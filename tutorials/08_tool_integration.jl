@@ -120,6 +120,8 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #     hifi_reads = ["reads_hifi_1.fastq.gz", "reads_hifi_2.fastq.gz"],
 # )
 # @assert metamdbg_hifi_result.status == :complete
+# metamdbg_hifi_result.provenance.package_inventory
+# metamdbg_hifi_result.provenance.package_inventory_sha256
 # metamdbg_ont_result = Mycelia.run_metamdbg(
 #     ont_reads = ["reads_ont_1.fastq.gz", "reads_ont_2.fastq.gz"],
 #     ont_r10_4_plus = true,

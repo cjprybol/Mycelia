@@ -57,14 +57,14 @@ ergonomics and need no attestation keyword. The wrapper also fails before
 provisioning when both technologies, neither technology, an empty path set, a
 missing/empty input file, or a nonpositive `graph_k` is supplied. Completed
 local or generated-runtime execution uses a spec-hash-addressed metaMDBG 1.4
-environment and records a digest of the complete normalized resolved Conda
-inventory (package name, version, build, and channel, including transitive
-packages). Contract-verified reuse reports the inventory digest and package
-count bound by its completion manifest. Planned and submitted results carry
-expected environment-specification provenance only and do not claim that
-installation or a resolved inventory has been realized. Environment discovery,
-creation, inventory, local commands, and generated runtime scripts all use one
-canonical Conda executable. The install lock is anchored beneath
+environment and persists the complete normalized resolved Conda inventory
+(package name, version, build, and channel, including transitive packages), its
+digest, and its package count. Contract-verified reuse reports that exact
+inventory identity bound by its completion manifest. Planned and submitted
+results carry expected environment-specification provenance only and do not
+claim that installation or a resolved inventory has been realized. Environment
+discovery, creation, inventory, local commands, and generated runtime scripts
+all use one canonical Conda executable. The install lock is anchored beneath
 that executable's Conda root rather than a Julia depot, so two wrappers cannot
 concurrently mutate the same environment through different depots and two
 independent Conda roots do not block each other. The wrapper reuses only
@@ -77,8 +77,8 @@ specification. The schema-v5 contract and its signature bind the explicit ONT
 R10.4-or-later attestation. Modification time is a transient same-invocation
 race snapshot only and is intentionally absent from that durable contract. A
 separate atomic completion manifest binds `graph_k`, the workflow signature,
-the realized package-inventory digest, and canonical artifact identities,
-sizes, and SHA-256 digests. Legacy plain contigs are normalized to
+the realized package inventory, its digest and count, and canonical artifact
+identities, sizes, and SHA-256 digests. Legacy plain contigs are normalized to
 `contigs.fasta.gz`. Each tool-execution lifecycle stages mode-0400 private input
 copies, verifies them against the captured SHA-256 contract, and runs metaMDBG
 only against those staged paths. Local execution and a submitted job's
@@ -269,7 +269,8 @@ Local execution returns
 contract finalization. Local and generated-runtime contract and completion
 publication fsync both the complete mode-0600 file and its containing directory
 before reporting success. Completed execution and contract-verified reuse
-report resolved package-inventory digest/count provenance. A nonlocal executor
+report the resolved package inventory plus its digest/count provenance. A
+nonlocal executor
 returns `status = :planned` for a collected or dry-run job. It returns
 `status = :submitted` only after a real held Slurm job's exact normalized
 `(job_id, job_cluster)` reference is durably bound, its pending publication name

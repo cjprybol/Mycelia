@@ -5527,7 +5527,7 @@ const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
 const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
 const _METAMDBG_CONTRACT_SCHEMA_VERSION = 5
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
-const _METAMDBG_COMPLETION_SCHEMA_VERSION = 1
+const _METAMDBG_COMPLETION_SCHEMA_VERSION = 2
 const _METAMDBG_COMPLETION_FILENAME = "mycelia_metamdbg_completion.json"
 const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 3
 const _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME = "contract.json"
@@ -5689,8 +5689,11 @@ def fail(message: str) -> None:
     raise ValueError(message)
 
 
+if len(sys.argv) not in (3, 4):
+    fail("expected source, TSV destination, and optional JSON destination")
 source = pathlib.Path(sys.argv[1])
 destination = pathlib.Path(sys.argv[2])
+manifest_destination = pathlib.Path(sys.argv[3]) if len(sys.argv) == 4 else None
 with source.open("r", encoding="utf-8") as stream:
     records = json.load(stream)
 if not isinstance(records, list) or not records:
@@ -5723,6 +5726,27 @@ if len(names) != len(set(names)):
 with destination.open("w", encoding="utf-8", newline="\n") as stream:
     for record in inventory:
         stream.write("\t".join(record) + "\n")
+if manifest_destination is not None:
+    manifest_inventory = [
+        {
+            "name": name,
+            "version": version,
+            "build": build,
+            "channel": channel,
+        }
+        for name, version, build, channel in inventory
+    ]
+    with manifest_destination.open(
+        "w",
+        encoding="utf-8",
+        newline="\n",
+    ) as stream:
+        json.dump(
+            manifest_inventory,
+            stream,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 """
 end
 
@@ -14307,6 +14331,19 @@ function _metamdbg_completion_toolchain_summary(
             )
         end
     end
+    hasproperty(toolchain, :package_inventory) || error(
+        "metaMDBG completion toolchain is missing its normalized package " *
+        "inventory.",
+    )
+    package_inventory = toolchain.package_inventory
+    package_inventory isa AbstractVector || error(
+        "metaMDBG completion toolchain package inventory must be an array.",
+    )
+    realized_toolchain =
+        _require_metamdbg_package_version(package_inventory)
+    normalized_inventory = realized_toolchain.package_inventory
+    expected_inventory_sha256 =
+        realized_toolchain.package_inventory_sha256
     hasproperty(toolchain, :package_inventory_sha256) || error(
         "metaMDBG completion toolchain is missing its normalized package " *
         "inventory digest.",
@@ -14319,6 +14356,10 @@ function _metamdbg_completion_toolchain_summary(
             "invalid.",
         )
     end
+    String(inventory_sha256) == expected_inventory_sha256 || error(
+        "metaMDBG completion toolchain package inventory does not match " *
+        "its normalized digest.",
+    )
     hasproperty(toolchain, :package_count) || error(
         "metaMDBG completion toolchain is missing its package count.",
     )
@@ -14326,8 +14367,13 @@ function _metamdbg_completion_toolchain_summary(
     if !(package_count isa Integer) || package_count <= 0
         error("metaMDBG completion toolchain package count must be positive.")
     end
+    Int(package_count) == length(normalized_inventory) || error(
+        "metaMDBG completion toolchain package inventory does not match " *
+        "its package count.",
+    )
     return (;
         expected...,
+        package_inventory = normalized_inventory,
         package_inventory_sha256 = String(inventory_sha256),
         package_count = Int(package_count),
     )
@@ -14532,6 +14578,7 @@ function _metamdbg_completion_toolchain_from_json(
         "metamdbg_version",
         "environment_name",
         "environment_spec_sha256",
+        "package_inventory",
         "package_inventory_sha256",
         "package_count",
     ])
@@ -14543,6 +14590,7 @@ function _metamdbg_completion_toolchain_from_json(
         environment_name = get(toolchain, "environment_name", nothing),
         environment_spec_sha256 =
             get(toolchain, "environment_spec_sha256", nothing),
+        package_inventory = get(toolchain, "package_inventory", nothing),
         package_inventory_sha256 =
             get(toolchain, "package_inventory_sha256", nothing),
         package_count = get(toolchain, "package_count", nothing),
@@ -15889,8 +15937,10 @@ function _metamdbg_executor_script(
         "graph_alias_new=\"\$secure_tmpdir/graph-alias.new\"",
         "package_inventory_before=\"\$secure_tmpdir/conda-packages.before.json\"",
         "package_inventory_normalized=\"\$secure_tmpdir/conda-packages.before.tsv\"",
+        "package_inventory_manifest=\"\$secure_tmpdir/conda-packages.before.manifest.json\"",
         "package_inventory_after=\"\$secure_tmpdir/conda-packages.after.json\"",
         "package_inventory_after_normalized=\"\$secure_tmpdir/conda-packages.after.tsv\"",
+        "package_inventory_after_manifest=\"\$secure_tmpdir/conda-packages.after.manifest.json\"",
         "completion_payload=\"\$secure_tmpdir/completion-payload.json\"",
         "completion_new=\"\$secure_tmpdir/completion.new\"",
         "printf '%s' $(_metamdbg_shell_literal(input_contract.contents)) > \"\$expected_contract\"",
@@ -15997,16 +16047,17 @@ function _metamdbg_executor_script(
         "capture_package_inventory() {",
         "  local json_path=\"\$1\"",
         "  local normalized_path=\"\$2\"",
+        "  local manifest_path=\"\$3\"",
         "  require_unchanged_metamdbg_output_root",
         "  \"\$conda_runner\" list -n \"\$environment_name\" --json > \"\$json_path\"",
         "  require_unchanged_metamdbg_output_root",
-        "  \"\$conda_runner\" run -n \"\$environment_name\" python -c $(inventory_canonicalizer) \"\$json_path\" \"\$normalized_path\" || {",
+        "  \"\$conda_runner\" run -n \"\$environment_name\" python -c $(inventory_canonicalizer) \"\$json_path\" \"\$normalized_path\" \"\$manifest_path\" || {",
         "    echo \"metaMDBG environment package inventory is incomplete or malformed\" >&2",
         "    return 1",
         "  }",
         "  require_unchanged_metamdbg_output_root",
         "}",
-        "capture_package_inventory \"\$package_inventory_before\" \"\$package_inventory_normalized\"",
+        "capture_package_inventory \"\$package_inventory_before\" \"\$package_inventory_normalized\" \"\$package_inventory_manifest\"",
         "package_count=\$(awk 'END { print NR }' \"\$package_inventory_normalized\")",
         "if [ \"\$package_count\" -le 0 ]; then",
         "  echo \"metaMDBG normalized package inventory is empty\" >&2",
@@ -16225,6 +16276,13 @@ function _metamdbg_executor_script(
         "    if [ ! -e \"\$contigs_new\" ] && [ ! -L \"\$contigs_new\" ] && [ -f \"\$contigs_gz\" ] && [ ! -L \"\$contigs_gz\" ] && [ \"\$(metamdbg_file_identity \"\$contigs_gz\")\" = \"\$bound_contigs_publication_identity\" ]; then",
         "      published_contigs=1",
         "    fi",
+        "    if [ -e \"\$contigs_new\" ] || [ -L \"\$contigs_new\" ]; then",
+        "      if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
+        "        echo \"metaMDBG refused to overwrite a concurrent compressed-contigs artifact\" >&2",
+        "        preserve_secure_tmpdir=1",
+        "        exit 1",
+        "      fi",
+        "    fi",
         "    echo \"metaMDBG compressed-contigs publication command " *
         "failed\" >&2",
         "    preserve_secure_tmpdir=1",
@@ -16291,6 +16349,13 @@ function _metamdbg_executor_script(
         "    if [ ! -e \"\$graph_alias_new\" ] && [ ! -L \"\$graph_alias_new\" ] && [ -L \"\$graph_alias\" ] && [ \"\$(metamdbg_symlink_identity \"\$graph_alias\")\" = \"\$bound_graph_alias_publication_identity\" ]; then",
         "      published_graph_alias=1",
         "    fi",
+        "    if [ -e \"\$graph_alias_new\" ] || [ -L \"\$graph_alias_new\" ]; then",
+        "      if [ -e \"\$graph_alias\" ] || [ -L \"\$graph_alias\" ]; then",
+        "        echo \"metaMDBG refused to overwrite a concurrent graph alias\" >&2",
+        "        preserve_secure_tmpdir=1",
+        "        exit 1",
+        "      fi",
+        "    fi",
         "    echo \"metaMDBG graph-alias publication command failed\" >&2",
         "    preserve_secure_tmpdir=1",
         "    exit 1",
@@ -16320,11 +16385,15 @@ function _metamdbg_executor_script(
         "validate_gfa \"\$graph_source\"",
         "validate_staged_metamdbg_inputs",
         "validate_metamdbg_inputs",
-        "capture_package_inventory \"\$package_inventory_after\" \"\$package_inventory_after_normalized\"",
+        "capture_package_inventory \"\$package_inventory_after\" \"\$package_inventory_after_normalized\" \"\$package_inventory_after_manifest\"",
         (post_package_inventory_hook === nothing ? "true" :
          post_package_inventory_hook),
         "cmp -s -- \"\$package_inventory_normalized\" \"\$package_inventory_after_normalized\" || {",
         "  echo \"metaMDBG resolved package inventory changed while assembly tools were running\" >&2",
+        "  exit 1",
+        "}",
+        "cmp -s -- \"\$package_inventory_manifest\" \"\$package_inventory_after_manifest\" || {",
+        "  echo \"metaMDBG resolved package manifest changed while assembly tools were running\" >&2",
         "  exit 1",
         "}",
         "require_unchanged_metamdbg_artifacts \"after package-inventory validation\"",
@@ -16355,7 +16424,9 @@ function _metamdbg_executor_script(
         "printf '\"metamdbg_version\":\"%s\",' \"\$expected_metamdbg_version\" >> \"\$completion_payload\"",
         "printf '\"environment_name\":\"%s\",' \"\$environment_name\" >> \"\$completion_payload\"",
         "printf '\"environment_spec_sha256\":\"%s\",' \"\$expected_spec_sha256\" >> \"\$completion_payload\"",
-        "printf '\"package_inventory_sha256\":\"%s\",' \"\$package_inventory_sha256\" >> \"\$completion_payload\"",
+        "printf '\"package_inventory\":' >> \"\$completion_payload\"",
+        "cat \"\$package_inventory_manifest\" >> \"\$completion_payload\"",
+        "printf ',\"package_inventory_sha256\":\"%s\",' \"\$package_inventory_sha256\" >> \"\$completion_payload\"",
         "printf '\"package_count\":%s},\"artifacts\":{\"contigs\":{' \"\$package_count\" >> \"\$completion_payload\"",
         "printf '\"canonical_path_sha256\":\"%s\",' \"\$contigs_path_sha256\" >> \"\$completion_payload\"",
         "printf '\"size_bytes\":%s,' \"\$contigs_size\" >> \"\$completion_payload\"",
@@ -16394,6 +16465,12 @@ function _metamdbg_executor_script(
         "    if [ ! -e \"\$contract_new\" ] && [ ! -L \"\$contract_new\" ] && [ -f \"\$contract_marker\" ] && [ ! -L \"\$contract_marker\" ] && [ \"\$(metamdbg_file_identity \"\$contract_marker\")\" = \"\$bound_contract_marker_identity\" ]; then",
         "      published_contract=1",
         "    fi",
+        "    if [ -e \"\$contract_new\" ] || [ -L \"\$contract_new\" ]; then",
+        "      if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
+        "        echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
+        "        exit 1",
+        "      fi",
+        "    fi",
         "    echo \"metaMDBG provenance-marker publication command " *
         "failed\" >&2",
         "    preserve_secure_tmpdir=1",
@@ -16423,6 +16500,12 @@ function _metamdbg_executor_script(
         "\"\$completion_marker\"; then",
         "  if [ ! -e \"\$completion_new\" ] && [ ! -L \"\$completion_new\" ] && [ -f \"\$completion_marker\" ] && [ ! -L \"\$completion_marker\" ] && [ \"\$(metamdbg_file_identity \"\$completion_marker\")\" = \"\$bound_completion_marker_identity\" ]; then",
         "    published_completion=1",
+        "  fi",
+        "  if [ -e \"\$completion_new\" ] || [ -L \"\$completion_new\" ]; then",
+        "    if [ -e \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ]; then",
+        "      echo \"metaMDBG refused to overwrite a concurrent completion manifest\" >&2",
+        "      exit 1",
+        "    fi",
         "  fi",
         "  echo \"metaMDBG completion-manifest publication command " *
         "failed\" >&2",
@@ -16513,6 +16596,7 @@ function _metamdbg_provenance(
     return (;
         provenance...,
         completion_signature = completion.signature,
+        package_inventory = manifest.toolchain.package_inventory,
         package_inventory_sha256 =
             manifest.toolchain.package_inventory_sha256,
         package_count = manifest.toolchain.package_count,
@@ -18899,7 +18983,7 @@ from this wrapper rather than advertised as a false combined-input contract.
 Synchronous execution and complete reuse return `status = :complete`, `outdir`,
 the sequence-bearing `contigs.fasta.gz`, a stable `assemblyGraph_k<k>.gfa`
 alias, the input-contract marker, an atomic completion manifest, and exact
-resolved package-inventory digest/count provenance. Nonlocal execution
+resolved package inventory plus digest/count provenance. Nonlocal execution
 returns `status = :planned` for collected/dry-run jobs or `:submitted` for a
 real submission, together with the backend `submission` result and
 `expected_artifacts`; submitted results also include the exact random-owner
@@ -18931,8 +19015,9 @@ The graph alias resolves to metaMDBG's validated dynamic
   queued start and immediately before finalization. Any
   nonempty uncontracted output root fails before provisioning. Complete reuse
   additionally verifies the atomic completion manifest against `graph_k`, the
-  workflow signature, normalized resolved package-inventory digest, and current
-  canonical artifact identities, sizes, and SHA-256 digests.
+  workflow signature, complete normalized resolved package inventory plus its
+  digest/count, and current canonical artifact identities, sizes, and SHA-256
+  digests.
   One output root owns exactly one `graph_k`; request another graph in a fresh
   output root.
 - Every nonlocal job embeds an adjacent, contract-addressed submission
@@ -18987,11 +19072,11 @@ The graph alias resolves to metaMDBG's validated dynamic
   metadata with its exact job id and cluster and `confirm_terminal = :failed` or
   `:completed`.
 - Completed local or generated-runtime execution uses metaMDBG exactly 1.4 from
-  a checksum-verified, spec-hash-addressed environment and records a normalized
-  digest and count over every resolved package's name, version, build, and
-  channel. Contract-verified reuse reports the digest and count bound by its
-  completion manifest; planned and submitted results retain only the expected
-  environment specification until runtime completion.
+  a checksum-verified, spec-hash-addressed environment and persists every
+  resolved package's name, version, build, and channel plus a normalized digest
+  and count. Contract-verified reuse reports that full inventory identity bound
+  by its completion manifest; planned and submitted results retain only the
+  expected environment specification until runtime completion.
 - Local and executor lifecycles validate nonempty unique FASTA identifiers,
   gap-free IUPAC DNA FASTA, and strict H/S/L/P GFA1 structure, shared segment/
   path naming, and typed A/i/f/Z/J/H/B optional tags. GFA validation is two-pass

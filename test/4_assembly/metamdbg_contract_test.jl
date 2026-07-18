@@ -3643,6 +3643,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test result.provenance.package_inventory_sha256 ==
                        _test_metamdbg_toolchain().package_inventory_sha256
             Test.@test result.provenance.package_count == 2
+            Test.@test result.provenance.package_inventory ==
+                       _test_metamdbg_toolchain().package_inventory
             Test.@test result.provenance.contigs_size_bytes ==
                        filesize(result.contigs)
             Test.@test result.provenance.graph_size_bytes ==
@@ -3653,8 +3655,16 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 outputs.completion_marker,
                 String,
             ))
+            Test.@test completion_record["schema_version"] == 2
+            Test.@test completion_record["manifest"]["schema_version"] == 2
             Test.@test completion_record["manifest"]["workflow"]["graph_k"] ==
                        21
+            recorded_package_inventory = completion_record["manifest"][
+                "toolchain"
+            ]["package_inventory"]
+            Test.@test recorded_package_inventory == JSON.parse(JSON.json(
+                _test_metamdbg_toolchain().package_inventory,
+            ))
             Test.@test completion_record["manifest"]["artifacts"]["contigs"]["sha256"] ==
                        Mycelia._metamdbg_sha256(result.contigs)
             Test.@test completion_record["manifest"]["artifacts"]["graph"]["sha256"] ==
@@ -3681,6 +3691,31 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test reused == result
             Test.@test command_count[] == 2
+
+            completion_backup = read(outputs.completion_marker, String)
+            mismatched_inventory_record = deepcopy(completion_record)
+            mismatched_inventory_record["manifest"]["toolchain"][
+                "package_inventory"
+            ][1]["build"] = "synthetic-mismatched-build"
+            write(
+                outputs.completion_marker,
+                JSON.json(mismatched_inventory_record) * "\n",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
+                    outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "inventory-mismatched reuse must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"package inventory does not match its normalized digest",
+            )
+            write(outputs.completion_marker, completion_backup)
 
             contigs_backup = joinpath(temporary_root, "contigs-backup.fasta.gz")
             cp(result.contigs, contigs_backup)
@@ -4037,6 +4072,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
                 artifact_outputs =
                     Mycelia._metamdbg_output_paths(artifact_outdir, 21)
+                artifact_original_contigs =
+                    artifact_outputs.contigs_gz * ".original"
                 artifact_dependency_calls = Ref(0)
                 artifact_commands = Ref(0)
                 _test_metamdbg_error(
@@ -4047,7 +4084,13 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                             artifact_dependency_calls[] += 1
                             if artifact_dependency_calls[] == 2
                                 if mutation_kind == :contigs
-                                    rm(artifact_outputs.contigs_gz)
+                                    # Keep the original inode linked so Linux
+                                    # cannot recycle it for the replacement
+                                    # fixture before cleanup's identity fence.
+                                    mv(
+                                        artifact_outputs.contigs_gz,
+                                        artifact_original_contigs,
+                                    )
                                     _write_test_metamdbg_gzip_fasta!(
                                         artifact_outputs.contigs_gz;
                                         contents = ">replacement\nTGCA\n",
@@ -4092,6 +4135,23 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 ))
                 Test.@test ispath(artifact_outputs.contigs_gz) ==
                            (mutation_kind == :contigs)
+
+                if mutation_kind == :contigs
+                    Test.@test isfile(artifact_original_contigs)
+                    Test.@test isfile(artifact_outputs.contigs_gz)
+                    Test.@test !Base.Filesystem.samefile(
+                        artifact_original_contigs,
+                        artifact_outputs.contigs_gz,
+                    )
+                    Test.@test String(Base.transcode(
+                        CodecZlib.GzipDecompressor,
+                        read(artifact_original_contigs),
+                    )) == ">contig-1\nACGT\n"
+                    Test.@test String(Base.transcode(
+                        CodecZlib.GzipDecompressor,
+                        read(artifact_outputs.contigs_gz),
+                    )) == ">replacement\nTGCA\n"
+                end
 
                 if mutation_kind == :graph
                     _test_metamdbg_error(
@@ -4558,10 +4618,32 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        realized_toolchain.metamdbg_version
             Test.@test changed_build_toolchain.package_inventory_sha256 !=
                        realized_toolchain.package_inventory_sha256
+            missing_metamdbg_inventory = NamedTuple[(;
+                name = "libzlib",
+                version = "1.3.1",
+                build = "h8359307_2",
+                channel = "conda-forge",
+            )]
+            missing_metamdbg_completion_toolchain = (;
+                Mycelia._metamdbg_expected_toolchain()...,
+                package_inventory = missing_metamdbg_inventory,
+                package_inventory_sha256 =
+                    Mycelia._metamdbg_package_inventory_sha256(
+                        missing_metamdbg_inventory,
+                    ),
+                package_count = 1,
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._metamdbg_completion_toolchain_summary(
+                    missing_metamdbg_completion_toolchain,
+                ),
+                ErrorException,
+                r"must contain metamdbg exactly 1.4",
+            )
 
             escaped_inventory = Any[
                 Dict(
-                    "channel" => "bio\"conda",
+                    "channel" => "bio\"conda\\edge",
                     "build_string" => "h43eeafb_2",
                     "version" => "1.4",
                     "name" => "metamdbg",
@@ -4581,17 +4663,38 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 temporary_root,
                 "escaped-reordered-inventory.tsv",
             )
+            inventory_manifest = joinpath(
+                temporary_root,
+                "escaped-reordered-inventory.manifest.json",
+            )
             serialized_inventory = JSON.json(reverse(escaped_inventory))
             write(
                 inventory_json,
                 "  \n" * replace(serialized_inventory, "},{" => "},\n {") *
                 "\n",
             )
-            run(`python3 -c $(Mycelia._metamdbg_runtime_inventory_canonicalizer_python()) $(inventory_json) $(inventory_tsv)`)
+            inventory_canonicalizer =
+                Mycelia._metamdbg_runtime_inventory_canonicalizer_python()
+            run(Cmd(String[
+                "python3",
+                "-c",
+                inventory_canonicalizer,
+                inventory_json,
+                inventory_tsv,
+                inventory_manifest,
+            ]))
             Test.@test read(inventory_tsv, String) ==
                        Mycelia._metamdbg_package_inventory_contents(
                 escaped_inventory,
             )
+            normalized_escaped_inventory =
+                Mycelia._metamdbg_normalized_package_inventory(
+                    escaped_inventory,
+                )
+            Test.@test read(inventory_manifest, String) ==
+                       JSON.json(normalized_escaped_inventory)
+            Test.@test JSON.parse(read(inventory_manifest, String)) ==
+                       JSON.parse(JSON.json(normalized_escaped_inventory))
             escaped_changed = deepcopy(escaped_inventory)
             escaped_changed[1]["build_string"] = "h43eeafb_3"
             changed_inventory_json = joinpath(
@@ -4602,10 +4705,23 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 temporary_root,
                 "changed-build-inventory.tsv",
             )
+            changed_inventory_manifest = joinpath(
+                temporary_root,
+                "changed-build-inventory.manifest.json",
+            )
             write(changed_inventory_json, JSON.json(escaped_changed))
-            run(`python3 -c $(Mycelia._metamdbg_runtime_inventory_canonicalizer_python()) $(changed_inventory_json) $(changed_inventory_tsv)`)
+            run(Cmd(String[
+                "python3",
+                "-c",
+                inventory_canonicalizer,
+                changed_inventory_json,
+                changed_inventory_tsv,
+                changed_inventory_manifest,
+            ]))
             Test.@test Mycelia._metamdbg_sha256(changed_inventory_tsv) !=
                        Mycelia._metamdbg_sha256(inventory_tsv)
+            Test.@test read(changed_inventory_manifest, String) !=
+                       read(inventory_manifest, String)
             _test_metamdbg_error(
                 () -> Mycelia._require_metamdbg_package_version(Any[
                     Dict("name" => "metamdbg", "version" => "1.4"),
@@ -7886,6 +8002,29 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 return nothing
             end
 
+            function write_no_clobber_failure_wrapper!(
+                    wrapper_path::String,
+                    real_mv::String,
+                    target_path::String,
+                    occupant_command::String,
+            )::Nothing
+                write(
+                    wrapper_path,
+                    "#!/usr/bin/env bash\n" *
+                    "set -euo pipefail\n" *
+                    "if [ \"\$#\" -gt 0 ] && [ \"\${!#}\" = " *
+                    Base.shell_escape(target_path) * " ]; then\n" *
+                    "  $(occupant_command)\n" *
+                    "  exit 73\n" *
+                    "fi\n" *
+                    "exec " * Base.shell_escape(real_mv) *
+                    " \"\$@\"\n",
+                )
+                chmod(wrapper_path, 0o700)
+                Test.@test success(Cmd(["bash", "-n", wrapper_path]))
+                return nothing
+            end
+
             contigs_race_outdir = joinpath(
                 temporary_root,
                 "executor-contigs-publication-race",
@@ -7913,9 +8052,23 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "executor-contigs-publication-race.sh",
             )
             write(contigs_race_script_path, contigs_race_script)
+            real_mv_path = something(Sys.which("mv"), "/bin/mv")
+            contigs_race_mv_directory = joinpath(
+                temporary_root,
+                "executor-contigs-publication-race-bin",
+            )
+            mkpath(contigs_race_mv_directory)
+            write_no_clobber_failure_wrapper!(
+                joinpath(contigs_race_mv_directory, "mv"),
+                real_mv_path,
+                contigs_race_outputs.contigs_gz,
+                ":",
+            )
             contigs_race_log = IOBuffer()
             contigs_race_process = Base.withenv(
                 "SLURM_JOB_ID" => contigs_race_reservation.job_id,
+                "PATH" =>
+                    "$(contigs_race_mv_directory):$(get(ENV, "PATH", ""))",
             ) do
                 return run(pipeline(
                     ignorestatus(`bash $(contigs_race_script_path)`),
@@ -7950,6 +8103,94 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 name -> startswith(name, ".mycelia-metamdbg-tmp."),
                 readdir(temporary_root),
             )
+
+            for (
+                    publication_name,
+                    target_field,
+                    job_id,
+                    expected_failure,
+                    generic_failure,
+                ) in (
+                    (
+                        "graph-alias",
+                        :graph_alias,
+                        "892",
+                        "refused to overwrite a concurrent graph alias",
+                        "graph-alias publication command failed",
+                    ),
+                    (
+                        "provenance-marker",
+                        :contract_marker,
+                        "893",
+                        "refused to overwrite a concurrent provenance marker",
+                        "provenance-marker publication command failed",
+                    ),
+                    (
+                        "completion-manifest",
+                        :completion_marker,
+                        "894",
+                        "refused to overwrite a concurrent completion manifest",
+                        "completion-manifest publication command failed",
+                    ),
+                )
+                no_clobber_outdir = joinpath(
+                    temporary_root,
+                    "executor-$(publication_name)-no-clobber-failure",
+                )
+                no_clobber_outputs, no_clobber_reservation =
+                    create_bound_runtime_fixture(
+                        no_clobber_outdir,
+                        "executor-$(publication_name)-no-clobber-owner",
+                        job_id,
+                    )
+                target_path = getproperty(no_clobber_outputs, target_field)
+                replacement =
+                    "concurrent $(publication_name) publication must survive\n"
+                no_clobber_mv_directory = joinpath(
+                    temporary_root,
+                    "executor-$(publication_name)-no-clobber-bin",
+                )
+                mkpath(no_clobber_mv_directory)
+                write_no_clobber_failure_wrapper!(
+                    joinpath(no_clobber_mv_directory, "mv"),
+                    real_mv_path,
+                    target_path,
+                    "printf '%s' " * Base.shell_escape(replacement) *
+                    " > " * Base.shell_escape(target_path),
+                )
+                no_clobber_script = Mycelia._metamdbg_executor_script(
+                    fake_asm,
+                    fake_gfa,
+                    no_clobber_outputs,
+                    21,
+                    input_contract;
+                    conda_runner = fake_conda,
+                    submission_reservation = no_clobber_reservation,
+                )
+                no_clobber_script_path = joinpath(
+                    temporary_root,
+                    "executor-$(publication_name)-no-clobber.sh",
+                )
+                write(no_clobber_script_path, no_clobber_script)
+                no_clobber_log = IOBuffer()
+                no_clobber_process = Base.withenv(
+                    "SLURM_JOB_ID" => no_clobber_reservation.job_id,
+                    "PATH" =>
+                        "$(no_clobber_mv_directory):$(get(ENV, "PATH", ""))",
+                ) do
+                    return run(pipeline(
+                        ignorestatus(`bash $(no_clobber_script_path)`),
+                        stdout = no_clobber_log,
+                        stderr = no_clobber_log,
+                    ))
+                end
+                no_clobber_output = String(take!(no_clobber_log))
+                Test.@test !success(no_clobber_process)
+                Test.@test occursin(expected_failure, no_clobber_output)
+                Test.@test !occursin(generic_failure, no_clobber_output)
+                Test.@test read(target_path, String) == replacement
+                Test.@test !ispath(no_clobber_reservation.path)
+            end
 
             completion_race_outdir = joinpath(
                 temporary_root,
@@ -11675,6 +11916,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             Test.@test executable_completion.manifest.toolchain.package_inventory_sha256 ==
                        _test_metamdbg_toolchain().package_inventory_sha256
+            Test.@test executable_completion.manifest.toolchain.package_inventory ==
+                       _test_metamdbg_toolchain().package_inventory
             Test.@test !ispath(executable_reservation.path)
             Test.@test !ispath(
                 Mycelia._metamdbg_output_lock_path(executable_outdir),
@@ -13362,6 +13605,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test immediate_complete.status == :complete
             Test.@test immediate_complete.provenance.package_inventory_sha256 ==
                        _test_metamdbg_toolchain().package_inventory_sha256
+            Test.@test immediate_complete.provenance.package_inventory ==
+                       _test_metamdbg_toolchain().package_inventory
             consumed_metadata = only(
                 Mycelia.inspect_metamdbg_submission_reservations(
                     immediate_outdir,
