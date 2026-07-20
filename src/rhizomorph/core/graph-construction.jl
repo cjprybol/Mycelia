@@ -408,6 +408,7 @@ alongside k-mer observations.
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 - `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
 - `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
+- `min_count::Int=1`: Minimum global k-mer observation count to retain
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Strand-specific qualmer graph with quality-aware evidence
@@ -417,11 +418,13 @@ function build_qualmer_graph_singlestrand(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
+    min_count >= 1 || throw(ArgumentError("min_count must be at least 1, got $min_count"))
 
     sequence_alphabet = _infer_sequence_alphabet(
         records;
@@ -439,11 +442,14 @@ function build_qualmer_graph_singlestrand(
 
     # Dispatch to type-stable core function
     if sequence_alphabet == :DNA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(
+            records, Val(k), Kmers.DNAKmer{k}, dataset_id; min_count = min_count)
     elseif sequence_alphabet == :RNA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(
+            records, Val(k), Kmers.RNAKmer{k}, dataset_id; min_count = min_count)
     elseif sequence_alphabet == :AA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.AAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(
+            records, Val(k), Kmers.AAKmer{k}, dataset_id; min_count = min_count)
     else
         error("Unsupported sequence type for qualmer graph: $sequence_alphabet")
     end
@@ -459,8 +465,10 @@ function _build_qualmer_graph_core(
         records::Vector{FASTX.FASTQ.Record},
         ::Val{K},
         ::Type{KmerType},
-        dataset_id::String
+        dataset_id::String;
+        min_count::Int = 1
 ) where {K, KmerType <: Kmers.Kmer}
+    min_count >= 1 || throw(ArgumentError("min_count must be at least 1, got $min_count"))
     # Determine sequence type and iterator
     if KmerType <: Kmers.DNAKmer
         SeqType = BioSequences.LongDNA{4}
@@ -497,6 +505,20 @@ function _build_qualmer_graph_core(
     end
     ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
 
+    kmer_counts = if min_count == 1
+        nothing
+    else
+        counts = Dict{ActualKmerType, Int}()
+        for record in records
+            sequence = FASTX.sequence(SeqType, record)
+            for value in KmerIterator(sequence)
+                kmer = is_aa ? value : value[1]
+                counts[kmer] = get(counts, kmer, 0) + 1
+            end
+        end
+        counts
+    end
+
     # Create empty directed graph with actual kmer type as vertex labels
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
     graph = MetaGraphsNext.MetaGraph(
@@ -521,6 +543,9 @@ function _build_qualmer_graph_core(
         else
             # UnambiguousDNAMers/RNAMers return (kmer, position) tuples
             collect(KmerIterator(sequence))
+        end
+        if kmer_counts !== nothing
+            filter!(item -> get(kmer_counts, item[1], 0) >= min_count, kmers_with_positions)
         end
 
         # Add vertices and evidence
@@ -589,7 +614,8 @@ function build_qualmer_graph_doublestrand(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -601,7 +627,8 @@ function build_qualmer_graph_doublestrand(
         k;
         dataset_id = dataset_id,
         type_hint = type_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        min_count = min_count
     )
 
     # Convert to doublestrand representation (replicate vertices/edges)
@@ -865,7 +892,8 @@ function build_qualmer_graph_canonical(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -877,7 +905,8 @@ function build_qualmer_graph_canonical(
         k;
         dataset_id = dataset_id,
         type_hint = type_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        min_count = min_count
     )
 
     # Convert to canonical representation

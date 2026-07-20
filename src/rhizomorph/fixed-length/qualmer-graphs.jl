@@ -20,7 +20,7 @@
 
 """
     build_qualmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand,
-                        type_hint=nothing, ambiguous_action=:dna)
+                        type_hint=nothing, ambiguous_action=:dna, min_count=1)
 
 Build a quality-aware k-mer de Bruijn graph from FASTQ records.
 
@@ -34,6 +34,7 @@ Preserves per-base quality scores for quality-aware assembly algorithms.
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 - `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
 - `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
+- `min_count::Int=1`: Minimum global k-mer observation count to retain
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph with Phred scores
@@ -89,8 +90,14 @@ function build_qualmer_graph(
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
         ambiguous_action::Symbol = :dna,
-        memory_profile::Symbol = :full
+        memory_profile::Symbol = :full,
+        min_count::Int = 1
 )
+    min_count >= 1 || throw(ArgumentError("min_count must be at least 1, got $min_count"))
+    if memory_profile != :full && min_count != 1
+        throw(ArgumentError("min_count is only supported with memory_profile=:full"))
+    end
+
     # Reduced quality profiles route through build_kmer_graph
     if memory_profile == :ultralight_quality
         return build_kmer_graph_singlestrand_ultralight_quality(
@@ -116,7 +123,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     elseif mode == :doublestrand
         return build_qualmer_graph_doublestrand(
@@ -124,7 +132,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     elseif mode == :canonical
         return build_qualmer_graph_canonical(
@@ -132,7 +141,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     else
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
