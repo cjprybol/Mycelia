@@ -160,13 +160,17 @@ function _tempered_walk(
             tempered = fill(1.0 / length(valid_transitions), length(valid_transitions))
         end
 
-        next_transition = _sample_transition(valid_transitions, tempered)
+        idx = _sample_transition_index(valid_transitions, tempered)
 
-        if next_transition === nothing
+        if idx === nothing
             break
         end
 
-        step_prob = next_transition[:probability]
+        next_transition = valid_transitions[idx]
+
+        # Record the normalized (tempered) sampling probability actually used, not the
+        # raw edge weight, so cumulative_prob stays a valid path probability.
+        step_prob = tempered[idx]
         cumulative_prob *= step_prob
 
         current_vertex = next_transition[:target_vertex]

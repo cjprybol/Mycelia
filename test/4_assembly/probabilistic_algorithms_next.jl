@@ -55,8 +55,8 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
 
     function add_reduced_edge_evidence!(edge_data)
         if edge_data isa Union{
-                Mycelia.Rhizomorph.UltralightQualityEdgeData,
-                Mycelia.Rhizomorph.LightweightQualityEdgeData}
+            Mycelia.Rhizomorph.UltralightQualityEdgeData,
+            Mycelia.Rhizomorph.LightweightQualityEdgeData}
             Mycelia.Rhizomorph.add_evidence!(
                 edge_data,
                 "dataset_01",
@@ -130,6 +130,41 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         sequence1 = Mycelia.Rhizomorph.path_to_sequence(path1, graph)
         sequence2 = Mycelia.Rhizomorph.path_to_sequence(path2, graph)
         Test.@test sequence1 == sequence2
+    end
+
+    Test.@testset "Probabilistic Walk normalization (regression)" begin
+        # Regression: probabilistic_walk_next previously recorded the RAW edge
+        # weight as each step's probability instead of the normalized transition
+        # probability, so GraphPath.total_probability was an un-normalized weight
+        # product that could exceed 1.0. A fork whose raw weights (3.0, 2.0) do not
+        # sum to 1 makes the raw-vs-normalized difference observable.
+        fork = MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0
+        )
+        fork["A"] = nothing
+        fork["B"] = nothing
+        fork["C"] = nothing
+        fork["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+        fork["A", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+        # B and C are terminal, so the walk takes exactly one fork step.
+        path = Mycelia.Rhizomorph.probabilistic_walk_next(fork, "A", 5; seed = 42)
+        Test.@test length(path.steps) == 2
+        walked = path.steps[2]
+        # Normalized transition probabilities are 3/5 = 0.6 and 2/5 = 0.4 — never the
+        # raw 3.0 / 2.0 the buggy code recorded.
+        Test.@test walked.probability ≈ 0.6 || walked.probability ≈ 0.4
+        # total_probability must be a valid probability in (0, 1].
+        Test.@test 0.0 < path.total_probability <= 1.0
+        # cumulative probability is the product of per-step probabilities.
+        Test.@test path.total_probability ≈ walked.probability
     end
 
     Test.@testset "Maximum Weight Walk" begin
@@ -305,7 +340,8 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         src, dst = first(MetaGraphsNext.edge_labels(canonical_graph))
         Test.@test haskey(canonical_weighted, src, dst)
         Test.@test haskey(canonical_weighted, dst, src)
-        Test.@test canonical_weighted[src, dst].weight == canonical_weighted[dst, src].weight
+        Test.@test canonical_weighted[src, dst].weight ==
+                   canonical_weighted[dst, src].weight
     end
 
     Test.@testset "Transition helper coverage" begin
