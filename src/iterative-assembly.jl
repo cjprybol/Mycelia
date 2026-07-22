@@ -4502,6 +4502,18 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     end
 end
 
+# opt5 (td-jbjd): resolve whether the corrector's forced between-batch
+# GC.gc() fires, from the gc_between_batches keyword (primary) and the
+# MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback). Pure and
+# side-effect free so the wiring is truth-table testable without running
+# the corrector — the GC itself is output-invisible, so byte-identity
+# alone cannot lock that the keyword actually gates it.
+function _gc_between_batches_enabled(gc_between_batches::Bool)::Bool
+    return gc_between_batches ||
+           get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in
+           ("1", "true", "yes")
+end
+
 function _improve_read_set_likelihood_impl(
         reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool,
@@ -4824,6 +4836,10 @@ function _improve_read_set_likelihood_impl(
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
     # decode operates on already-simplified reads.
+    # Resolve the between-batch GC policy ONCE (opt5, td-jbjd): it is
+    # output-neutral, so it is a stable per-run setting rather than a
+    # per-batch env re-read.
+    gc_between_batches_enabled = _gc_between_batches_enabled(gc_between_batches)
     for batch_start in 1:batch_size:total_reads
         batch_end = min(batch_start + batch_size - 1, total_reads)
         batch_reads = work_reads[batch_start:batch_end]
@@ -4944,17 +4960,16 @@ function _improve_read_set_likelihood_impl(
 
         # Between-batch GC is opt-in (td-jbjd opt5). The forced stop-the-world
         # GC.gc() here parked ALL @threads decode workers between batches — the
-        # mechanism most consistent with the observed ~286% CPU on a flat/bounded
-        # memory plateau — while buying nothing once memory is already bounded.
-        # Default OFF (the speedup); re-enable via the gc_between_batches keyword
-        # (primary) or the MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback,
-        # for memory-constrained hosts). GC is output-neutral, so corrected reads
-        # are byte-identical either way. (The OOM-handler GC.gc(true) calls
-        # elsewhere in this file are unaffected — they stay for fail-closed safety.)
-        if batch_end < total_reads &&
-           (gc_between_batches ||
-            get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in
-            ("1", "true", "yes"))
+        # mechanism most consistent with the ~286% CPU observed on the td-n8ax
+        # E.coli @30x gate (a flat/bounded memory plateau) — while buying nothing
+        # once memory is already bounded. Default OFF (the speedup); re-enable via
+        # the gc_between_batches keyword (primary) or the
+        # MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback, for memory-
+        # constrained hosts). GC is output-neutral, so corrected reads are
+        # byte-identical either way. (The other GC.gc(true) calls in this file —
+        # OOM handlers and proactive memory-release paths — are unaffected; they
+        # stay for fail-closed safety.)
+        if batch_end < total_reads && gc_between_batches_enabled
             GC.gc()
         end
     end

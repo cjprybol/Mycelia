@@ -115,4 +115,31 @@ Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
             end)
         Test.@test final_seqs(r_off) == final_seqs(r_on)
     end
+
+    # WIRING LOCK: byte-identity alone can't prove the keyword gates the GC
+    # (the GC is output-invisible). Assert the pure gate predicate directly.
+    Test.@testset "gate predicate truth table (opt5 wiring lock)" begin
+        gc_enabled = Mycelia._gc_between_batches_enabled
+        # keyword is primary: true regardless of env
+        Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+            Test.@test gc_enabled(true) == true
+            Test.@test gc_enabled(false) == false
+        end
+        Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => "false") do
+            Test.@test gc_enabled(true) == true      # keyword wins over env
+            Test.@test gc_enabled(false) == false
+        end
+        # env fallback enables when the keyword is false
+        for tok in ("1", "true", "yes")
+            Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => tok) do
+                Test.@test gc_enabled(false) == true
+            end
+        end
+        # env rejects everything else (documented case-sensitive allow-list)
+        for tok in ("0", "no", "TRUE", "on", "", "garbage")
+            Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => tok) do
+                Test.@test gc_enabled(false) == false
+            end
+        end
+    end
 end
