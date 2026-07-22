@@ -1736,6 +1736,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         verbose::Bool = true,
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
+        gc_between_batches::Bool = false,
         enable_checkpointing::Bool = true,
         checkpoint_interval::Int = 5,
         skip_solid::Bool = false,
@@ -2408,6 +2409,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                 current_reads, graph, k,
                 verbose = verbose,
                 batch_size = batch_size,
+                gc_between_batches = gc_between_batches,
                 enable_parallel = enable_parallel,
                 graph_mode = graph_mode,
                 skip_solid = skip_solid,
@@ -4446,6 +4448,7 @@ two/three/four values are unaffected.
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
         batch_size::Int = 10000,
+        gc_between_batches::Bool = false,
         enable_parallel::Bool = false,
         graph_mode::Symbol = :canonical,
         skip_solid::Bool = false,
@@ -4475,6 +4478,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             k;
             verbose = verbose,
             batch_size = batch_size,
+            gc_between_batches = gc_between_batches,
             enable_parallel = enable_parallel,
             graph_mode = graph_mode,
             skip_solid = skip_solid,
@@ -4502,6 +4506,7 @@ function _improve_read_set_likelihood_impl(
         reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool,
         batch_size::Int,
+        gc_between_batches::Bool,
         enable_parallel::Bool,
         graph_mode::Symbol,
         skip_solid::Bool,
@@ -4941,12 +4946,15 @@ function _improve_read_set_likelihood_impl(
         # GC.gc() here parked ALL @threads decode workers between batches — the
         # mechanism most consistent with the observed ~286% CPU on a flat/bounded
         # memory plateau — while buying nothing once memory is already bounded.
-        # Default OFF (the speedup); a memory-constrained host can re-enable it via
-        # MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES. GC is output-neutral, so corrected
-        # reads are byte-identical either way. (The OOM-handler GC.gc(true) calls
+        # Default OFF (the speedup); re-enable via the gc_between_batches keyword
+        # (primary) or the MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback,
+        # for memory-constrained hosts). GC is output-neutral, so corrected reads
+        # are byte-identical either way. (The OOM-handler GC.gc(true) calls
         # elsewhere in this file are unaffected — they stay for fail-closed safety.)
         if batch_end < total_reads &&
-           get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in ("1", "true", "yes")
+           (gc_between_batches ||
+            get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in
+            ("1", "true", "yes"))
             GC.gc()
         end
     end

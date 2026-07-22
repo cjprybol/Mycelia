@@ -103,6 +103,7 @@
 #   MYCELIA_RCA_READLEN         comma-separated read lengths (default 150)
 #   MYCELIA_RCA_COVERAGE        target fold coverage (default 30; smoke default 10)
 #   MYCELIA_RCA_K               assembly k-mer size (default 21)
+#   MYCELIA_RCA_BATCH_SIZE      corrector read-batch size (default 10000; set small, e.g. 50, to expose between-batch GC/parallel effects)
 #   MYCELIA_RCA_ASSIGNED_Q      uniform Phred assigned to every base (default 20)
 #   MYCELIA_RCA_SEED            RNG seed (default 42)
 #   MYCELIA_RCA_SCALE_FLOOR     override the scale-guard floor in bases
@@ -188,6 +189,7 @@ function correct_reads_scalable(records::Vector{FASTX.FASTQ.Record}, k::Int)
         graph_mode = :doublestrand,
         n_k_rungs = 3,
         max_iterations_per_k = 2,
+        batch_size = parse(Int, get(ENV, "MYCELIA_RCA_BATCH_SIZE", "10000")),
         hard_window = true,
         soft_em = true,
         cheap_correct = true,
