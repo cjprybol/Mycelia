@@ -167,6 +167,71 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         Test.@test path.total_probability ≈ walked.probability
     end
 
+    Test.@testset "Tempered generative walk normalization (regression)" begin
+        # The same raw-vs-normalized bug lived in _tempered_walk (generation.jl),
+        # reached only via generate_sequences(...; temperature != 1.0). Exercise it
+        # so a regression there is caught: every generated walk_probability must be
+        # a valid probability in (0, 1], never a raw edge-weight product.
+        fork = MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0
+        )
+        fork["A"] = nothing
+        fork["B"] = nothing
+        fork["C"] = nothing
+        fork["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+        fork["A", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+        results = Mycelia.Rhizomorph.generate_sequences(
+            fork, 6; walk_length = 5, seed = 42, temperature = 0.5)
+        Test.@test !isempty(results)
+        # temperature = 0.5 (< 1) sharpens but the recorded probability is still the
+        # normalized tempered value, never the raw 3.0 / 2.0.
+        for r in results
+            Test.@test 0.0 < r.walk_probability <= 1.0
+        end
+    end
+
+    Test.@testset "Probabilistic Walk cumulative product (regression)" begin
+        # Two guaranteed fork steps (every first-level child itself forks) so the
+        # cumulative product of two normalized steps is exercised — a bug that only
+        # manifests across >= 2 steps would slip past the single-step fork test.
+        g = MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0
+        )
+        for v in ("A", "B", "C", "D", "E", "F", "G")
+            g[v] = nothing
+        end
+        fwd = Mycelia.Rhizomorph.Forward
+        g["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(3.0, fwd, fwd)
+        g["A", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(1.0, fwd, fwd)
+        g["B", "D"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(1.0, fwd, fwd)
+        g["B", "E"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(3.0, fwd, fwd)
+        g["C", "F"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(2.0, fwd, fwd)
+        g["C", "G"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(2.0, fwd, fwd)
+
+        path = Mycelia.Rhizomorph.probabilistic_walk_next(g, "A", 10; seed = 7)
+        # Start + two fork steps.
+        Test.@test length(path.steps) == 3
+        # total_probability is the product of every step's probability (start = 1.0).
+        Test.@test path.total_probability ≈ prod(s.probability for s in path.steps)
+        Test.@test 0.0 < path.total_probability <= 1.0
+        # Each non-start step is a normalized fork probability, strictly below 1.
+        Test.@test path.steps[2].probability < 1.0
+        Test.@test path.steps[3].probability < 1.0
+    end
+
     Test.@testset "Maximum Weight Walk" begin
         graph = create_test_graph()
 
