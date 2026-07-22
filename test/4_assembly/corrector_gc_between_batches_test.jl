@@ -50,7 +50,11 @@ function _gc_reads(rng, ref; n_reads = 180, readlen = 80, n_err = 30)
     return records
 end
 
-_seqs(records) = [FASTX.sequence(String, r) for r in records]
+# Full-record fingerprint (identifier, sequence, quality): the byte-identity
+# contract covers all three, so GC on/off must match on every field, not just
+# the sequence.
+_recs(records) = [(String(FASTX.identifier(r)), FASTX.sequence(String, r),
+    String(FASTX.quality(r))) for r in records]
 
 Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
     R = Mycelia.Rhizomorph
@@ -77,14 +81,14 @@ Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
             run_unit(true)
         end
         # byte-identical: GC is output-neutral
-        Test.@test _seqs(out_off) == _seqs(out_on)
+        Test.@test _recs(out_off) == _recs(out_on)
 
         # Env-var independence: env force-"true" with keyword=false is still
         # output-identical to the keyword=false / env-unset baseline.
         out_env, = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => "true") do
             run_unit(false)
         end
-        Test.@test _seqs(out_env) == _seqs(out_off)
+        Test.@test _recs(out_env) == _recs(out_off)
     end
 
     Test.@testset "integration: mycelia_iterative_assemble threads the keyword" begin
@@ -109,11 +113,11 @@ Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
             run_full(; gc = true, out = joinpath(tmp, "on"))
         end
 
-        final_seqs = res -> _seqs(
+        final_recs = res -> _recs(
             open(FASTX.FASTQ.Reader, res[:metadata][:final_fastq_file]) do rd
                 collect(rd)
             end)
-        Test.@test final_seqs(r_off) == final_seqs(r_on)
+        Test.@test final_recs(r_off) == final_recs(r_on)
     end
 
     # WIRING LOCK: byte-identity alone can't prove the keyword gates the GC
