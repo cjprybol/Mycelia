@@ -1817,7 +1817,7 @@ function _indel_decode_successors!(
 )::_IndelDecodeSuccessorBatch{V} where {V}
     key = (vertex, strand)
     return get!(cache, key) do
-        transitions = Rhizomorph._get_valid_transitions(
+        transitions, total_out = Rhizomorph._valid_transitions_and_total(
             graph, vertex, strand)
         successors = Tuple{
             Tuple{V, Rhizomorph.StrandOrientation}, Float64
@@ -1827,18 +1827,16 @@ function _indel_decode_successors!(
                 successors, length(transitions))
         end
 
-        total_out = Rhizomorph._total_outgoing_weight(
-            graph, vertex, strand)
         if !isfinite(total_out) || total_out <= 0.0
             return _IndelDecodeSuccessorBatch{V}(
                 successors, length(transitions))
         end
         for transition in transitions
-            next_vertex = convert(V, transition[:target_vertex])
+            next_vertex = convert(V, transition.target_vertex)
             next_strand = Rhizomorph._normalize_strand(
-                transition[:target_strand])
+                transition.target_strand)
             edge_weight = Rhizomorph._edge_transition_weight(
-                transition[:edge_data])
+                transition.edge_data)
             edge_weight <= 0.0 && continue
             push!(
                 successors,
