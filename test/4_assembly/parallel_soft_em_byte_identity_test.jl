@@ -69,6 +69,7 @@ else
 
         # (b) byte-identity vs serial: reads AND soft-EM weights
         seqs_ser, wts_ser = _psi_run(reads, graph, k, hard; parallel = false)
+        Test.@test !isempty(wts_par)
         Test.@test seqs_par == seqs_ser
         Test.@test wts_par == wts_ser
     end
@@ -167,7 +168,35 @@ else
 
         seqs_par, wts_par = _psi_run_windowed(reads, graph, k, hard; parallel = true)
         seqs_ser, wts_ser = _psi_run_windowed(reads, graph, k, hard; parallel = false)
+        Test.@test !isempty(wts_par)
         Test.@test seqs_par == seqs_ser
         Test.@test wts_par == wts_ser
+    end
+
+    Test.@testset "parallel x GC on/off byte-identity (opt1 + opt5)" begin
+        rng = Random.MersenneTwister(555)
+        ref = join(rand(rng, _PSI_BASES, 1500))
+        reads = _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
+        k = 13
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+        hard = Mycelia._hard_vertex_set(graph, k)
+        runit = gc -> begin
+            acc = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+            out, = Mycelia.improve_read_set_likelihood(
+                reads, graph, k; graph_mode = :canonical, skip_solid = true,
+                cheap_correct = true, hard_vertices = hard, decode_enabled = true,
+                batch_size = 50, enable_parallel = true, gc_between_batches = gc,
+                soft_weights = acc)
+            (_psi_seqs(out), _psi_weight_pairs(acc))
+        end
+        off = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+            runit(false)
+        end
+        on = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+            runit(true)
+        end
+        Test.@test !isempty(off[2])
+        Test.@test off[1] == on[1]        # reads
+        Test.@test off[2] == on[2]        # weights
     end
 end
