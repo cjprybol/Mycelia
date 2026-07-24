@@ -1,9 +1,7 @@
 # opt2: Kill the inner-DP allocation storm (typed transitions, fused edge-scan)
 
-Date: 2026-07-24
-Status: Approved (design)
-Scope: `_viterbi_correct_observation` hot decode loop — remove per-transition
-allocations, byte-identically.
+Date: 2026-07-24 Status: Approved (design) Scope: `_viterbi_correct_observation`
+hot decode loop — remove per-transition allocations, byte-identically.
 
 ## Context
 
@@ -18,9 +16,9 @@ allocation reduces GC contention on every worker.
 
 The load-bearing constraint is **byte-identical decode output** — the corrector
 lock tests assert byte-identical corrected reads across passes, and the opt1
-`parallel_soft_em_byte_identity` test asserts byte-identical soft-EM weights. Any
-refactor must preserve exact iteration order, exact floating-point accumulation
-order, and the weight floor.
+`parallel_soft_em_byte_identity` test asserts byte-identical soft-EM weights.
+Any refactor must preserve exact iteration order, exact floating-point
+accumulation order, and the weight floor.
 
 ## Key facts (post-opt1 baseline)
 
@@ -35,9 +33,9 @@ Files: `src/viterbi-next.jl` (hot loop) and
    `:target_strand` (`StrandOrientation`), `:probability` (`Float64`),
    `:edge_data` (edge-data struct).
 2. **Enumeration order + filters.** Directed/production path iterates
-   `Graphs.outneighbors(graph.graph, src_code)` in ascending dst-code order, with
-   a strand filter `_normalize_strand(edge_data.src_strand) == strand` and a
-   positive-weight filter (`_edge_transition_weight(edge_data) <= 0.0` skips).
+   `Graphs.outneighbors(graph.graph, src_code)` in ascending dst-code order,
+   with a strand filter `_normalize_strand(edge_data.src_strand) == strand` and
+   a positive-weight filter (`_edge_transition_weight(edge_data) <= 0.0` skips).
 3. **The double scan.** The loop separately calls
    `_total_outgoing_weight(graph, vertex, strand)` (path-finding.jl ~760) which
    scans the **same** `outneighbors` set in the **same** order with the **same**
@@ -49,25 +47,39 @@ Files: `src/viterbi-next.jl` (hot loop) and
    `:retained_states` / `:cumulative_retained_states` / `:max_retained_states` /
    `:completed_steps`). Each `+= 1` on an `Any`-typed Dict boxes an `Int`. All
    read-backs are in-loop self-reads; external consumers read only final values.
-5. **Consumers of `_get_valid_transitions`.** Besides the hot loop, the return is
-   consumed by `_calculate_transition_probabilities`, `_sample_transition`,
-   `_top_b_transitions` (sorts by `(_edge_transition_weight(t[:edge_data]),
-   string(t[:target_vertex]))`), and a few other sites — all read `:edge_data`
-   and/or `:probability`/`:target_vertex`.
+5. **Consumers of `_get_valid_transitions`.** Besides the hot loop, the return
+   is consumed by `_calculate_transition_probabilities`, `_sample_transition`,
+   `_top_b_transitions` (sorts by
+   `(_edge_transition_weight(t[:edge_data]), string(t[:target_vertex]))`), and a
+   few other sites — all read `:edge_data` and/or
+   `:probability`/`:target_vertex`.
 6. **Byte-identity surfaces.** Float accumulations: the `total_out` running sum;
-   `transition_prob = edge_w / total_out`; `next_score = state_score +
-   log(transition_prob) + emission_score`; the cumulative emission
-   `get(active_emissions, state, 0.0) + emission_score`. Ordered iterations that
-   drive tie-breaks: the `outneighbors` order, the `active_scores` Dict iteration
-   (line ~1420), the `transitions` iteration, and the beam-prune sorts (which
-   tie-break on `hash(state_tuple)` — so the **state-tuple key type must not
-   change**).
+   `transition_prob = edge_w / total_out`;
+   `next_score = state_score + log(transition_prob) + emission_score`; the
+   cumulative emission `get(active_emissions, state, 0.0) + emission_score`.
+   Ordered iterations that drive tie-breaks: the `outneighbors` order, the
+   `active_scores` Dict iteration (line ~1420), the `transitions` iteration, and
+   the beam-prune sorts (which tie-break on `hash(state_tuple)` — so the
+   **state-tuple key type must not change**).
 
 ## Design (changes 1-3; change 4 deferred)
 
-### 1. Typed transition struct
+### Scoping decision: hot-loop-only typed path (narrow blast radius)
 
-Define a concrete, parametric struct and replace the per-edge Dict:
+`_get_valid_transitions` feeds ~12 consumers across 5 files, but only the two
+hot decode call sites (viterbi-next.jl ~1422/1428 and ~1820/1830) run
+per-active-state per-depth. The cold consumers (`information-theory.jl`,
+`generation.jl`, `batched-viterbi-poc.jl`, and the `path-finding.jl`
+sampling/traversal helpers at ~407/467/665) are called rarely and get no benefit
+from de-allocation. So changes 1 and 2 are **isolated to the hot loop**: add a
+new typed, fused function used only there; leave `_get_valid_transitions` /
+`_total_outgoing_weight` (Dict form) untouched for every cold consumer. This
+keeps the byte-identity-critical, high- churn change to ~2 call sites instead of
+forcing a global return-type change.
+
+### 1 + 2. Typed transition struct + fused single-pass (hot loop only)
+
+Define a concrete parametric struct:
 
 ```julia
 struct _Transition{L, E}
@@ -78,46 +90,41 @@ struct _Transition{L, E}
 end
 ```
 
-`_get_valid_transitions` returns a typed `Vector{_Transition{L,E}}` (element type
-inferred from the first push, or built via a typed accumulator). Update every
-consumer from `t[:key]` to `t.key` field access
-(`_maybe_push_transition!`, the hot-loop consumer at ~1445-1478,
-`_calculate_transition_probabilities`, `_sample_transition`,
-`_top_b_transitions`, and the other `t[:edge_data]` sites). Byte-identical: the
-push order (outneighbors) is unchanged, the four values are unchanged, and the
-state-tuple key type (`(next_vertex, next_strand)`) is untouched — so
-`hash`-based tie-breaks are unaffected.
-
-### 2. Fuse `_total_outgoing_weight` into the transition pass
-
-Replace the two separate `outneighbors` scans (transition build at ~1422 +
-weight sum at ~1428) with one pass that returns both:
+Add ONE new function that fuses the transition build and the total-weight sum
+into a single `outneighbors` pass, returning a typed vector plus the total:
 
 ```julia
-# returns (transitions::Vector{_Transition}, total_out::Float64)
+# returns (transitions::Vector{_Transition{L,E}}, total_out::Float64)
 function _valid_transitions_and_total(graph, vertex, strand) ... end
 ```
 
 The single pass iterates `outneighbors` in ascending dst-code order; for each
 strand-matched edge it (a) adds `_edge_transition_weight(edge_data)` to `total`
 (including 0.0-weight edges — they contribute exactly `0.0`, so the sum is
-bit-identical to the current `_total_outgoing_weight`), and (b) pushes a
-`_Transition` iff the weight is `> 0.0`. Return `max(total, _KSP_MIN_WEIGHT)` for
-`total_out`. **Order invariants:** `total_out` is summed over the full
+bit-identical to the current `_total_outgoing_weight`), and (b) pushes a typed
+`_Transition` iff the weight is `> 0.0`. Returns `max(total, _KSP_MIN_WEIGHT)`
+for `total_out`. **Order invariants:** `total_out` is summed over the full
 strand-matched set in `outneighbors` order and fully computed before any
 `edge_w / total_out` divide and before the top-B truncation — exactly as today.
-Keep `_total_outgoing_weight` and `_get_valid_transitions` as thin wrappers (or
-in place) for their other call sites, so only the hot loop switches to the fused
-path.
+
+At the two hot decode call sites, replace the paired
+`_get_valid_transitions(...)` + `_total_outgoing_weight(...)` calls with the
+single fused call, and convert their transition consumers (viterbi-next.jl
+~1446-1448 and ~1837-1841) plus `_top_b_transitions` (viterbi-next.jl:1213, a
+hot-loop-only helper — verify no cold caller) from `t[:key]` to `t.key` field
+access. Byte-identical: same push order, same values, state-tuple key type
+untouched (so `hash`-based tie-breaks are unaffected). The Dict-form
+`_get_valid_transitions` / `_total_outgoing_weight` remain for the cold
+consumers, whose `t[:key]` access is unchanged.
 
 ### 3. Hoist diagnostics to local `Int` accumulators
 
-Replace each in-loop `diagnostics[:key] += 1` (and the `get(diagnostics, :key,
-0) + 1` forms) with unboxed `Int` locals, initialized from the pre-loop values
-where a running max / cumulative sum is seeded, updated in the loop, and written
-back into `diagnostics` once after the loop. Final values are identical (the
-counters are only self-read in-loop); the win is removing per-transition boxed
-allocation.
+Replace each in-loop `diagnostics[:key] += 1` (and the
+`get(diagnostics, :key, 0) + 1` forms) with unboxed `Int` locals, initialized
+from the pre-loop values where a running max / cumulative sum is seeded, updated
+in the loop, and written back into `diagnostics` once after the loop. Final
+values are identical (the counters are only self-read in-loop); the win is
+removing per-transition boxed allocation.
 
 ### 4. (Deferred) Reuse per-depth Dicts
 
@@ -140,18 +147,21 @@ possible approximate-tier item, not part of opt2.
 - **opt1 `parallel_soft_em_byte_identity`** asserts byte-identical soft-EM
   weights (parallel and serial) — must stay green (opt2 is inside the decode
   both paths share).
-- **Allocation check (optional):** a `@allocated` micro-benchmark on the hot loop
-  before/after to confirm the allocation reduction (directional; not a pass/fail
-  gate).
+- **Allocation check (optional):** a `@allocated` micro-benchmark on the hot
+  loop before/after to confirm the allocation reduction (directional; not a
+  pass/fail gate).
 
 ## Risks
 
 - **Type instability from `_Transition{L,E}`** if `L`/`E` aren't concrete at the
   call site — verify the element type is inferred concretely (the win depends on
   it). Mitigate by constructing the vector with the known element type.
-- **Missed consumer** of the old Dict interface — grep every `t[:` / `[:target_`
-  / `[:edge_data` / `[:probability` / `[:target_strand` site and convert. A
-  missed site is a `MethodError` (loud), not a silent byte-identity break.
+- **Wrong consumer converted** — because the Dict form is retained for cold
+  paths, only the HOT consumers (the two decode call sites +
+  `_top_b_transitions`) switch to field access. Verify `_top_b_transitions` has
+  no cold caller before converting it; if it does, keep it Dict-compatible or
+  give the hot path its own helper. A type mismatch is a `MethodError` (loud),
+  not a silent byte-identity break.
 - **Fusion reordering** the float sum — mitigated by summing in `outneighbors`
   order over the full strand-matched set (identical to today).
 
@@ -162,9 +172,11 @@ and opt3 (batched/SIMD kernel wiring).
 
 ## Acceptance criteria
 
-- Per-edge `Dict{Symbol,Any}` and `Vector{Any}` transitions replaced by the typed
-  struct/vector; all consumers converted to field access.
-- The two out-edge scans fused into one; `total_out` bit-identical.
+- The two hot decode call sites use a single fused, typed
+  `_valid_transitions_and_total`; their transition consumers converted to field
+  access. Cold consumers keep the retained Dict-form `_get_valid_transitions`.
+- The paired out-edge scans at the hot sites fused into one; `total_out`
+  bit-identical.
 - Diagnostics counters hoisted to `Int` locals; final diagnostics identical.
 - Golden-master decode test passes (path + score + diagnostics bit-identical);
   all corrector lock tests + the opt1 soft-EM byte-identity test stay green.
