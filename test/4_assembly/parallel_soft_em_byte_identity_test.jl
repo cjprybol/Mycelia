@@ -41,12 +41,13 @@ else
     _psi_seqs(records) = [FASTX.sequence(String, r) for r in records]
     _psi_weight_pairs(acc) = sort!(collect(acc.weights); by = p -> repr(p[1]))
 
-    function _psi_run(reads, graph, k, hard; parallel::Bool)
+    function _psi_run(reads, graph, k, hard; parallel::Bool, diagnostics = nothing)
         acc = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         out, = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = true,
             cheap_correct = true, hard_vertices = hard, decode_enabled = true,
-            batch_size = 50, enable_parallel = parallel, soft_weights = acc)
+            batch_size = 50, enable_parallel = parallel, soft_weights = acc,
+            diagnostics = diagnostics)
         return _psi_seqs(out), _psi_weight_pairs(acc)
     end
 
@@ -59,13 +60,19 @@ else
         graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
         hard = Mycelia._hard_vertex_set(graph, k)
 
-        # (a) parallel path taken: no "ignoring enable_parallel" warning
-        logger = Test.TestLogger()
-        seqs_par, wts_par = Logging.with_logger(logger) do
-            _psi_run(reads, graph, k, hard; parallel = true)
-        end
-        Test.@test !any(occursin("ignoring enable_parallel", r.message)
-                        for r in logger.logs)
+        # (a) parallel path ACTUALLY taken — assert via the opt1 actuation counter.
+        # The old "ignoring enable_parallel" warning was DELETED with the guard, so
+        # grepping the logs for it was vacuous. The counter increments once per
+        # parallel decode batch; a serial run leaves it at 0, so the counter
+        # DISCRIMINATES parallel from serial. A silent revert-to-serial regression
+        # makes the >0 assertion fail even though byte-identity still holds.
+        diag = Mycelia.CorrectorDiagnostics()
+        seqs_par, wts_par = _psi_run(reads, graph, k, hard; parallel = true,
+            diagnostics = diag)
+        Test.@test diag.parallel_decode_batches[] > 0
+        serial_diag = Mycelia.CorrectorDiagnostics()
+        _psi_run(reads, graph, k, hard; parallel = false, diagnostics = serial_diag)
+        Test.@test serial_diag.parallel_decode_batches[] == 0
 
         # (b) byte-identity vs serial: reads AND soft-EM weights
         seqs_ser, wts_ser = _psi_run(reads, graph, k, hard; parallel = false)

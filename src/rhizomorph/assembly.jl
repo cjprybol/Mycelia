@@ -1772,6 +1772,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # stamped value is "v2-competing-paths-floor" (or false on
         # :exhaustive), never a bare `true`.
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        # opt1 actuation counter surfaced end-to-end: total parallel decode batches
+        # (>0 proves the parallel path ran; 0 on serial/exhaustive).
+        assembly.assembly_stats["parallel_decode_batches"] =
+            get(_corr_meta, :parallel_decode_batches, 0)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])
         # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode

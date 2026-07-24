@@ -62,11 +62,11 @@ serial fold order.**
 
 ## Approaches considered
 
-|                | Approach                                                                                                                                                                                                          | Byte-identical weights?                                  | Memory                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **A (chosen)** | Deferred read-order reduce: parallelize the decode; each read writes its own staged accumulator to `batch_local[i]`; after the loop, serially fold `batch_local[1..N]` into the shared accumulator in read order. | Yes — exactly reproduces the serial left-fold.           | up to `batch_size` small accumulators per batch (freed after the fold). |
-| B              | Per-thread accumulators, reduce in thread order.                                                                                                                                                                  | No — chunk-wise grouping ≠ serial left-fold (ULP drift). | T accumulators (T = threads).                                           |
-| C              | Lock-striped / atomic shared Dict.                                                                                                                                                                                | No — adds in completion order (nondeterministic).        | 1 shared Dict.                                                          |
+|                | Approach                                                                                                                                                                                                                                        | Byte-identical weights?                                  | Memory                                                                                                                                                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A (chosen)** | Deferred read-order reduce: parallelize the decode; each read writes its own staged accumulators, one per window, to `batch_local[i]`; after the loop, serially fold `batch_local[1..N]` flat in read×window order into the shared accumulator. | Yes — exactly reproduces the serial left-fold.           | up to `batch_size × windows_per_read` small accumulators per batch — O(`batch_size × windows_per_read × edges_per_window`) — freed after the fold; tunable via `batch_size`, mitigated by opt5 `gc_between_batches`. |
+| B              | Per-thread accumulators, reduce in thread order.                                                                                                                                                                                                | No — chunk-wise grouping ≠ serial left-fold (ULP drift). | T accumulators (T = threads).                                                                                                                                                                                        |
+| C              | Lock-striped / atomic shared Dict.                                                                                                                                                                                                              | No — adds in completion order (nondeterministic).        | 1 shared Dict.                                                                                                                                                                                                       |
 
 Only **A** meets the hard byte-identity requirement. The parallelized portion in
 A is the expensive decode; the serial fold is only Dict additions, so A retains
@@ -180,9 +180,13 @@ threads.
 
 ## Risks
 
-- **Peak memory:** up to `batch_size` per-read accumulators held per batch,
-  freed after each fold. Bounded and tunable via `batch_size`; each accumulator
-  holds only the edges one read touches.
+- **Peak memory:** windowed decode stages one accumulator PER WINDOW, so the
+  peak is up to `batch_size × windows_per_read` staged accumulators held per
+  batch — O(`batch_size × windows_per_read × edges_per_window`), not
+  `batch_size` accumulators (a non-windowed read stages a single accumulator).
+  All are freed after each fold. Bounded and tunable via `batch_size`, further
+  mitigated by opt5 `gc_between_batches`; each accumulator holds only the edges
+  its window touches.
 - **Hidden shared mutable state** touched during decode beyond `soft_weights`.
   The survey found none (snapshot is read-only; reads/skips are indexed writes),
   and the subprocess byte-identity test is the guard that would catch any.

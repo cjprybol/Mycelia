@@ -9,10 +9,15 @@
 `Threads.@threads` with soft-EM enabled, byte-identically to serial, defaulting
 parallel-on when `nthreads > 1`.
 
-**Architecture:** Each `@threads` iteration decodes into its own per-read
-`SoftEdgeWeightAccumulator` written by index (`batch_local[i]`); after the loop,
-the per-read accumulators are folded into the shared accumulator in ascending
-read order, exactly reproducing the serial left-fold so soft-EM weights stay
+**Architecture (as shipped — see the REVISED banner in Task 1):** Each
+`@threads` iteration decodes into its own per-read _list_ of staged
+`SoftEdgeWeightAccumulator`s written by index
+(`batch_local::Vector{Vector{SoftEdgeWeightAccumulator}}`, `batch_local[i]`),
+appending one staged accumulator PER WINDOW (a non-windowed read stages one);
+after the loop the captured lists are folded FLAT into the shared accumulator in
+ascending read×window order (nested
+`for i; for staged in batch_local[i]: _merge_soft_edge_weights!(soft_weights, staged)`),
+exactly reproducing the serial per-window left-fold so soft-EM weights stay
 bit-identical despite float non-associativity. The read-side snapshot is already
 parallel-safe; the corrected-reads collection is already order-deterministic.
 

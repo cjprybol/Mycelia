@@ -271,4 +271,21 @@ if Threads.nthreads() > 1
             end]
         Test.@test seqs(runit(true)) == seqs(runit(false))
     end
+
+    Test.@testset "opt1 actuation counter surfaced through :scalable (I2)" begin
+        # Prove the parallel path actually RAN through the public strategy path
+        # (NOT an explicit enable_parallel): :scalable defaults enable_parallel to
+        # Threads.nthreads() > 1, so under -t>=2 the surfaced counter must be > 0.
+        # :exhaustive is serial by construction, so its counter must be 0 — the
+        # counter thus DISCRIMINATES the tiers, catching a silent revert-to-serial
+        # (guard re-added, or forwarding at assembly.jl deleted) that byte-identity
+        # alone would miss.
+        reads = _toy_fastq_records(Random.MersenneTwister(11))
+        sc = Mycelia.Rhizomorph.assemble_genome(
+            reads; k = 13, corrector = :iterative, strategy = :scalable)
+        Test.@test sc.assembly_stats["parallel_decode_batches"] > 0
+        ex = Mycelia.Rhizomorph.assemble_genome(
+            reads; k = 13, corrector = :iterative, strategy = :exhaustive)
+        Test.@test ex.assembly_stats["parallel_decode_batches"] == 0
+    end
 end

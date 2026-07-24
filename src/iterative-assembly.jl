@@ -3886,6 +3886,9 @@ function _capture_or_merge_soft_weights!(
         push!(sink, staged)
     elseif soft_weights !== nothing
         _merge_soft_edge_weights!(soft_weights, staged)
+    else
+        error("staged soft-EM weights with no destination (both sink and " *
+              "soft_weights are nothing)")
     end
     return nothing
 end
@@ -4296,12 +4299,17 @@ mutable struct CorrectorDiagnostics
     # the first uncorrectable position — see the decode-truncation defect). It is
     # the completeness guarantee: every such read is still scored at input length.
     substitution_length_divergences::Threads.Atomic{Int}
+    # opt1 actuation counter: incremented once per PARALLEL decode batch (the
+    # `if use_parallel` branch). A silent revert to serial leaves this at 0 while
+    # byte-identity still holds, so tests assert >0 to catch a lost parallel path.
+    parallel_decode_batches::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -4454,7 +4462,9 @@ first two/three/four values are unaffected.
 
 `soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
-NOT thread-safe, so supplying it forces sequential processing for this pass.
+thread-safe under parallel decode: each read/window's staged contributions are
+captured and folded into this accumulator in read×window order after the
+`Threads.@threads` loop, byte-identical to serial.
 
 `cheap_correct` (td-bjnt): when `true` (and `graph_mode==:canonical`), run the
 Stage 0 k-mer-spectrum correction pass (`_stage0_cheap_correct`) over the read set
@@ -4873,6 +4883,7 @@ function _improve_read_set_likelihood_impl(
         batch_improvements = 0
 
         if use_parallel
+            Threads.atomic_add!(diag.parallel_decode_batches, 1)
             # Parallel processing for large batches
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
 
@@ -4967,8 +4978,9 @@ function _improve_read_set_likelihood_impl(
                 end
             end
         else
-            # Sequential processing (also the soft-EM path: accumulation into
-            # `soft_weights` happens per-read inside improve_read_likelihood).
+            # Sequential processing (soft-EM in this serial branch accumulates
+            # per-read into `soft_weights` inside improve_read_likelihood; the
+            # parallel branch captures into per-read sinks and folds after the loop).
             for (i, read) in enumerate(batch_reads)
                 if _skip_this_read_at(batch_start + i - 1)
                     updated_reads[batch_start + i - 1] = read   # skip the decode
@@ -6130,7 +6142,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # verifies k + mode match its re-assembly parameters before reusing.
         :final_graph_k => final_pass_graph_k,
         :final_graph_mode => final_pass_graph_mode,
-        :final_graph_reusable => final_pass_graph_reusable
+        :final_graph_reusable => final_pass_graph_reusable,
+        # opt1 actuation counter: total PARALLEL decode batches across all passes
+        # (0 on a serial/exhaustive run). Lets an integration test prove the
+        # parallel path actually ran rather than silently reverting to serial.
+        :parallel_decode_batches =>
+            (diagnostics === nothing ? 0 : diagnostics.parallel_decode_batches[]),
     )
 
     if verbose
