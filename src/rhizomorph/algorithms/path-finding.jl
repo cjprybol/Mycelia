@@ -810,9 +810,17 @@ end
 # over ALL strand-matched edges in outneighbors order (0.0-weight edges add 0.0,
 # so bit-identical to _total_outgoing_weight); a _Transition is pushed only for
 # weight > 0.0 (identical to the positive-weight skip in _maybe_push_transition!).
-function _valid_transitions_and_total(graph, vertex_label, strand)
+# graph's Label/EdgeData type parameters (L, E) are pulled from the MetaGraph type
+# via dispatch so the returned vector is concretely typed Vector{_Transition{L,E}}
+# (fix round 1: `_Transition[]` was Vector{_Transition}, an abstract eltype that
+# would box every field access in the hot loop and defeat the typed struct).
+function _valid_transitions_and_total(
+        graph::MetaGraphsNext.MetaGraph{<:Any, <:Any, L, <:Any, E},
+        vertex_label,
+        strand
+) where {L, E}
     total = 0.0
-    transitions = _Transition[]
+    transitions = _Transition{L, E}[]
     haskey(graph, vertex_label) || return transitions, max(total, _KSP_MIN_WEIGHT)
     if Graphs.is_directed(graph.graph)
         src_code = MetaGraphsNext.code_for(graph, vertex_label)

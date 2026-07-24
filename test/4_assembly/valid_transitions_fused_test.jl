@@ -33,6 +33,11 @@ Test.@testset "fused valid-transitions equivalence (opt2)" begin
             dict_tx = R._get_valid_transitions(graph, label, strand)
             dict_total = R._total_outgoing_weight(graph, label, strand)
             fused_tx, fused_total = R._valid_transitions_and_total(graph, label, strand)
+            # fix round 1: the returned vector's static eltype must be concrete
+            # (Vector{_Transition{L,E}}), not the abstract Vector{_Transition} that
+            # `_Transition[]` produces — checked every iteration (empty and non-empty
+            # alike), since eltype concreteness is a static property of the vector.
+            Test.@test isconcretetype(eltype(fused_tx))
             Test.@test fused_total === dict_total                       # bit-identical
             Test.@test length(fused_tx) == length(dict_tx)
             for (a, b) in zip(fused_tx, dict_tx)
