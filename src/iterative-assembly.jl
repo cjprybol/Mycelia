@@ -4765,15 +4765,11 @@ function _improve_read_set_likelihood_impl(
     # otherwise use the precomputed gate flags.
     _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
-    # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
-    # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
-    # `Threads.@threads` still creates a distinct task with one Julia thread, so
-    # keep the explicit parallel contract (including task-local snapshot rebinding)
-    # active instead of silently taking the sequential branch on single-thread CI.
-    use_parallel = enable_parallel && soft_weights === nothing
-    if enable_parallel && soft_weights !== nothing
-        @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
-    end
+    # opt1: soft-EM accumulation is now thread-safe — the parallel branch gives
+    # each read its own SoftEdgeWeightAccumulator (indexed write), then folds them
+    # into the shared accumulator in read order after the loop, reproducing the
+    # serial left-fold bit-for-bit. So parallel + soft-EM coexist byte-identically.
+    use_parallel = enable_parallel
 
     if verbose
         println("  Processing $total_reads reads in batches of $batch_size")
@@ -4854,6 +4850,12 @@ function _improve_read_set_likelihood_impl(
             # word) — the @threads writes below would otherwise race on the shared
             # word and undercount the skip fraction (review I2).
             skip_flags = fill(false, length(batch_reads))
+
+            # opt1: one accumulator per read (indexed write, no race), folded in
+            # read order after the loop. `nothing` when soft-EM is off.
+            batch_local = soft_weights === nothing ? nothing :
+                          Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}(
+                              undef, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 Mycelia.Rhizomorph._with_soft_edge_weight_snapshot(
                     parallel_soft_edge_weight_snapshot,
@@ -4866,6 +4868,13 @@ function _improve_read_set_likelihood_impl(
                         read_index = batch_start + i - 1
                         read_window_sources = get(
                             scheduled_window_sources, read_index, nothing)
+                        # opt1: one accumulator per read (indexed write, no race),
+                        # folded into `soft_weights` in read order after the loop.
+                        local_acc = soft_weights === nothing ? nothing :
+                                    Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+                        if soft_weights !== nothing
+                            batch_local[i] = local_acc
+                        end
                         improved_read,
                         was_improved = (use_windowed &&
                                         (force_indel_windowing ||
@@ -4874,6 +4883,7 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k, hard_vertices;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = local_acc,
                             weighted_graph = pass_weighted_graph,
                             cleaned_graph = scheduled_cleaned_graph,
                             cleaned_weighted_graph =
@@ -4887,6 +4897,7 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = local_acc,
                             weighted_graph = pass_weighted_graph,
                             diagnostics = diag,
                             indel_params = effective_indel_params,
@@ -4904,6 +4915,16 @@ function _improve_read_set_likelihood_impl(
                 updated_reads[batch_start + i - 1] = improved_read
                 if was_improved
                     batch_improvements += 1
+                end
+            end
+
+            # opt1: fold per-read soft-EM contributions into the shared accumulator
+            # in ascending read order — identical summation order to the serial
+            # path, so weights are bit-identical despite float non-associativity.
+            if soft_weights !== nothing
+                for i in eachindex(batch_reads)
+                    isassigned(batch_local, i) || continue   # skipped reads
+                    _merge_soft_edge_weights!(soft_weights, batch_local[i])
                 end
             end
         else
