@@ -3810,6 +3810,8 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         cleaned_graph = nothing,
         cleaned_weighted_graph = nothing,
@@ -3827,6 +3829,7 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
     _divergent = improve_read_likelihood_windowed_detail(
         read, graph, k, hard_vertices;
         graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph, cleaned_graph = cleaned_graph,
         cleaned_weighted_graph = cleaned_weighted_graph,
         indel_window_sources = indel_window_sources, diagnostics = diagnostics,
@@ -3863,6 +3866,29 @@ function _merge_soft_edge_weights!(
     for (edge_id, weight) in staged.weights
         destination.weights[edge_id] =
             get(destination.weights, edge_id, 0.0) + weight
+    end
+    return nothing
+end
+
+# opt1: parallel-branch capture. When a `sink` vector is supplied the per-read /
+# per-window staged accumulator is APPENDED in decode order (indexed-write
+# ownership, no shared mutation) instead of merged into the shared `soft_weights`.
+# The batch loop later folds the captured lists flat in read×window order,
+# reproducing the serial left-fold bit-for-bit. `sink === nothing` keeps the
+# serial merge path unchanged.
+function _capture_or_merge_soft_weights!(
+        soft_weights,
+        sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}},
+        staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+)::Nothing
+    if sink !== nothing
+        push!(sink, staged)
+    elseif soft_weights !== nothing
+        _merge_soft_edge_weights!(soft_weights, staged)
+    else
+        error("staged soft-EM weights with no destination (both sink and " *
+              "soft_weights are nothing)")
     end
     return nothing
 end
@@ -3936,6 +3962,8 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         cleaned_graph = nothing,
         cleaned_weighted_graph = nothing,
@@ -4006,7 +4034,8 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
             continue
         end
-        staged_soft_weights = soft_weights === nothing ?
+        staged_soft_weights = (soft_weights === nothing &&
+                               soft_weights_sink === nothing) ?
                               nothing :
                               Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         decoded_sub,
@@ -4023,9 +4052,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             # path/trace/length contract passes, so structural failures merge an
             # empty accumulator. Changed windows remain staged until their splice
             # and overlap contracts pass below.
-            if soft_weights !== nothing
-                _merge_soft_edge_weights!(
+            if staged_soft_weights !== nothing
+                _capture_or_merge_soft_weights!(
                     soft_weights,
+                    soft_weights_sink,
                     Base.something(staged_soft_weights),
                 )
             end
@@ -4090,9 +4120,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 (owned_window, String(dseq_chars), String(dqual_chars)))
             accepted_window = true
         end
-        if accepted_window && soft_weights !== nothing
-            _merge_soft_edge_weights!(
+        if accepted_window && staged_soft_weights !== nothing
+            _capture_or_merge_soft_weights!(
                 soft_weights,
+                soft_weights_sink,
                 something(staged_soft_weights),
             )
         end
@@ -4268,12 +4299,17 @@ mutable struct CorrectorDiagnostics
     # the first uncorrectable position — see the decode-truncation defect). It is
     # the completeness guarantee: every such read is still scored at input length.
     substitution_length_divergences::Threads.Atomic{Int}
+    # opt1 actuation counter: incremented once per PARALLEL decode batch (the
+    # `if use_parallel` branch). A silent revert to serial leaves this at 0 while
+    # byte-identity still holds, so tests assert >0 to catch a lost parallel path.
+    parallel_decode_batches::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -4426,7 +4462,9 @@ first two/three/four values are unaffected.
 
 `soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
-NOT thread-safe, so supplying it forces sequential processing for this pass.
+thread-safe under parallel decode: each read/window's staged contributions are
+captured and folded into this accumulator in read×window order after the
+`Threads.@threads` loop, byte-identical to serial.
 
 `cheap_correct` (td-bjnt): when `true` (and `graph_mode==:canonical`), run the
 Stage 0 k-mer-spectrum correction pass (`_stage0_cheap_correct`) over the read set
@@ -4765,15 +4803,13 @@ function _improve_read_set_likelihood_impl(
     # otherwise use the precomputed gate flags.
     _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
-    # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
-    # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
-    # `Threads.@threads` still creates a distinct task with one Julia thread, so
-    # keep the explicit parallel contract (including task-local snapshot rebinding)
-    # active instead of silently taking the sequential branch on single-thread CI.
-    use_parallel = enable_parallel && soft_weights === nothing
-    if enable_parallel && soft_weights !== nothing
-        @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
-    end
+    # opt1: soft-EM accumulation is now thread-safe — the parallel branch captures
+    # each read's per-window staged accumulators into its own sink list (indexed
+    # write, no shared mutation), then folds them FLAT in read×window order after
+    # the loop, reproducing the serial left-fold bit-for-bit (windowed decodes
+    # contribute one staged accumulator per window; non-windowed one per read). So
+    # parallel + soft-EM coexist byte-identically on both decode paths.
+    use_parallel = enable_parallel
 
     if verbose
         println("  Processing $total_reads reads in batches of $batch_size")
@@ -4847,6 +4883,7 @@ function _improve_read_set_likelihood_impl(
         batch_improvements = 0
 
         if use_parallel
+            Threads.atomic_add!(diag.parallel_decode_batches, 1)
             # Parallel processing for large batches
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
 
@@ -4854,6 +4891,14 @@ function _improve_read_set_likelihood_impl(
             # word) — the @threads writes below would otherwise race on the shared
             # word and undercount the skip fraction (review I2).
             skip_flags = fill(false, length(batch_reads))
+
+            # opt1: one sink LIST per read (indexed write, no race); the decode
+            # appends its per-window staged accumulators in order. Folded flat in
+            # read×window order after the loop. `nothing` when soft-EM is off.
+            batch_local = soft_weights === nothing ? nothing :
+                          Vector{
+                              Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}}(
+                              undef, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 Mycelia.Rhizomorph._with_soft_edge_weight_snapshot(
                     parallel_soft_edge_weight_snapshot,
@@ -4866,6 +4911,15 @@ function _improve_read_set_likelihood_impl(
                         read_index = batch_start + i - 1
                         read_window_sources = get(
                             scheduled_window_sources, read_index, nothing)
+                        # opt1: one sink LIST per read (indexed write, no race); the
+                        # decode appends its per-window staged accumulators in order,
+                        # folded flat into `soft_weights` in read×window order below.
+                        local_sink = soft_weights === nothing ? nothing :
+                                     Vector{
+                                         Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}()
+                        if soft_weights !== nothing
+                            batch_local[i] = local_sink
+                        end
                         improved_read,
                         was_improved = (use_windowed &&
                                         (force_indel_windowing ||
@@ -4874,6 +4928,8 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k, hard_vertices;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = nothing,
+                            soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             cleaned_graph = scheduled_cleaned_graph,
                             cleaned_weighted_graph =
@@ -4887,6 +4943,8 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = nothing,
+                            soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             diagnostics = diag,
                             indel_params = effective_indel_params,
@@ -4906,9 +4964,23 @@ function _improve_read_set_likelihood_impl(
                     batch_improvements += 1
                 end
             end
+
+            # opt1: fold captured per-window soft-EM contributions into the shared
+            # accumulator flat in ascending read×window order — identical summation
+            # order to the serial path, so weights are bit-identical despite float
+            # non-associativity.
+            if soft_weights !== nothing
+                for i in eachindex(batch_reads)
+                    isassigned(batch_local, i) || continue   # skipped reads
+                    for staged in batch_local[i]
+                        _merge_soft_edge_weights!(soft_weights, staged)
+                    end
+                end
+            end
         else
-            # Sequential processing (also the soft-EM path: accumulation into
-            # `soft_weights` happens per-read inside improve_read_likelihood).
+            # Sequential processing (soft-EM in this serial branch accumulates
+            # per-read into `soft_weights` inside improve_read_likelihood; the
+            # parallel branch captures into per-read sinks and folds after the loop).
             for (i, read) in enumerate(batch_reads)
                 if _skip_this_read_at(batch_start + i - 1)
                     updated_reads[batch_start + i - 1] = read   # skip the decode
@@ -5106,6 +5178,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -5137,6 +5211,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
     likelihood_improvement = find_optimal_sequence_path(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
         substitution_error_rate = substitution_error_rate,
@@ -5174,6 +5249,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -5209,6 +5286,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     viterbi_result = try_viterbi_path_improvement(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
         substitution_error_rate = substitution_error_rate,
@@ -5932,6 +6010,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_anchor_rejections => 0,
             :window_divergences => 0,
             :substitution_length_divergences => 0,
+            :parallel_decode_batches => 0,
         )
     else
         Dict(
@@ -5947,6 +6026,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_divergences => diagnostics.window_divergences[],
             :substitution_length_divergences =>
                 diagnostics.substitution_length_divergences[],
+            :parallel_decode_batches => diagnostics.parallel_decode_batches[],
         )
     end
 
@@ -6064,7 +6144,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # verifies k + mode match its re-assembly parameters before reusing.
         :final_graph_k => final_pass_graph_k,
         :final_graph_mode => final_pass_graph_mode,
-        :final_graph_reusable => final_pass_graph_reusable
+        :final_graph_reusable => final_pass_graph_reusable,
+        # opt1 actuation counter: total PARALLEL decode batches across all passes
+        # (0 on a serial/exhaustive run). Lets an integration test prove the
+        # parallel path actually ran rather than silently reverting to serial.
+        :parallel_decode_batches =>
+            (diagnostics === nothing ? 0 : diagnostics.parallel_decode_batches[]),
     )
 
     if verbose
@@ -6244,6 +6329,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -6254,7 +6341,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
 )::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing} where {F, L}
     indel_attempt_started = false
     indel_outcome_recorded = false
-    staged_soft_weights = soft_weights === nothing ?
+    staged_soft_weights = (soft_weights === nothing &&
+                           soft_weights_sink === nothing) ?
                           nothing :
                           Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
     try
@@ -6514,7 +6602,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         soft_result_is_valid = indel_params !== nothing ||
                                length(corrected_sequence_string) ==
                                length(sequence_string)
-        if soft_weights !== nothing && soft_result_is_valid
+        if staged_soft_weights !== nothing && soft_result_is_valid
             # Bound the competing-path GENERATION with the same discipline as the
             # decode bounds above (td-e70t speed residual C5c): engage the walk band
             # + successor cap ONLY where the width beam is already finite (the
@@ -6602,9 +6690,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         end
         improved_record = FASTX.FASTQ.Record(
             FASTX.identifier(read), corrected_sequence_string, improved_quality)
-        if soft_weights !== nothing
-            _merge_soft_edge_weights!(
+        if staged_soft_weights !== nothing
+            _capture_or_merge_soft_weights!(
                 soft_weights,
+                soft_weights_sink,
                 something(staged_soft_weights),
             )
         end
