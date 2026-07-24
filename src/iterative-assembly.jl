@@ -6010,6 +6010,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_anchor_rejections => 0,
             :window_divergences => 0,
             :substitution_length_divergences => 0,
+            :parallel_decode_batches => 0,
         )
     else
         Dict(
@@ -6025,6 +6026,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_divergences => diagnostics.window_divergences[],
             :substitution_length_divergences =>
                 diagnostics.substitution_length_divergences[],
+            :parallel_decode_batches => diagnostics.parallel_decode_batches[],
         )
     end
 
