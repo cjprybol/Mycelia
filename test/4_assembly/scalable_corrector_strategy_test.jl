@@ -240,4 +240,35 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test asm.assembly_stats["skip_solid"] == true
         Test.@test asm.assembly_stats["hard_window"] == true
     end
+
+    Test.@testset "scalable defaults parallel on multi-thread (opt1)" begin
+        ks = R._corrector_strategy_knobs(:scalable)
+        Test.@test ks.enable_parallel == (Threads.nthreads() > 1)
+        ex = R._corrector_strategy_knobs(:exhaustive)
+        Test.@test ex.enable_parallel == false     # exhaustive stays serial/exact
+    end
+end
+
+if Threads.nthreads() > 1
+    Test.@testset "scalable assemble_genome parallel==serial (opt1)" begin
+        rng = Random.MersenneTwister(77)
+        ref = join(rand(rng, ['A', 'C', 'G', 'T'], 1200))
+        reads = [FASTX.FASTQ.Record("r$i",
+            ref[(s):(s + 79)], String(fill('I', 80)))
+            for (i, s) in enumerate(rand(rng, 1:1121, 150))]
+        tmp = mktempdir()
+        fq = joinpath(tmp, "in.fastq")
+        Mycelia.write_fastq(records = reads, filename = fq)
+        runit = par -> Mycelia.mycelia_iterative_assemble(fq;
+            max_k = 17, n_k_rungs = 3, max_iterations_per_k = 2,
+            graph_mode = :canonical, skip_solid = true, cheap_correct = true,
+            hard_window = true, soft_em = true, enable_parallel = par,
+            verbose = false, enable_checkpointing = false,
+            output_dir = joinpath(tmp, par ? "par" : "ser"))
+        seqs(res) = [FASTX.sequence(String, r) for r in
+            open(FASTX.FASTQ.Reader, res[:metadata][:final_fastq_file]) do rd
+                collect(rd)
+            end]
+        Test.@test seqs(runit(true)) == seqs(runit(false))
+    end
 end
