@@ -1426,9 +1426,9 @@ function _viterbi_correct_observation(
     beam_pruned = 0
     margin_pruned = 0
     completed_steps = 0
-    retained_states = diagnostics[:retained_states]
-    cumulative_retained_states = diagnostics[:cumulative_retained_states]
-    max_retained_states = diagnostics[:max_retained_states]
+    retained_states::Int = diagnostics[:retained_states]
+    cumulative_retained_states::Int = diagnostics[:cumulative_retained_states]
+    max_retained_states::Int = diagnostics[:max_retained_states]
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1574,9 +1574,15 @@ function _viterbi_correct_observation(
     diagnostics[:expanded_states] = expanded_states
     diagnostics[:generated_states] = generated_states
     diagnostics[:skipped_transitions] = skipped_transitions
-    successor_bounded > 0 && (diagnostics[:successor_bounded] = successor_bounded)
-    beam_pruned > 0 && (diagnostics[:beam_pruned] = beam_pruned)
-    margin_pruned > 0 && (diagnostics[:margin_pruned] = margin_pruned)
+    if successor_bounded > 0
+        diagnostics[:successor_bounded] = successor_bounded
+    end
+    if beam_pruned > 0
+        diagnostics[:beam_pruned] = beam_pruned
+    end
+    if margin_pruned > 0
+        diagnostics[:margin_pruned] = margin_pruned
+    end
     diagnostics[:retained_states] = retained_states
     diagnostics[:cumulative_retained_states] = cumulative_retained_states
     diagnostics[:max_retained_states] = max_retained_states
