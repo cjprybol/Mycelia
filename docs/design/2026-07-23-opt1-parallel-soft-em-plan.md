@@ -72,7 +72,18 @@ Actions CI.
 
 ---
 
-### Task 1: Deferred read-order reduce in the parallel decode branch
+> **REVISED (post-review):** Task 1's fold is upgraded from a per-read
+> accumulator to **per-window ordered capture + flat read-order replay** — the
+> production `:scalable` path sets `windowed_decode=true`, and the windowed
+> decode merges per-window, so a per-read fold is not bit-identical to serial.
+> See the design spec §"2. Parallel branch: per-window ordered capture + flat
+> read-order replay" for the exact mechanism (a `soft_weights_sink` that
+> captures staged accumulators in decode order;
+> `batch_local::Vector{Vector{SoftEdgeWeightAccumulator}}`; flat replay
+> `for i; for staged in batch_local[i]; _merge_soft_edge_weights!(soft_weights, staged)`).
+> The test must include a `windowed_decode=true` repeat-heavy case.
+
+### Task 1: Per-window ordered capture + flat read-order replay (parallel decode)
 
 **Files:**
 

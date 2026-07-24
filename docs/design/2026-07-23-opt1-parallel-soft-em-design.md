@@ -82,24 +82,53 @@ In `src/iterative-assembly.jl`, change the gate to
 `use_parallel = enable_parallel` and remove the now-inaccurate "soft-EM is
 sequential" `@warn`. Parallel + soft-EM now coexist.
 
-### 2. Parallel branch: per-read staged accumulators + deferred fold
+### 2. Parallel branch: per-window ordered capture + flat read-order replay
 
-In the `if use_parallel` branch:
+The serial path folds soft-EM contributions onto a running accumulator in
+**read×window order**: for an edge `e`, `0, +r1w1, +r1w2, +r2w1, …` (flat
+sequential). Two contribution granularities exist:
 
-- Allocate `batch_local = Vector{SoftEdgeWeightAccumulator}(undef, n)` when
-  `soft_weights !== nothing` (else keep `nothing`).
-- Each `@threads` iteration `i` decodes with
-  `soft_weights = (soft_weights === nothing ? nothing : batch_local[i])`, a
-  fresh per-read accumulator (indexed write; no races — mirrors
-  `batch_results[i]`).
-- **After** the `@threads` loop, if `soft_weights !== nothing`, serially fold in
-  read order:
-  `for i in 1:n; _merge_soft_edge_weights!(soft_weights, batch_local[i]); end`.
+- **Non-windowed decode** contributes **once per read** — it stages into a
+  private `staged_soft_weights` and does a single terminal
+  `_merge_soft_edge_weights!(soft_weights, staged)`. A per-read accumulator
+  reproduces this exactly.
+- **Windowed decode** (`windowed_decode=true`, which the production `:scalable`
+  strategy sets) contributes **once per window** — it stages a fresh accumulator
+  per window and merges each into the passed accumulator in window order.
 
-This reproduces the serial left-fold exactly: for every edge `e`,
-`shared[e] = ((staged₁[e] + staged₂[e]) + … ) + staged_N[e]` in ascending read
-index — identical to what the serial branch produces today. The read-side
-snapshot rebinding is unchanged; reads/skip-flags collection is unchanged.
+A per-read accumulator therefore is NOT sufficient: it would pre-group a read's
+windows as `(w1+w2)` before folding onto the running total `R`, giving
+`R+(w1+w2)` where the serial path computes `(R+w1)+w2`. Float non-associativity
+makes these differ whenever an edge is hit by ≥2 windows of one read that a
+prior read also touched (a within-read cross-window repeat). To be bit-identical
+on all paths, the parallel branch must replay the **per-window** contributions
+in the exact serial flat order.
+
+Mechanism — a capture "sink" instead of an internal merge:
+
+- Add an optional
+  `soft_weights_sink::Union{Nothing, Vector{SoftEdgeWeightAccumulator}}` kwarg
+  threaded `improve_read_likelihood` → `try_viterbi_path_improvement`
+  (non-windowed) and `improve_read_likelihood_windowed` (windowed). At each
+  existing merge site, when `sink !== nothing`, `push!(sink, staged)` (append
+  the staged accumulator in decode order) instead of
+  `_merge_soft_edge_weights!(soft_weights, staged)`. Staging guards become
+  `soft_weights !== nothing || sink !== nothing`. Serial behavior (sink
+  `nothing`) is untouched.
+- In the `if use_parallel` branch, allocate
+  `batch_local = Vector{Vector{SoftEdgeWeightAccumulator}}(undef, n)` when
+  `soft_weights !== nothing`. Each `@threads` iteration `i` passes
+  `soft_weights_sink = batch_local[i]` (a fresh empty vector; the decode appends
+  its per-read/per-window staged accumulators in order). Indexed write, no
+  races.
+- **After** the loop, replay flat in read×window order:
+  `for i in 1:n; isassigned(batch_local, i) || continue; for staged in batch_local[i]; _merge_soft_edge_weights!(soft_weights, staged); end; end`.
+
+For an edge `e`, this reproduces the serial running-total sequence
+`0, +r1w1, +r1w2, +r2w1, …` exactly (non-windowed reads simply contribute a
+length-1 list), so weights are bit-identical to the serial path on both windowed
+and non-windowed decodes. The read-side snapshot rebinding and the
+reads/skip-flags collection are unchanged.
 
 ### 3. Caller wiring — default parallel on when `nthreads > 1`
 
@@ -128,9 +157,13 @@ threads.
    `julia -t 4` subprocess running the corrector twice on the same input —
    `enable_parallel = true` vs `false` — and asserts **identical corrected reads
    AND identical soft-EM weights** (full accumulator Dict, key set and every
-   `Float64` value). Subprocess-based so it exercises genuine concurrency
-   regardless of the parent harness's thread count. This is the primary guard
-   against any hidden shared-state race beyond `soft_weights`.
+   `Float64` value). One test case MUST enable `windowed_decode=true` on a
+   repeat-heavy input (a short tandem repeat so an edge is hit by ≥2 windows of
+   one read that a prior read also touched) — this is the case the per-window
+   ordered capture exists for, and it would diverge under a naive per-read fold.
+   Subprocess-based so it exercises genuine concurrency regardless of the parent
+   harness's thread count. This is the primary guard against any hidden
+   shared-state race beyond `soft_weights`.
 2. **Equal-weights exposure.** The accumulator must be observable to the test —
    via a test hook or the corrector's returned metadata — so the weights can be
    compared, not just the reads.
