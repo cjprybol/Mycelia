@@ -1214,8 +1214,8 @@ function _top_b_transitions(transitions, b::Int)
     length(transitions) <= b && return transitions
     ordered = sort(
         transitions;
-        by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
-            string(t[:target_vertex])),
+        by = t -> (Rhizomorph._edge_transition_weight(t.edge_data),
+            string(t.target_vertex)),
         rev = true
     )
     return ordered[1:b]
@@ -1419,13 +1419,13 @@ function _viterbi_correct_observation(
 
         for (state, state_score) in active_scores
             current_vertex, current_strand = state
-            transitions = Rhizomorph._get_valid_transitions(graph, current_vertex, current_strand)
+            transitions, total_out = Rhizomorph._valid_transitions_and_total(
+                graph, current_vertex, current_strand)
             diagnostics[:expanded_states] += 1
             if isempty(transitions)
                 continue
             end
 
-            total_out = Rhizomorph._total_outgoing_weight(graph, current_vertex, current_strand)
             if !isfinite(total_out) || total_out <= 0.0
                 diagnostics[:skipped_transitions] += length(transitions)
                 continue
@@ -1443,9 +1443,9 @@ function _viterbi_correct_observation(
             end
 
             for transition in transitions
-                next_vertex = convert(label_type, transition[:target_vertex])
-                next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
-                edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
+                next_vertex = convert(label_type, transition.target_vertex)
+                next_strand = Rhizomorph._normalize_strand(transition.target_strand)
+                edge_w = Rhizomorph._edge_transition_weight(transition.edge_data)
                 if edge_w <= 0.0
                     diagnostics[:skipped_transitions] += 1
                     continue
