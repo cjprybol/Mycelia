@@ -188,13 +188,19 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         fork["A", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
             2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
 
+        # Force every walk to start at the fork vertex A (B and C are terminal, so a
+        # degree-weighted start could otherwise pick them and yield a 0-step walk).
         results = Mycelia.Rhizomorph.generate_sequences(
-            fork, 6; walk_length = 5, seed = 42, temperature = 0.5)
+            fork, 6; walk_length = 5, seed = 42, temperature = 0.5,
+            start_vertices = ["A"])
         Test.@test !isempty(results)
-        # temperature = 0.5 (< 1) sharpens but the recorded probability is still the
-        # normalized tempered value, never the raw 3.0 / 2.0.
+        # At temperature 0.5 the tempered distribution over the 3.0/2.0 fork is
+        # (3/5)^2 : (2/5)^2 renormalized = 9/13 : 4/13. Asserting the exact tempered
+        # value (not just the (0,1] bound) is what distinguishes the correct
+        # tempered[idx] from the raw edge weight OR the untempered 3/5, 2/5.
         for r in results
             Test.@test 0.0 < r.walk_probability <= 1.0
+            Test.@test (r.walk_probability ≈ 9 / 13) || (r.walk_probability ≈ 4 / 13)
         end
     end
 
