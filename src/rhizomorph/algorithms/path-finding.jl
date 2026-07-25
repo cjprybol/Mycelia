@@ -801,7 +801,6 @@ end
 struct _Transition{L, E}
     target_vertex::L
     target_strand::StrandOrientation
-    probability::Float64
     edge_data::E
 end
 
@@ -833,7 +832,7 @@ function _valid_transitions_and_total(
             w <= 0.0 && continue
             push!(transitions,
                 _Transition(target_vertex, _normalize_strand(edge_data.dst_strand),
-                    w, edge_data))
+                    edge_data))
         end
     else
         for edge_labels in MetaGraphsNext.edge_labels(graph)
@@ -846,7 +845,7 @@ function _valid_transitions_and_total(
                 w <= 0.0 && continue
                 push!(transitions,
                     _Transition(target_vertex,
-                        _normalize_strand(edge_data.dst_strand), w, edge_data))
+                        _normalize_strand(edge_data.dst_strand), edge_data))
             end
         end
     end

@@ -43,7 +43,7 @@ Test.@testset "fused valid-transitions equivalence (opt2)" begin
             for (a, b) in zip(fused_tx, dict_tx)
                 Test.@test a.target_vertex == b[:target_vertex]
                 Test.@test a.target_strand == b[:target_strand]
-                Test.@test a.probability === b[:probability]            # bit-identical
+                Test.@test R._edge_transition_weight(a.edge_data) === b[:probability]  # bit-identical
                 Test.@test a.edge_data === b[:edge_data]
             end
             checked += 1
