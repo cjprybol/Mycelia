@@ -100,9 +100,11 @@ function _valid_transitions_and_total(graph, vertex, strand) ... end
 
 The single pass iterates `outneighbors` in ascending dst-code order; for each
 strand-matched edge it (a) adds `_edge_transition_weight(edge_data)` to `total`
-(including 0.0-weight edges — they contribute exactly `0.0`, so the sum is
-bit-identical to the current `_total_outgoing_weight`), and (b) pushes a typed
-`_Transition` iff the weight is `> 0.0`. Returns `max(total, _KSP_MIN_WEIGHT)`
+(non-finite-weight edges contribute `0.0`, finite weights floor to
+`_KSP_MIN_WEIGHT = 1e-10`; the sum is bit-identical to the current
+`_total_outgoing_weight` because both add `_edge_transition_weight` for every
+strand-matched edge), and (b) pushes a typed `_Transition` iff the weight is
+`> 0.0`. Returns `max(total, _KSP_MIN_WEIGHT)`
 for `total_out`. **Order invariants:** `total_out` is summed over the full
 strand-matched set in `outneighbors` order and fully computed before any
 `edge_w / total_out` divide and before the top-B truncation — exactly as today.

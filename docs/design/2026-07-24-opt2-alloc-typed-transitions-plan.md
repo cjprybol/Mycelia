@@ -207,6 +207,15 @@ function _valid_transitions_and_total(graph, vertex_label, strand)
 end
 ```
 
+> NOTE (shipped form differs from this sketch): the shipped `_Transition` list
+> is allocated as `_Transition{L, E}[]` (concrete eltype, pulled from the
+> MetaGraph type parameters `L`/`E` via dispatch — fix round 1), not the
+> abstract `_Transition[]` shown above; and the shipped struct is the 3-field
+> `_Transition{L, E}(target_vertex, target_strand, edge_data)` after the
+> vestigial `probability::Float64` field was dropped (no src reads it — the hot
+> consumers recompute the weight via `_edge_transition_weight(edge_data)`), so
+> the two `push!` sites take no `w` argument.
+
 NOTE on order: `_maybe_push_transition!` computes `probability` and applies the
 `<= 0.0` skip BEFORE reading `dst_strand`; here
 `w = _edge_transition_weight(...)` is the same `probability`. The sum adds `w`

@@ -35,11 +35,12 @@ between before and after:
   `[1.0, 1.0, 0.6666666666666666, 0.6666666666666666, 0.6666666666666666, 0.6666666666666666]`
 - `path.total_probability` — `0.6666666666666666`
 - `result.score` — `-0.5863711534711905`
-- `result.diagnostics` — all 20 key/value pairs identical, including
+- `result.diagnostics` — all 21 key/value pairs identical, including
   `successor_bounded => 1` (confirms the `_top_b_transitions` bounded-branch
-  code path fired identically on both branches)
+  code path fired on this fixture, with the same count on both branches)
 
-**The allocation reduction did not change decode output.** This also matches
+**The allocation reduction did not change decode output on this fixture.** This
+also matches
 the pinned expected values in
 `test/4_assembly/viterbi_decode_golden_test.jl` (captured pre-refactor at
 commit `047142aa8`), which continues to pass on this branch.

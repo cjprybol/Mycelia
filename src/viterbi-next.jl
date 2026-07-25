@@ -1409,7 +1409,10 @@ function _viterbi_correct_observation(
     # log-prob). Empty + untouched unless config.record_position_gaps is set.
     position_gaps = Float64[]
 
-    # Perf (opt2, td-cppm/td-jbjd): hoist the per-transition diagnostics counters
+    # Perf (opt2, td-cppm/td-jbjd): hoist the loop-updated diagnostics counters
+    # (a mix — per-transition: generated_states/skipped_transitions; per-state:
+    # expanded_states/successor_bounded; per-depth: beam_pruned/margin_pruned/
+    # retained_states/cumulative_retained_states/max_retained_states/completed_steps)
     # out of `diagnostics::Dict{Symbol,Any}` (every `Int` update there boxes a
     # fresh `Any`) into unboxed `Int` locals, merged back into `diagnostics`
     # once after the loop. Byte-identical: final dict values are unchanged, only
