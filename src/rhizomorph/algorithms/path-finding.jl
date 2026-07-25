@@ -411,9 +411,12 @@ function probabilistic_walk_next(
         end
 
         transition_probs = _calculate_transition_probabilities(valid_transitions)
-        next_transition = _sample_transition(valid_transitions, transition_probs)
+        idx = _sample_transition_index(valid_transitions, transition_probs)
+        next_transition = valid_transitions[idx]
 
-        step_prob = next_transition[:probability]
+        # Record the NORMALIZED transition probability, not the raw edge weight, so
+        # cumulative_prob / GraphPath.total_probability stays a valid path probability.
+        step_prob = transition_probs[idx]
         cumulative_prob *= step_prob
 
         current_vertex = next_transition[:target_vertex]
@@ -582,13 +585,15 @@ function _calculate_transition_probabilities(transitions)
     return weights ./ total_weight
 end
 
-function _sample_transition(transitions, probabilities)
+# Draw the INDEX of a sampled transition so callers can recover the matching
+# normalized probability from their probability vector (see probabilistic_walk_next).
+function _sample_transition_index(transitions, probabilities)
     if isempty(transitions)
         return nothing
     end
 
     if length(transitions) == 1
-        return first(transitions)
+        return 1
     end
 
     r = Mycelia.Random.rand()
@@ -597,11 +602,16 @@ function _sample_transition(transitions, probabilities)
     for (i, prob) in enumerate(probabilities)
         cumulative += prob
         if r <= cumulative
-            return transitions[i]
+            return i
         end
     end
 
-    return last(transitions)
+    return length(transitions)
+end
+
+function _sample_transition(transitions, probabilities)
+    idx = _sample_transition_index(transitions, probabilities)
+    return idx === nothing ? nothing : transitions[idx]
 end
 
 """
