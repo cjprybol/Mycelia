@@ -1214,8 +1214,8 @@ function _top_b_transitions(transitions, b::Int)
     length(transitions) <= b && return transitions
     ordered = sort(
         transitions;
-        by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
-            string(t[:target_vertex])),
+        by = t -> (Rhizomorph._edge_transition_weight(t.edge_data),
+            string(t.target_vertex)),
         rev = true
     )
     return ordered[1:b]
@@ -1408,6 +1408,30 @@ function _viterbi_correct_observation(
     # Opt-in Tier-2 telemetry: per-depth Viterbi margin (best - 2nd-best surviving
     # log-prob). Empty + untouched unless config.record_position_gaps is set.
     position_gaps = Float64[]
+
+    # Perf (opt2, td-cppm/td-jbjd): hoist the loop-updated diagnostics counters
+    # (a mix — per-transition: generated_states/skipped_transitions; per-state:
+    # expanded_states/successor_bounded; per-depth: beam_pruned/margin_pruned/
+    # retained_states/cumulative_retained_states/max_retained_states/completed_steps)
+    # out of `diagnostics::Dict{Symbol,Any}` (every `Int` update there boxes a
+    # fresh `Any`) into unboxed `Int` locals, merged back into `diagnostics`
+    # once after the loop. Byte-identical: final dict values are unchanged, only
+    # the in-loop storage representation changes. `successor_bounded`,
+    # `beam_pruned`, and `margin_pruned` use lazy get-or-default in the original
+    # code (key absent from the dict until first triggered) — the post-loop
+    # write-back preserves that by only assigning when the local is nonzero
+    # (each is monotonically incremented and never decremented, so `> 0` means
+    # exactly "triggered at least once").
+    expanded_states = 0
+    generated_states = 0
+    skipped_transitions = 0
+    successor_bounded = 0
+    beam_pruned = 0
+    margin_pruned = 0
+    completed_steps = 0
+    retained_states::Int = diagnostics[:retained_states]
+    cumulative_retained_states::Int = diagnostics[:cumulative_retained_states]
+    max_retained_states::Int = diagnostics[:max_retained_states]
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1419,15 +1443,15 @@ function _viterbi_correct_observation(
 
         for (state, state_score) in active_scores
             current_vertex, current_strand = state
-            transitions = Rhizomorph._get_valid_transitions(graph, current_vertex, current_strand)
-            diagnostics[:expanded_states] += 1
+            transitions, total_out = Rhizomorph._valid_transitions_and_total(
+                graph, current_vertex, current_strand)
+            expanded_states += 1
             if isempty(transitions)
                 continue
             end
 
-            total_out = Rhizomorph._total_outgoing_weight(graph, current_vertex, current_strand)
             if !isfinite(total_out) || total_out <= 0.0
-                diagnostics[:skipped_transitions] += length(transitions)
+                skipped_transitions += length(transitions)
                 continue
             end
 
@@ -1437,17 +1461,16 @@ function _viterbi_correct_observation(
             # transition probabilities stay normalized against the FULL outgoing
             # mass, so a bounded expansion is a strict subset of the exact frontier.
             if length(transitions) > config.max_successors_per_state
-                diagnostics[:successor_bounded] = get(diagnostics, :successor_bounded, 0) +
-                                                  1
+                successor_bounded += 1
                 transitions = _top_b_transitions(transitions, config.max_successors_per_state)
             end
 
             for transition in transitions
-                next_vertex = convert(label_type, transition[:target_vertex])
-                next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
-                edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
+                next_vertex = convert(label_type, transition.target_vertex)
+                next_strand = Rhizomorph._normalize_strand(transition.target_strand)
+                edge_w = Rhizomorph._edge_transition_weight(transition.edge_data)
                 if edge_w <= 0.0
-                    diagnostics[:skipped_transitions] += 1
+                    skipped_transitions += 1
                     continue
                 end
                 transition_prob = edge_w / total_out
@@ -1461,12 +1484,12 @@ function _viterbi_correct_observation(
                 )
                 next_score = state_score + log(transition_prob) + emission_score
                 if !isfinite(next_score)
-                    diagnostics[:skipped_transitions] += 1
+                    skipped_transitions += 1
                     continue
                 end
 
                 next_state = (next_vertex, next_strand)
-                diagnostics[:generated_states] += 1
+                generated_states += 1
                 if !haskey(next_scores, next_state) || next_score > next_scores[next_state]
                     next_scores[next_state] = next_score
                     next_predecessors[next_state] = state
@@ -1496,7 +1519,7 @@ function _viterbi_correct_observation(
             # Keep the emission dict aligned to the width-beam survivors.
             next_emissions = Dict(
                 state => next_emissions[state] for state in keys(next_scores))
-            diagnostics[:beam_pruned] = get(diagnostics, :beam_pruned, 0) + 1
+            beam_pruned += 1
         end
 
         # Score-margin ("histogram") prune with emission exemption: keep a state
@@ -1515,7 +1538,7 @@ function _viterbi_correct_observation(
                 next_scores, next_predecessors, next_emissions,
                 depth_best, depth_best_emission, config.beam_score_margin)
             if length(next_scores) < pre_margin
-                diagnostics[:margin_pruned] = get(diagnostics, :margin_pruned, 0) + 1
+                margin_pruned += 1
             end
         end
 
@@ -1531,10 +1554,10 @@ function _viterbi_correct_observation(
         active_scores = next_scores
         active_emissions = next_emissions
         retained_count = length(active_scores)
-        diagnostics[:retained_states] = retained_count
-        diagnostics[:cumulative_retained_states] += retained_count
-        diagnostics[:max_retained_states] = max(diagnostics[:max_retained_states], retained_count)
-        diagnostics[:completed_steps] = depth
+        retained_states = retained_count
+        cumulative_retained_states += retained_count
+        max_retained_states = max(max_retained_states, retained_count)
+        completed_steps = depth
 
         if target_vertex === nothing
             best_state, best_score = _best_correction_state(active_scores)
@@ -1550,6 +1573,23 @@ function _viterbi_correct_observation(
             end
         end
     end
+
+    diagnostics[:expanded_states] = expanded_states
+    diagnostics[:generated_states] = generated_states
+    diagnostics[:skipped_transitions] = skipped_transitions
+    if successor_bounded > 0
+        diagnostics[:successor_bounded] = successor_bounded
+    end
+    if beam_pruned > 0
+        diagnostics[:beam_pruned] = beam_pruned
+    end
+    if margin_pruned > 0
+        diagnostics[:margin_pruned] = margin_pruned
+    end
+    diagnostics[:retained_states] = retained_states
+    diagnostics[:cumulative_retained_states] = cumulative_retained_states
+    diagnostics[:max_retained_states] = max_retained_states
+    diagnostics[:completed_steps] = completed_steps
 
     if target_vertex !== nothing && !isfinite(best_score)
         diagnostics[:reason] = :target_unreachable
@@ -1817,7 +1857,7 @@ function _indel_decode_successors!(
 )::_IndelDecodeSuccessorBatch{V} where {V}
     key = (vertex, strand)
     return get!(cache, key) do
-        transitions = Rhizomorph._get_valid_transitions(
+        transitions, total_out = Rhizomorph._valid_transitions_and_total(
             graph, vertex, strand)
         successors = Tuple{
             Tuple{V, Rhizomorph.StrandOrientation}, Float64
@@ -1827,18 +1867,16 @@ function _indel_decode_successors!(
                 successors, length(transitions))
         end
 
-        total_out = Rhizomorph._total_outgoing_weight(
-            graph, vertex, strand)
         if !isfinite(total_out) || total_out <= 0.0
             return _IndelDecodeSuccessorBatch{V}(
                 successors, length(transitions))
         end
         for transition in transitions
-            next_vertex = convert(V, transition[:target_vertex])
+            next_vertex = convert(V, transition.target_vertex)
             next_strand = Rhizomorph._normalize_strand(
-                transition[:target_strand])
+                transition.target_strand)
             edge_weight = Rhizomorph._edge_transition_weight(
-                transition[:edge_data])
+                transition.edge_data)
             edge_weight <= 0.0 && continue
             push!(
                 successors,
