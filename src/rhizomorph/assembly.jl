@@ -1257,7 +1257,13 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             indel_schedule = :frontier_budgeted,
             band_width = 16,
             deletion_max_run = 3,
-            max_insertion_run = 3
+            max_insertion_run = 3,
+            # opt1 (td-vmiy / td-jbjd): :scalable defaults to the thread-safe
+            # parallel decode path whenever multiple threads are available — the
+            # per-window ordered capture + flat replay makes it byte-identical to
+            # serial (see the Task 1 soft-EM fix), so there is no quality cost to
+            # turning it on by default.
+            enable_parallel = Threads.nthreads() > 1
         )
     elseif strategy == :exhaustive
         return (
@@ -1280,7 +1286,10 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             indel_schedule = :unrestricted,
             band_width = nothing,
             deletion_max_run = 10,
-            max_insertion_run = 10
+            max_insertion_run = 10,
+            # :exhaustive stays serial/exact — it is the small-scale, maximum-
+            # sensitivity oracle tier and is never opted into the parallel decode.
+            enable_parallel = false
         )
     else
         error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
@@ -1505,6 +1514,7 @@ function _run_stage1_correction(
             indel_params = indel_params,
             indel_schedule = knobs.indel_schedule,
             substitution_error_rate = substitution_error_rate,
+            enable_parallel = knobs.enable_parallel,
             verbose = false,
             enable_checkpointing = false,
             output_dir = corrector_output_dir,
@@ -1762,6 +1772,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # stamped value is "v2-competing-paths-floor" (or false on
         # :exhaustive), never a bare `true`.
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        # opt1 actuation counter surfaced end-to-end: total parallel decode batches
+        # (>0 proves the parallel path ran; 0 on serial/exhaustive).
+        assembly.assembly_stats["parallel_decode_batches"] =
+            get(_corr_meta, :parallel_decode_batches, 0)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])
         # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode
