@@ -51,3 +51,58 @@ Test.@testset "fused valid-transitions equivalence (opt2)" begin
     end
     Test.@test checked > 0                                             # non-vacuous
 end
+
+# UNDIRECTED-BRANCH EQUIVALENCE (opt2, F3)
+# Production `weighted_graph_from_rhizomorph` always yields a DiGraph, so the
+# undirected `else` branch of `_valid_transitions_and_total` (mirroring the
+# undirected branches of `_get_valid_transitions`/`_total_outgoing_weight`) is
+# never hit by the directed fixture above. Build a hand-constructed UNDIRECTED
+# MetaGraph carrying `StrandWeightedEdgeData` so the undirected code path is
+# exercised under the same byte-identity equivalence assertions. The edge set is
+# chosen so at least one (vertex,strand) yields a NON-EMPTY, multi-edge
+# transition list (A/Forward), locking the branch's push path, not just its
+# empty-return.
+Test.@testset "fused valid-transitions equivalence, undirected branch (opt2)" begin
+    R = Mycelia.Rhizomorph
+    MGN = Mycelia.MetaGraphsNext
+    graph = MGN.MetaGraph(
+        MGN.Graph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = R.StrandWeightedEdgeData,
+        weight_function = R.edge_data_weight,
+        default_weight = 0.0
+    )
+    for v in ("A", "B", "C", "D")
+        graph[v] = nothing
+    end
+    graph["A", "B"] = R.StrandWeightedEdgeData(2.0, R.Forward, R.Forward)
+    graph["A", "C"] = R.StrandWeightedEdgeData(3.0, R.Forward, R.Reverse)
+    graph["B", "C"] = R.StrandWeightedEdgeData(1.5, R.Reverse, R.Forward)
+    graph["C", "D"] = R.StrandWeightedEdgeData(4.0, R.Forward, R.Forward)
+
+    Test.@test !Mycelia.Graphs.is_directed(graph.graph)   # undirected branch
+
+    checked = 0
+    saw_nonempty = false
+    for label in MGN.labels(graph)
+        for strand in (R.Forward, R.Reverse)
+            dict_tx = R._get_valid_transitions(graph, label, strand)
+            dict_total = R._total_outgoing_weight(graph, label, strand)
+            fused_tx, fused_total = R._valid_transitions_and_total(graph, label, strand)
+            Test.@test isconcretetype(eltype(fused_tx))
+            Test.@test fused_total === dict_total                       # bit-identical
+            Test.@test length(fused_tx) == length(dict_tx)
+            for (a, b) in zip(fused_tx, dict_tx)
+                Test.@test a.target_vertex == b[:target_vertex]
+                Test.@test a.target_strand == b[:target_strand]
+                Test.@test R._edge_transition_weight(a.edge_data) === b[:probability]
+                Test.@test a.edge_data === b[:edge_data]
+            end
+            saw_nonempty |= !isempty(fused_tx)
+            checked += 1
+        end
+    end
+    Test.@test checked > 0                                             # non-vacuous
+    Test.@test saw_nonempty          # branch's push path exercised, not just empty
+end
