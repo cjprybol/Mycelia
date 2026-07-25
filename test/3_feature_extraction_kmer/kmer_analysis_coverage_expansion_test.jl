@@ -82,17 +82,29 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
                 end
             end
 
-            histogram_path = Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_path)
-            Test.@test isfile(histogram_path)
+            # `jellyfish_counts_to_kmer_frequency_histogram` shells out to the
+            # coreutils pipeline gzip|cut|sort|uniq|sed. Gate on their presence
+            # so a minimal CI image lacking one of them (e.g. `sort` ENOENT)
+            # skips the histogram assertions cleanly instead of aborting the
+            # whole `Pkg.test` suite. The pure-Julia `load_jellyfish_counts`
+            # coverage below still runs unconditionally.
+            histogram_tools = ("gzip", "cut", "sort", "uniq", "sed")
+            missing_histogram_tools = filter(t -> Sys.which(t) === nothing, collect(histogram_tools))
+            if !isempty(missing_histogram_tools)
+                Test.@test_skip "Missing external tools for jellyfish histogram: $(join(missing_histogram_tools, ", "))"
+            else
+                histogram_path = Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_path)
+                Test.@test isfile(histogram_path)
 
-            histogram_table = CSV.read(histogram_path, DataFrames.DataFrame; delim = '\t')
-            histogram_map = Dict(
-                histogram_table[!, "number of observations"] .=> histogram_table[!, "number of kmers"]
-            )
-            Test.@test histogram_map == Dict(2 => 2, 3 => 1)
+                histogram_table = CSV.read(histogram_path, DataFrames.DataFrame; delim = '\t')
+                histogram_map = Dict(
+                    histogram_table[!, "number of observations"] .=> histogram_table[!, "number of kmers"]
+                )
+                Test.@test histogram_map == Dict(2 => 2, 3 => 1)
 
-            Test.@test Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_path) ==
-                       histogram_path
+                Test.@test Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_path) ==
+                           histogram_path
+            end
 
             loaded_counts = Mycelia.load_jellyfish_counts(jellyfish_counts_path)
             Test.@test isa(loaded_counts, DataFrames.DataFrame)
