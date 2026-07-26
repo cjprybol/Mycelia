@@ -24,6 +24,11 @@ err_rate = parse(Float64, get(ENV, "FX_ERR", "0.01"))
 seed = parse(Int, get(ENV, "FX_SEED", "42"))
 outpath = ENV["FX_OUT"]
 
+genome_len > 0 || error("FX_GENOME_LEN must be positive, got $genome_len")
+readlen > 0 || error("FX_READLEN must be positive, got $readlen")
+coverage > 0 || error("FX_COVERAGE must be positive, got $coverage")
+(0.0 <= err_rate <= 1.0) || error("FX_ERR must be in [0, 1], got $err_rate")
+
 rng = Random.MersenneTwister(seed)
 bases = ('A', 'C', 'G', 'T')
 
@@ -35,7 +40,7 @@ function revcomp(s::AbstractString)
     return String(reverse([comp[c] for c in s]))
 end
 
-function inject_errors(s::AbstractString, rate::Float64, rng)
+function inject_errors(s::AbstractString, rate::Float64, rng::Random.AbstractRNG)
     chars = collect(s)
     for i in eachindex(chars)
         if rand(rng) < rate
@@ -47,6 +52,8 @@ function inject_errors(s::AbstractString, rate::Float64, rng)
 end
 
 effective_readlen = min(readlen, genome_len)
+effective_readlen < readlen &&
+    @warn "FX_READLEN ($readlen) > FX_GENOME_LEN ($genome_len); reads clipped to $effective_readlen bp"
 n_reads = max(1, ceil(Int, coverage * genome_len / effective_readlen))
 
 open(outpath, "w") do io
@@ -65,5 +72,5 @@ open(outpath, "w") do io
 end
 
 println(
-    "genome_len=$genome_len readlen=$readlen coverage=$coverage err_rate=$err_rate n_reads=$n_reads seed=$seed -> $outpath",
+    "genome_len=$genome_len readlen=$readlen effective_readlen=$effective_readlen coverage=$coverage err_rate=$err_rate n_reads=$n_reads seed=$seed -> $outpath",
 )

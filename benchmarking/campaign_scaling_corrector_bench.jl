@@ -15,8 +15,8 @@
 #
 # ENV:
 #   BENCH_PROJECT           path to the checkout being timed (informational only)
-#   BENCH_FASTQ             input FASTQ (from gen_fixture.jl)
-#   BENCH_OUTDIR            output_dir for mycelia_iterative_assemble
+#   BENCH_FASTQ             input FASTQ (from gen_fixture.jl)   (required)
+#   BENCH_OUTDIR            output_dir for mycelia_iterative_assemble (required)
 #   BENCH_MAX_K             (default 21)
 #   BENCH_N_K_RUNGS         (default 3)
 #   BENCH_MAX_ITER          (default 2)
@@ -30,7 +30,7 @@ import FASTX
 import SHA
 import Dates
 
-function tiny_fastq(path::String; genome_len::Int = 300, n_reads::Int = 40, seed::Int = 1)
+function tiny_fastq(path::String; genome_len::Int = 300, n_reads::Int = 40, seed::Int = 1)::String
     rng = Random.MersenneTwister(seed)
     bases = ('A', 'C', 'G', 'T')
     genome = join(rand(rng, collect(bases), genome_len))
@@ -58,6 +58,29 @@ function sha256_of(path::String)
     return open(io -> bytes2hex(SHA.sha256(io)), path, "r")
 end
 
+# Validate + wipe the output dir OUTSIDE the timed region. Refuses to
+# rm -rf a filesystem root, the home dir, or the current dir — a typo in
+# the caller-provided BENCH_OUTDIR must not destroy unrelated files.
+function prepare_outdir(outdir::String)::String
+    isempty(outdir) && error("BENCH_OUTDIR is empty")
+    ap = abspath(outdir)
+    if ap == "/" || ap == dirname(ap) || ap == abspath(homedir()) || ap == abspath(pwd())
+        error("BENCH_OUTDIR ($ap) is unsafe to rm -rf; use a dedicated benchmark subdirectory")
+    end
+    isdir(ap) && rm(ap; recursive = true, force = true)
+    return ap
+end
+
+# Minimal JSON string escaping — paths can contain quotes/backslashes.
+json_str(s) = "\"" * replace(
+    string(s),
+    "\\" => "\\\\",
+    "\"" => "\\\"",
+    "\n" => "\\n",
+    "\r" => "\\r",
+    "\t" => "\\t",
+) * "\""
+
 function run_corrector(
     fastq::String,
     outdir::String;
@@ -66,7 +89,6 @@ function run_corrector(
     max_iterations_per_k::Int,
     enable_parallel::Bool,
 )
-    isdir(outdir) && rm(outdir; recursive = true, force = true)
     return Mycelia.mycelia_iterative_assemble(
         fastq;
         max_k = max_k,
@@ -87,7 +109,11 @@ end
 max_k = parse(Int, get(ENV, "BENCH_MAX_K", "21"))
 n_k_rungs = parse(Int, get(ENV, "BENCH_N_K_RUNGS", "3"))
 max_iter = parse(Int, get(ENV, "BENCH_MAX_ITER", "2"))
-enable_parallel = lowercase(get(ENV, "BENCH_ENABLE_PARALLEL", "false")) == "true"
+_ep_raw = lowercase(strip(get(ENV, "BENCH_ENABLE_PARALLEL", "false")))
+enable_parallel =
+    _ep_raw == "true" ? true :
+    _ep_raw == "false" ? false :
+    error("BENCH_ENABLE_PARALLEL must be \"true\" or \"false\", got: $(repr(_ep_raw))")
 fastq = ENV["BENCH_FASTQ"]
 outdir = ENV["BENCH_OUTDIR"]
 result_json = get(ENV, "BENCH_RESULT_JSON", "")
@@ -98,30 +124,48 @@ println("project             : $(get(ENV, "BENCH_PROJECT", "?"))")
 println("fastq               : $fastq")
 println("max_k/n_k_rungs/iter: $max_k/$n_k_rungs/$max_iter")
 println("enable_parallel     : $enable_parallel")
+if enable_parallel && Threads.nthreads() == 1
+    @warn "enable_parallel=true but Julia started single-threaded (-t1); the parallel decode path has no worker pool, so this run is effectively serial."
+end
 
 # --- Warm-up (compilation only; NOT timed) ----------------------------------
 warm_dir = mktempdir()
-warm_fastq = tiny_fastq(joinpath(warm_dir, "warm.fastq"))
-println("warming up on tiny fixture ($(warm_fastq)) ...")
-t_warm = time()
-run_corrector(
-    warm_fastq,
-    joinpath(warm_dir, "warm_out");
-    max_k = min(max_k, 11),
-    n_k_rungs = 1,
-    max_iterations_per_k = 1,
-    enable_parallel = enable_parallel,
-)
-println(
-    "warm-up wall time (compile-inclusive, excluded from measured runtime): $(round(time() - t_warm, digits=2))s",
-)
+try
+    warm_fastq = tiny_fastq(
+        joinpath(warm_dir, "warm.fastq");
+        genome_len = parse(Int, get(ENV, "BENCH_WARMUP_GENOME_LEN", "300")),
+    )
+    println("warming up on tiny fixture ($(warm_fastq)) ...")
+    t_warm = time()
+    run_corrector(
+        warm_fastq,
+        prepare_outdir(joinpath(warm_dir, "warm_out"));
+        max_k = min(max_k, 11),
+        n_k_rungs = 1,
+        max_iterations_per_k = 1,
+        enable_parallel = enable_parallel,
+    )
+    println(
+        "warm-up wall time (compile-inclusive, excluded from measured runtime): $(round(time() - t_warm, digits=2))s",
+    )
+finally
+    rm(warm_dir; recursive = true, force = true)
+end
+
+# --- Input provenance + outdir prep (BEFORE timing) --------------------------
+clean_outdir = prepare_outdir(outdir)
+input_sha = sha256_of(fastq)
+n_in_reads = open(FASTX.FASTQ.Reader, fastq) do r
+    count(_ -> true, r)
+end
+println("input_fastq_sha256  : $input_sha  ($n_in_reads reads)")
 
 # --- Timed real run ----------------------------------------------------------
 GC.gc()
 t0 = time()
 result = run_corrector(
     fastq,
-    outdir;
+    clean_outdir;
     max_k = max_k,
     n_k_rungs = n_k_rungs,
     max_iterations_per_k = max_iter,
@@ -131,10 +175,20 @@ runtime_s = time() - t0
 
 final_fastq = result[:metadata][:final_fastq_file]
 final_sha = sha256_of(final_fastq)
-n_out_reads = count(_ -> true, FASTX.FASTQ.Reader(open(final_fastq)))
+n_out_reads = open(FASTX.FASTQ.Reader, final_fastq) do r
+    count(_ -> true, r)
+end
+
+# A corrector that returns normally but emits an empty/degenerate FASTQ
+# would still hash cleanly and read as a "successful" benchmark point.
+n_out_reads > 0 ||
+    error("corrector produced $n_out_reads output reads (degenerate result) — refusing to report a runtime/SHA for a failed run")
+if n_out_reads < n_in_reads ÷ 2
+    @warn "output read count ($n_out_reads) is <50% of input ($n_in_reads) — verify this is expected before trusting the timing."
+end
 
 println(
-    "RESULT runtime_s=$(round(runtime_s, digits=3)) final_fastq=$final_fastq sha256=$final_sha n_out_reads=$n_out_reads",
+    "RESULT runtime_s=$(round(runtime_s, digits=3)) final_fastq=$final_fastq sha256=$final_sha n_out_reads=$n_out_reads n_in_reads=$n_in_reads input_sha256=$input_sha",
 )
 
 if !isempty(result_json)
@@ -143,17 +197,19 @@ if !isempty(result_json)
             io,
             """
   {
-    "timestamp": "$(Dates.now())",
-    "project": "$(get(ENV, "BENCH_PROJECT", "?"))",
+    "timestamp": $(json_str(Dates.now())),
+    "project": $(json_str(get(ENV, "BENCH_PROJECT", "?"))),
     "nthreads": $(Threads.nthreads()),
     "enable_parallel": $(enable_parallel),
     "max_k": $max_k,
     "n_k_rungs": $n_k_rungs,
     "max_iterations_per_k": $max_iter,
-    "fastq": "$fastq",
+    "fastq": $(json_str(fastq)),
+    "input_fastq_sha256": $(json_str(input_sha)),
+    "n_in_reads": $n_in_reads,
     "runtime_s": $(runtime_s),
-    "final_fastq": "$final_fastq",
-    "final_fastq_sha256": "$final_sha",
+    "final_fastq": $(json_str(final_fastq)),
+    "final_fastq_sha256": $(json_str(final_sha)),
     "n_out_reads": $n_out_reads
   }
   """,

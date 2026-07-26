@@ -6,10 +6,10 @@ parallel decode), #435 (opt2, typed transitions + fused edge-scan) — by
 comparing the pre-campaign baseline against the fully-merged campaign checkout
 on a decode-dominated fixture, and confirms byte-identical corrected output.
 
-**Filename note:** despite the filename (matching the requested path), the
-fixture used is a **synthetic random genome, NOT E. coli**. See "What scale was
-NOT reached" below — this run does not reach, and must not be extrapolated to,
-E. coli @30x.
+**Fixture note:** this run uses a **synthetic random genome, NOT E. coli** —
+the "E. coli-scale" wall-clock target motivating the campaign remains
+unmeasured. See "Caveats" below: this run does not reach, and must not be
+extrapolated to, E. coli @30x.
 
 ## Setup
 
@@ -25,6 +25,15 @@ E. coli @30x.
   `MYCELIA_RCA_BATCH_SIZE` (opt5-only knobs) were **never** passed;
   `batch_size` was left at its shared default (10000), so all runs place every
   read of this fixture in a single decode batch.
+  - **Consequence — opt5 is _not exercised_ in this configuration.** opt5
+    gates the between-batch `GC.gc()`, which fires only when
+    `batch_end < total_reads` (i.e. across ≥2 batches). With every read in a
+    single batch, that GC fires in **neither** checkout (verified: baseline
+    `iterative-assembly.jl:4941`, campaign `:5044`), so opt5 contributes
+    nothing measurable here. The serial gain below is therefore **opt2
+    alone**, and the total is **opt1+opt2**; opt5's between-batch-GC benefit
+    requires a multi-batch run (`batch_size` < read count) and remains
+    untested at this fixture scale.
 - **`enable_parallel` was passed explicitly** (`true` for the campaign-parallel
   arm, `false` elsewhere) — see "Deviation from the original plan" below for
   why.
@@ -102,7 +111,11 @@ All 6 runs produced **the same 64-hex-character SHA256**
 final corrected FASTQ (5334 reads each). SHA256 equality is full-file
 byte-identity, not a sampled check.
 
-Per-config summary (mean ± spread across 2 reps):
+> The campaign-parallel rep swing (42.9 → 64.4s) and campaign-serial swing
+> (90.3 → 101.4s) above are contention artifacts, not corrector variance — see
+> the "Shared machine, heavy concurrent load" caveat below.
+
+Per-config summary (mean, min–max, and spread across 2 reps):
 
 | Config                        | mean runtime_s | min–max         | spread as % of mean |
 | ------------------------------ | --------------- | ---------------- | -------------------- |
@@ -116,13 +129,13 @@ Using **per-rep-mean** runtimes:
 
 | Comparison                                            | Ratio                        | Interpretation                          |
 | ------------------------------------------------------ | ----------------------------- | ---------------------------------------- |
-| Serial gain: baseline `-t1` / campaign `-t1`            | 106.22 / 95.85 = **1.11x**    | opt5 + opt2 serial-path contribution     |
+| Serial gain: baseline `-t1` / campaign `-t1`            | 106.22 / 95.85 = **1.11x**    | opt2 serial-path contribution (opt5 not exercised — single batch) |
 | Parallel gain: campaign `-t1` / campaign `-t8`          | 95.85 / 53.66 = **1.79x**     | opt1 thread-scaling contribution         |
-| **Total campaign speedup:** baseline `-t1` / campaign `-t8` | 106.22 / 53.66 = **1.98x**  | cumulative opt5+opt1+opt2, this fixture  |
+| **Total campaign speedup:** baseline `-t1` / campaign `-t8` | 106.22 / 53.66 = **1.98x**  | opt1+opt2 (opt5 not exercised at this scale) |
 
-Using the **least-contended (min) rep per config** — see Caveats for why this
-is arguably the more representative number on this run — gives a cleaner,
-larger picture:
+Using the **least-contended (min) rep per config** — an alternative estimate
+under the assumption that contention noise, not real variance, dominates the
+spread (see Caveats):
 
 | Comparison                                  | Ratio                         |
 | --------------------------------------------- | ------------------------------ |
@@ -134,10 +147,15 @@ Both the mean-based (1.98x) and min-based (2.47x) totals are reported because
 the two arms have very different noise sensitivity (see below) — **neither
 number should be quoted alone as "the" campaign speedup**; the honest range on
 this fixture, this machine, this run is **roughly 2.0x–2.5x total, with the
-serial-only contribution (opt5+opt2) around 1.1x–1.2x and the parallel
-contribution (opt1, 8 vs 1 thread) around 1.8x–2.1x**.
+serial contribution (opt2 alone; opt5 not exercised here) around 1.1x–1.2x and
+the parallel contribution (opt1, 8 vs 1 thread) around 1.8x–2.1x**. Note the
+min-selection is asymmetric: baseline's spread is 0.6% (min≈mean) while the
+campaign arms swing 11.5%/40.1%, so "min" corrects the campaign arms far more
+than the baseline, inflating the min-based ratio partly by selection rather
+than purely by noise removal — and with only 2 reps, "min" is itself a weak
+noise-floor estimator.
 
-## Byte-identity: YES, confirmed at this scale
+## Byte-identity (6/6 runs identical, this fixture scale)
 
 All 6 runs (2 baseline-serial, 2 campaign-parallel, 2 campaign-serial) produced
 the exact same corrected-FASTQ SHA256. The campaign's byte-identity claim holds
@@ -202,11 +220,12 @@ at this fixture's scale (5334 reads, 2 kb genome, k=21/3 rungs/2 iterations,
 ## Honest bottom line
 
 On a small (2 kb / 5334-read), decode-dominated, `:canonical`-mode fixture with
-soft-EM enabled, the merged opt5+opt1+opt2 campaign is **directionally and
+soft-EM enabled, the merged campaign checkout is **directionally and
 substantially faster** than the pre-campaign baseline (roughly **2.0x–2.5x**
-total, split into a ~1.1–1.2x serial contribution and a ~1.8–2.1x parallel
-contribution from 1→8 threads), and **produces byte-identical corrected output**
-across all 6 runs at this scale. The measurement is noisy — dominated by a
+total, split into a ~1.1–1.2x serial contribution from opt2 and a ~1.8–2.1x
+parallel contribution from opt1's 1→8-thread decode; opt5's between-batch GC is
+not exercised in this single-batch config), and **produces byte-identical
+corrected output** across all 6 runs at this scale. The measurement is noisy — dominated by a
 heavily shared 13-user machine during part of the run, most visibly on the
 8-thread arm — and does not reach, and must not be read as evidence about,
 E. coli-scale genomes or realistic 30x whole-genome coverage.
@@ -214,12 +233,15 @@ E. coli-scale genomes or realistic 30x whole-genome coverage.
 ## Reproduce
 
 ```bash
-# Fixture (deterministic, seed=42; ~1s):
-LD_LIBRARY_PATH='' julia --project=. benchmarking/campaign_scaling_fixture_gen.jl
-# (set FX_OUT, FX_GENOME_LEN=2000, FX_READLEN=150, FX_COVERAGE=400, FX_ERR=0.01, FX_SEED=42 in ENV)
+# Fixture (deterministic; ~1s). FX_COVERAGE=400 is REQUIRED to get 5334 reads
+# — the generator default (50) yields only 667.
+FX_OUT=/tmp/campaign_fixture.fastq FX_GENOME_LEN=2000 FX_READLEN=150 \
+  FX_COVERAGE=400 FX_ERR=0.01 FX_SEED=42 \
+  LD_LIBRARY_PATH='' julia --project=. benchmarking/campaign_scaling_fixture_gen.jl
 
 # Timed run (example: campaign checkout, 8 threads, parallel):
-BENCH_FASTQ=<fixture.fastq> BENCH_OUTDIR=<outdir> BENCH_ENABLE_PARALLEL=true \
+BENCH_FASTQ=/tmp/campaign_fixture.fastq BENCH_OUTDIR=/tmp/campaign_out \
+  BENCH_ENABLE_PARALLEL=true \
   LD_LIBRARY_PATH='' julia --project=. --threads=8 \
   benchmarking/campaign_scaling_corrector_bench.jl
 ```
