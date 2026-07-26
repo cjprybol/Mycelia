@@ -39,8 +39,10 @@ against merge `b032fab3`.
    per-k iteration loop `while iteration <= max_iterations_per_k` (`:2290`);
    the graph is rebuilt inside the iteration loop via
    `build_qualmer_graph(current_reads, k; mode = graph_mode, ...)` (`:2317`);
-   the per-read decode runs in `_improve_read_set_likelihood_impl` (called
-   `:2408`), batch loop `for batch_start in 1:batch_size:total_reads` (`:4879`),
+   the per-read decode runs in `_improve_read_set_likelihood_impl` (defined
+   `:4555`, reached via the public wrapper `improve_read_set_likelihood` called
+   at `:2408` which forwards to the impl at `:4513`); batch loop
+   `for batch_start in 1:batch_size:total_reads` (`:4879`),
    per-read decode parallel `Threads.@threads for i in eachindex(batch_reads)`
    (`:4902`) / serial (`:4984`).
 
