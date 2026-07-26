@@ -62,7 +62,11 @@ const TECHNOLOGIES = ["illumina", "pacbio", "ont"]
 const COVERAGES = [10, 30, 50, 100]
 const SEEDS = [42, 123, 456]
 const DECODER_ARMS = ["qualmer", "kmer"]
-const K = 31
+# k is settable so an ONT k-sweep can probe whether ANY k assembles high-error long
+# reads usefully (at k=31 every ONT cell at 10x/30x yields NGA50 = 0). Default unchanged.
+const K = let v = findfirst(==("--k"), ARGS)
+    (v !== nothing && v < length(ARGS)) ? parse(Int, ARGS[v + 1]) : 31
+end
 const CV_THRESHOLD = 0.15  # assumed NGA50 coefficient of variation in the power analysis
 
 # Canonical row schema (fixed order so in-memory and JSON-reloaded rows align in the DataFrame).
@@ -478,7 +482,11 @@ for (org, acc, _expected) in organisms,
     seed in seeds,
     arm in arms
     global cell_index += 1
-    cell_id = "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)"
+    # k belongs in the cell id: without it, two runs at different --k write the same
+    # cells/<id>/cell_result.json and the second silently resumes the first's result.
+    # Existing k=31 trees keep their old names, so point a k-sweep at its own
+    # --output-dir rather than reusing a completed one.
+    cell_id = "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)__k$(K)"
     cell_dir = joinpath(cells_dir, cell_id)
     ckpt = joinpath(cell_dir, "cell_result.json")
 
