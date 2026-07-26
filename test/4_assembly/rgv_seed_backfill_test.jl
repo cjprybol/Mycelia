@@ -1,0 +1,201 @@
+# Unit test for the RGV `seed` column backfill (bead td-59o7).
+#
+# The tool's job is narrow and its risk is specific: writing a seed value that was
+# never actually used would make an unpairable historical run LOOK pairable, which
+# is worse than leaving it unpairable. So the tests concentrate on provenance
+# discipline:
+#
+#   * a seed must be justified (explicit, recovered from a log, or an explicitly
+#     labelled fall back to the documented default)
+#   * an ambiguous log raises rather than picking one value
+#   * the input file is never modified, and the sidecar records how the seed was
+#     determined
+#   * an existing `seed` column is never silently overwritten
+#
+# Dependency-free apart from CSV / DataFrames / JSON (direct Mycelia deps).
+
+import Test
+import CSV
+import DataFrames
+import JSON
+
+include(joinpath(@__DIR__, "..", "..", "benchmarking", "rgv_seed_backfill.jl"))
+
+function _sbf_throws_with(f, needles::Vector{String})
+    try
+        f()
+    catch e
+        msg = sprint(showerror, e)
+        for needle in needles
+            Test.@test occursin(needle, msg)
+        end
+        return msg
+    end
+    Test.@test false
+    return ""
+end
+
+# A pre-`seed` sweep CSV, matching the real one committed at
+# benchmarking/results/rhizomorph_correction_validation_sweep_20260711_125013.csv.
+const _SBF_LEGACY_HEADER = "reference,genome_len,error_rate,regime,readlen,tech," *
+                           "target_coverage,effective_coverage,k,arm,ok,n_contigs,total_length," *
+                           "largest_contig,n50,genome_fraction,runtime_s,mode,scale_metric_bases," *
+                           "scale_floor_bases"
+
+function _sbf_legacy_csv(path)
+    open(path, "w") do io
+        println(io, _SBF_LEGACY_HEADER)
+        println(io,
+            "synthetic_2000bp,2000,0.05,short-low-error,150,illumina,10.0,10.05," *
+            "21,naive,true,935,49291,152,60,2464.5,9.606,SMOKE-ONLY,20100.0,1.0e6")
+        println(io,
+            "synthetic_2000bp,2000,0.05,short-low-error,150,illumina,10.0,10.05," *
+            "21,iterative,true,244,14097,153,62,704.8,17.107,SMOKE-ONLY,20100.0,1.0e6")
+    end
+    return path
+end
+
+Test.@testset "RGV seed backfill (td-59o7)" begin
+    Test.@testset "seed recovery from each run-log form" begin
+        mktempdir() do dir
+            # The sbatch echo form, as patched into run_rgv_sweep_{lrc,nersc}.sbatch.
+            sbatch_log = joinpath(dir, "sbatch.log")
+            write(sbatch_log,
+                ">>> RUN rhizomorph_correction_validation_sweep.jl  Fri Jul 25\n" *
+                "    ERR=0.01,0.05,0.10  READLEN=150,5000  COVERAGE=30x  K=21  " *
+                "SEED=123  QUAST=true\n")
+            Test.@test recover_seed_from_log(sbatch_log) == 123
+
+            # The export form.
+            export_log = joinpath(dir, "export.log")
+            write(export_log, "export MYCELIA_RGV_SEED=\"456\"\n")
+            Test.@test recover_seed_from_log(export_log) == 456
+
+            # The harness banner form, as added to the sweep's config printout.
+            banner_log = joinpath(dir, "banner.log")
+            write(banner_log, "k              : 21\nSeed           : 42\nArms: naive\n")
+            Test.@test recover_seed_from_log(banner_log) == 42
+
+            # All three forms agreeing in one log is fine.
+            combined = joinpath(dir, "combined.log")
+            write(combined,
+                "export MYCELIA_RGV_SEED=\"42\"\n  SEED=42  QUAST=true\nSeed           : 42\n")
+            Test.@test recover_seed_from_log(combined) == 42
+
+            # A log with no seed at all: nothing, not a guess.
+            silent = joinpath(dir, "silent.log")
+            write(silent, "ERR=0.01  READLEN=150  COVERAGE=30x  K=21  QUAST=true\n")
+            Test.@test recover_seed_from_log(silent) === nothing
+
+            _sbf_throws_with(() -> recover_seed_from_log(joinpath(dir, "nope.log")),
+                ["run log not found"])
+        end
+    end
+
+    Test.@testset "an ambiguous log raises instead of choosing" begin
+        mktempdir() do dir
+            log = joinpath(dir, "two-runs.log")
+            write(log, "SEED=42\n...\nSEED=123\n")
+            _sbf_throws_with(() -> recover_seed_from_log(log),
+                ["ambiguous seed", "42, 123", "more than one run"])
+        end
+    end
+
+    Test.@testset "backfill writes a new file and leaves the original alone" begin
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            before = read(src, String)
+
+            out, sidecar, n = backfill_seed(src; seed = 42, provenance = "explicit (test)")
+            Test.@test n == 2
+            Test.@test out == joinpath(dir, "sweep_seedbackfill.csv")
+            Test.@test read(src, String) == before      # input untouched
+
+            df = CSV.read(out, DataFrames.DataFrame)
+            Test.@test "seed" in DataFrames.names(df)
+            Test.@test all(df.seed .== 42)
+            # Placed right after `k`, matching the live sweep's column order.
+            cols = DataFrames.names(df)
+            Test.@test cols[findfirst(==("k"), cols) + 1] == "seed"
+            # Nothing else changed.
+            Test.@test DataFrames.nrow(df) == 2
+            Test.@test df.arm == ["naive", "iterative"]
+
+            meta = JSON.parsefile(sidecar)
+            Test.@test meta["seed"] == 42
+            Test.@test occursin("explicit", meta["seed_provenance"])
+            Test.@test meta["rows"] == 2
+            Test.@test meta["bead"] == "td-59o7"
+            Test.@test abspath(src) == meta["source_csv"]
+        end
+    end
+
+    Test.@testset "existing seed column: idempotent if equal, refused if not" begin
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            out, _, _ = backfill_seed(src; seed = 42, provenance = "explicit (test)")
+
+            # Re-running with the SAME seed is a no-op, so a re-run is safe.
+            df = CSV.read(out, DataFrames.DataFrame)
+            Test.@test insert_seed_column!(copy(df), 42).seed == [42, 42]
+
+            # A DIFFERENT seed would rewrite provenance — refuse.
+            _sbf_throws_with(() -> insert_seed_column!(copy(df), 123),
+                ["already has a `seed` column", "refusing to overwrite", "123"])
+        end
+    end
+
+    Test.@testset "appends when there is no `k` column to anchor to" begin
+        mktempdir() do dir
+            src = joinpath(dir, "nok.csv")
+            write(src, "arm,n50\nnaive,60\niterative,62\n")
+            out, _, _ = backfill_seed(src; seed = 42, provenance = "explicit (test)")
+            cols = DataFrames.names(CSV.read(out, DataFrames.DataFrame))
+            Test.@test cols == ["arm", "n50", "seed"]
+        end
+    end
+
+    Test.@testset "existing output is not clobbered without --force" begin
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            out, _, _ = backfill_seed(src; seed = 42, provenance = "explicit (test)")
+            _sbf_throws_with(
+                () -> backfill_seed(src; seed = 42, provenance = "explicit (test)"),
+                ["output already exists", "--force"])
+            # With force it succeeds.
+            out2, _,
+            _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)", force = true)
+            Test.@test out2 == out
+        end
+    end
+
+    Test.@testset "missing input raises" begin
+        mktempdir() do dir
+            _sbf_throws_with(
+                () -> backfill_seed(joinpath(dir, "nope.csv");
+                    seed = 42, provenance = "explicit (test)"),
+                ["CSV not found"])
+        end
+    end
+
+    Test.@testset "the documented default matches the harness" begin
+        # RGV_DEFAULT_SEED is mirrored from the sweep's MYCELIA_RGV_SEED default.
+        # If the harness default changes, --assume-default-seed would attribute the
+        # wrong seed to historical runs.
+        sweep = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking",
+                "rhizomorph_correction_validation_sweep.jl"), String)
+        Test.@test occursin(
+            "get(ENV, \"MYCELIA_RGV_SEED\", \"$(RGV_DEFAULT_SEED)\")", sweep)
+        Test.@test RGV_DEFAULT_SEED == 42
+    end
+
+    Test.@testset "the sbatch wrappers echo SEED so future runs are recoverable" begin
+        for wrapper in ("run_rgv_sweep_lrc.sbatch", "run_rgv_sweep_nersc.sbatch")
+            text = read(
+                joinpath(@__DIR__, "..", "..", "benchmarking", wrapper), String)
+            Test.@test occursin("SEED=\${MYCELIA_RGV_SEED}", text)
+        end
+    end
+end

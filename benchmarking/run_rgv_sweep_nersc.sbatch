@@ -59,7 +59,7 @@ cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 
 echo ""
 echo ">>> RUN rhizomorph_correction_validation_sweep.jl  $(date)"
-echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  QUAST=${MYCELIA_RUN_EXTERNAL}"
+echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  SEED=${MYCELIA_RGV_SEED}  QUAST=${MYCELIA_RUN_EXTERNAL}"
 
 # Capture julia stdout to a runlog while still streaming it to the job .out (tee),
 # so the guard can bind to THIS run's CSV by the path the .jl prints
