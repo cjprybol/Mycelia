@@ -58,16 +58,20 @@ function sha256_of(path::String)
     return open(io -> bytes2hex(SHA.sha256(io)), path, "r")
 end
 
-# Validate + wipe the output dir OUTSIDE the timed region. Refuses to
-# rm -rf a filesystem root, the home dir, or the current dir — a typo in
-# the caller-provided BENCH_OUTDIR must not destroy unrelated files.
+# Resolve + validate the output dir OUTSIDE the timed region. NEVER rm -rf a
+# populated pre-existing directory: a typo in the caller-provided BENCH_OUTDIR
+# (e.g. /tmp, or the directory holding BENCH_FASTQ) must not destroy unrelated
+# files. The target must be fresh (non-existent) or empty — safe by
+# construction, not by blocklist. The corrector creates the dir if absent.
 function prepare_outdir(outdir::String)::String
     isempty(outdir) && error("BENCH_OUTDIR is empty")
     ap = abspath(outdir)
     if ap == "/" || ap == dirname(ap) || ap == abspath(homedir()) || ap == abspath(pwd())
-        error("BENCH_OUTDIR ($ap) is unsafe to rm -rf; use a dedicated benchmark subdirectory")
+        error("BENCH_OUTDIR ($ap) is unsafe; use a dedicated benchmark subdirectory")
     end
-    isdir(ap) && rm(ap; recursive = true, force = true)
+    if ispath(ap) && !isempty(readdir(ap))
+        error("BENCH_OUTDIR ($ap) already exists and is non-empty; point at a fresh or empty dedicated directory (refusing to delete pre-existing content)")
+    end
     return ap
 end
 
