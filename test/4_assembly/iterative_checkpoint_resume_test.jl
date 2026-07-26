@@ -1846,3 +1846,310 @@ Test.@testset "Iterative checkpoint advances to the next rung once" begin
         ] == [(1, 3, 1), (2, 5, 1)]
     end
 end
+
+# ---------------------------------------------------------------------------
+# Rejection-cause diagnostics round-trip (td-jt7r). Covers the previously
+# untested POSITIVE case of a populated `cleaned_frontier_metrics` vector, and
+# pins the additive-field contract: the new histograms are accepted when
+# present, defaulted when absent, and rejected when internally inconsistent.
+# ---------------------------------------------------------------------------
+
+const CHECKPOINT_CAUSE_K = 5
+
+function checkpoint_cause_metric(
+        read_index::Int,
+        reason::AbstractString,
+)::Dict{String, Any}
+    admitted = reason == "complete"
+    completed_columns = admitted ? 16 : 4
+    frontier_area = admitted ? 32 : 400_000
+    peak_frontier = admitted ? 2 : 100_000
+    return Dict{String, Any}(
+        "anchored" => true,
+        "window_length" => 16,
+        "vertex_count" => 100,
+        "edge_count" => 100,
+        "branch_vertices" => 0,
+        "join_vertices" => 0,
+        "branch_fraction" => 0.0,
+        "join_fraction" => 0.0,
+        "max_out_degree" => 1,
+        "frontier_area" => frontier_area,
+        "edge_expansions" => 0,
+        "peak_frontier" => peak_frontier,
+        "completed_columns" => completed_columns,
+        "frontier_work" => frontier_area,
+        "reason" => reason,
+        "read_index" => read_index,
+        "window_start" => 1,
+        "window_stop" => 20,
+        "admitted" => admitted,
+    )
+end
+
+function checkpoint_cause_row()::Dict{String, Any}
+    return Dict{String, Any}(
+        "profile_requested" => true,
+        "requested" => 3,
+        "attempted" => 1,
+        "completed" => 1,
+        "truncated" => 0,
+        "engaged" => 1,
+        "admitted" => true,
+        "admitted_windows" => 1,
+        "rejected_windows" => 2,
+        "graph_source" => "mixed",
+        "decision_reason" => "sparse_frontier_affordable",
+        "frontier_work_limit" => Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
+        "frontier_metric_sample_limit" =>
+            Mycelia._INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT,
+        "raw_frontier_evaluated" => 3,
+        "cleaned_frontier_evaluated" => 2,
+        "bounded_windowing_forced" => true,
+        "substitution_decode_memory_gated" => false,
+        "raw_frontier_metrics" => Any[
+            checkpoint_cause_metric(1, "complete"),
+            checkpoint_cause_metric(2, "work_limit"),
+            checkpoint_cause_metric(3, "work_limit"),
+        ],
+        "cleaned_frontier_metrics" => Any[
+            checkpoint_cause_metric(2, "complete"),
+            checkpoint_cause_metric(3, "work_limit"),
+        ],
+        "raw_frontier_rejection_causes" => Dict{String, Any}(
+            "admitted" => 1,
+            "probe_work_limit" => 2,
+        ),
+        "cleaned_frontier_rejection_causes" => Dict{String, Any}(
+            "admitted" => 1,
+            "probe_work_limit" => 1,
+        ),
+        "raw_frontier_work_summary" => Dict{String, Any}(
+            "count" => 3,
+            "min" => 32,
+            "p50" => 400_000,
+            "p90" => 400_000,
+            "p99" => 400_000,
+            "max" => 400_000,
+        ),
+        "cleaned_frontier_work_summary" => Dict{String, Any}(
+            "count" => 2,
+            "min" => 32,
+            "p50" => 400_000,
+            "p90" => 400_000,
+            "p99" => 400_000,
+            "max" => 400_000,
+        ),
+        "graph_cleanup" => Dict{String, Any}(),
+        "ladder_index" => 1,
+        "k" => CHECKPOINT_CAUSE_K,
+        "iteration" => 1,
+    )
+end
+
+function checkpoint_cause_roundtrip(row::AbstractDict)::Dict{Symbol, Any}
+    # Exercise the real wire path: JSON stringifies symbol keys and widens
+    # integers, so normalization must accept the parsed shape, not the in-memory
+    # one.
+    parsed = JSON.parse(Base.sprint(io -> JSON.print(io, row)))
+    return Mycelia._normalize_indel_rung_telemetry(parsed, true)
+end
+
+Test.@testset "Populated cleaned frontier metrics survive a v2 round trip" begin
+    normalized = checkpoint_cause_roundtrip(checkpoint_cause_row())
+
+    Test.@test Base.length(normalized[:raw_frontier_metrics]) == 3
+    Test.@test Base.length(normalized[:cleaned_frontier_metrics]) == 2
+    Test.@test Base.first(normalized[:cleaned_frontier_metrics])[:reason] ==
+               :complete
+    Test.@test Base.first(normalized[:cleaned_frontier_metrics])[:admitted]
+    Test.@test Base.last(normalized[:cleaned_frontier_metrics])[:reason] ==
+               :work_limit
+    Test.@test !Base.last(normalized[:cleaned_frontier_metrics])[:admitted]
+    Test.@test Base.Set(
+        Base.keys(Base.first(normalized[:cleaned_frontier_metrics]))) ==
+               Mycelia._CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS
+
+    Test.@test normalized[:raw_frontier_rejection_causes] ==
+               Dict{Symbol, Int}(:admitted => 1, :probe_work_limit => 2)
+    Test.@test normalized[:cleaned_frontier_rejection_causes] ==
+               Dict{Symbol, Int}(:admitted => 1, :probe_work_limit => 1)
+    # Exactness (one cause per evaluated window) is a PRODUCER invariant checked
+    # against live scheduler output, not something the normalizer re-derives; the
+    # round trip must preserve it byte for byte.
+    Test.@test Base.sum(
+        Base.values(normalized[:raw_frontier_rejection_causes])) ==
+               normalized[:raw_frontier_evaluated]
+    Test.@test Base.sum(
+        Base.values(normalized[:cleaned_frontier_rejection_causes])) ==
+               normalized[:cleaned_frontier_evaluated]
+    Test.@test normalized[:raw_frontier_work_summary][:count] == 3
+    Test.@test normalized[:raw_frontier_work_summary][:max] == 400_000
+    Test.@test normalized[:cleaned_frontier_work_summary][:count] == 2
+    for key in Base.keys(normalized[:raw_frontier_work_summary])
+        Test.@test key in Mycelia._INDEL_FRONTIER_WORK_SUMMARY_KEYS
+    end
+
+    # The diagnostics are ADDITIVE: a schema-v2 checkpoint written before they
+    # existed must still normalize, which is exactly what the frozen required-key
+    # set protects. If `_CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS` were derived
+    # from the accept-list again, this would fail on mandatory fields.
+    for key in (
+            :raw_frontier_rejection_causes,
+            :cleaned_frontier_rejection_causes,
+            :raw_frontier_work_summary,
+            :cleaned_frontier_work_summary,
+    )
+        Test.@test !(key in Mycelia._CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS)
+        Test.@test key in Base.values(Mycelia._CHECKPOINT_INDEL_TELEMETRY_KEYS)
+    end
+    legacy_row = checkpoint_cause_row()
+    for key in (
+            "raw_frontier_rejection_causes",
+            "cleaned_frontier_rejection_causes",
+            "raw_frontier_work_summary",
+            "cleaned_frontier_work_summary",
+    )
+        Base.delete!(legacy_row, key)
+    end
+    legacy_normalized = checkpoint_cause_roundtrip(legacy_row)
+    Test.@test Base.isempty(legacy_normalized[:raw_frontier_rejection_causes])
+    Test.@test Base.isempty(legacy_normalized[:raw_frontier_work_summary])
+    Test.@test Base.length(legacy_normalized[:cleaned_frontier_metrics]) == 2
+end
+
+Test.@testset "Inconsistent frontier diagnostics are rejected" begin
+    # NEGATIVE: sample count no longer matches `cleaned_frontier_evaluated`.
+    # The histogram is kept consistent so the sample-count check is the one that
+    # fires rather than being masked by an earlier failure.
+    sample_mismatch = checkpoint_cause_row()
+    sample_mismatch["cleaned_frontier_evaluated"] = 3
+    sample_mismatch["cleaned_frontier_rejection_causes"] = Dict{String, Any}(
+        "admitted" => 1,
+        "probe_work_limit" => 2,
+    )
+    checkpoint_test_error(
+        ArgumentError,
+        "cleaned_frontier_metrics sample count does not match " *
+        "cleaned_frontier_evaluated",
+    ) do
+        checkpoint_cause_roundtrip(sample_mismatch)
+    end
+
+    dropped_sample = checkpoint_cause_row()
+    dropped_sample["cleaned_frontier_metrics"] = Any[
+        checkpoint_cause_metric(2, "complete"),
+    ]
+    checkpoint_test_error(
+        ArgumentError,
+        "cleaned_frontier_metrics sample count does not match " *
+        "cleaned_frontier_evaluated",
+    ) do
+        checkpoint_cause_roundtrip(dropped_sample)
+    end
+
+    unknown_cause = checkpoint_cause_row()
+    unknown_cause["raw_frontier_rejection_causes"] = Dict{String, Any}(
+        "admitted" => 1,
+        "cosmic_rays" => 2,
+    )
+    checkpoint_test_error(ArgumentError, "unsupported value cosmic_rays") do
+        checkpoint_cause_roundtrip(unknown_cause)
+    end
+
+    negative_cause = checkpoint_cause_row()
+    negative_cause["raw_frontier_rejection_causes"] = Dict{String, Any}(
+        "admitted" => 4,
+        "probe_work_limit" => -1,
+    )
+    checkpoint_test_error(ArgumentError, "must be nonnegative") do
+        checkpoint_cause_roundtrip(negative_cause)
+    end
+
+    non_monotone = checkpoint_cause_row()
+    non_monotone["raw_frontier_work_summary"] = Dict{String, Any}(
+        "count" => 3,
+        "min" => 400_000,
+        "p50" => 32,
+        "p90" => 400_000,
+        "p99" => 400_000,
+        "max" => 400_000,
+    )
+    checkpoint_test_error(ArgumentError, "order statistics must be monotone") do
+        checkpoint_cause_roundtrip(non_monotone)
+    end
+
+    partial_summary = checkpoint_cause_row()
+    partial_summary["raw_frontier_work_summary"] = Dict{String, Any}(
+        "count" => 3,
+        "max" => 400_000,
+    )
+    checkpoint_test_error(
+        ArgumentError, "must contain every order statistic") do
+        checkpoint_cause_roundtrip(partial_summary)
+    end
+
+end
+
+Test.@testset "Frontier diagnostics reach the on-disk checkpoint" begin
+    Base.mktempdir() do temporary_directory
+        sequence = "AAAGCTTAGGGAGAGTAGAAATAATATAGA"
+        input_fastq = Base.joinpath(temporary_directory, "input.fastq")
+        output_directory = Base.joinpath(temporary_directory, "run")
+        Mycelia.write_fastq(
+            records = FASTX.FASTQ.Record[
+                FASTX.FASTQ.Record(
+                    "diagnostics",
+                    sequence,
+                    Base.repeat("I", Base.length(sequence)),
+                ),
+            ],
+            filename = input_fastq,
+        )
+
+        result = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        telemetry = result[:metadata][:indel_rung_telemetry]
+        evaluated_rows = [
+            row for row in telemetry if row[:raw_frontier_evaluated] > 0
+        ]
+        Test.@test !Base.isempty(evaluated_rows)
+        for row in evaluated_rows
+            causes = row[:raw_frontier_rejection_causes]
+            Test.@test !Base.isempty(causes)
+            Test.@test Base.sum(Base.values(causes)) ==
+                       row[:raw_frontier_evaluated]
+            Test.@test Base.all(
+                cause in Mycelia._INDEL_FRONTIER_REJECTION_CAUSES
+                for cause in Base.keys(causes)
+            )
+            # Raw-admitted windows are a subset of all admitted windows: a
+            # cleaned-graph rescue is counted in `admitted_windows` but appears
+            # in the CLEANED histogram, not the raw one.
+            Test.@test Base.get(causes, :admitted, 0) <= row[:admitted_windows]
+            summary = row[:raw_frontier_work_summary]
+            Test.@test summary[:count] <= row[:raw_frontier_evaluated]
+            Test.@test summary[:min] <= summary[:p50] <= summary[:p90] <=
+                       summary[:p99] <= summary[:max]
+            Test.@test Base.sum(
+                Base.values(row[:cleaned_frontier_rejection_causes])) ==
+                       row[:cleaned_frontier_evaluated]
+        end
+
+        checkpoint_file = Base.joinpath(
+            output_directory, "checkpoints", "latest_checkpoint.json")
+        serialized_row = Base.first(
+            JSON.parsefile(checkpoint_file)["indel_rung_telemetry"])
+        Test.@test Base.haskey(
+            serialized_row, "raw_frontier_rejection_causes")
+        Test.@test Base.haskey(serialized_row, "raw_frontier_work_summary")
+        Test.@test Base.sum(
+            Base.values(serialized_row["raw_frontier_rejection_causes"])) ==
+                   serialized_row["raw_frontier_evaluated"]
+
+        # Resuming re-reads those fields through the normalizer.
+        resumed = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        Test.@test resumed[:metadata][:indel_rung_telemetry] == telemetry
+    end
+end

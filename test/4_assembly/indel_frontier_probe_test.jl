@@ -1732,3 +1732,282 @@ Test.@testset "clean_corrector_graph! includes support-two tips" begin
     Test.@test !haskey(at_boundary, support_two_label)
     Test.@test haskey(at_boundary, support_three_label)
 end
+
+# ---------------------------------------------------------------------------
+# Rejection-cause diagnostics (td-jt7r). The scheduler only samples the first 64
+# per-window metrics per rung, so a rejection breakdown read off those samples is
+# a biased prefix. These tests pin the exact histograms and order statistics that
+# replace it, plus the pure classifier they are built from.
+# ---------------------------------------------------------------------------
+
+function indel_cause_metric(;
+        anchored::Bool = true,
+        reason::Symbol = :complete,
+        completed_columns::Int = 16,
+        window_length::Int = 16,
+        frontier_work::Int = 32,
+)::Dict{Symbol, Any}
+    return Dict{Symbol, Any}(
+        :anchored => anchored,
+        :reason => reason,
+        :completed_columns => completed_columns,
+        :window_length => window_length,
+        :frontier_work => frontier_work,
+    )
+end
+
+Test.@testset "Frontier rejection classifier mirrors the admission chain" begin
+    work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT
+
+    # One case per outcome, in the order of `_indel_frontier_admitted`'s `&&`
+    # chain: anchored -> reason == :complete -> completed_columns ==
+    # window_length -> frontier_work <= work_limit.
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(), work_limit) == :admitted
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(
+            anchored = false,
+            reason = :unanchored_start,
+            completed_columns = 0,
+            frontier_work = 0,
+        ),
+        work_limit,
+    ) == :unanchored
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(
+            reason = :work_limit,
+            completed_columns = 3,
+            frontier_work = work_limit + 1,
+        ),
+        work_limit,
+    ) == :probe_work_limit
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(reason = :frontier_exhausted, completed_columns = 3),
+        work_limit,
+    ) == :probe_frontier_exhausted
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        Dict{Symbol, Any}(:anchored => false, :reason => :encode_error),
+        work_limit,
+    ) == :probe_encode_error
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(completed_columns = 3), work_limit) ==
+               :partial_columns
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(frontier_work = work_limit + 1), work_limit) ==
+               :work_limit_exceeded
+
+    # Short-circuit priority: an earlier failing conjunct wins outright, so a
+    # window that is simultaneously unanchored, incomplete and over budget is
+    # attributed to the anchor, which is what actually rejected it.
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(
+            anchored = false,
+            reason = :work_limit,
+            completed_columns = 0,
+            frontier_work = work_limit + 1,
+        ),
+        work_limit,
+    ) == :unanchored
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(
+            reason = :frontier_exhausted,
+            completed_columns = 3,
+            frontier_work = work_limit + 1,
+        ),
+        work_limit,
+    ) == :probe_frontier_exhausted
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(
+            completed_columns = 3, frontier_work = work_limit + 1),
+        work_limit,
+    ) == :partial_columns
+
+    # `:encode_error` is a harness sentinel whose `anchored = false` is synthetic
+    # (the probe never ran), so it must NOT be absorbed into `:unanchored`.
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        Dict{Symbol, Any}(:anchored => false, :reason => :encode_error),
+        work_limit,
+    ) != :unanchored
+
+    # The classifier agrees with the predicate it mirrors, so the histogram
+    # reconciles with the admission counters rather than merely resembling them.
+    for metric in (
+            indel_cause_metric(),
+            indel_cause_metric(completed_columns = 3),
+            indel_cause_metric(frontier_work = work_limit + 1),
+            indel_cause_metric(anchored = false, reason = :unanchored_start),
+    )
+        admitted = metric[:anchored] && metric[:reason] == :complete &&
+                   metric[:completed_columns] == metric[:window_length] &&
+                   metric[:frontier_work] <= work_limit
+        Test.@test (Mycelia._indel_frontier_rejection_cause(
+            metric, work_limit) == :admitted) == admitted
+    end
+
+    # Every emitted cause is in the persisted taxonomy, and an unknown probe
+    # reason degrades to `:probe_unknown` instead of silently mapping onto a
+    # real bucket.
+    Test.@test Mycelia._indel_frontier_rejection_cause(
+        indel_cause_metric(reason = :not_a_real_reason), work_limit) ==
+               :probe_unknown
+    for cause in (
+            :admitted,
+            :unanchored,
+            :probe_work_limit,
+            :probe_frontier_exhausted,
+            :probe_encode_error,
+            :partial_columns,
+            :work_limit_exceeded,
+            :probe_unknown,
+    )
+        Test.@test cause in Mycelia._INDEL_FRONTIER_REJECTION_CAUSES
+    end
+end
+
+Test.@testset "Frontier work summary reports exact order statistics" begin
+    empty_summary = Mycelia._indel_frontier_work_summary(Int[])
+    Test.@test Base.Set(Base.keys(empty_summary)) ==
+               Base.Set(Mycelia._INDEL_FRONTIER_WORK_SUMMARY_KEYS)
+    Test.@test Base.all(value == 0 for value in Base.values(empty_summary))
+
+    summary = Mycelia._indel_frontier_work_summary(Base.collect(1:100))
+    Test.@test summary[:count] == 100
+    Test.@test summary[:min] == 1
+    Test.@test summary[:p50] == 50
+    Test.@test summary[:p90] == 90
+    Test.@test summary[:p99] == 99
+    Test.@test summary[:max] == 100
+
+    # Nearest-rank returns observed samples, so monotonicity is structural and
+    # the statistics survive an unsorted input unchanged.
+    shuffled = Mycelia._indel_frontier_work_summary([7, 1, 9, 3, 5])
+    Test.@test shuffled == Mycelia._indel_frontier_work_summary([1, 3, 5, 7, 9])
+    Test.@test shuffled[:min] <= shuffled[:p50] <= shuffled[:p90] <=
+               shuffled[:p99] <= shuffled[:max]
+    singleton = Mycelia._indel_frontier_work_summary([42])
+    Test.@test Base.all(
+        singleton[key] == 42
+        for key in (:min, :p50, :p90, :p99, :max)
+    )
+    Test.@test singleton[:count] == 1
+
+    # Profile-disabled rungs (Illumina) carry the containers but never populate
+    # them, so nothing downstream has to special-case a missing field.
+    for profile_requested in (false, true)
+        telemetry = Mycelia._empty_indel_rung_telemetry(profile_requested)
+        for key in (
+                :raw_frontier_rejection_causes,
+                :cleaned_frontier_rejection_causes,
+                :raw_frontier_work_summary,
+                :cleaned_frontier_work_summary,
+        )
+            Test.@test Base.haskey(telemetry, key)
+            Test.@test Base.isempty(telemetry[key])
+        end
+    end
+end
+
+Test.@testset "Frontier rejection histograms are exact, not sampled" begin
+    work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT
+
+    # Maximally-branching 64-vertex DNA k=3 graph: the probe aborts on the work
+    # budget, so the modal cause must be the probe-side `:work_limit` abort.
+    alphabet = Base.collect("ACGT")
+    branch_records = FASTX.FASTQ.Record[]
+    for a in alphabet, b in alphabet, c in alphabet, d in alphabet
+        sequence = Base.string(a, b, c, d)
+        Base.push!(
+            branch_records,
+            indel_classifier_fastq(
+                "cause_branch_$(Base.length(branch_records) + 1)", sequence),
+        )
+    end
+    branch_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        branch_records, 3; mode = :singlestrand)
+    branch_cycle = indel_classifier_de_bruijn_sequence(3)
+    branch_sequence = Base.first(
+        Base.repeat(branch_cycle, Base.cld(500, Base.length(branch_cycle))), 500)
+    branch_read = indel_classifier_fastq("cause_branch_probe", branch_sequence)
+    Test.@test Graphs.nv(branch_graph.graph) == 64
+
+    branch_decision = Mycelia._evaluate_indel_frontier_schedule(
+        FASTX.FASTQ.Record[branch_read],
+        branch_graph,
+        3,
+        Base.Set(MetaGraphsNext.labels(branch_graph)),
+        Bool[false],
+        indel_classifier_params(),
+        :singlestrand,
+    )
+    Test.@test branch_decision.admitted_windows == 0
+    Test.@test branch_decision.rejected_windows > 0
+    Test.@test branch_decision.raw_causes[:probe_work_limit] > 0
+    Test.@test Base.sum(Base.values(branch_decision.raw_causes)) ==
+               branch_decision.raw_evaluated
+    Test.@test Base.get(branch_decision.raw_causes, :admitted, 0) == 0
+    Test.@test Base.sum(Base.values(branch_decision.cleaned_causes)) ==
+               branch_decision.cleaned_evaluated
+    Test.@test Base.all(
+        cause in Mycelia._INDEL_FRONTIER_REJECTION_CAUSES
+        for cause in Base.keys(branch_decision.raw_causes)
+    )
+    # The scheduler's own budget is the binding constraint here, which is only
+    # visible because the statistics are exact rather than prefix-sampled.
+    Test.@test branch_decision.raw_work_summary[:count] ==
+               branch_decision.raw_evaluated
+    Test.@test branch_decision.raw_work_summary[:max] > work_limit
+
+    # Long linear graph: every window is affordable, so `:admitted` dominates and
+    # no observed `frontier_work` may exceed the budget. The read set is sized to
+    # produce MORE windows than `_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT`, which is
+    # the regime a prefix-sampled breakdown could not describe.
+    linear_cycle = indel_classifier_de_bruijn_sequence(7)
+    linear_sequence = Base.first(linear_cycle, 10_007)
+    linear_reference = indel_classifier_fastq("cause_linear", linear_sequence)
+    linear_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[linear_reference], 7; mode = :singlestrand)
+    linear_reads = FASTX.FASTQ.Record[
+        indel_classifier_fastq(
+            "cause_linear_$(offset)",
+            linear_sequence[offset:(offset + 299)],
+        )
+        for offset in 1:100:7_001
+    ]
+    linear_decision = Mycelia._evaluate_indel_frontier_schedule(
+        linear_reads,
+        linear_graph,
+        7,
+        Base.Set(MetaGraphsNext.labels(linear_graph)),
+        Base.fill(false, Base.length(linear_reads)),
+        indel_classifier_params(),
+        :singlestrand,
+    )
+    Test.@test linear_decision.admitted
+    Test.@test linear_decision.rejected_windows == 0
+    Test.@test linear_decision.cleaned_evaluated == 0
+    Test.@test linear_decision.raw_causes[:admitted] ==
+               linear_decision.admitted_windows
+    Test.@test Base.length(linear_decision.raw_causes) == 1
+    Test.@test Base.sum(Base.values(linear_decision.raw_causes)) ==
+               linear_decision.raw_evaluated
+    # With no cleaning pass, every requested window is classified exactly once.
+    Test.@test Base.sum(Base.values(linear_decision.raw_causes)) ==
+               linear_decision.admitted_windows +
+               linear_decision.rejected_windows
+    Test.@test Base.isempty(linear_decision.cleaned_causes)
+
+    linear_summary = linear_decision.raw_work_summary
+    Test.@test linear_summary[:count] == linear_decision.raw_evaluated
+    Test.@test linear_summary[:max] <= work_limit
+    Test.@test linear_summary[:min] <= linear_summary[:p50] <=
+               linear_summary[:p90] <= linear_summary[:p99] <=
+               linear_summary[:max]
+
+    # The histogram is exact even when the rung produces more windows than the
+    # 64-sample metric cap, which is precisely the regime the sampled breakdown
+    # could not describe.
+    Test.@test linear_decision.raw_evaluated >
+               Mycelia._INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT
+    Test.@test Base.length(linear_decision.raw_metrics) ==
+               Mycelia._INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT
+end

@@ -457,14 +457,49 @@ const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
         :substitution_decode_memory_gated,
         :raw_frontier_metrics,
         :cleaned_frontier_metrics,
+        :raw_frontier_rejection_causes,
+        :cleaned_frontier_rejection_causes,
+        :raw_frontier_work_summary,
+        :cleaned_frontier_work_summary,
         :graph_cleanup,
         :ladder_index,
         :k,
         :iteration,
     )
 )
-const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS =
-    Set{Symbol}(values(_CHECKPOINT_INDEL_TELEMETRY_KEYS))
+# FROZEN v2 WIRE CONTRACT. This is the set of fields a schema-v2 checkpoint row
+# MUST carry, and it is deliberately an explicit literal rather than
+# `values(_CHECKPOINT_INDEL_TELEMETRY_KEYS)`: deriving it would make every
+# additive telemetry field retroactively mandatory, so any checkpoint written by
+# an earlier build would fail the mandatory-field check below. Do NOT add a name
+# here without bumping `_ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION`; purely
+# additive fields belong in the accept-list above and must normalize from an
+# empty default so absent-in-old-checkpoint stays legal.
+const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS = Set{Symbol}((
+    :profile_requested,
+    :requested,
+    :attempted,
+    :completed,
+    :truncated,
+    :engaged,
+    :admitted,
+    :admitted_windows,
+    :rejected_windows,
+    :graph_source,
+    :decision_reason,
+    :frontier_work_limit,
+    :frontier_metric_sample_limit,
+    :raw_frontier_evaluated,
+    :cleaned_frontier_evaluated,
+    :bounded_windowing_forced,
+    :substitution_decode_memory_gated,
+    :raw_frontier_metrics,
+    :cleaned_frontier_metrics,
+    :graph_cleanup,
+    :ladder_index,
+    :k,
+    :iteration,
+))
 const _CHECKPOINT_INDEL_METRIC_KEYS = Dict{String, Symbol}(
     string(key) => key for key in (
         :anchored,
@@ -548,6 +583,35 @@ const _CHECKPOINT_FRONTIER_REASONS = Dict{String, Symbol}(
         :work_limit,
         :frontier_exhausted,
     )
+)
+# Per-window rejection-cause taxonomy for the branching-frontier scheduler.
+# `raw_frontier_metrics` is capped at `_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT`
+# and keeps the FIRST samples by read index, so any rejection breakdown computed
+# from it is a biased prefix. These histograms instead accumulate exactly one
+# cause per EVALUATED window and persist only the counters, which keeps the rung
+# telemetry O(number of causes) while making the breakdown exact at any scale.
+const _INDEL_FRONTIER_PROBE_REJECTION_CAUSES = Dict{Symbol, Symbol}(
+    reason => Symbol("probe_", reason)
+    for reason in values(_CHECKPOINT_FRONTIER_REASONS) if reason !== :complete
+)
+const _INDEL_FRONTIER_REJECTION_CAUSES = Base.Set{Symbol}((
+    :admitted,
+    :unanchored,
+    :partial_columns,
+    :work_limit_exceeded,
+    :probe_unknown,
+    values(_INDEL_FRONTIER_PROBE_REJECTION_CAUSES)...,
+))
+const _INDEL_FRONTIER_REJECTION_CAUSE_NAMES = Dict{String, Symbol}(
+    string(cause) => cause for cause in _INDEL_FRONTIER_REJECTION_CAUSES
+)
+# `frontier_work` order statistics over every evaluated window. Only these six
+# numbers are persisted; the per-window values stay transient. p50/p90/p99 use
+# nearest-rank on the sorted values, so every statistic is an observed sample
+# (an exact `Int`) and `min <= p50 <= p90 <= p99 <= max` holds by construction.
+const _INDEL_FRONTIER_WORK_SUMMARY_KEYS = (:count, :min, :p50, :p90, :p99, :max)
+const _INDEL_FRONTIER_WORK_SUMMARY_NAMES = Dict{String, Symbol}(
+    string(key) => key for key in _INDEL_FRONTIER_WORK_SUMMARY_KEYS
 )
 const _CHECKPOINT_GRAPH_CLEANUP_KEYS = Set{String}((
     "graph_cleanup_vertices_before",
@@ -1012,6 +1076,10 @@ function _empty_indel_rung_telemetry(profile_requested::Bool)::Dict{Symbol, Any}
         :substitution_decode_memory_gated => false,
         :raw_frontier_metrics => Dict{Symbol, Any}[],
         :cleaned_frontier_metrics => Dict{Symbol, Any}[],
+        :raw_frontier_rejection_causes => Dict{Symbol, Int}(),
+        :cleaned_frontier_rejection_causes => Dict{Symbol, Int}(),
+        :raw_frontier_work_summary => Dict{Symbol, Int}(),
+        :cleaned_frontier_work_summary => Dict{Symbol, Int}(),
         :graph_cleanup => Dict{String, Any}(),
     )
 end
@@ -1252,6 +1320,59 @@ function _validate_indel_frontier_metric(
     return nothing
 end
 
+function _checkpoint_indel_rejection_causes(
+        value::Any,
+        field::String,
+)::Dict{Symbol, Int}
+    value isa AbstractDict || throw(ArgumentError(
+        "checkpoint $field must be an object"))
+    causes = Dict{Symbol, Int}()
+    for (key, count) in value
+        cause = _checkpoint_enum_symbol(
+            _checkpoint_key_string(key, "checkpoint $field"),
+            _INDEL_FRONTIER_REJECTION_CAUSE_NAMES,
+            "$field cause",
+        )
+        haskey(causes, cause) && throw(ArgumentError(
+            "checkpoint $field repeats cause $cause"))
+        causes[cause] = _checkpoint_nonnegative_int(count, "$field $cause")
+    end
+    return causes
+end
+
+function _checkpoint_indel_work_summary(
+        value::Any,
+        field::String,
+)::Dict{Symbol, Int}
+    value isa AbstractDict || throw(ArgumentError(
+        "checkpoint $field must be an object"))
+    # Absent in every pre-diagnostics checkpoint, so an empty object is legal.
+    isempty(value) && return Dict{Symbol, Int}()
+    summary = Dict{Symbol, Int}()
+    for (key, statistic) in value
+        name = _checkpoint_enum_symbol(
+            _checkpoint_key_string(key, "checkpoint $field"),
+            _INDEL_FRONTIER_WORK_SUMMARY_NAMES,
+            "$field statistic",
+        )
+        haskey(summary, name) && throw(ArgumentError(
+            "checkpoint $field repeats statistic $name"))
+        summary[name] = _checkpoint_nonnegative_int(statistic, "$field $name")
+    end
+    length(summary) == length(_INDEL_FRONTIER_WORK_SUMMARY_KEYS) ||
+        throw(ArgumentError(
+            "checkpoint $field must contain every order statistic"))
+    summary[:min] <= summary[:p50] <= summary[:p90] <= summary[:p99] <=
+        summary[:max] || throw(ArgumentError(
+        "checkpoint $field order statistics must be monotone"))
+    if summary[:count] == 0
+        all(summary[name] == 0 for name in (:min, :p50, :p90, :p99, :max)) ||
+            throw(ArgumentError(
+                "checkpoint $field with zero count requires zero statistics"))
+    end
+    return summary
+end
+
 function _normalize_indel_rung_telemetry(
         row::AbstractDict,
         require_schema_v2::Bool = true,
@@ -1349,6 +1470,32 @@ function _normalize_indel_rung_telemetry(
             end
         end
     end
+    for key in (
+            :raw_frontier_rejection_causes,
+            :cleaned_frontier_rejection_causes,
+    )
+        normalized[key] = _checkpoint_indel_rejection_causes(
+            get(normalized, key, Dict{Symbol, Int}()),
+            "indel telemetry $key",
+        )
+    end
+    for key in (:raw_frontier_work_summary, :cleaned_frontier_work_summary)
+        normalized[key] = _checkpoint_indel_work_summary(
+            get(normalized, key, Dict{Symbol, Int}()),
+            "indel telemetry $key",
+        )
+    end
+    # These diagnostics are ADDITIVE and self-describing: an absent (empty)
+    # container is legal at any schema version, and the checks above are
+    # intra-field only (taxonomy, nonnegative exact `Int`, monotone order
+    # statistics). They are deliberately NOT cross-checked against
+    # `raw_frontier_evaluated` / `cleaned_frontier_evaluated` here. The
+    # scheduler is the sole producer and emits exactly one cause per
+    # evaluated window, an invariant the tests assert against live scheduler
+    # output and the on-disk checkpoint; coupling an additive diagnostic to
+    # the core counters would instead make hand-constructed v2 rows that
+    # legitimately restate those counters (to exercise unrelated checks)
+    # fail on a field they never touch, and would buy no resume safety.
     if require_schema_v2
         sample_limit = normalized[:frontier_metric_sample_limit]
         for (metric_key, evaluated_key) in (
@@ -3225,6 +3372,105 @@ function _indel_frontier_admitted(
            metrics.frontier_work <= work_limit
 end
 
+"""
+    _indel_frontier_rejection_cause(metric, work_limit) -> Symbol
+
+Classify why one probed decode window was (or was not) admitted to the
+pair-HMM by `_indel_frontier_admitted`.
+
+Pure: takes the metric dictionary produced by `_probe_indel_window_metric` plus
+the frontier budget, and touches no graph. `:admitted` is returned exactly when
+`_indel_frontier_admitted` would return `true` for the same window, so the
+histogram built from this function reconciles with the admission counters.
+
+Apart from the `:encode_error` pre-check the branch order mirrors the `&&` chain
+in `_indel_frontier_admitted` conjunct for conjunct, so the FIRST failing
+conjunct names the cause:
+
+| Conjunct                             | Cause when it fails      |
+|:-------------------------------------|:-------------------------|
+| `metrics.anchored`                   | `:unanchored`            |
+| `metrics.reason == :complete`        | `:probe_<probe reason>`  |
+| `completed_columns == window_length` | `:partial_columns`       |
+| `frontier_work <= work_limit`        | `:work_limit_exceeded`   |
+
+A window that is BOTH unanchored and over budget therefore reports
+`:unanchored`, matching the short-circuit that actually rejected it.
+
+`:encode_error` is a harness sentinel emitted by `_probe_indel_window_metric`
+when the window sequence cannot be encoded: the probe never ran, so its
+`anchored = false` is synthetic rather than an anchor finding. It is classified
+before the anchor conjunct so that `:unanchored` keeps its literal meaning --
+the probe ran and found no start vertex -- which is the distinction the
+diagnostic exists to make. `_indel_frontier_admitted` is never consulted for
+that sentinel, so the `:admitted` equivalence above is unaffected.
+"""
+function _indel_frontier_rejection_cause(
+        metric::AbstractDict,
+        work_limit::Int,
+)::Symbol
+    reason = get(metric, :reason, nothing)
+    reason === :encode_error && return :probe_encode_error
+    get(metric, :anchored, false) === true || return :unanchored
+    if reason !== :complete
+        return get(
+            _INDEL_FRONTIER_PROBE_REJECTION_CAUSES, reason, :probe_unknown)
+    end
+    get(metric, :completed_columns, -1) == get(metric, :window_length, -2) ||
+        return :partial_columns
+    get(metric, :frontier_work, typemax(Int)) <= work_limit ||
+        return :work_limit_exceeded
+    return :admitted
+end
+
+function _record_indel_frontier_cause!(
+        causes::Dict{Symbol, Int},
+        metric::AbstractDict,
+        work_limit::Int,
+)::Symbol
+    cause = _indel_frontier_rejection_cause(metric, work_limit)
+    causes[cause] = get(causes, cause, 0) + 1
+    return cause
+end
+
+# `:encode_error` sentinels carry no `frontier_work`, so they are counted in the
+# cause histogram but contribute nothing to the order statistics.
+function _record_indel_frontier_work!(
+        works::Vector{Int},
+        metric::AbstractDict,
+)::Nothing
+    frontier_work = get(metric, :frontier_work, nothing)
+    frontier_work isa Int && push!(works, frontier_work)
+    return nothing
+end
+
+"""
+    _indel_frontier_work_summary(works) -> Dict{Symbol, Int}
+
+Reduce the per-window `frontier_work` values of one rung to the six order
+statistics persisted in the rung telemetry. Percentiles use nearest-rank, so
+each is an observed value and monotonicity holds without interpolation.
+"""
+function _indel_frontier_work_summary(
+        works::Vector{Int},
+)::Dict{Symbol, Int}
+    if isempty(works)
+        return Dict{Symbol, Int}(
+            key => 0 for key in _INDEL_FRONTIER_WORK_SUMMARY_KEYS)
+    end
+    sorted = sort(works)
+    n = length(sorted)
+    nearest_rank(quantile) = sorted[clamp(ceil(Int, quantile * n), 1, n)]
+    return Dict{Symbol, Int}(
+        :count => n,
+        :min => first(sorted),
+        :p50 => nearest_rank(0.50),
+        :p90 => nearest_rank(0.90),
+        :p99 => nearest_rank(0.99),
+        :max => last(sorted),
+    )
+end
+
 function _indel_candidate_windows(
         reads::Vector{<:FASTX.FASTQ.Record},
         k::Int,
@@ -3460,6 +3706,14 @@ function _evaluate_indel_frontier_schedule_impl(
         sources = get!(window_sources, read_index, Dict{UnitRange{Int}, Symbol}())
         sources[window] = :substitution
     end
+    # Exact per-window diagnostics. Unlike `raw_metrics`/`cleaned_metrics` these
+    # are NOT capped at `_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT`; every evaluated
+    # window contributes one cause, and `*_works` is reduced to six order
+    # statistics before it leaves this function.
+    raw_causes = Dict{Symbol, Int}()
+    raw_works = Int[]
+    cleaned_causes = Dict{Symbol, Int}()
+    cleaned_works = Int[]
     if isempty(candidates)
         return (
             graph = raw_graph,
@@ -3475,6 +3729,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :no_candidate_windows,
             raw_evaluated = 0,
             cleaned_evaluated = 0,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics = Dict{Symbol, Any}[],
             cleaned_metrics = Dict{Symbol, Any}[],
             cleanup = Dict{String, Any}(),
@@ -3503,6 +3761,8 @@ function _evaluate_indel_frontier_schedule_impl(
         metric[:window_stop] = last(window)
         metric[:admitted] = admitted
         raw_evaluated += 1
+        _record_indel_frontier_cause!(raw_causes, metric, work_limit)
+        _record_indel_frontier_work!(raw_works, metric)
         if length(raw_metrics) < _INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT
             push!(raw_metrics, metric)
         end
@@ -3532,6 +3792,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_memory_limit,
                 raw_evaluated,
                 cleaned_evaluated = 0,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics = Dict{Symbol, Any}[],
                 cleanup,
@@ -3558,6 +3822,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_out_of_memory,
                 raw_evaluated,
                 cleaned_evaluated = 0,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics = Dict{Symbol, Any}[],
                 cleanup = Dict{String, Any}(
@@ -3579,6 +3847,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :raw_frontier_affordable,
             raw_evaluated,
             cleaned_evaluated = 0,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics = Dict{Symbol, Any}[],
             cleanup = Dict{String, Any}(),
@@ -3626,6 +3898,9 @@ function _evaluate_indel_frontier_schedule_impl(
                     metric[:window_stop] = last(window)
                     metric[:admitted] = admitted
                     cleaned_evaluated += 1
+                    _record_indel_frontier_cause!(
+                        cleaned_causes, metric, work_limit)
+                    _record_indel_frontier_work!(cleaned_works, metric)
                     cleaning_lost_anchor |= raw_anchored[candidate_index] &&
                                             !get(metric, :anchored, false)
                     if length(cleaned_metrics) <
@@ -3648,6 +3923,8 @@ function _evaluate_indel_frontier_schedule_impl(
             cleaned_graph = nothing
             cleaned_weighted_graph = nothing
             empty!(cleaned_metrics)
+            empty!(cleaned_causes)
+            empty!(cleaned_works)
             cleaned_evaluated = 0
             fill!(cleaned_admitted, false)
             for (candidate_index, (read_index, window)) in enumerate(candidates)
@@ -3691,6 +3968,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :cleaning_out_of_memory,
             raw_evaluated,
             cleaned_evaluated,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics,
             cleanup,
@@ -3744,6 +4025,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_memory_limit,
                 raw_evaluated,
                 cleaned_evaluated,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics,
                 cleanup,
@@ -3774,6 +4059,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_out_of_memory,
                 raw_evaluated,
                 cleaned_evaluated,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics,
                 cleanup = Dict{String, Any}(
@@ -3795,6 +4084,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = reason,
             raw_evaluated,
             cleaned_evaluated,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics,
             cleanup,
@@ -3803,8 +4096,6 @@ function _evaluate_indel_frontier_schedule_impl(
 
     reason = if cleaning_status == :out_of_memory
         :cleaning_out_of_memory
-    elseif cleaning_status == :weighted_memory_limit
-        :weighted_graph_memory_limit
     elseif cleaning_status == :memory_limit
         :cleaning_memory_limit
     elseif cleaning_lost_anchor
@@ -3826,6 +4117,10 @@ function _evaluate_indel_frontier_schedule_impl(
         decision_reason = reason,
         raw_evaluated,
         cleaned_evaluated,
+        raw_causes,
+        cleaned_causes,
+        raw_work_summary = _indel_frontier_work_summary(raw_works),
+        cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
         raw_metrics,
         cleaned_metrics,
         cleanup,
@@ -4843,6 +5138,14 @@ function _improve_read_set_likelihood_impl(
         pass_indel_telemetry[:cleaned_frontier_evaluated] = decision.cleaned_evaluated
         pass_indel_telemetry[:raw_frontier_metrics] = decision.raw_metrics
         pass_indel_telemetry[:cleaned_frontier_metrics] = decision.cleaned_metrics
+        pass_indel_telemetry[:raw_frontier_rejection_causes] =
+            decision.raw_causes
+        pass_indel_telemetry[:cleaned_frontier_rejection_causes] =
+            decision.cleaned_causes
+        pass_indel_telemetry[:raw_frontier_work_summary] =
+            decision.raw_work_summary
+        pass_indel_telemetry[:cleaned_frontier_work_summary] =
+            decision.cleaned_work_summary
         pass_indel_telemetry[:graph_cleanup] = decision.cleanup
         indel_admitted = decision.admitted
         scheduled_weighted_graph_oom = decision.decision_reason in (
