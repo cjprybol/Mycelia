@@ -10,6 +10,15 @@
 # The scheduler is calibrated only against warmed pair-HMM runtime and topology-
 # only frontier work. Correction accuracy is neither measured nor available to
 # this script, so it cannot leak into threshold selection.
+#
+# Warmup vs timed samples: every (graph, window) cell runs ONE untimed warmup
+# decode plus `--repeats` timed decodes. Only the timed decodes feed median_ms /
+# p95_ms / min_ms / max_ms; the warmup is reported separately as warmup_ms. In
+# the replicates CSV, `phase` is "warmup" or "measurement" and
+# `feeds_timing_summary` is the boolean form of the same distinction. All samples
+# — warmup included — are validated, so the summary reports `timed_samples`
+# (feeding the percentiles) apart from `validated_samples` (feeding the
+# pair-HMM validity columns).
 
 import BioSequences
 import CairoMakie
@@ -22,6 +31,8 @@ import Random
 import SHA
 import Statistics
 
+include(joinpath(@__DIR__, "indel_benchmark_common.jl"))
+
 const INDEL_FRONTIER_K = 9
 const INDEL_FRONTIER_TOY_K = 31
 const INDEL_FRONTIER_GENOME_LENGTH = 2_000
@@ -31,7 +42,6 @@ const INDEL_FRONTIER_ERROR_RATE = 0.05
 const INDEL_FRONTIER_FIXTURE_SEED = 42
 const INDEL_FRONTIER_WINDOW_BASES = (250, 500, 1_200)
 const INDEL_FRONTIER_REPEATS = 5
-const INDEL_FRONTIER_MISSING_DEPENDENCY_SENTINEL = "MISSING"
 # A historical 200 ms value informed early topology calibration and remains
 # aspirational context only; it is not an executable or portable wall-clock
 # SLA. The executable runtime-only affordability gate requires the 10,001-
@@ -40,6 +50,22 @@ const INDEL_FRONTIER_MISSING_DEPENDENCY_SENTINEL = "MISSING"
 # from satisfying only the relative check.
 const INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN = 3.0
 const INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS = 1_000.0
+# Figure label de-overlap, expressed in axis-normalized units so it behaves the
+# same on either log-log panel. A label's width is estimated as
+# character_count * INDEL_FRONTIER_LABEL_CHAR_WIDTH pixels against a panel
+# INDEL_FRONTIER_LABEL_PANEL_WIDTH wide (the ~1750 px figure minus the legend,
+# split across two axes); its height is INDEL_FRONTIER_LABEL_HEIGHT_FRACTION of
+# the panel. Colliding labels are pushed up by whole levels until their boxes
+# separate. The panel dimensions are approximations used only for collision
+# geometry — they never move a data point, only a text annotation.
+const INDEL_FRONTIER_LABEL_FONT_SIZE = 9
+const INDEL_FRONTIER_LABEL_CHAR_WIDTH = 4.7
+const INDEL_FRONTIER_LABEL_HEIGHT_FRACTION = 0.024
+const INDEL_FRONTIER_LABEL_BASE_OFFSET = 6
+const INDEL_FRONTIER_LABEL_LEVEL_OFFSET = 14
+const INDEL_FRONTIER_LABEL_PANEL_WIDTH = 730.0
+const INDEL_FRONTIER_LABEL_PANEL_HEIGHT = 600.0
+const INDEL_FRONTIER_LABEL_MAX_LEVELS = 12
 const INDEL_FRONTIER_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-frontier-runtime"
 )
@@ -48,7 +74,7 @@ const INDEL_FRONTIER_ARTIFACT_NAMES = (
     "indel_frontier_runtime_replicates.csv",
     "indel_frontier_runtime.png",
     "indel_frontier_runtime.svg",
-    "indel_frontier_runtime_manifest.csv",
+    "indel_frontier_runtime_manifest.csv"
 )
 
 struct IndelFrontierCalibrationGraph
@@ -65,10 +91,7 @@ function main(args::Vector{String} = ARGS)::Nothing
     options = _indel_frontier_parse_args(args)
     repeats = something(
         options.repeats,
-        options.smoke ? 1 : INDEL_FRONTIER_REPEATS,
-    )
-    _indel_frontier_remove_prior_artifacts(
-        options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES
+        options.smoke ? 1 : INDEL_FRONTIER_REPEATS
     )
     run_provenance = _indel_frontier_run_provenance(options.smoke, repeats)
 
@@ -83,8 +106,12 @@ function main(args::Vector{String} = ARGS)::Nothing
 
     provenance = merge(
         run_provenance,
-        _indel_frontier_affordability_provenance(options.smoke, summary),
+        _indel_frontier_affordability_provenance(options.smoke, summary)
     )
+    # Everything is staged out of tree and published only once the generation is
+    # complete, so an abort anywhere above leaves the previous complete
+    # generation untouched rather than an empty output directory.
+    Base.Filesystem.mkpath(options.output_dir)
     staging_dir = Base.Filesystem.mktempdir(
         options.output_dir; prefix = ".frontier-runtime-staging-"
     )
@@ -100,26 +127,26 @@ function main(args::Vector{String} = ARGS)::Nothing
         figure_paths = _indel_frontier_write_figure(summary, staging_dir)
         manifest = DataFrames.DataFrame([
             merge(
-                provenance,
-                (
-                    summary_sha256 = _indel_frontier_file_sha256(
-                        summary_staging_path
-                    ),
-                    replicates_sha256 = _indel_frontier_file_sha256(
-                        replicates_staging_path
-                    ),
-                    png_sha256 = _indel_frontier_file_sha256(figure_paths.png),
-                    svg_sha256 = _indel_frontier_file_sha256(figure_paths.svg),
+            provenance,
+            (
+                summary_sha256 = indel_bench_file_sha256(
+                    summary_staging_path
                 ),
-            ),
+                replicates_sha256 = indel_bench_file_sha256(
+                    replicates_staging_path
+                ),
+                png_sha256 = indel_bench_file_sha256(figure_paths.png),
+                svg_sha256 = indel_bench_file_sha256(figure_paths.svg)
+            )
+        ),
         ])
         CSV.write(
             joinpath(staging_dir, INDEL_FRONTIER_ARTIFACT_NAMES[5]), manifest
         )
-        _indel_frontier_assert_provenance_unchanged(
-            run_provenance, options.smoke, repeats
+        indel_bench_assert_environment_unchanged(
+            run_provenance, @__FILE__; context = "frontier runtime run"
         )
-        _indel_frontier_publish_artifacts(
+        indel_bench_publish_artifacts(
             staging_dir, options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES
         )
     finally
@@ -142,6 +169,11 @@ function main(args::Vector{String} = ARGS)::Nothing
     println("  png:        $(png_path)")
     println("  svg:        $(svg_path)")
     println("  manifest:   $(manifest_path)")
+    println(
+        "Latency columns (median_ms/p95_ms/min_ms/max_ms) come from timed " *
+        "replicates only; the untimed warmup is reported separately as " *
+        "warmup_ms and flagged feeds_timing_summary=false in the replicates CSV."
+    )
     println("No correction-accuracy metric was computed or used.")
     return nothing
 end
@@ -153,7 +185,7 @@ function _indel_frontier_calibration_graphs(
     if smoke
         return IndelFrontierCalibrationGraph[
             branching,
-            _indel_frontier_linear_graph(300, "linear_300_smoke"),
+            _indel_frontier_linear_graph(300, "linear_300_smoke")
         ]
     end
 
@@ -179,7 +211,7 @@ function _indel_frontier_calibration_graphs(
             INDEL_FRONTIER_TOY_K,
             :doublestrand,
             :raw_fixed_toy,
-            Dict{String, Any}(),
+            Dict{String, Any}()
         ),
         IndelFrontierCalibrationGraph(
             "fixed_toy_k31_cleaned",
@@ -188,14 +220,14 @@ function _indel_frontier_calibration_graphs(
             INDEL_FRONTIER_TOY_K,
             :doublestrand,
             :cleaned_fixed_toy,
-            cleanup_stats,
-        ),
+            cleanup_stats
+        )
     ]
 end
 
 function _indel_frontier_linear_graph(
         target_vertices::Int,
-        graph_id::String,
+        graph_id::String
 )::IndelFrontierCalibrationGraph
     target_vertices > 0 || throw(ArgumentError("target_vertices must be positive"))
     cycle = _indel_frontier_de_bruijn_sequence(INDEL_FRONTIER_K)
@@ -226,7 +258,7 @@ function _indel_frontier_linear_graph(
         INDEL_FRONTIER_K,
         :singlestrand,
         :synthetic_linear,
-        Dict{String, Any}(),
+        Dict{String, Any}()
     )
 end
 
@@ -239,7 +271,7 @@ function _indel_frontier_branching_graph()::IndelFrontierCalibrationGraph
         sequence = string(a, b, c, d)
         push!(
             records,
-            _indel_frontier_fastq_record("branch_edge_$(record_index)", sequence),
+            _indel_frontier_fastq_record("branch_edge_$(record_index)", sequence)
         )
     end
     graph = Mycelia.Rhizomorph.build_qualmer_graph(
@@ -254,9 +286,8 @@ function _indel_frontier_branching_graph()::IndelFrontierCalibrationGraph
     )
 
     n_vertices = Graphs.nv(graph.graph)
-    outdegrees = [
-        Graphs.outdegree(graph.graph, vertex) for vertex in Graphs.vertices(graph.graph)
-    ]
+    outdegrees = [Graphs.outdegree(graph.graph, vertex)
+                  for vertex in Graphs.vertices(graph.graph)]
     n_vertices == 64 || error(
         "maximally branching k=3 graph expected 64 vertices, observed $(n_vertices)"
     )
@@ -270,7 +301,7 @@ function _indel_frontier_branching_graph()::IndelFrontierCalibrationGraph
         3,
         :singlestrand,
         :synthetic_branching,
-        Dict{String, Any}(),
+        Dict{String, Any}()
     )
 end
 
@@ -301,52 +332,25 @@ function _indel_frontier_de_bruijn_sequence(order::Int)::String
     return String([alphabet[index + 1] for index in indices])
 end
 
+# Thin binding of the shared simulator to this script's pinned constants. These
+# are the same constants the fixed-toy acceptance proof uses, so the k=31 raw and
+# cleaned calibration graphs below are built from the identical read bytes; the
+# digest is pinned in benchmarking/indel_benchmark_common_test.jl.
 function _indel_frontier_fixed_fixture()::Tuple{
         Vector{FASTX.FASTQ.Record}, BioSequences.LongDNA{4}}
-    reference_record = Mycelia.random_fasta_record(
-        moltype = :DNA,
+    return indel_bench_simulate_reads(
+        genome_length = INDEL_FRONTIER_GENOME_LENGTH,
+        source_read_length = INDEL_FRONTIER_SOURCE_READ_LENGTH,
+        coverage = INDEL_FRONTIER_COVERAGE,
+        error_rate = INDEL_FRONTIER_ERROR_RATE,
         seed = INDEL_FRONTIER_FIXTURE_SEED,
-        L = INDEL_FRONTIER_GENOME_LENGTH,
+        tech = :nanopore
     )
-    reference = FASTX.sequence(BioSequences.LongDNA{4}, reference_record)
-    rng = Random.MersenneTwister(INDEL_FRONTIER_FIXTURE_SEED)
-    Random.seed!(INDEL_FRONTIER_FIXTURE_SEED)
-    n_reads = ceil(
-        Int,
-        INDEL_FRONTIER_COVERAGE * INDEL_FRONTIER_GENOME_LENGTH /
-        INDEL_FRONTIER_SOURCE_READ_LENGTH,
-    )
-    reads = FASTX.FASTQ.Record[]
-    for read_index in 1:n_reads
-        start_position = rand(
-            rng,
-            1:(INDEL_FRONTIER_GENOME_LENGTH -
-               INDEL_FRONTIER_SOURCE_READ_LENGTH + 1),
-        )
-        fragment = reference[
-            start_position:(start_position + INDEL_FRONTIER_SOURCE_READ_LENGTH - 1)
-        ]
-        if rand(rng, Bool)
-            fragment = BioSequences.reverse_complement(fragment)
-        end
-        observed, qualities = Mycelia.observe(
-            fragment; error_rate = INDEL_FRONTIER_ERROR_RATE, tech = :nanopore
-        )
-        isempty(observed) && continue
-        quality_string = String([Char(quality + 33) for quality in qualities])
-        push!(
-            reads,
-            FASTX.FASTQ.Record(
-                "nanopore_read_$(read_index)", string(observed), quality_string
-            ),
-        )
-    end
-    return reads, reference
 end
 
 function _indel_frontier_fastq_record(
         identifier::String,
-        sequence::String,
+        sequence::String
 )::FASTX.FASTQ.Record
     return FASTX.FASTQ.Record(identifier, sequence, repeat("I", length(sequence)))
 end
@@ -354,7 +358,7 @@ end
 function _indel_frontier_run_matrix(
         graph_cases::Vector{IndelFrontierCalibrationGraph},
         window_bases::Tuple{Vararg{Int}},
-        repeats::Int,
+        repeats::Int
 )::Tuple{DataFrames.DataFrame, DataFrames.DataFrame}
     summary_rows = NamedTuple[]
     replicate_rows = NamedTuple[]
@@ -374,7 +378,7 @@ function _indel_frontier_run_matrix(
                 :DNA;
                 config = config,
                 strand_mode = graph_case.strand_mode,
-                work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
+                work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT
             )
             measurement = _indel_frontier_measure_decode(
                 graph_case.graph, observations, config, repeats
@@ -390,6 +394,7 @@ function _indel_frontier_run_matrix(
                         n_observations = length(observations),
                         window_start = window.start,
                         phase = row.phase,
+                        feeds_timing_summary = row.feeds_timing_summary,
                         replicate = row.replicate,
                         elapsed_ms = row.elapsed_ms,
                         algorithm = string(row.algorithm),
@@ -401,7 +406,7 @@ function _indel_frontier_run_matrix(
                         decoded_read_index = row.decoded_read_index,
                         terminal_contract_valid = row.terminal_contract_valid,
                         graph_step_trace_aligned =
-                            row.graph_step_trace_aligned,
+                        row.graph_step_trace_aligned,
                         path_length_aligned = row.path_length_aligned,
                         corrected_path_aligned = row.corrected_path_aligned,
                         move_counts_aligned = row.move_counts_aligned,
@@ -411,8 +416,8 @@ function _indel_frontier_run_matrix(
                         full_decode = row.full_decode,
                         frontier_area = row.frontier_area,
                         edge_expansions = row.edge_expansions,
-                        peak_frontier = row.peak_frontier,
-                    ),
+                        peak_frontier = row.peak_frontier
+                    )
                 )
             end
             cleanup = graph_case.cleanup_stats
@@ -443,21 +448,27 @@ function _indel_frontier_run_matrix(
                     probe_peak_frontier = probe.peak_frontier,
                     probe_frontier_work = probe.frontier_work,
                     frontier_work_limit =
-                        Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
+                    Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
                     beam_width = config.beam_width,
+                    # warmup_ms is the single untimed first call; the
+                    # median/p95/min/max columns are computed over the
+                    # `timed_samples` timed replicates ONLY and never include it.
                     warmup_ms = measurement.warmup_ms,
                     median_ms = measurement.median_ms,
                     p95_ms = measurement.p95_ms,
                     min_ms = measurement.min_ms,
                     max_ms = measurement.max_ms,
                     repeats = repeats,
-                    pair_hmm_samples = measurement.samples,
+                    timed_samples = measurement.timed_samples,
+                    warmup_samples = measurement.warmup_samples,
+                    # Validity columns below span warmup + timed samples.
+                    validated_samples = measurement.validated_samples,
                     pair_hmm_path_valid = measurement.path_valid,
                     pair_hmm_valid = measurement.valid,
                     pair_hmm_terminal_contract_valid =
-                        measurement.terminal_contract_valid,
+                    measurement.terminal_contract_valid,
                     pair_hmm_path_trace_aligned =
-                        measurement.path_trace_aligned,
+                    measurement.path_trace_aligned,
                     pair_hmm_trace_complete = measurement.trace_complete,
                     pair_hmm_truncated = measurement.truncated,
                     pair_hmm_truncated_samples = measurement.truncated_samples,
@@ -476,16 +487,18 @@ function _indel_frontier_run_matrix(
                     cleanup_bubbles_collapsed = get(
                         cleanup, "graph_cleanup_bubbles_collapsed", missing
                     ),
-                    accuracy_metric_used = false,
-                ),
+                    accuracy_metric_used = false
+                )
             )
             println(
                 "graph=$(graph_case.graph_id),window=$(n_bases)bp," *
                 "nv=$(structural.n_vertices),branch=" *
                 "$(round(structural.branch_fraction; digits = 4))," *
                 "frontier_work=$(probe.frontier_work),reason=$(probe.reason)," *
-                "median_ms=$(round(measurement.median_ms; digits = 3))," *
-                "p95_ms=$(round(measurement.p95_ms; digits = 3))"
+                "warmup_ms=$(round(measurement.warmup_ms; digits = 3))," *
+                "timed_n=$(measurement.timed_samples)," *
+                "timed_median_ms=$(round(measurement.median_ms; digits = 3))," *
+                "timed_p95_ms=$(round(measurement.p95_ms; digits = 3))"
             )
         end
     end
@@ -510,13 +523,13 @@ function _indel_frontier_structural_metrics(graph::Any)::NamedTuple
         mean_outdegree = isempty(outdegrees) ? 0.0 : Statistics.mean(outdegrees),
         p95_outdegree = isempty(outdegrees) ?
                         0.0 : Statistics.quantile(outdegrees, 0.95),
-        max_outdegree = isempty(outdegrees) ? 0 : maximum(outdegrees),
+        max_outdegree = isempty(outdegrees) ? 0 : maximum(outdegrees)
     )
 end
 
 function _indel_frontier_anchored_window(
         graph_case::IndelFrontierCalibrationGraph,
-        n_bases::Int,
+        n_bases::Int
 )::NamedTuple
     n_bases >= graph_case.k || throw(
         ArgumentError("window length must be at least k=$(graph_case.k)")
@@ -541,7 +554,7 @@ end
 function _indel_frontier_slice_record(
         record::FASTX.FASTQ.Record,
         start::Int,
-        n_bases::Int,
+        n_bases::Int
 )::FASTX.FASTQ.Record
     sequence = FASTX.sequence(String, record)
     quality = String(FASTX.quality(record))
@@ -550,13 +563,13 @@ function _indel_frontier_slice_record(
     return FASTX.FASTQ.Record(
         "$(FASTX.identifier(record))_$(start)_$(stop)",
         sequence[start:stop],
-        quality[start:stop],
+        quality[start:stop]
     )
 end
 
 function _indel_frontier_quality_observations(
         read::FASTX.FASTQ.Record,
-        k::Int,
+        k::Int
 )::Vector{Mycelia.QualityObservation}
     sequence_string = FASTX.sequence(String, read)
     alphabet = Mycelia.detect_alphabet(sequence_string)
@@ -578,7 +591,7 @@ end
 function _indel_frontier_config(
         n_observations::Int,
         n_vertices::Int,
-        strand_mode::Symbol,
+        strand_mode::Symbol
 )::Mycelia.ViterbiCorrectionConfig
     profile = Mycelia.indel_error_profile(:nanopore)
     knobs = Mycelia.Rhizomorph._corrector_strategy_knobs(:scalable)
@@ -601,15 +614,32 @@ function _indel_frontier_config(
         deletion_extend_probability = profile.deletion_extend_probability,
         deletion_max_run = knobs.deletion_max_run,
         max_insertion_run = knobs.max_insertion_run,
-        band_width = knobs.band_width,
+        band_width = knobs.band_width
     )
 end
 
+# WARMUP VS TIMED SAMPLES — read this before interpreting any latency column.
+#
+# Each (graph, window) cell runs `repeats + 1` decodes:
+#
+#   * exactly ONE untimed WARMUP decode, which absorbs first-call compilation and
+#     cache population. Its wall time is reported separately as `warmup_ms` and
+#     is NEVER mixed into median/p95/min/max.
+#   * exactly `repeats` TIMED decodes, and ONLY these feed `median_ms`, `p95_ms`,
+#     `min_ms`, and `max_ms`.
+#
+# Every sample, warmup included, is validated and emitted as a row in the
+# replicates CSV (`phase` = "warmup" or "measurement", `feeds_timing_summary` =
+# false or true). The validity aggregates below are deliberately computed over
+# ALL rows including the warmup, because a warmup decode that fails its trace
+# contract invalidates the cell regardless of how fast the timed replicates ran.
+# That is why the summary reports `timed_samples` and `validated_samples`
+# separately rather than one ambiguous sample count.
 function _indel_frontier_measure_decode(
         graph::Any,
         observations::Vector{Mycelia.QualityObservation},
         config::Mycelia.ViterbiCorrectionConfig,
-        repeats::Int,
+        repeats::Int
 )::NamedTuple
     weighted_graph = Mycelia.build_correction_weighted_graph(graph; config = config)
     Base.GC.gc()
@@ -618,21 +648,21 @@ function _indel_frontier_measure_decode(
         graph,
         [observations];
         config = config,
-        weighted_graph = weighted_graph,
+        weighted_graph = weighted_graph
     )
     warmup_ms = (time_ns() - warm_start) / 1.0e6
     warm_path = only(warm.paths)
     warm_corrected = only(warm.corrected_observations)
     rows = NamedTuple[
-        _indel_frontier_replicate_row(
-            "warmup",
-            0,
-            warmup_ms,
-            warm_path,
-            warm_corrected,
-            length(observations),
-        ),
-    ]
+    _indel_frontier_replicate_row(
+        "warmup",
+        0,
+        warmup_ms,
+        warm_path,
+        warm_corrected,
+        length(observations)
+    ),
+]
     elapsed_ms = Float64[]
     for replicate in 1:repeats
         Base.GC.gc()
@@ -641,7 +671,7 @@ function _indel_frontier_measure_decode(
             graph,
             [observations];
             config = config,
-            weighted_graph = weighted_graph,
+            weighted_graph = weighted_graph
         )
         elapsed = (time_ns() - start_ns) / 1.0e6
         path = only(result.paths)
@@ -655,8 +685,8 @@ function _indel_frontier_measure_decode(
                 elapsed,
                 path,
                 corrected,
-                length(observations),
-            ),
+                length(observations)
+            )
         )
     end
 
@@ -672,12 +702,18 @@ function _indel_frontier_measure_decode(
     complete = complete_samples == length(rows)
 
     return (
+        # Untimed first call, reported for transparency; excluded from every
+        # latency percentile below.
         warmup_ms = warmup_ms,
+        # Computed over the `repeats` TIMED replicates only.
         median_ms = Statistics.median(elapsed_ms),
         p95_ms = Statistics.quantile(elapsed_ms, 0.95),
         min_ms = minimum(elapsed_ms),
         max_ms = maximum(elapsed_ms),
-        samples = length(rows),
+        timed_samples = length(elapsed_ms),
+        # Validity aggregates span warmup + timed, hence `repeats + 1`.
+        validated_samples = length(rows),
+        warmup_samples = length(rows) - length(elapsed_ms),
         path_valid = path_valid,
         valid = valid,
         terminal_contract_valid = terminal_contract_valid,
@@ -688,14 +724,14 @@ function _indel_frontier_measure_decode(
         complete = complete,
         complete_samples = complete_samples,
         full_decode = valid,
-        replicates = rows,
+        replicates = rows
     )
 end
 
 function _indel_frontier_trace_complete(
         move_trace::Any,
         read_index_trace::Any,
-        expected_columns::Int,
+        expected_columns::Int
 )::Bool
     move_trace isa AbstractVector{Symbol} || return false
     read_index_trace isa AbstractVector{Int} || return false
@@ -724,7 +760,7 @@ function _indel_frontier_replicate_row(
         elapsed_ms::Float64,
         path::Any,
         corrected_observations::Any,
-        expected_columns::Int,
+        expected_columns::Int
 )::NamedTuple
     diagnostics = path.diagnostics
     algorithm = get(diagnostics, :algorithm, :missing)
@@ -738,70 +774,67 @@ function _indel_frontier_replicate_row(
     completed_columns_field = get(diagnostics, :completed_columns, nothing)
     decoded_read_index_field = get(
         diagnostics, :decoded_read_index, nothing)
-    terminal_contract_valid =
-        truncated_field === false &&
-        typeof(completed_columns_field) === Int &&
-        completed_columns_field == expected_columns &&
-        typeof(decoded_read_index_field) === Int &&
-        decoded_read_index_field == expected_columns
+    terminal_contract_valid = truncated_field === false &&
+                              typeof(completed_columns_field) === Int &&
+                              completed_columns_field == expected_columns &&
+                              typeof(decoded_read_index_field) === Int &&
+                              decoded_read_index_field == expected_columns
     move_trace = get(diagnostics, :move_trace, nothing)
     trace_indices_complete = _indel_frontier_trace_complete(
         move_trace,
         get(diagnostics, :read_index_trace, nothing),
-        expected_columns,
+        expected_columns
     )
     decoded_path = path.path
-    decoded_steps =
-        decoded_path !== nothing && hasproperty(decoded_path, :steps) ?
-        getproperty(decoded_path, :steps) : nothing
-    graph_step_trace_aligned =
-        decoded_steps isa AbstractVector &&
-        move_trace isa AbstractVector{Symbol} &&
-        length(decoded_steps) == count(!=(:I), move_trace)
+    decoded_steps = decoded_path !== nothing && hasproperty(decoded_path, :steps) ?
+                    getproperty(decoded_path, :steps) : nothing
+    graph_step_trace_aligned = decoded_steps isa AbstractVector &&
+                               move_trace isa AbstractVector{Symbol} &&
+                               length(decoded_steps) == count(!=(:I), move_trace)
     path_length_field = get(diagnostics, :path_length, nothing)
-    path_length_aligned =
-        decoded_steps isa AbstractVector &&
-        typeof(path_length_field) === Int &&
-        path_length_field == length(decoded_steps)
-    corrected_path_aligned =
-        decoded_steps isa AbstractVector &&
-        corrected_observations isa AbstractVector &&
-        length(corrected_observations) == length(decoded_steps) &&
-        all(
-            hasproperty(decoded_steps[index], :vertex_label) &&
-            isequal(
-                corrected_observations[index],
-                getproperty(decoded_steps[index], :vertex_label),
-            )
-            for index in eachindex(decoded_steps)
-        )
+    path_length_aligned = decoded_steps isa AbstractVector &&
+                          typeof(path_length_field) === Int &&
+                          path_length_field == length(decoded_steps)
+    corrected_path_aligned = decoded_steps isa AbstractVector &&
+                             corrected_observations isa AbstractVector &&
+                             length(corrected_observations) == length(decoded_steps) &&
+                             all(
+                                 hasproperty(decoded_steps[index], :vertex_label) &&
+                                 isequal(
+                                     corrected_observations[index],
+                                     getproperty(decoded_steps[index], :vertex_label)
+                                 )
+                             for index in eachindex(decoded_steps)
+                             )
     move_counts = get(diagnostics, :move_counts, nothing)
-    move_counts_aligned =
-        move_trace isa AbstractVector{Symbol} &&
-        move_counts isa AbstractDict{Symbol, Int} &&
-        length(move_counts) == 3 &&
-        all(haskey(move_counts, move) for move in (:M, :I, :D)) &&
-        all(
-            move_counts[move] >= 0 &&
-            move_counts[move] == count(==(move), move_trace)
-            for move in (:M, :I, :D)
-        )
-    path_trace_aligned =
-        graph_step_trace_aligned &&
-        path_length_aligned &&
-        corrected_path_aligned &&
-        move_counts_aligned
+    move_counts_aligned = move_trace isa AbstractVector{Symbol} &&
+                          move_counts isa AbstractDict{Symbol, Int} &&
+                          length(move_counts) == 3 &&
+                          all(haskey(move_counts, move) for move in (:M, :I, :D)) &&
+                          all(
+                              move_counts[move] >= 0 &&
+                              move_counts[move] == count(==(move), move_trace)
+                          for move in (:M, :I, :D)
+                          )
+    path_trace_aligned = graph_step_trace_aligned &&
+                         path_length_aligned &&
+                         corrected_path_aligned &&
+                         move_counts_aligned
     trace_complete = trace_indices_complete
     truncated = truncated_field === true
     completed_columns = typeof(completed_columns_field) === Int ?
                         completed_columns_field : 0
     decoded_read_index = typeof(decoded_read_index_field) === Int ?
                          decoded_read_index_field : 0
-    complete =
-        terminal_contract_valid && trace_complete && path_trace_aligned
+    complete = terminal_contract_valid && trace_complete && path_trace_aligned
     pair_hmm_valid = pair_hmm_path_valid && complete
     return (
+        # "warmup" is the untimed first call; "measurement" rows are the timed
+        # replicates. `feeds_timing_summary` is the machine-readable form of that
+        # distinction: only true rows contribute to median/p95/min/max in the
+        # summary CSV. Both kinds are validated identically.
         phase = phase,
+        feeds_timing_summary = phase != "warmup",
         replicate = replicate,
         elapsed_ms = elapsed_ms,
         algorithm = algorithm,
@@ -822,7 +855,7 @@ function _indel_frontier_replicate_row(
         full_decode = pair_hmm_valid && complete,
         frontier_area = get(diagnostics, :frontier_area, 0),
         edge_expansions = get(diagnostics, :edge_expansions, 0),
-        peak_frontier = get(diagnostics, :peak_frontier, 0),
+        peak_frontier = get(diagnostics, :peak_frontier, 0)
     )
 end
 
@@ -830,20 +863,17 @@ function _indel_frontier_assert_topology_controls(
         summary::DataFrames.DataFrame
 )::Nothing
     branching = summary[
-        (summary.graph_id .== "branching_k3_complete") .&
-        (summary.window_bases .== 500),
-        :,
-    ]
+    (summary.graph_id .== "branching_k3_complete") .& (summary.window_bases .== 500),
+    :
+]
     linear = summary[
-        (summary.graph_id .== "linear_10001") .&
-        (summary.window_bases .== 500),
-        :,
-    ]
+    (summary.graph_id .== "linear_10001") .& (summary.window_bases .== 500),
+    :
+]
     linear_reference = summary[
-        (summary.graph_id .== "linear_2001") .&
-        (summary.window_bases .== 500),
-        :,
-    ]
+    (summary.graph_id .== "linear_2001") .& (summary.window_bases .== 500),
+    :
+]
     DataFrames.nrow(branching) == 1 || error(
         "missing 500 bp highly-branching classifier control"
     )
@@ -892,18 +922,91 @@ function _indel_frontier_assert_topology_controls(
     return nothing
 end
 
+# Deterministic label de-overlap in axis-normalized space.
+#
+# Labels are modelled as BOXES, not points: each one occupies a horizontal
+# interval whose width is estimated from its character count and whose side
+# depends on its alignment (a right-aligned label extends leftward from its
+# anchor), plus a fixed height. A label is raised by whole vertical levels until
+# its box clears every box already placed. An earlier version compared only
+# log-x anchor distance, which left long labels at well-separated anchors
+# painted over each other.
+#
+# Placement runs top-down (highest anchor first) so labels are pushed into empty
+# space above rather than piling onto the next point up. Returns one pixel
+# y-offset per input point, in input order. Both axes are log10, so anchors are
+# normalized on a log scale. Deterministic: identical input yields identical
+# offsets, keeping the figure digest reproducible.
+function _indel_frontier_label_offsets(
+        anchor_x::Vector{Float64},
+        anchor_y::Vector{Float64},
+        label_lengths::Vector{Int},
+        align_left::Vector{Bool},
+)::Vector{Int}
+    n_points = length(anchor_x)
+    all(
+        length(field) == n_points
+        for field in (anchor_y, label_lengths, align_left)
+    ) || throw(ArgumentError("all label placement inputs must have equal length"))
+    n_points == 0 && return Int[]
+
+    log_x = log10.(max.(anchor_x, 1.0))
+    log_y = log10.(max.(anchor_y, eps()))
+    x_span = maximum(log_x) - minimum(log_x)
+    y_span = maximum(log_y) - minimum(log_y)
+    x_span = x_span > 0 ? x_span : 1.0
+    y_span = y_span > 0 ? y_span : 1.0
+    normalized_x = (log_x .- minimum(log_x)) ./ x_span
+    normalized_y = (log_y .- minimum(log_y)) ./ y_span
+    level_step = INDEL_FRONTIER_LABEL_LEVEL_OFFSET /
+                 INDEL_FRONTIER_LABEL_PANEL_HEIGHT
+
+    widths = Float64[
+        label_length * INDEL_FRONTIER_LABEL_CHAR_WIDTH /
+        INDEL_FRONTIER_LABEL_PANEL_WIDTH
+        for label_length in label_lengths
+    ]
+    intervals = Tuple{Float64, Float64}[
+        align_left[index] ?
+        (normalized_x[index], normalized_x[index] + widths[index]) :
+        (normalized_x[index] - widths[index], normalized_x[index])
+        for index in 1:n_points
+    ]
+
+    offsets = Vector{Int}(undef, n_points)
+    placed = Tuple{Float64, Float64, Float64}[]
+    # Ties broken by index so the ordering is total and reproducible.
+    for index in sortperm(collect(zip(-normalized_y, 1:n_points)))
+        left, right = intervals[index]
+        level = 0
+        candidate_y = normalized_y[index]
+        while level < INDEL_FRONTIER_LABEL_MAX_LEVELS && any(
+            left < placed_right && placed_left < right &&
+            abs(candidate_y - placed_y) < INDEL_FRONTIER_LABEL_HEIGHT_FRACTION
+            for (placed_left, placed_right, placed_y) in placed
+        )
+            level += 1
+            candidate_y = normalized_y[index] + level * level_step
+        end
+        push!(placed, (left, right, candidate_y))
+        offsets[index] = INDEL_FRONTIER_LABEL_BASE_OFFSET +
+                         INDEL_FRONTIER_LABEL_LEVEL_OFFSET * level
+    end
+    return offsets
+end
+
 function _indel_frontier_write_figure(
         summary::DataFrames.DataFrame,
         output_dir::String,
 )::NamedTuple
     figure = CairoMakie.Figure(
-        size = (1_500, 650), fontsize = 14, backgroundcolor = :white
+        size = (1_750, 760), fontsize = 14, backgroundcolor = :white
     )
     vertex_axis = CairoMakie.Axis(
         figure[1, 1],
         title = "Vertex count is not a full-decode runtime classifier",
         xlabel = "graph vertices",
-        ylabel = "warmed pair-HMM p95 (ms)",
+        ylabel = "warmed pair-HMM p95 (ms), timed replicates only",
         xscale = log10,
         yscale = log10,
     )
@@ -911,7 +1014,7 @@ function _indel_frontier_write_figure(
         figure[1, 2],
         title = "Full-decode runtime against topology-only frontier work",
         xlabel = "bounded frontier work (area + edge expansions)",
-        ylabel = "warmed pair-HMM p95 (ms)",
+        ylabel = "warmed pair-HMM p95 (ms), timed replicates only",
         xscale = log10,
         yscale = log10,
     )
@@ -928,85 +1031,171 @@ function _indel_frontier_write_figure(
         max(minimum(summary.probe_frontier_work), 1) *
         max(maximum(summary.probe_frontier_work), 1)
     )
-    censored_index = 0
+
+    # First pass: derive every point's styling and label text. Label placement
+    # needs the whole set up front, since de-overlapping one label requires
+    # knowing every other label's box — not just the ones drawn so far.
+    points = NamedTuple[]
     for row in DataFrames.eachrow(summary)
         color = get(colors, row.graph_source, :gray40)
         marker = get(markers, row.window_bases, :circle)
-        label = "$(row.graph_id):$(row.window_bases)"
-        runtime_evidence_valid =
-            row.pair_hmm_valid &&
-            row.pair_hmm_full_decode &&
-            !row.pair_hmm_truncated
-        plotted_color = runtime_evidence_valid ? color : :gray45
-        plotted_marker = runtime_evidence_valid ? marker : :xcross
-        plotted_size = runtime_evidence_valid ? 13 : 16
+        label = "$(row.graph_id) · $(row.window_bases) bp"
+        runtime_evidence_valid = row.pair_hmm_valid &&
+                                 row.pair_hmm_full_decode &&
+                                 !row.pair_hmm_truncated
         frontier_work_censored = row.probe_reason == "work_limit"
-        (!runtime_evidence_valid || frontier_work_censored) &&
-            (censored_index += 1)
-        label_vertical_offset = runtime_evidence_valid ?
-                                5 : 5 + 12 * (censored_index - 1)
         status_label = if runtime_evidence_valid
             label
         elseif row.pair_hmm_truncated
-            "$(label) [CENSORED: truncated diagnostic]"
+            "$(label) [censored: truncated]"
         else
-            "$(label) [CENSORED: incomplete diagnostic]"
+            "$(label) [censored: incomplete]"
         end
-        vertex_on_left = row.n_vertices <= vertex_midpoint
-        frontier_on_left = row.probe_frontier_work <= frontier_midpoint
-        CairoMakie.scatter!(
-            vertex_axis,
-            [row.n_vertices],
-            [row.p95_ms];
-            color = plotted_color,
-            marker = plotted_marker,
-            markersize = plotted_size,
-        )
-        CairoMakie.text!(
-            vertex_axis,
-            row.n_vertices,
-            row.p95_ms;
-            text = status_label,
-            fontsize = 8,
-            align = (vertex_on_left ? :left : :right, :bottom),
-            offset = (vertex_on_left ? 5 : -5, label_vertical_offset),
-        )
-        CairoMakie.scatter!(
-            frontier_axis,
-            [max(row.probe_frontier_work, 1)],
-            [row.p95_ms];
-            color = frontier_work_censored ? :gray45 : plotted_color,
-            marker = frontier_work_censored ? :rtriangle : plotted_marker,
-            markersize = frontier_work_censored ? 16 : plotted_size,
-        )
-        frontier_status = frontier_work_censored ?
-                          "$(status_label) [work_limit; x is lower bound]" :
-                          "$(status_label) [$(row.probe_reason)]"
-        CairoMakie.text!(
-            frontier_axis,
-            max(row.probe_frontier_work, 1),
-            row.p95_ms;
-            text = frontier_status,
-            fontsize = 8,
-            align = (frontier_on_left ? :left : :right, :bottom),
-            offset = (frontier_on_left ? 5 : -5, label_vertical_offset),
+        frontier_label = frontier_work_censored ?
+                         "$(status_label) [work_limit; x is lower bound]" :
+                         "$(status_label) [$(row.probe_reason)]"
+        push!(
+            points,
+            (
+                vertex_x = Float64(row.n_vertices),
+                frontier_x = Float64(max(row.probe_frontier_work, 1)),
+                y = Float64(row.p95_ms),
+                color = runtime_evidence_valid ? color : :gray45,
+                marker = runtime_evidence_valid ? marker : :xcross,
+                markersize = runtime_evidence_valid ? 13 : 16,
+                runtime_evidence_valid = runtime_evidence_valid,
+                frontier_work_censored = frontier_work_censored,
+                vertex_label = status_label,
+                frontier_label = frontier_label,
+                vertex_on_left = row.n_vertices <= vertex_midpoint,
+                frontier_on_left = row.probe_frontier_work <= frontier_midpoint,
+            ),
         )
     end
+
+    vertex_offsets = _indel_frontier_label_offsets(
+        Float64[point.vertex_x for point in points],
+        Float64[point.y for point in points],
+        Int[length(point.vertex_label) for point in points],
+        Bool[point.vertex_on_left for point in points],
+    )
+    frontier_offsets = _indel_frontier_label_offsets(
+        Float64[point.frontier_x for point in points],
+        Float64[point.y for point in points],
+        Int[length(point.frontier_label) for point in points],
+        Bool[point.frontier_on_left for point in points],
+    )
+
+    for (index, point) in enumerate(points)
+        CairoMakie.scatter!(
+            vertex_axis,
+            [point.vertex_x],
+            [point.y];
+            color = point.color,
+            marker = point.marker,
+            markersize = point.markersize,
+        )
+        CairoMakie.text!(
+            vertex_axis,
+            point.vertex_x,
+            point.y;
+            text = point.vertex_label,
+            fontsize = INDEL_FRONTIER_LABEL_FONT_SIZE,
+            color = point.runtime_evidence_valid ? :gray15 : :gray45,
+            align = (point.vertex_on_left ? :left : :right, :bottom),
+            offset = (
+                point.vertex_on_left ? 6 : -6,
+                vertex_offsets[index],
+            ),
+        )
+        CairoMakie.scatter!(
+            frontier_axis,
+            [point.frontier_x],
+            [point.y];
+            color = point.frontier_work_censored ? :gray45 : point.color,
+            marker = point.frontier_work_censored ? :rtriangle : point.marker,
+            markersize = point.frontier_work_censored ? 16 : point.markersize,
+        )
+        CairoMakie.text!(
+            frontier_axis,
+            point.frontier_x,
+            point.y;
+            text = point.frontier_label,
+            fontsize = INDEL_FRONTIER_LABEL_FONT_SIZE,
+            color = (point.runtime_evidence_valid &&
+                     !point.frontier_work_censored) ? :gray15 : :gray45,
+            align = (point.frontier_on_left ? :left : :right, :bottom),
+            offset = (
+                point.frontier_on_left ? 6 : -6,
+                frontier_offsets[index],
+            ),
+        )
+    end
+
+    # Legend built from the levels actually present, so a --smoke run does not
+    # advertise graph sources or windows it never measured.
+    present_sources = sort(unique(summary.graph_source))
+    present_windows = sort(unique(summary.window_bases))
+    source_elements = [
+        CairoMakie.MarkerElement(
+            color = get(colors, source, :gray40), marker = :circle,
+            markersize = 12,
+        )
+        for source in present_sources
+    ]
+    window_elements = [
+        CairoMakie.MarkerElement(
+            color = :gray30, marker = get(markers, window, :circle),
+            markersize = 12,
+        )
+        for window in present_windows
+    ]
+    status_elements = [
+        CairoMakie.MarkerElement(
+            color = :gray45, marker = :xcross, markersize = 14
+        ),
+        CairoMakie.MarkerElement(
+            color = :gray45, marker = :rtriangle, markersize = 14
+        ),
+    ]
+    CairoMakie.Legend(
+        figure[1, 3],
+        [source_elements, window_elements, status_elements],
+        [
+            present_sources,
+            ["$(window) bp" for window in present_windows],
+            [
+                "censored timing diagnostic",
+                "frontier work_limit (x is a lower bound)",
+            ],
+        ],
+        ["graph source (color)", "decode window (marker)", "censoring"];
+        framevisible = true,
+        labelsize = 11,
+        titlesize = 12,
+        patchsize = (18.0f0, 18.0f0),
+    )
+
     CairoMakie.Label(
-        figure[0, 1:2],
+        figure[0, 1:3],
         "Indel frontier scheduling calibration — runtime/topology only; no " *
         "correction accuracy";
         fontsize = 19,
         font = :bold,
     )
     CairoMakie.Label(
-        figure[2, 1:2],
-        "Colored symbols are complete, non-truncated pair-HMM decodes. Gray " *
-        "× symbols are explicitly censored timing diagnostics and are not " *
-        "full-decode runtime evidence. Gray right triangles hit the frontier " *
-        "work limit, so their x positions are censored lower bounds.";
+        figure[2, 1:3],
+        "INTERIM ENGINEERING VALIDATION — not the four-tier benchmark and not " *
+        "the H5 result. Points are warmed pair-HMM p95 over the TIMED " *
+        "replicates only; the untimed warmup decode is excluded. Colored " *
+        "symbols are complete, non-truncated decodes. Gray × symbols are " *
+        "explicitly censored timing diagnostics and are not full-decode " *
+        "runtime evidence. Gray right triangles hit the frontier work limit, " *
+        "so their x positions are censored lower bounds.";
         fontsize = 12,
         color = :gray30,
+        justification = :left,
+        word_wrap = true,
     )
 
     png_path = joinpath(output_dir, "indel_frontier_runtime.png")
@@ -1058,182 +1247,68 @@ function _indel_frontier_parse_args(args::Vector{String})::NamedTuple
     if !smoke && repeats !== nothing && repeats < INDEL_FRONTIER_REPEATS
         throw(
             ArgumentError(
-                "non-smoke --repeats must be at least " *
-                "$(INDEL_FRONTIER_REPEATS)"
-            ),
+            "non-smoke --repeats must be at least " *
+            "$(INDEL_FRONTIER_REPEATS)"
+        ),
         )
     end
     return (smoke = smoke, output_dir = output_dir, repeats = repeats)
 end
 
-function _indel_frontier_remove_prior_artifacts(
-        output_dir::String,
-        artifact_names::Tuple{Vararg{String}},
-)::Nothing
-    Base.Filesystem.mkpath(output_dir)
-    # Invalidate the completion manifest before removing generation members.
-    for artifact_index in length(artifact_names):-1:1
-        artifact_name = artifact_names[artifact_index]
-        artifact_path = joinpath(output_dir, artifact_name)
-        isdir(artifact_path) && error(
-            "refusing to replace artifact directory: $(artifact_path)"
-        )
-        Base.rm(artifact_path; force = true)
-    end
-    return nothing
-end
-
-function _indel_frontier_publish_artifacts(
-        staging_dir::String,
-        output_dir::String,
-        artifact_names::Tuple{Vararg{String}},
-)::Nothing
-    for artifact_name in artifact_names
-        staging_path = joinpath(staging_dir, artifact_name)
-        isfile(staging_path) || error(
-            "staged artifact is missing: $(staging_path)"
-        )
-    end
-    for artifact_name in artifact_names
-        Base.Filesystem.rename(
-            joinpath(staging_dir, artifact_name),
-            joinpath(output_dir, artifact_name),
-        )
-    end
-    return nothing
-end
-
+# Thin run-provenance record: the shared code/worktree/host environment core
+# from indel_benchmark_common.jl, merged with this script's own calibration
+# constants and its own generation identity. Only the environment is shared,
+# because only the environment is genuinely common across the benchmark family.
 function _indel_frontier_run_provenance(
         smoke::Bool,
-        repeats::Int,
+        repeats::Int
 )::NamedTuple
-    repository_root = normpath(joinpath(@__DIR__, ".."))
-    git_head_sha = strip(
-        Base.read(
-            `git -C $repository_root rev-parse HEAD`,
-            String,
-        ),
-    )
-    tracked_diff = Base.read(
-        `git -C $repository_root diff --binary --no-ext-diff HEAD --`
-    )
-    tracked_diff_sha256 = Base.bytes2hex(SHA.sha256(tracked_diff))
-    benchmark_source_sha256 = _indel_frontier_file_sha256(@__FILE__)
-    dependency = _indel_frontier_dependency_provenance()
-    code_environment_components = (
-        git_head_sha,
-        tracked_diff_sha256,
-        benchmark_source_sha256,
-        dependency.project_toml_sha256,
-        dependency.manifest_toml_sha256,
-        string(VERSION),
-        string(Threads.nthreads()),
-        string(Sys.CPU_NAME),
-        string(Sys.ARCH),
-        string(Sys.KERNEL),
-        string(Sys.CPU_THREADS),
-    )
-    code_environment_fingerprint = Base.bytes2hex(SHA.sha256(codeunits(join(
-        code_environment_components, ":"
-    ))))
+    environment = indel_bench_code_environment(@__FILE__)
     run_fingerprint = join(
         (
-            code_environment_fingerprint,
+            environment.code_environment_fingerprint,
             string(INDEL_FRONTIER_FIXTURE_SEED),
             string(smoke),
-            string(repeats),
+            string(repeats)
         ),
-        ":",
+        ":"
     )
     generation_id = Base.bytes2hex(SHA.sha256(codeunits(run_fingerprint)))
-    return (
-        manifest_schema_version = 1,
-        generation_id = generation_id,
-        code_environment_fingerprint = code_environment_fingerprint,
-        code_sha = git_head_sha,
-        git_tracked_worktree_dirty = !isempty(tracked_diff),
-        git_tracked_diff_sha256 = tracked_diff_sha256,
-        benchmark_source_sha256 = benchmark_source_sha256,
-        active_project_path = dependency.active_project_path,
-        project_toml_sha256 = dependency.project_toml_sha256,
-        manifest_toml_present = dependency.manifest_toml_present,
-        manifest_toml_sha256 = dependency.manifest_toml_sha256,
-        julia_version = string(VERSION),
-        julia_threads = Threads.nthreads(),
-        cpu_name = string(Sys.CPU_NAME),
-        architecture = string(Sys.ARCH),
-        kernel = string(Sys.KERNEL),
-        cpu_threads = Sys.CPU_THREADS,
-        smoke = smoke,
-        repeats = repeats,
-        synthetic_k = INDEL_FRONTIER_K,
-        fixed_toy_k = INDEL_FRONTIER_TOY_K,
-        genome_length = INDEL_FRONTIER_GENOME_LENGTH,
-        source_read_length = INDEL_FRONTIER_SOURCE_READ_LENGTH,
-        coverage = INDEL_FRONTIER_COVERAGE,
-        error_rate = INDEL_FRONTIER_ERROR_RATE,
-        fixture_seed = INDEL_FRONTIER_FIXTURE_SEED,
-        window_bases = join(INDEL_FRONTIER_WINDOW_BASES, ";"),
-        frontier_work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
-        linear_10k_500_max_p95_ms =
-            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS,
-        linear_10k_500_max_p95_slowdown =
-            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN,
-        accuracy_metric_used = false,
-    )
-end
-
-function _indel_frontier_assert_provenance_unchanged(
-        initial::NamedTuple,
-        smoke::Bool,
-        repeats::Int,
-)::Nothing
-    current = _indel_frontier_run_provenance(smoke, repeats)
-    current.project_toml_sha256 == initial.project_toml_sha256 || error(
-        "active Project.toml changed during the frontier runtime run; " *
-        "refusing to publish artifacts"
-    )
-    current.manifest_toml_sha256 == initial.manifest_toml_sha256 || error(
-        "active Manifest.toml changed during the frontier runtime run; " *
-        "refusing to publish artifacts"
-    )
-    current.code_environment_fingerprint ==
-    initial.code_environment_fingerprint || error(
-        "code/worktree/environment fingerprint changed during the frontier " *
-        "runtime run; refusing to publish artifacts"
-    )
-    return nothing
-end
-
-function _indel_frontier_dependency_provenance()::NamedTuple
-    active_project = Base.active_project()
-    active_project isa String || error(
-        "an active Project.toml is required for benchmark provenance"
-    )
-    isfile(active_project) || error(
-        "active Project.toml does not exist: $(active_project)"
-    )
-    manifest_path = joinpath(dirname(active_project), "Manifest.toml")
-    manifest_present = isfile(manifest_path)
-    return (
-        active_project_path = normpath(active_project),
-        project_toml_sha256 = _indel_frontier_file_sha256(active_project),
-        manifest_toml_present = manifest_present,
-        manifest_toml_sha256 = _indel_frontier_optional_dependency_sha256(
-            manifest_path
+    return merge(
+        (
+            manifest_schema_version = 1,
+            generation_id = generation_id
         ),
+        environment,
+        (
+            smoke = smoke,
+            # `repeats` counts TIMED replicates only. Each (graph, window) cell
+            # additionally runs one untimed warmup whose sample is recorded in
+            # the replicates CSV but excluded from median/p95/min/max.
+            repeats = repeats,
+            timed_samples_per_cell = repeats,
+            warmup_samples_per_cell = 1,
+            synthetic_k = INDEL_FRONTIER_K,
+            fixed_toy_k = INDEL_FRONTIER_TOY_K,
+            genome_length = INDEL_FRONTIER_GENOME_LENGTH,
+            source_read_length = INDEL_FRONTIER_SOURCE_READ_LENGTH,
+            coverage = INDEL_FRONTIER_COVERAGE,
+            error_rate = INDEL_FRONTIER_ERROR_RATE,
+            fixture_seed = INDEL_FRONTIER_FIXTURE_SEED,
+            window_bases = join(INDEL_FRONTIER_WINDOW_BASES, ";"),
+            frontier_work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
+            linear_10k_500_max_p95_ms =
+            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS,
+            linear_10k_500_max_p95_slowdown =
+            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN,
+            accuracy_metric_used = false
+        )
     )
-end
-
-function _indel_frontier_optional_dependency_sha256(path::String)::String
-    return isfile(path) ?
-           _indel_frontier_file_sha256(path) :
-           INDEL_FRONTIER_MISSING_DEPENDENCY_SENTINEL
 end
 
 function _indel_frontier_affordability_provenance(
         smoke::Bool,
-        summary::DataFrames.DataFrame,
+        summary::DataFrames.DataFrame
 )::NamedTuple
     if smoke
         return (
@@ -1241,19 +1316,17 @@ function _indel_frontier_affordability_provenance(
             linear_10k_500_p95_ms = missing,
             linear_2001_500_p95_ms = missing,
             linear_10k_500_p95_slowdown = missing,
-            linear_10k_500_affordable = missing,
+            linear_10k_500_affordable = missing
         )
     end
     linear = summary[
-        (summary.graph_id .== "linear_10001") .&
-        (summary.window_bases .== 500),
-        :,
-    ]
+    (summary.graph_id .== "linear_10001") .& (summary.window_bases .== 500),
+    :
+]
     reference = summary[
-        (summary.graph_id .== "linear_2001") .&
-        (summary.window_bases .== 500),
-        :,
-    ]
+    (summary.graph_id .== "linear_2001") .& (summary.window_bases .== 500),
+    :
+]
     DataFrames.nrow(linear) == 1 || error(
         "missing 10,001-vertex/500 bp affordability row"
     )
@@ -1263,20 +1336,15 @@ function _indel_frontier_affordability_provenance(
     linear_p95_ms = only(linear.p95_ms)
     reference_p95_ms = only(reference.p95_ms)
     slowdown = linear_p95_ms / reference_p95_ms
-    affordable =
-        linear_p95_ms <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS &&
-        slowdown <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN
+    affordable = linear_p95_ms <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS &&
+                 slowdown <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN
     return (
         affordability_check_enforced = true,
         linear_10k_500_p95_ms = linear_p95_ms,
         linear_2001_500_p95_ms = reference_p95_ms,
         linear_10k_500_p95_slowdown = slowdown,
-        linear_10k_500_affordable = affordable,
+        linear_10k_500_affordable = affordable
     )
-end
-
-function _indel_frontier_file_sha256(path::String)::String
-    return Base.bytes2hex(SHA.sha256(Base.read(path)))
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

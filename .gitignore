@@ -61,8 +61,16 @@ hpc-ci/hpc-results.json
 benchmarking/results/track_a_baseline/refs/
 benchmarking/results/track_a_baseline/cells/
 
-# Runtime-only frontier calibration and fixed-toy outputs are regenerable.
-benchmarking/results/td-jt7r-2-*/
+# td-jt7r indel benchmark working outputs (frontier runtime calibration,
+# fixed-toy proof, and later sub-tasks) are regenerable by re-running the
+# scripts, so the live output directories are not tracked.
+#
+# Curated evidence snapshots ARE committed and are deliberately NOT matched by
+# this glob: they use underscores (benchmarking/results/td_jt7r_*_evidence_<sha>/)
+# rather than the hyphenated working-output prefix. Keep that distinction when
+# adding directories — a hyphenated name is transient, an underscored
+# *_evidence_<sha> name is durable knowledge.
+benchmarking/results/td-jt7r-*/
 
 # Agent worktrees
 trees/
