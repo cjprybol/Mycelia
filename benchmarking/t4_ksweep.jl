@@ -18,6 +18,12 @@ import CSV
 import Dates
 import Statistics
 
+# Shared QUAST --min-contig policy (bead td-28o0). Replaces the inline
+# `max(50, <len> ÷ 10)` this file used to carry, which for any reference above
+# ~5 kb raised the threshold ABOVE QUAST's default and, for T4 (168,903 bp),
+# demanded a 16,890 bp contig that a fragmented assembly cannot reach.
+include(joinpath(@__DIR__, "quast_min_contig.jl"))
+
 # === Configuration ===
 
 TIER = let
@@ -256,9 +262,8 @@ if run_quast
             continue
         end
         ref_path = first(subset.ref_path)
-        # Use low min_contig for viroid-scale genomes (246-359 nt)
         ref_size = first(subset.ref_size)
-        mc = max(50, ref_size ÷ 10)
+        mc = quast_min_contig(ref_size)
         contig_files = String[r.contigs_path
                               for r in eachrow(subset) if isfile(r.contigs_path)]
         if isempty(contig_files)

@@ -6,7 +6,14 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=04:00:00
+# MYCELIA_RGV_SEED now defaults to three seeds, so this sweep does 3x the work
+# the original 4h assumed — and 4h was already observed to be too short for one
+# seed on Lawrencium. 12h is the documented cap for the `regular` QOS on
+# Perlmutter CPU; VERIFY against current NERSC policy before submitting, and if
+# the three-seed sweep does not fit, shard it by seed
+# (MYCELIA_RGV_SEED=42 / 123 / 456 as three jobs) rather than raising this past
+# the cap — the analysis concatenates per-seed CSVs by design.
+#SBATCH --time=12:00:00
 #SBATCH --output=rgv_sweep_nersc_%j.out
 #SBATCH --error=rgv_sweep_nersc_%j.err
 
@@ -52,14 +59,17 @@ export MYCELIA_RGV_ERR="${MYCELIA_RGV_ERR:-0.01,0.05,0.10}"
 export MYCELIA_RGV_READLEN="${MYCELIA_RGV_READLEN:-150,5000}"
 export MYCELIA_RGV_COVERAGE="${MYCELIA_RGV_COVERAGE:-30}"
 export MYCELIA_RGV_K="${MYCELIA_RGV_K:-21}"
-export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42}"
+# Three pre-registered replicate seeds. The sweep loops over this list, so one
+# submission yields a table the paired analysis can pair over; a single seed
+# would need three manual submissions plus a three-way --csv merge.
+export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42,123,456}"
 export MYCELIA_RUN_EXTERNAL="${MYCELIA_RUN_EXTERNAL:-true}"
 
 cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 
 echo ""
 echo ">>> RUN rhizomorph_correction_validation_sweep.jl  $(date)"
-echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  QUAST=${MYCELIA_RUN_EXTERNAL}"
+echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  SEED=${MYCELIA_RGV_SEED}  QUAST=${MYCELIA_RUN_EXTERNAL}"
 
 # Capture julia stdout to a runlog while still streaming it to the job .out (tee),
 # so the guard can bind to THIS run's CSV by the path the .jl prints
