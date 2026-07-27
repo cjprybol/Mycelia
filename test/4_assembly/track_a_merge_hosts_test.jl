@@ -487,7 +487,6 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         mktempdir() do dir
             out = joinpath(dir, "merged")
             mkpath(out)
-            # A pre-existing, larger, correct table.
             good = joinpath(out, "track_a_results.tsv")
             write(good, "organism\taccession\n" * repeat("Lambda\tNC_001416\n", 6))
             before = read(good, String)
@@ -498,12 +497,80 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             _tam_write_cell(host, ids[1], _tam_cell())
             result = merge_hosts(["partial" => host]; expected_ids = ids)
             code, _ = merge_exit_status(result)
-            Test.@test code == 1          # incomplete
-
-            # The gate is what protects the table; `main` writes only when code==0.
-            # Assert the invariant the CLI relies on: a failing merge has a nonzero
-            # code, so the prior table survives untouched.
+            Test.@test code == 1
             Test.@test read(good, String) == before
+
+            # ATOMICITY, asserted directly rather than implied: a write that throws
+            # part-way must leave the destination untouched and no temp behind.
+            Test.@test_throws ErrorException _atomic_write(good) do io
+                write(io, "partial junk")
+                error("simulated interruption")
+            end
+            Test.@test read(good, String) == before
+            Test.@test isempty(filter(f -> startswith(f, "."), readdir(out)))
+
+            # And a successful atomic write does replace the contents.
+            _atomic_write(good) do io
+                write(io, "replaced\n")
+            end
+            Test.@test read(good, String) == "replaced\n"
+        end
+    end
+
+    Test.@testset "CR: a path that exists but is not a cells tree is unreachable" begin
+        mktempdir() do dir
+            # A typo landing on some real-but-wrong directory used to report
+            # exists=true with zero cells and escape the guard.
+            notatree = joinpath(dir, "some-other-dir")
+            mkpath(joinpath(notatree, "unrelated"))
+            cid = "Lambda__illumina__30x__seed42__qualmer"
+            result = merge_hosts(["typo" => notatree]; expected_ids = [cid])
+            Test.@test result.unreachable_sources == ["typo"]
+            code, problems = merge_exit_status(result)
+            Test.@test code == 1
+            Test.@test any(p -> occursin("not a checkpoint tree", p.message), problems)
+        end
+    end
+
+    Test.@testset "CR: malformed cells are counted in the report's evidence table" begin
+        mktempdir() do dir
+            host = joinpath(dir, "h")
+            broken = _tam_cell()
+            delete!(broken, "largest_contig")
+            cid = "Lambda__illumina__30x__seed42__qualmer"
+            _tam_write_cell(host, cid, broken)
+            result = merge_hosts(["h" => host]; expected_ids = [cid])
+            path = write_merge_report(joinpath(dir, "r.md"), result; output_dir = dir)
+            text = read(path, String)
+            # The class carries a suffix, so a bare-name lookup rendered 0 forever.
+            row = first(filter(l -> startswith(l, "| h |"), split(text, "\n")))
+            Test.@test occursin("1", row)
+            Test.@test !occursin("| h | 0 | 0 | 0 | 0 | 0 |", row)
+        end
+    end
+
+    Test.@testset "CR: nested values canonicalize stably" begin
+        # Falling through to `string(v)` rendered a nested object in Dict iteration
+        # order, so two hosts with EQUAL content could digest differently.
+        a = _tam_cell(); a["extra"] = Dict("z" => 1, "a" => 2, "m" => [1, 2, 3])
+        b = _tam_cell(); b["extra"] = Dict("a" => 2, "m" => [1, 2, 3], "z" => 1)
+        Test.@test cell_digest(a) == cell_digest(b)
+        Test.@test isempty(differing_fields(a, b))
+        c = _tam_cell(); c["extra"] = Dict("z" => 9, "a" => 2, "m" => [1, 2, 3])
+        Test.@test cell_digest(a) != cell_digest(c)
+    end
+
+    Test.@testset "CR: a non-numeric shard flag is usage error, not a stacktrace" begin
+        saved = copy(ARGS)
+        try
+            empty!(ARGS); append!(ARGS, ["--coverages", "10,notanumber"])
+            Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) === nothing
+            empty!(ARGS); append!(ARGS, ["--coverages", "10,30"])
+            Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) == [10, 30]
+            empty!(ARGS)
+            Test.@test _parse_int_flag("--seeds", TRACK_A_SEEDS) == TRACK_A_SEEDS
+        finally
+            empty!(ARGS); append!(ARGS, saved)
         end
     end
 end

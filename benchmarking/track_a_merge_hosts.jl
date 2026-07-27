@@ -151,6 +151,15 @@ end
 _canon_value(v::AbstractString) = String(v)
 _canon_value(v::Nothing) = "null"
 _canon_value(v::Missing) = "missing"
+# Recurse into nested containers. Falling through to `string(v)` would render a
+# nested object via Dict iteration order, which is not guaranteed to match between
+# two hosts holding EQUAL content — a false collision. Keys are sorted here for the
+# same reason they are sorted at the top level.
+function _canon_value(v::AbstractDict)
+    ks = sort(String[string(k) for k in keys(v)])
+    return "{" * join(("$(k):$(_canon_value(v[k]))" for k in ks), ",") * "}"
+end
+_canon_value(v::AbstractVector) = "[" * join((_canon_value(x) for x in v), ",") * "]"
 _canon_value(v) = string(v)
 
 """
@@ -329,7 +338,15 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
         # silently shrinks the merge — a mistyped path or an unmounted filesystem
         # produced a smaller-but-plausible matrix, and (before tables moved behind
         # the gate) overwrote a larger correct table with it.
-        exists = isdir(root)
+        # `isdir(root)` alone is not enough: `cells_root` falls back to the given
+        # path when it has no `cells/` subdirectory, so a path that exists but is
+        # not a checkpoint tree at all (a typo landing on some other directory)
+        # would report `exists = true` with zero cells and escape the guard —
+        # exactly the silent-shrink this check exists to stop.
+        looks_like_tree = isdir(joinpath(path, "cells")) ||
+                          (isdir(root) && any(isfile(joinpath(root, e, "cell_result.json"))
+        for e in (isdir(root) ? readdir(root) : String[])))
+        exists = isdir(root) && looks_like_tree
         cells, unreadable = discover_cells(root)
         push!(per_host,
             (host = String(label), root = root, exists = exists,
@@ -589,6 +606,19 @@ function write_merge_report(path::AbstractString, result; output_dir::AbstractSt
             "means the merged matrix MIXES METRIC DEFINITIONS BY HOST — see bead " *
             "td-9p91 and `metric_source_guard.jl` before aggregating.\n")
         breakdown = evidence_by_host(result)
+        # Collapse `malformed:unreadable(n_contigs)` etc. onto the `malformed`
+        # column, otherwise the table's malformed count is permanently 0 because no
+        # observed class ever equals the bare bucket name.
+        _bucket(cls) = is_malformed_evidence(cls) ? "malformed" : cls
+        collapsed = Dict{String, Dict{String, Int}}()
+        for (host, per) in breakdown
+            acc = get!(collapsed, host, Dict{String, Int}())
+            for (cls, n) in per
+                b = _bucket(cls)
+                acc[b] = get(acc, b, 0) + n
+            end
+        end
+        breakdown = collapsed
         println(io, "| host | " * join(EVIDENCE_CLASSES, " | ") * " |")
         println(io, "| --- |" * repeat(" --- |", length(EVIDENCE_CLASSES)))
         for host in sort(collect(keys(breakdown)))
@@ -653,7 +683,10 @@ function copy_merged_cells(result, output_dir::AbstractString)
             continue
         end
         mkpath(cell_dir)
-        open(dest, "w") do io
+        # Atomic, for the same reason the tables are: an interrupted merge must not
+        # leave a half-written checkpoint that a later run would read as corrupt
+        # (and now, correctly, treat as a fatal malformed cell).
+        _atomic_write(dest) do io
             JSON.print(io, cell, 2)
         end
         push!(copied, cell_id)
@@ -684,9 +717,10 @@ function merge_exit_status(result;
     if !isempty(result.unreachable_sources)
         push!(problems,
             (kind = :unreachable_source, fatal = true,
-                message = "source root does not exist for host(s): " *
-                          join(result.unreachable_sources, ", ") *
-                          ". Refusing to treat an unreachable source as an empty one."))
+                message = "source is unreachable or is not a checkpoint tree for " *
+                          "host(s): " * join(result.unreachable_sources, ", ") *
+                          ". Expected <path>/cells/<cell_id>/cell_result.json. " *
+                          "Refusing to treat an unreachable source as an empty one."))
     end
     if !isempty(result.malformed_cells)
         push!(problems,
@@ -718,13 +752,12 @@ end
 
 function _arg_all(flag)
     # Consume EVERY token after the flag until the next `--flag`, not just one, so
-    # both documented forms work:
-    #   --csv a.csv --csv b.csv       (repeated flag)
-    #   --csv results/sweep_*.csv     (shell glob -> --csv a.csv b.csv c.csv)
-    # Taking only `ARGS[i + 1]` silently used the first value and discarded the
-    # rest. Merging per-shard files is the entire purpose of the `seed` column, so
-    # that failure mode quietly analysed a fraction of the data behind an
-    # invocation this file's own header documents.
+    # both forms work:
+    #   --host a=/p1 --host b=/p2     (repeated flag)
+    #   --host a=/p1 b=/p2            (one flag, several values)
+    # Taking only `ARGS[i + 1]` silently used the first value and dropped the rest,
+    # which for `--host` means merging fewer trees than the operator asked for and
+    # reporting the result as complete.
     out = String[]
     i = 1
     while i <= length(ARGS)
@@ -750,6 +783,29 @@ end
 function _arg_list(flag)
     v = _arg_value(flag)
     return v === nothing ? nothing : String.(split(v, ","))
+end
+
+"""
+    _parse_int_flag(flag, default) -> Union{Vector{Int}, Tuple, Nothing}
+
+Parse a comma-separated integer shard flag, or return `default` when absent.
+Returns `nothing` (after printing a usage error) when a value is not an integer,
+so the caller can exit 2 rather than surfacing a stacktrace.
+"""
+function _parse_int_flag(flag::AbstractString, default)
+    v = _arg_list(flag)
+    v === nothing && return default
+    out = Int[]
+    for s in v
+        n = tryparse(Int, strip(s))
+        if n === nothing
+            println(stderr,
+                "ERROR: $flag expects comma-separated integers, got \"$s\"")
+            return nothing
+        end
+        push!(out, n)
+    end
+    return out
 end
 
 function _parse_host_spec(spec::AbstractString)
@@ -811,12 +867,12 @@ function main()
 
     organisms = something(_arg_list("--organisms"), TRACK_A_ORGANISMS)
     technologies = something(_arg_list("--technologies"), TRACK_A_TECHNOLOGIES)
-    coverages = let v = _arg_list("--coverages")
-        v === nothing ? TRACK_A_COVERAGES : parse.(Int, v)
-    end
-    seeds = let v = _arg_list("--seeds")
-        v === nothing ? TRACK_A_SEEDS : parse.(Int, v)
-    end
+    # A typo in a numeric shard flag is operator error, and should read as usage
+    # (exit 2) rather than as an unhandled `ArgumentError` stacktrace.
+    coverages = _parse_int_flag("--coverages", TRACK_A_COVERAGES)
+    coverages === nothing && return 2
+    seeds = _parse_int_flag("--seeds", TRACK_A_SEEDS)
+    seeds === nothing && return 2
     arms = something(_arg_list("--arms"), TRACK_A_ARMS)
 
     ids = expected_cell_ids(; organisms, technologies, coverages, seeds, arms)

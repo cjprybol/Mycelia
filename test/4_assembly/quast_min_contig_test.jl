@@ -152,9 +152,12 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
         harnesses = ["rhizomorph_correction_validation_sweep.jl", "t4_ksweep.jl",
             "real_genome_benchmark.jl", "e2e_phase_profile.jl"]
         for h in harnesses
-            src = read(joinpath(bench, h), String)
-            Test.@test occursin("include(joinpath(@__DIR__, \"quast_min_contig.jl\"))", src)
-            Test.@test occursin("quast_min_contig(", src)
+            # Assert on CODE lines only: a comment mentioning the helper would
+            # otherwise satisfy "this harness uses the shared policy".
+            code = join([l for l in eachline(joinpath(bench, h))
+                         if !startswith(strip(l), "#")], "\n")
+            Test.@test occursin("include(joinpath(@__DIR__, \"quast_min_contig.jl\"))", code)
+            Test.@test occursin("quast_min_contig(", code)
         end
         # No inline `max(50, <something> ÷ 10)` may survive in CODE anywhere under
         # benchmarking/ (comments describing the old formula are fine).

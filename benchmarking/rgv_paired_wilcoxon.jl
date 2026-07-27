@@ -709,19 +709,48 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
             end
             println(io)
         end
+        # The legend must enumerate EVERY outcome `decide` can emit, or a reader
+        # meets a verdict string the report never defines. It listed three while
+        # the function emitted five.
+        pct = round(Int, RGV_IMPROVEMENT_THRESHOLD * 100)
         println(io, "## Decision rule applied\n")
         println(io,
-            "- SUPPORTED: FDR-adjusted p < $RGV_ALPHA **and** median improvement " *
-            "> $(round(Int, RGV_IMPROVEMENT_THRESHOLD * 100))%")
+            "- **SUPPORTED**: FDR-adjusted p < $RGV_ALPHA, direction positive, " *
+            "median improvement > $pct%")
         println(io,
-            "- PARTIALLY SUPPORTED: FDR-adjusted p < $RGV_ALPHA, median " *
-            "improvement <= $(round(Int, RGV_IMPROVEMENT_THRESHOLD * 100))%")
+            "- **PARTIALLY SUPPORTED**: FDR-adjusted p < $RGV_ALPHA, direction " *
+            "positive, median improvement <= $pct%")
         println(io,
-            "- NOT SUPPORTED: FDR-adjusted p >= $RGV_ALPHA (report as a null " *
+            "- **FALSIFIED**: FDR-adjusted p < $RGV_ALPHA and the direction is " *
+            "NEGATIVE — the treatment is significantly worse. This is the " *
+            "pre-registration's falsification clause: a significant harm is not " *
+            "weak support.")
+        println(io,
+            "- **NOT SUPPORTED**: FDR-adjusted p >= $RGV_ALPHA (report as a null " *
             "result with effect size)")
+        println(io,
+            "- **INDETERMINATE**: the test or the effect size is undefined (no " *
+            "non-zero differences, or every control value is zero so relative " *
+            "improvement cannot be computed) — read the median paired difference " *
+            "instead")
     end
     return path
 end
+
+"""
+    _json_num(x)
+
+Render a number for JSON, mapping non-finite values to `nothing` (`null`).
+
+`NaN` is an ORDINARY outcome here — an undefined test, or an undefined effect
+size when every control value is zero — so it reaches the payload on normal runs.
+JSON has no NaN literal. Julia's JSON.jl happens to emit `null` for it rather
+than raising, but relying on that leaves the intent implicit and version-dependent;
+doing it explicitly keeps the contract with `rgv_paired_wilcoxon_figure.jl`, which
+already treats `null` as missing, visible in this file.
+"""
+_json_num(x::Real) = isfinite(x) ? x : nothing
+_json_num(x) = x
 
 """
     paired_analysis_json(analysis; csv_paths) -> Dict
@@ -742,10 +771,9 @@ function paired_analysis_json(analysis; csv_paths)
         "metric_definition" => Dict(string(col) => vals
         for (col, vals) in analysis.definition),
         "exploratory" => true,
-        "preregistration_status" =>
-            "Applies the pre-registration's statistical rule to a comparison it " *
-            "does not describe (H1 is Viterbi DP vs greedy; this is " *
-            "corrector=:none vs :iterative). Not a confirmatory test.",
+        "preregistration_status" => "Applies the pre-registration's statistical rule to a comparison it " *
+                                    "does not describe (H1 is Viterbi DP vs greedy; this is " *
+                                    "corrector=:none vs :iterative). Not a confirmatory test.",
         "axes_swept" => Dict(string(k) => v for (k, v) in analysis.axes),
         "allow_mixed_src" => analysis.allow_mixed_src,
         "mixed_definition_axes" => analysis.mixed_axes,
@@ -759,14 +787,14 @@ function paired_analysis_json(analysis; csv_paths)
                           "n_dropped" => r.n_dropped,
                           "n_nonzero_differences" => r.test.n,
                           "n_zero_differences_dropped" => r.test.n_zero_dropped,
-                          "w_plus" => r.test.w_plus,
-                          "w_minus" => r.test.w_minus,
-                          "statistic" => r.test.statistic,
-                          "pvalue" => r.test.pvalue,
-                          "pvalue_fdr" => analysis.adjusted_p[i],
+                          "w_plus" => _json_num(r.test.w_plus),
+                          "w_minus" => _json_num(r.test.w_minus),
+                          "statistic" => _json_num(r.test.statistic),
+                          "pvalue" => _json_num(r.test.pvalue),
+                          "pvalue_fdr" => _json_num(analysis.adjusted_p[i]),
                           "method" => r.test.method,
-                          "median_paired_difference" => r.median_paired_difference,
-                          "median_relative_improvement" => r.median_relative_improvement,
+                          "median_paired_difference" => _json_num(r.median_paired_difference),
+                          "median_relative_improvement" => _json_num(r.median_relative_improvement),
                           "n_zero_control_excluded_from_relative" => r.n_zero_control_excluded_from_relative,
                           "verdict" => analysis.verdicts[i],
                           "dropped" => [Dict("key" => d.key, "reason" => d.reason)
@@ -774,9 +802,9 @@ function paired_analysis_json(analysis; csv_paths)
                           # Per-pair observations, so rgv_paired_wilcoxon_figure.jl can
                           # draw the paired differences without re-reading the CSVs.
                           "pairs" => [Dict("key" => pr.key,
-                                          "control" => pr.control_value,
-                                          "treatment" => pr.treatment_value,
-                                          "difference" => pr.difference)
+                                          "control" => _json_num(pr.control_value),
+                                          "treatment" => _json_num(pr.treatment_value),
+                                          "difference" => _json_num(pr.difference))
                                       for pr in r.pairs]
                       )
                       for (i, r) in enumerate(analysis.results)]

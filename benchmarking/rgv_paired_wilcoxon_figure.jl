@@ -65,7 +65,7 @@ function draw_paired_figure(payload; output_dir::AbstractString,
             xticklabelrotation = 0.0)
         CairoMakie.xlims!(ax1, 0.7, 2.3)
         if isempty(pairs)
-            CairoMakie.text!(ax1, 1.5, 0.5; text = "no usable pairs",
+            CairoMakie.text!(ax1, 0.5, 0.5; text = "no usable pairs",
                 align = (:center, :center), space = :relative)
         else
             for i in eachindex(ctrl)

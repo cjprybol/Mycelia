@@ -92,12 +92,54 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         end
     end
 
+    Test.@testset "the log form the launchers NOW emit (a seed LIST)" begin
+        # MYCELIA_RGV_SEED became a comma-list, so the wrappers echo
+        # `SEED=42,123,456`. The old single-digit regex captured only `42`, which
+        # would have labelled every row of a 3-seed replicate run with one seed —
+        # making an unpairable table look pairable, the exact failure this tool is
+        # supposed to prevent.
+        mktempdir() do dir
+            log = joinpath(dir, "multi.log")
+            write(log,
+                "    ERR=0.01,0.05,0.10  READLEN=150,5000  COVERAGE=30x  K=21  " *
+                "SEED=42,123,456  QUAST=true\n")
+            msg = _sbf_throws_with(() -> recover_seed_from_log(log),
+                ["MORE THAN ONE seed", "42, 123, 456", "pairable"])
+            Test.@test occursin("per-row `seed` column", msg)
+
+            # A single-seed run in the new format still recovers cleanly.
+            single = joinpath(dir, "single.log")
+            write(single, "  ERR=0.01  K=21  SEED=123  QUAST=true\n")
+            Test.@test recover_seed_from_log(single) == 123
+
+            # And the export form with a list is caught too.
+            exp = joinpath(dir, "export.log")
+            write(exp, "export MYCELIA_RGV_SEED=\"42,123,456\"\n")
+            _sbf_throws_with(() -> recover_seed_from_log(exp), ["MORE THAN ONE seed"])
+        end
+    end
+
+    Test.@testset "a column present but entirely empty is filled, not refused" begin
+        # Legacy CSVs can carry the header with empty cells; CSV.jl reads those as
+        # `missing`. Treating that as a conflict made the documented workflow
+        # impossible on exactly the historical tables this tool targets.
+        mktempdir() do dir
+            src = joinpath(dir, "empty_col.csv")
+            write(src, "arm,k,seed,metric_source\nnaive,21,,\niterative,21,,\n")
+            out, _, _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)", metric_source = "quast")
+            df = CSV.read(out, DataFrames.DataFrame)
+            Test.@test all(df.seed .== 42)
+            Test.@test all(df.metric_source .== "quast")
+        end
+    end
+
     Test.@testset "an ambiguous log raises instead of choosing" begin
         mktempdir() do dir
             log = joinpath(dir, "two-runs.log")
             write(log, "SEED=42\n...\nSEED=123\n")
             _sbf_throws_with(() -> recover_seed_from_log(log),
-                ["ambiguous seed", "42, 123", "more than one run"])
+                ["MORE THAN ONE seed", "42, 123"])
         end
     end
 

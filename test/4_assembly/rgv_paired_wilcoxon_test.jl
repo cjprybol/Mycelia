@@ -414,6 +414,26 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         end
     end
 
+    Test.@testset "C6: multi-value flag parsing (glob and repeated forms)" begin
+        # The fix has to be exercised, or the header's documented glob invocation
+        # can silently regress to reading one shard again.
+        saved = copy(ARGS)
+        try
+            empty!(ARGS)
+            append!(ARGS, ["--csv", "a.csv", "--csv", "b.csv", "--metric-source", "quast"])
+            Test.@test _pw_args("--csv") == ["a.csv", "b.csv"]          # repeated flag
+            empty!(ARGS)
+            append!(ARGS, ["--csv", "a.csv", "b.csv", "c.csv", "--metrics", "n50"])
+            Test.@test _pw_args("--csv") == ["a.csv", "b.csv", "c.csv"] # shell glob
+            Test.@test _pw_arg("--metrics") == "n50"                    # single-value intact
+            empty!(ARGS)
+            append!(ARGS, ["--metric-source", "quast"])
+            Test.@test isempty(_pw_args("--csv"))                       # absent flag
+        finally
+            empty!(ARGS); append!(ARGS, saved)
+        end
+    end
+
     Test.@testset "pairing key and metrics match the pre-registration" begin
         # seed must be part of the pairing key, or the pre-registered replicate
         # design is not represented in the analysis.
@@ -577,6 +597,12 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             Test.@test occursin("Error rates swept", text)
             Test.@test occursin("0.01, 0.05", text)
             Test.@test occursin("~360 paired comparisons", text)
+            # Every outcome decide() can emit must be defined in the legend, or a
+            # reader meets a verdict string the report never explains.
+            for outcome in ("SUPPORTED", "PARTIALLY SUPPORTED", "FALSIFIED",
+                "NOT SUPPORTED", "INDETERMINATE")
+                Test.@test occursin("**$outcome**", text)
+            end
         end
     end
 end

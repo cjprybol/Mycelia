@@ -76,8 +76,8 @@ const RGV_DEFAULT_SEED = 42
 #   sbatch export  'export MYCELIA_RGV_SEED="42"'  /  MYCELIA_RGV_SEED=42
 #   harness banner "Seed           : 42"
 const SEED_LOG_PATTERNS = (
-    r"\bSEED=\"?(\d+)\"?"i,
-    r"\bMYCELIA_RGV_SEED=\"?(\d+)\"?",
+    r"\bSEED=\"?([\d,]+)\"?"i,
+    r"\bMYCELIA_RGV_SEED=\"?([\d,]+)\"?",
     r"^\s*Seed\s*:\s*(\d+)\s*$"
 )
 
@@ -98,13 +98,26 @@ function recover_seed_from_log(log_path::AbstractString)
         for pat in SEED_LOG_PATTERNS
             m = match(pat, line)
             m === nothing && continue
-            push!(found, parse(Int, m.captures[1]))
+            # The capture may be a COMMA LIST (`SEED=42,123,456`) since
+            # MYCELIA_RGV_SEED became a list. Taking `parse(Int, ...)` of the whole
+            # match would throw; taking only the first number would silently
+            # attribute one seed to a multi-seed run.
+            for piece in split(m.captures[1], ",")
+                isempty(strip(piece)) && continue
+                push!(found, parse(Int, strip(piece)))
+            end
         end
     end
     isempty(found) && return nothing
     if length(found) > 1
-        error("ambiguous seed in $log_path: found $(join(sort(collect(found)), ", ")). " *
-              "The log appears to cover more than one run — split it or pass --seed explicitly.")
+        error("this run used MORE THAN ONE seed ($(join(sort(collect(found)), ", ")) " *
+              "in $log_path), so a single value cannot be attributed to every row of " *
+              "the CSV. Since MYCELIA_RGV_SEED became a list, this is the normal shape " *
+              "of a replicate run: such a CSV must carry its own per-row `seed` column " *
+              "from the harness. Backfilling one seed here would label every replicate " *
+              "identically and make an unpairable table look pairable — the exact " *
+              "failure this tool exists to prevent (see the pseudo-replication guard " *
+              "in rgv_paired_wilcoxon.jl).")
     end
     return first(found)
 end
@@ -121,7 +134,16 @@ rather than add it.
 """
 function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
     if "seed" in DataFrames.names(df)
-        existing = unique(df.seed)
+        # A legacy CSV can carry the HEADER with empty cells, which CSV.jl reads as
+        # `missing`. That is "present but unpopulated", not "present with a
+        # conflicting value" — and it is exactly the historical shape this tool
+        # targets, so treating it as a conflict made the documented workflow
+        # impossible on its intended input. Fill it instead.
+        existing = unique(skipmissing(df.seed))
+        if isempty(existing)
+            df[!, :seed] = fill(Int(seed), DataFrames.nrow(df))
+            return df
+        end
         if length(existing) == 1 && first(existing) == seed
             return df
         end
@@ -150,6 +172,10 @@ function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value
     col = String(name)
     if col in DataFrames.names(df)
         existing = unique(skipmissing(getproperty(df, name)))
+        if isempty(existing)          # present but unpopulated — fill, do not refuse
+            df[!, name] = fill(value, DataFrames.nrow(df))
+            return df
+        end
         if length(existing) == 1 && first(existing) == value
             return df
         end
