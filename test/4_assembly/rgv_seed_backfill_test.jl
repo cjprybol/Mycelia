@@ -186,8 +186,8 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         sweep = read(
             joinpath(@__DIR__, "..", "..", "benchmarking",
                 "rhizomorph_correction_validation_sweep.jl"), String)
-        Test.@test occursin(
-            "get(ENV, \"MYCELIA_RGV_SEED\", \"$(RGV_DEFAULT_SEED)\")", sweep)
+        Test.@test occursin("MYCELIA_RGV_SEED", sweep)
+        Test.@test occursin("[$(RGV_DEFAULT_SEED)]", sweep)   # the list default
         Test.@test RGV_DEFAULT_SEED == 42
     end
 
@@ -196,6 +196,71 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
             text = read(
                 joinpath(@__DIR__, "..", "..", "benchmarking", wrapper), String)
             Test.@test occursin("SEED=\${MYCELIA_RGV_SEED}", text)
+        end
+    end
+
+    Test.@testset "C3: the documented backfill -> analyse workflow completes" begin
+        # A seed-only backfill DEAD-ENDED: the analysis accepted the seed and then
+        # refused the same file for carrying no metric-definition column, and
+        # nothing could supply one. The workflow the tools document has to finish.
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            out, sidecar, _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)",
+                metric_source = "internal:quast-disabled", quast_min_contig = 200)
+            df = CSV.read(out, DataFrames.DataFrame)
+            for col in ("seed", "metric_source", "quast_min_contig")
+                Test.@test col in DataFrames.names(df)
+            end
+            Test.@test all(df.metric_source .== "internal:quast-disabled")
+            Test.@test all(df.quast_min_contig .== 200)
+
+            # Backfilled definitions are DISTINGUISHABLE from observed ones.
+            meta = JSON.parsefile(sidecar)
+            Test.@test meta["metric_source_backfilled"] == "internal:quast-disabled"
+            Test.@test meta["quast_min_contig_backfilled"] == 200
+
+            # Never inferred: with no flags the columns stay absent, so the
+            # analysis still fails closed rather than getting a fabricated value.
+            out2, _, _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)",
+                output_path = joinpath(dir, "seed_only.csv"))
+            Test.@test !("metric_source" in
+                         DataFrames.names(CSV.read(out2, DataFrames.DataFrame)))
+        end
+    end
+
+    Test.@testset "an existing definition column is not silently overwritten" begin
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            out, _, _ = backfill_seed(src;
+                seed = 42, provenance = "t", metric_source = "quast")
+            df = CSV.read(out, DataFrames.DataFrame)
+            # Same value is a no-op, so a re-run is safe: the column keeps its
+            # value and no duplicate column is appended.
+            again = insert_definition_column!(copy(df), :metric_source, "quast")
+            Test.@test all(again.metric_source .== "quast")
+            Test.@test DataFrames.ncol(again) == DataFrames.ncol(df)
+            # A different value would assert a definition the run did not have.
+            _sbf_throws_with(
+                () -> insert_definition_column!(copy(df), :metric_source, "internal"),
+                ["already has a `metric_source` column", "refusing to overwrite"])
+        end
+    end
+
+    Test.@testset "I1: the launchers actually request the replicate seeds" begin
+        # The seed axis was asserted by the schema but not produced by anything: a
+        # scalar MYCELIA_RGV_SEED and no loop meant a pairable multi-seed table
+        # needed three manual submissions and an undocumented merge.
+        sweep = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking",
+                "rhizomorph_correction_validation_sweep.jl"), String)
+        Test.@test occursin("_parse_int_list(get(ENV, \"MYCELIA_RGV_SEED\"", sweep)
+        Test.@test occursin("for seed in seeds", sweep)
+        for wrapper in ("run_rgv_sweep_lrc.sbatch", "run_rgv_sweep_nersc.sbatch")
+            text = read(
+                joinpath(@__DIR__, "..", "..", "benchmarking", wrapper), String)
+            Test.@test occursin("MYCELIA_RGV_SEED:-42,123,456", text)
         end
     end
 end

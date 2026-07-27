@@ -47,8 +47,16 @@
 #     --seed N                   seed to write; provenance "explicit"
 #     --run-log PATH             recover the seed from a run log
 #     --assume-default-seed      fall back to 42; provenance "documented-default"
+#     --metric-source VALUE      also backfill `metric_source` (e.g. "quast")
+#     --quast-min-contig BP      also backfill `quast_min_contig` (e.g. 500)
 #     --output PATH              output CSV (default <csv-stem>_seedbackfill.csv)
 #     --force                    overwrite an existing output file
+#
+# WHY THE DEFINITION COLUMNS ARE HERE TOO. A `seed`-only backfill DEAD-ENDS: the
+# analysis accepts the seed and then refuses the same file for carrying no
+# metric-definition column, and nothing else could supply one. Both are opt-in and
+# operator-supplied — never inferred — and both are recorded in the sidecar, so a
+# reader can always tell a backfilled definition from an observed one.
 
 import CSV
 import DataFrames
@@ -128,6 +136,33 @@ function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
 end
 
 """
+    insert_definition_column!(df, name, value) -> DataFrames.DataFrame
+
+Append a metric-definition column (`:metric_source` / `:quast_min_contig`) with a
+single operator-supplied `value`.
+
+Refuses to overwrite an existing column holding a different value, for the same
+reason `insert_seed_column!` does: asserting a definition a run did not have makes
+an unusable table look usable, and the metric-definition guard would then pass on
+a claim nobody verified.
+"""
+function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value)
+    col = String(name)
+    if col in DataFrames.names(df)
+        existing = unique(skipmissing(getproperty(df, name)))
+        if length(existing) == 1 && first(existing) == value
+            return df
+        end
+        error("CSV already has a `$col` column with value(s) " *
+              "$(join(string.(existing), ", ")); refusing to overwrite it with " *
+              "$value.")
+    end
+    DataFrames.insertcols!(df, DataFrames.ncol(df) + 1,
+        name => fill(value, DataFrames.nrow(df)))
+    return df
+end
+
+"""
     backfill_seed(csv_path; seed, provenance, output_path=nothing, force=false)
         -> (output_path, sidecar_path, nrows)
 
@@ -138,6 +173,8 @@ label, and the timestamp. The input file is never modified.
 function backfill_seed(csv_path::AbstractString;
         seed::Integer,
         provenance::AbstractString,
+        metric_source::Union{Nothing, AbstractString} = nothing,
+        quast_min_contig::Union{Nothing, Integer} = nothing,
         output_path::Union{Nothing, AbstractString} = nothing,
         force::Bool = false)
     isfile(csv_path) || error("CSV not found: $csv_path")
@@ -149,6 +186,17 @@ function backfill_seed(csv_path::AbstractString;
     end
     df = CSV.read(csv_path, DataFrames.DataFrame)
     insert_seed_column!(df, seed)
+    # A `seed`-only backfill DEAD-ENDS: the analysis then refuses the same file for
+    # having no metric-definition column, and nothing else could supply one. The
+    # documented backfill -> analyse workflow has to be completable, so the same
+    # provenance discipline is extended to the definition columns — each is opt-in,
+    # explicit, and recorded in the sidecar, never inferred.
+    if metric_source !== nothing
+        insert_definition_column!(df, :metric_source, String(metric_source))
+    end
+    if quast_min_contig !== nothing
+        insert_definition_column!(df, :quast_min_contig, Int(quast_min_contig))
+    end
     CSV.write(out, df)
     sidecar = out * ".seed_backfill.json"
     open(sidecar, "w") do io
@@ -158,6 +206,10 @@ function backfill_seed(csv_path::AbstractString;
                 "output_csv" => abspath(out),
                 "seed" => Int(seed),
                 "seed_provenance" => String(provenance),
+                "metric_source_backfilled" =>
+                    metric_source === nothing ? nothing : String(metric_source),
+                "quast_min_contig_backfilled" =>
+                    quast_min_contig === nothing ? nothing : Int(quast_min_contig),
                 "rows" => DataFrames.nrow(df),
                 "backfilled_at" => string(Dates.now()),
                 "tool" => "benchmarking/rgv_seed_backfill.jl",
@@ -222,14 +274,20 @@ function main()
         return 2
     end
 
+    ms = _bf_arg("--metric-source")
+    qmc = _bf_arg("--quast-min-contig")
     out, sidecar,
     n = backfill_seed(csv_path;
         seed = seed, provenance = provenance,
+        metric_source = ms,
+        quast_min_contig = qmc === nothing ? nothing : parse(Int, qmc),
         output_path = _bf_arg("--output"), force = "--force" in ARGS)
     println("=== RGV seed backfill ===")
     println("Source     : $csv_path")
     println("Seed       : $seed")
     println("Provenance : $provenance")
+    ms === nothing || println("metric_source    : $ms (operator-supplied)")
+    qmc === nothing || println("quast_min_contig : $qmc (operator-supplied)")
     println("Rows       : $n")
     println("Wrote      : $out")
     println("Sidecar    : $sidecar")

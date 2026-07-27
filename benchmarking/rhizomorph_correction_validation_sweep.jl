@@ -44,7 +44,11 @@
 #   MYCELIA_RGV_READLEN        comma-separated read lengths (default 150,5000)
 #   MYCELIA_RGV_COVERAGE       target fold coverage per cell (default 30; smoke default 10)
 #   MYCELIA_RGV_K              assembly k-mer size (default 21)
-#   MYCELIA_RGV_SEED           RNG seed for reproducibility (default 42)
+#   MYCELIA_RGV_SEED           comma-separated RNG seeds; each is an independent
+#                              replicate of the whole (err x readlen) grid and is
+#                              written to the `seed` CSV column (default 42). Use
+#                              "42,123,456" to produce the replicate axis the
+#                              paired-Wilcoxon analysis pairs over.
 #   MYCELIA_RGV_SCALE_FLOOR    override the scale-guard floor in bases
 #   MYCELIA_RUN_EXTERNAL       truthy -> run QUAST per arm and parse its
 #                              alignment-validated metrics (Genome fraction,
@@ -256,7 +260,13 @@ function run_sweep()
     readlens = _parse_int_list(get(ENV, "MYCELIA_RGV_READLEN", ""), [150, 5000])
     coverage = parse(Float64, get(ENV, "MYCELIA_RGV_COVERAGE", smoke ? "10" : "30"))
     k = parse(Int, get(ENV, "MYCELIA_RGV_K", "21"))
-    seed = parse(Int, get(ENV, "MYCELIA_RGV_SEED", "42"))
+    # Seed is a LIST, matching ERR and READLEN. It was a scalar, so no launcher
+    # could produce the replicate axis the paired analysis needs: a pairable
+    # multi-seed table required three separate manual submissions plus a
+    # three-way `--csv` merge, a procedure documented nowhere. The axis was
+    # asserted by the schema and not wired by the harness (bead td-59o7).
+    seeds = _parse_int_list(get(ENV, "MYCELIA_RGV_SEED", ""), [42])
+    seed = first(seeds)   # the reference seed, for the banner and for k clamping
     scale_floor = parse(Float64, get(ENV, "MYCELIA_RGV_SCALE_FLOOR", string(SCALE_FLOOR_BASES)))
     run_external = _truthy(get(ENV, "MYCELIA_RUN_EXTERNAL", "false"))
 
@@ -269,7 +279,7 @@ function run_sweep()
     println("k              : $k")
     # Printed so the seed is recoverable from a run log even for runs whose CSV
     # predates the `seed` column (see rgv_seed_backfill.jl).
-    println("Seed           : $seed")
+    println("Seeds          : $(join(seeds, ", "))")
     println("Arms           : naive (corrector=:none) vs iterative (corrector=:iterative), both DoubleStrand")
     println("Scale floor    : $(scale_floor) bases")
     println("QUAST          : $(run_external ? "enabled" : "disabled (set MYCELIA_RUN_EXTERNAL=true)")")
@@ -301,7 +311,8 @@ function run_sweep()
         k = min_readlen
     end
 
-    rng = Random.MersenneTwister(seed)
+    # One RNG per seed, constructed inside the loop, so each replicate is
+    # reproducible on its own rather than depending on how many cells preceded it.
 
     rows = DataFrames.DataFrame(
         reference = String[], genome_len = Int[], error_rate = Float64[],
@@ -331,13 +342,15 @@ function run_sweep()
     # weakest cell governs whether the whole sweep earns a VERDICT.
     min_effective_coverage = Inf
 
-    println("\n--- Sweeping (error_rate x read-regime) x {naive, iterative} ---")
-    for err in errs
+    println("\n--- Sweeping (seed x error_rate x read-regime) x {naive, iterative} ---")
+    for seed in seeds
+        rng = Random.MersenneTwister(seed)
+        for err in errs
         for readlen in readlens
             regime, tech = regime_for_readlen(readlen)
-            cell_dir = joinpath(workdir, "err$(err)_len$(readlen)")
+            cell_dir = joinpath(workdir, "seed$(seed)_err$(err)_len$(readlen)")
             mkpath(cell_dir)
-            println("\n[cell] err=$err  regime=$regime  readlen=$readlen  tech=$tech")
+            println("\n[cell] seed=$seed  err=$err  regime=$regime  readlen=$readlen  tech=$tech")
 
             reads,
             sampled_bases = simulate_regime_reads(refseq, readlen, coverage, err, tech, rng)
@@ -346,7 +359,7 @@ function run_sweep()
             println("  simulated $(length(reads)) reads, effective coverage $(eff_cov)x")
 
             for corrector in (:none, :iterative)
-                tag = "$(ref_label)_err$(err)_len$(readlen)"
+                tag = "$(ref_label)_seed$(seed)_err$(err)_len$(readlen)"
                 arm_name = corrector == :none ? "naive" : "iterative"
                 res = run_arm(reads, corrector, k, glen, cell_dir, tag)
 
@@ -424,6 +437,7 @@ function run_sweep()
                         "n50=$(res.n50) frac=$(res.genome_fraction)% " *
                         "src=$(quast.metric_source) $(res.runtime_s)s")
             end
+        end
         end
     end
 

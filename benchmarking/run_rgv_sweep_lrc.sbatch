@@ -58,7 +58,10 @@ export MYCELIA_RGV_ERR="${MYCELIA_RGV_ERR:-0.01,0.05,0.10}"     # low / mid / hi
 export MYCELIA_RGV_READLEN="${MYCELIA_RGV_READLEN:-150,5000}"   # short-Illumina / long-Nanopore
 export MYCELIA_RGV_COVERAGE="${MYCELIA_RGV_COVERAGE:-30}"       # 48.5kb x 30x ~= 1.46 Mbase > scale floor
 export MYCELIA_RGV_K="${MYCELIA_RGV_K:-21}"
-export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42}"
+# Three pre-registered replicate seeds. The sweep loops over this list, so one
+# submission yields a table the paired analysis can pair over; a single seed
+# would need three manual submissions plus a three-way --csv merge.
+export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42,123,456}"
 # Enable QUAST (Mycelia auto-provisions it via Conda.jl); harness degrades
 # gracefully to internal metrics if QUAST/Conda is unavailable.
 export MYCELIA_RUN_EXTERNAL="${MYCELIA_RUN_EXTERNAL:-true}"
