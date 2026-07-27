@@ -23,9 +23,18 @@
 #                                 mis-alignment
 #
 # A naive `groupby` across those rows compares incompatible quantities, and the
-# resulting difference reads as a real effect. Observed concretely on Lawrencium
-# job 24247925: T4 rows may carry internal metrics while Lambda rows carry QUAST
-# metrics.
+# resulting difference reads as a real effect.
+#
+# WHAT WAS ACTUALLY OBSERVED. An earlier version of this comment said the mix was
+# "observed concretely on Lawrencium job 24247925: T4 rows MAY carry internal
+# metrics while Lambda rows carry QUAST metrics" — but observed and "may" cannot
+# both be true, and the T4 and Lambda rows came from different jobs and were never
+# in one table. The real observation is stronger and needs no cross-job inference:
+# the completed Lambda sweep produced a SINGLE 12-row CSV holding 4 rows with
+# `metric_source="quast"` and 8 with `"internal:quast-failed"` (bead td-4e19d.1).
+# And because `run_quast` is invoked PER ARM, the naive and iterative arms of one
+# cell can carry different definitions — a mixed PAIR, which defeats the paired
+# design directly rather than merely biasing a group mean.
 #
 # This guard is the DURABLE fix; `quast_min_contig.jl` (td-28o0) is the specific
 # one. Fixing the `--min-contig` floor removes one trigger, but graceful
@@ -41,12 +50,21 @@
 # RGV sweep records `quast_min_contig` per row — it makes a future change to the
 # threshold policy trip THIS guard instead of passing silently.
 #
-# FAIL-CLOSED ON A MISSING COLUMN
-# -------------------------------
-# If a table carries none of the definition columns, the guard RAISES rather than
-# reporting "consistent". A table with no provenance column is not a table that
-# has been shown to be consistent; it is a table that cannot be checked. Callers
-# with a differently-named provenance column pass it via `columns=`.
+# FAIL-CLOSED ON A MISSING COLUMN — PER AXIS, NOT PER SET
+# -------------------------------------------------------
+# If a table carries none of the definition columns, the guard RAISES: a table
+# with no provenance column is not a table that has been shown to be consistent,
+# it is a table that cannot be checked.
+#
+# The same reasoning applies to each axis INDIVIDUALLY, and an earlier version got
+# this wrong. It raised only when EVERY column was absent, so a table with a
+# uniform `metric_source` and no `quast_min_contig` — the shape of every CSV
+# produced before this policy existed — passed and reported a single consistent
+# definition over an axis it had never examined. A table concatenating runs scored
+# at different thresholds has exactly that shape. Any requested axis that is absent
+# while others are present therefore also raises; pass `require_all_columns=false`
+# to accept the narrower check (a warning then names which axes went unchecked), or
+# pass an explicit `columns=` to record the narrower claim deliberately.
 
 """
 Columns that together define "which metric definition produced this row".
@@ -123,14 +141,38 @@ function metric_definition_summary(df; columns = METRIC_DEFINITION_COLUMNS)
     return summary
 end
 
-function _require_definition_columns(df, columns, context)
+function _require_definition_columns(df, columns, context; require_all::Bool = true)
     present = Symbol[c for c in columns if hasproperty(df, c)]
+    absent = Symbol[c for c in columns if !hasproperty(df, c)]
     if isempty(present)
         throw(ArgumentError(
             "no metric-definition column present in $context (looked for " *
             join((":$c" for c in columns), ", ") * "). A table with no provenance " *
             "column cannot be shown to be consistent — add one, or pass an explicit " *
             "`columns=` naming this table's provenance column."))
+    end
+    # PARTIAL absence is the subtler hole, and it was a real one. The doctrine in
+    # this file's header is per-AXIS ("a table that cannot be checked"), but the
+    # implementation was per-SET: it raised only when EVERY column was missing, and
+    # `metric_definition_summary` silently skipped any individually-absent column.
+    # So a table with a uniform `metric_source` and no `quast_min_contig` — the
+    # shape of every CSV produced before this PR — passed and reported a single
+    # consistent definition, over an axis that was never examined. A table
+    # concatenating runs scored at different thresholds is exactly that shape.
+    if require_all && !isempty(absent)
+        throw(ArgumentError(
+            "metric-definition axis not checkable in $context: " *
+            join(("`$c`" for c in absent), ", ") *
+            " absent while " * join(("`$c`" for c in present), ", ") *
+            " present. Reporting 'consistent' would assert something about an axis " *
+            "this table cannot answer for. Either add the column, or pass an " *
+            "explicit `columns=` limited to the axes this table actually carries " *
+            "(which records the narrower claim), or `require_all_columns=false` to " *
+            "accept the narrower check with a warning."))
+    end
+    if !isempty(absent)
+        @warn "metric-definition axis NOT checked (column absent) — the " *
+              "consistency claim below covers only the axes listed as checked." context=String(context) absent=join(("$c" for c in absent), ", ") checked=join(("$c" for c in present), ", ")
     end
     return present
 end
@@ -164,8 +206,10 @@ assert_single_metric_definition(all_rows; context = "H1 NGA50 aggregate")
 function assert_single_metric_definition(df;
         columns = METRIC_DEFINITION_COLUMNS,
         context::AbstractString = "aggregation",
-        allow_mixed_src::Bool = false)
-    present = _require_definition_columns(df, columns, context)
+        allow_mixed_src::Bool = false,
+        require_all_columns::Bool = true)
+    present = _require_definition_columns(df, columns, context;
+        require_all = require_all_columns)
     summary = metric_definition_summary(df; columns = present)
     offenders = Tuple{Union{Nothing, String}, Symbol, Vector{String}}[(nothing, col, vals)
                                                                       for (col, vals) in
@@ -196,8 +240,10 @@ checked.
 function assert_single_metric_definition_per_group(df, groupcols;
         columns = METRIC_DEFINITION_COLUMNS,
         context::AbstractString = "grouped aggregation",
-        allow_mixed_src::Bool = false)
-    present = _require_definition_columns(df, columns, context)
+        allow_mixed_src::Bool = false,
+        require_all_columns::Bool = true)
+    present = _require_definition_columns(df, columns, context;
+        require_all = require_all_columns)
     for col in groupcols
         hasproperty(df, col) ||
             throw(ArgumentError("group column :$col not present in $context"))
@@ -251,7 +297,9 @@ end
 function guarded_aggregate(f, df;
         columns = METRIC_DEFINITION_COLUMNS,
         context::AbstractString = "aggregation",
-        allow_mixed_src::Bool = false)
-    assert_single_metric_definition(df; columns, context, allow_mixed_src)
+        allow_mixed_src::Bool = false,
+        require_all_columns::Bool = true)
+    assert_single_metric_definition(df; columns, context, allow_mixed_src,
+        require_all_columns)
     return f(df)
 end

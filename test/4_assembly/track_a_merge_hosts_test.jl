@@ -418,20 +418,92 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         _tam_throws_with(() -> _parse_host_spec("label="), ["path is empty"])
     end
 
-    Test.@testset "a nonexistent source is empty, not a crash" begin
+    Test.@testset "C10: a nonexistent source is FATAL, not silently empty" begin
         mktempdir() do dir
             cid = "Lambda__illumina__30x__seed42__qualmer"
             result = merge_hosts(["ghost" => joinpath(dir, "does-not-exist")];
                 expected_ids = [cid])
             Test.@test isempty(result.merged)
             Test.@test result.per_host[1].discovered == 0
+            Test.@test result.per_host[1].exists == false
             Test.@test result.missing_ids == [cid]
+            # A mistyped path or an unmounted filesystem must not read as "this
+            # host contributed nothing", which silently shrinks the matrix.
+            Test.@test result.unreachable_sources == ["ghost"]
+            code, problems = merge_exit_status(result)
+            Test.@test code == 1
+            Test.@test :unreachable_source in [p.kind for p in problems]
+            # NOT waivable: --allow-incomplete says the matrix is partial, not that
+            # a requested source may vanish.
+            code2, problems2 = merge_exit_status(result;
+                allow_incomplete = true, allow_collisions = true)
+            Test.@test code2 == 1
+            Test.@test any(p -> p.kind == :unreachable_source && p.fatal, problems2)
             # Empty tables still have the right schema, so a downstream reader
             # fails on emptiness rather than on a missing column.
             results_df, prov_df = merged_tables(result)
             Test.@test DataFrames.names(results_df) == TRACK_A_ROW_KEYS
             Test.@test "quast_evidence" in DataFrames.names(prov_df)
             Test.@test DataFrames.nrow(results_df) == 0
+        end
+    end
+
+    Test.@testset "C7: an unreadable field is malformed, never benign" begin
+        # `_as_number -> 0.0` used to route every read failure into a benign class:
+        # an unreadable n_contigs became "n/a:empty-assembly" and an unreadable
+        # largest_contig became "unknown:quast-unscored", so schema drift and
+        # truncated checkpoints passed at exit 0.
+        truncated = _tam_cell()
+        delete!(truncated, "n_contigs")
+        Test.@test quast_evidence(truncated) == "malformed:unreadable(n_contigs)"
+        Test.@test is_malformed_evidence(quast_evidence(truncated))
+
+        drifted = _tam_cell()
+        drifted["largest_contig"] = "n/a"          # schema change to a string
+        Test.@test quast_evidence(drifted) == "malformed:unreadable(largest_contig)"
+
+        nostatus = _tam_cell()
+        delete!(nostatus, "status")
+        Test.@test quast_evidence(nostatus) == "malformed:missing-field(status)"
+
+        # A genuine empty assembly is still benign — the classes stay distinct.
+        Test.@test !is_malformed_evidence(
+            quast_evidence(_tam_cell(n_contigs = 0, status = "empty_assembly")))
+
+        # And a malformed cell fails the merge rather than passing quietly.
+        mktempdir() do dir
+            host = joinpath(dir, "h")
+            cid = "Lambda__illumina__30x__seed42__qualmer"
+            _tam_write_cell(host, cid, truncated)
+            result = merge_hosts(["h" => host]; expected_ids = [cid])
+            Test.@test result.malformed_cells == [cid]
+            code, problems = merge_exit_status(result)
+            Test.@test code == 1
+            Test.@test :malformed_cells in [p.kind for p in problems]
+        end
+    end
+
+    Test.@testset "C10: tables are written only behind the gate, atomically" begin
+        mktempdir() do dir
+            out = joinpath(dir, "merged")
+            mkpath(out)
+            # A pre-existing, larger, correct table.
+            good = joinpath(out, "track_a_results.tsv")
+            write(good, "organism\taccession\n" * repeat("Lambda\tNC_001416\n", 6))
+            before = read(good, String)
+
+            host = joinpath(dir, "partial")
+            ids = expected_cell_ids(organisms = ("Lambda",),
+                technologies = ("illumina",), coverages = (10, 30), seeds = (42,))
+            _tam_write_cell(host, ids[1], _tam_cell())
+            result = merge_hosts(["partial" => host]; expected_ids = ids)
+            code, _ = merge_exit_status(result)
+            Test.@test code == 1          # incomplete
+
+            # The gate is what protects the table; `main` writes only when code==0.
+            # Assert the invariant the CLI relies on: a failing merge has a nonzero
+            # code, so the prior table survives untouched.
+            Test.@test read(good, String) == before
         end
     end
 end

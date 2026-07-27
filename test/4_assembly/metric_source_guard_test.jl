@@ -207,4 +207,41 @@ Test.@testset "metric-definition guard (td-9p91)" begin
             Test.@test occursin("$col = ", sweep)
         end
     end
+
+    Test.@testset "C4/I2: a PARTIALLY absent axis fails closed too" begin
+        # The doctrine is per-AXIS. An earlier implementation was per-SET: it raised
+        # only when EVERY definition column was missing, so a table with a uniform
+        # metric_source and no quast_min_contig — the shape of every CSV produced
+        # before this policy — passed and reported a single consistent definition
+        # over an axis it never examined.
+        partial = DataFrames.DataFrame(metric_source = ["quast", "quast"])
+        _msg_throws_with(
+            () -> assert_single_metric_definition(partial; context = "pre-policy CSV"),
+            ["not checkable", "quast_min_contig", "pre-policy CSV"])
+
+        # The narrower check is still available, but it must be asked for, and it
+        # says out loud which axis went unchecked.
+        summary, logs = _msg_capture_logs() do
+            assert_single_metric_definition(partial;
+                context = "pre-policy CSV", require_all_columns = false)
+        end
+        Test.@test Dict(summary) == Dict(:metric_source => ["quast"])
+        warns = filter(l -> l.level == Logging.Warn, logs)
+        Test.@test length(warns) == 1
+        Test.@test occursin("NOT checked", warns[1].message)
+        Test.@test occursin("quast_min_contig", string(Dict(warns[1].kwargs)[:absent]))
+
+        # Naming the axes explicitly records the narrower claim deliberately.
+        Test.@test Dict(assert_single_metric_definition(partial;
+            columns = (:metric_source,), context = "explicit narrow")) ==
+                   Dict(:metric_source => ["quast"])
+
+        # Grouped form fails closed on the same grounds.
+        pg = DataFrames.DataFrame(
+            organism = ["Lambda", "Lambda"], metric_source = ["quast", "quast"])
+        _msg_throws_with(
+            () -> assert_single_metric_definition_per_group(pg, (:organism,);
+                context = "grouped partial"),
+            ["not checkable", "quast_min_contig"])
+    end
 end

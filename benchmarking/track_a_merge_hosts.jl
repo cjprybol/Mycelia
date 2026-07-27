@@ -6,7 +6,10 @@
 #
 #   <results_root>/cells/<cell_id>/cell_result.json
 #
-# Concretely (2026-07-26):
+# Concretely, per the dispatch notes on bead td-bblmi (2026-07-26 — REPORTED job
+# state, not verified from this repository; the cluster logs are not reachable
+# from a checkout, so treat these as the shard LAYOUT the tool was built for
+# rather than as measured facts):
 #   * Lovelace   — Lambda complete (72/72), T4 in progress; phi29 / SARS-CoV-2 untouched
 #   * Lawrencium — the `--organisms phi29,SARS-CoV-2` shard (144 cells)
 #
@@ -21,9 +24,13 @@
 #    bury it. Byte-equivalent duplicates are benign and reported separately from
 #    content collisions, which fail the merge unless `--allow-collisions`.
 #
-# 2. PER-CELL PROVENANCE, BECAUSE THE HOSTS DO NOT MEASURE THE SAME THING
-#    QUAST works on Lawrencium but was failing on Lovelace (conda
-#    `ProcessExited(4)`), where the harness degrades to internal metrics. So the
+# 2. PER-CELL PROVENANCE, BECAUSE THE HOSTS MAY NOT MEASURE THE SAME THING
+#    QUAST was reported working on Lawrencium and failing on Lovelace (conda
+#    `ProcessExited(4)`) in the td-bblmi dispatch notes. That specific per-host
+#    status is NOT verifiable from this repository, and the tool does not depend
+#    on it being true: it classifies every cell from the checkpoint itself and
+#    reports the breakdown, so a matrix that is uniform passes and one that is
+#    mixed is caught, whichever host caused it. Where the harness degrades, the
 #    merged matrix MIXES METRIC SOURCES BY HOST. The merge therefore records which
 #    host produced each cell and classifies whether QUAST actually scored it (see
 #    `quast_evidence` below), and reports the breakdown by host — which is the
@@ -199,18 +206,36 @@ Classify whether QUAST actually scored this cell. See the file header for why th
                                   alignment-validated values
 """
 function quast_evidence(cell::AbstractDict)
-    status = get(cell, "status", "")
+    # A field that is ABSENT or UNREADABLE must never be coerced into a benign
+    # class. An earlier version routed every read failure through `_as_number ->
+    # 0.0`, so a truncated checkpoint or a schema change landed in
+    # "n/a:empty-assembly" (n_contigs unreadable -> 0) or "unknown:quast-unscored"
+    # (largest_contig unreadable -> 0), and the merge exited 0 reporting a clean
+    # matrix. The classifier's signal was inverted: quiet exactly when the data was
+    # broken. Malformed input now gets its own class and is counted as a defect.
+    haskey(cell, "status") || return "malformed:missing-field(status)"
+    status = string(cell["status"])
     status == "error" && return "n/a:cell-error"
-    n_contigs = _as_number(get(cell, "n_contigs", 0))
+    n_contigs = _ta_as_number(cell, "n_contigs")
+    n_contigs === nothing && return "malformed:unreadable(n_contigs)"
     n_contigs <= 0 && return "n/a:empty-assembly"
-    largest = _as_number(get(cell, "largest_contig", 0))
+    largest = _ta_as_number(cell, "largest_contig")
+    largest === nothing && return "malformed:unreadable(largest_contig)"
     return largest > 0 ? "quast:scored" : "unknown:quast-unscored"
 end
 
-_as_number(v::Real) = Float64(v)
-function _as_number(v)
-    parsed = tryparse(Float64, string(v))
-    return parsed === nothing ? 0.0 : parsed
+"""
+    _ta_as_number(cell, key) -> Union{Float64, Nothing}
+
+Numeric value of `cell[key]`, or `nothing` when the key is absent or the value is
+not numeric. Returning `nothing` rather than a default is the point: a default
+would make a read failure indistinguishable from a real zero.
+"""
+function _ta_as_number(cell::AbstractDict, key::AbstractString)
+    haskey(cell, key) || return nothing
+    v = cell[key]
+    v isa Real && return Float64(v)
+    return tryparse(Float64, string(v))
 end
 
 # === Discovery ==============================================================
@@ -300,10 +325,15 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
 
     for (label, path) in sources
         root = cells_root(path)
+        # An unreachable source is NOT "a host with zero cells". Treated as zero it
+        # silently shrinks the merge — a mistyped path or an unmounted filesystem
+        # produced a smaller-but-plausible matrix, and (before tables moved behind
+        # the gate) overwrote a larger correct table with it.
+        exists = isdir(root)
         cells, unreadable = discover_cells(root)
         push!(per_host,
-            (host = String(label), root = root, discovered = length(cells),
-                unreadable = unreadable))
+            (host = String(label), root = root, exists = exists,
+                discovered = length(cells), unreadable = unreadable))
         for (cell_id, parsed) in cells
             entry = (String(label), cell_digest(parsed), parsed)
             push!(get!(seen, cell_id, Tuple{String, String, Any}[]), entry)
@@ -348,9 +378,13 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
     missing_ids = sort(collect(setdiff(expected, found)))
     unexpected_ids = sort(collect(setdiff(Set{String}(keys(seen)), expected)))
 
+    unreachable = [h.host for h in per_host if !h.exists]
+    malformed = sort([cid for (cid, cell) in merged
+                      if is_malformed_evidence(quast_evidence(cell))])
     return (merged = merged, origin = origin, digests = digests,
         collisions = collisions, duplicates = duplicates,
         missing_ids = missing_ids, unexpected_ids = unexpected_ids,
+        unreachable_sources = unreachable, malformed_cells = malformed,
         per_host = per_host, expected_n = length(expected))
 end
 
@@ -426,7 +460,16 @@ function evidence_by_host(result)
 end
 
 const EVIDENCE_CLASSES = ("quast:scored", "unknown:quast-unscored",
-    "n/a:empty-assembly", "n/a:cell-error")
+    "n/a:empty-assembly", "n/a:cell-error", "malformed")
+
+"""
+    is_malformed_evidence(cls) -> Bool
+
+True for any `quast_evidence` class produced by a checkpoint that could not be
+read (absent or non-numeric field). Kept separate from the benign `n/a:*` classes
+so a schema change or a truncated file can never be counted as "nothing to score".
+"""
+is_malformed_evidence(cls::AbstractString) = startswith(cls, "malformed")
 
 """
     write_merge_report(path, result; sources, output_dir) -> String
@@ -634,6 +677,27 @@ function merge_exit_status(result;
         allow_collisions::Bool = false, allow_incomplete::Bool = false,
         report_hint::AbstractString = "the merge report")
     problems = Any[]
+    # Deliberately NOT waivable by any --allow-* flag. `--allow-incomplete` says
+    # "I know the matrix is partial"; it does not say "I am fine with a source I
+    # asked for having silently contributed nothing", which is an operator error
+    # (wrong path, unmounted filesystem), not an accepted state of the data.
+    if !isempty(result.unreachable_sources)
+        push!(problems,
+            (kind = :unreachable_source, fatal = true,
+                message = "source root does not exist for host(s): " *
+                          join(result.unreachable_sources, ", ") *
+                          ". Refusing to treat an unreachable source as an empty one."))
+    end
+    if !isempty(result.malformed_cells)
+        push!(problems,
+            (kind = :malformed_cells, fatal = true,
+                message = "$(length(result.malformed_cells)) checkpoint(s) could not " *
+                          "be read (absent or non-numeric field): " *
+                          join(first(result.malformed_cells, 5), ", ") *
+                          (length(result.malformed_cells) > 5 ? ", ..." : "") *
+                          ". These are schema drift or truncated files, not empty " *
+                          "assemblies."))
+    end
     if !isempty(result.collisions)
         push!(problems,
             (kind = :collisions, fatal = !allow_collisions,
@@ -653,9 +717,29 @@ end
 # === CLI ====================================================================
 
 function _arg_all(flag)
-    String[ARGS[i + 1]
-           for i in eachindex(ARGS)
-           if ARGS[i] == flag && i < length(ARGS)]
+    # Consume EVERY token after the flag until the next `--flag`, not just one, so
+    # both documented forms work:
+    #   --csv a.csv --csv b.csv       (repeated flag)
+    #   --csv results/sweep_*.csv     (shell glob -> --csv a.csv b.csv c.csv)
+    # Taking only `ARGS[i + 1]` silently used the first value and discarded the
+    # rest. Merging per-shard files is the entire purpose of the `seed` column, so
+    # that failure mode quietly analysed a fraction of the data behind an
+    # invocation this file's own header documents.
+    out = String[]
+    i = 1
+    while i <= length(ARGS)
+        if ARGS[i] == flag
+            j = i + 1
+            while j <= length(ARGS) && !startswith(ARGS[j], "--")
+                push!(out, ARGS[j])
+                j += 1
+            end
+            i = j
+        else
+            i += 1
+        end
+    end
+    return out
 end
 
 function _arg_value(flag)
@@ -677,6 +761,27 @@ function _parse_host_spec(spec::AbstractString)
     isempty(label) && error("--host label is empty in \"$spec\"")
     isempty(path) && error("--host path is empty in \"$spec\"")
     return String(label) => String(path)
+end
+
+"""
+    _atomic_write(f, path)
+
+Write via `f(io)` to a sibling temp file and `mv` it into place, so a reader never
+observes a partially-written table and an interrupted run leaves the previous
+contents intact.
+"""
+function _atomic_write(f, path::AbstractString)
+    dir = dirname(path)
+    mkpath(dir)
+    tmp = joinpath(dir, "." * basename(path) * ".tmp")
+    try
+        open(f, tmp, "w")
+        mv(tmp, path; force = true)
+    catch
+        isfile(tmp) && rm(tmp; force = true)
+        rethrow()
+    end
+    return path
 end
 
 function main()
@@ -730,8 +835,6 @@ function main()
     results_df, provenance_df = merged_tables(result)
     results_path = joinpath(output_dir, "track_a_results.tsv")
     provenance_path = joinpath(output_dir, "track_a_results_provenance.tsv")
-    CSV.write(results_path, results_df; delim = '\t')
-    CSV.write(provenance_path, provenance_df; delim = '\t')
 
     if copy_cells
         copied, skipped, dest_conflicts = copy_merged_cells(result, output_dir)
@@ -744,44 +847,84 @@ function main()
         end
     end
 
+    # The report is a DIAGNOSTIC and is always written — it is how the operator
+    # finds out what went wrong.
     report_path = write_merge_report(
         joinpath(output_dir, "merge_report.md"), result; output_dir = output_dir)
 
-    println("\n--- Summary ---")
-    for h in result.per_host
-        println("  $(h.host): $(h.discovered) checkpoints, $(length(h.unreadable)) not readable")
-    end
-    println("  merged: $(length(result.merged)) / $(length(ids)) expected")
-    println("  identical duplicates: $(length(result.duplicates))")
-    println("  CONTENT COLLISIONS:   $(length(result.collisions))")
-    println("  missing:              $(length(result.missing_ids))")
-    println("  unexpected ids:       $(length(result.unexpected_ids))")
-    println("\nWrote:\n  $results_path\n  $provenance_path\n  $report_path")
-
-    rc,
-    problems = merge_exit_status(result;
+    rc, problems = merge_exit_status(result;
         allow_collisions = allow_collisions, allow_incomplete = allow_incomplete,
         report_hint = report_path)
     for p in problems
         if p.fatal
             println(stderr, "ERROR: $(p.message)")
         else
-            @warn "WAIVED via --allow-$(p.kind == :collisions ? "collisions" : "incomplete"). $(p.message)"
+            @warn "WAIVED via --allow-$(p.kind). $(p.message)"
         end
     end
+
     if assert_single_def
-        try
-            assert_single_metric_definition(provenance_df;
-                columns = (:quast_evidence,),
-                context = "merged Track A matrix")
-            println("\nmetric-definition check: single quast_evidence class — OK")
-        catch e
-            println(stderr, "\nERROR: metric-definition check failed:")
-            showerror(stderr, e)
-            println(stderr)
-            rc = 1
+        # Ask the question the flag is FOR: do the cells that were actually SCORED
+        # share one metric definition? Passing the unfiltered table asked a
+        # different question and answered it uselessly — every realistic 288-cell
+        # matrix contains at least one empty assembly, so `n/a:empty-assembly`
+        # always sat alongside `quast:scored` and the check fired on every clean
+        # run. Malformed cells are excluded here only because they are already a
+        # separate FATAL problem above; they are never silently tolerated.
+        scored = provenance_df[
+            .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .&
+            .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
+        if DataFrames.nrow(scored) == 0
+            println("\nmetric-definition check: no scored cells to compare — skipped")
+        else
+            try
+                assert_single_metric_definition(scored;
+                    columns = (:quast_evidence,),
+                    context = "merged Track A matrix (scored cells only)")
+                println("\nmetric-definition check: single quast_evidence class " *
+                        "across $(DataFrames.nrow(scored)) scored cells — OK")
+            catch e
+                println(stderr, "\nERROR: metric-definition check failed:")
+                showerror(stderr, e)
+                println(stderr)
+                rc = 1
+            end
         end
     end
+
+    # TABLES ARE WRITTEN ONLY BEHIND THE GATE. They are the artifact a downstream
+    # analysis reads, so writing them before the completeness/collision check meant
+    # a failing merge still left a smaller-but-plausible table on disk, overwriting
+    # a correct one. Written atomically (temp + rename) so an interrupted run
+    # cannot leave a half-written table either.
+    if rc == 0
+        _atomic_write(results_path) do io
+            CSV.write(io, results_df; delim = '\t')
+        end
+        _atomic_write(provenance_path) do io
+            CSV.write(io, provenance_df; delim = '\t')
+        end
+    else
+        println(stderr,
+            "\nTables NOT written (merge did not pass its gate). The previous " *
+            "contents of\n  $results_path\n  $provenance_path\nare left intact. " *
+            "See $report_path, fix the cause, and re-run; pass the matching " *
+            "--allow-* flag only if the condition is genuinely acceptable.")
+    end
+
+    println("\n--- Summary ---")
+    for h in result.per_host
+        println("  $(h.host): $(h.exists ? "" : "UNREACHABLE, ")" *
+                "$(h.discovered) checkpoints, $(length(h.unreadable)) not readable")
+    end
+    println("  merged: $(length(result.merged)) / $(length(ids)) expected")
+    println("  identical duplicates: $(length(result.duplicates))")
+    println("  CONTENT COLLISIONS:   $(length(result.collisions))")
+    println("  malformed checkpoints:$(length(result.malformed_cells))")
+    println("  missing:              $(length(result.missing_ids))")
+    println("  unexpected ids:       $(length(result.unexpected_ids))")
+    println("\nWrote:\n  $report_path" *
+            (rc == 0 ? "\n  $results_path\n  $provenance_path" : ""))
     return rc
 end
 
