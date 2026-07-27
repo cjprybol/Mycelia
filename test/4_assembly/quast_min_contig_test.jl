@@ -1,17 +1,21 @@
 # Unit test for the QUAST --min-contig threshold policy (bead td-28o0).
 #
-# The load-bearing property is NOT "the new formula equals the old one" — it
-# deliberately does not, for T4. It is:
+# The load-bearing properties are:
 #
-#   (a) every reference the old expression already handled keeps its EXACT
-#       threshold, so results already committed and the Lambda runs in flight stay
-#       comparable, and
-#   (b) T4 (and anything larger) now gets a threshold a fragmented assembly can
-#       actually satisfy, so QUAST runs instead of silently degrading to internal
-#       metrics.
+#   (a) the threshold never exceeds QUAST's own 500 bp default — the scaling term
+#       exists only to go BELOW it for viroid-scale references, and every value it
+#       produced above 500 was a threshold nobody chose;
+#   (b) it is UNIFORM across the viral tier, because the pre-registration pools
+#       across organisms and a per-reference threshold would make that pooled
+#       analysis mixed-definition, which `metric_source_guard.jl` must refuse; and
+#   (c) T4 (and anything larger) gets a threshold a fragmented assembly can
+#       actually satisfy, so QUAST runs instead of silently degrading.
 #
-# Both are asserted against the specific documented values, not against a
-# re-implementation of the old expression.
+# An earlier version of this policy clamped at 5,000 bp to hold Lambda at 4,850
+# "for comparability with committed results". Review established that no such
+# committed results exist (one committed CSV, synthetic, threshold 200 under every
+# candidate policy) and that Lambda was itself failing 8/12 cells at 4,850. The
+# tests below therefore pin the CONTRACT, not the historical values.
 #
 # Dependency-free: includes only the pure policy helper. No Mycelia, no QUAST.
 
@@ -42,20 +46,26 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
     sars_len = 29_903
     ecoli_len = 4_641_652
 
-    Test.@testset "preserved thresholds — comparability with committed results" begin
-        # These are the values the harness has ALREADY used. A change here would
-        # silently redefine the metric for genomes that were working, and would
-        # break comparability with Lawrencium jobs 24247923 / 24247924 (Lambda
-        # 50x / 100x) that are in flight.
-        Test.@test quast_min_contig(lambda_len) == 4_850
-        Test.@test quast_min_contig(phi29_len) == 1_928
-        Test.@test quast_min_contig(sars_len) == 2_990
+    Test.@testset "clamped at QUAST's default; uniform above 5 kb" begin
+        # The ceiling IS QUAST's own default. The scaling term exists only to go
+        # below it for viroid-scale references.
+        Test.@test quast_min_contig(lambda_len) == 500
+        Test.@test quast_min_contig(phi29_len) == 500
+        Test.@test quast_min_contig(sars_len) == 500
+        Test.@test quast_min_contig(t4_len) == 500
 
-        # Same assertion stated the other way: unchanged relative to the legacy
-        # expression for every reference the legacy expression could serve.
-        for glen in (246, 300, 359, 1_000, 5_000, phi29_len, sars_len, lambda_len)
-            Test.@test quast_min_contig(glen) == _qmc_legacy(glen)
-        end
+        # UNIFORMITY IS THE LOAD-BEARING PROPERTY, not any single value: the
+        # pre-registration pools across organisms, so a threshold that varied by
+        # reference would make the pooled analysis mixed-definition and
+        # `metric_source_guard.jl` would refuse it. Every viral-tier reference must
+        # land on one threshold.
+        viral_tier = (lambda_len, t4_len, phi29_len, sars_len)
+        Test.@test length(unique(quast_min_contig.(viral_tier))) == 1
+
+        # An earlier ceiling of 5,000 gave four distinct thresholds — the state
+        # that would have forced `--allow-mixed-src` on the pooled analysis.
+        Test.@test length(unique(
+            quast_min_contig.(viral_tier; ceiling_bp = 5_000))) == 4
     end
 
     Test.@testset "T4 is fixed — threshold is now reachable" begin
@@ -65,7 +75,7 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
         Test.@test _qmc_legacy(t4_len) == 16_890
         t4_naive_largest_contig = 11_622
         Test.@test _qmc_legacy(t4_len) > t4_naive_largest_contig      # the failure
-        Test.@test quast_min_contig(t4_len) == 5_000
+        Test.@test quast_min_contig(t4_len) == 500
         Test.@test quast_min_contig(t4_len) < t4_naive_largest_contig # the fix
 
         # And it stays reachable as references grow, rather than getting worse.
@@ -82,7 +92,7 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
         end
         Test.@test quast_min_contig(0) == MIN_CONTIG_FLOOR_BP
         # 5_000 bp is where the ÷10 term crosses QUAST's own default.
-        Test.@test quast_min_contig(5_000) == 500
+        Test.@test quast_min_contig(5_000) == 500  # where the scaling term meets the ceiling
     end
 
     Test.@testset "monotone, and bounded on both sides" begin
@@ -105,8 +115,8 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
     end
 
     Test.@testset "keyword overrides" begin
-        Test.@test quast_min_contig(lambda_len; ceiling_bp = 500) == 500
-        Test.@test quast_min_contig(lambda_len; divisor = 100) == 485
+        Test.@test quast_min_contig(lambda_len; ceiling_bp = 5_000) == 4_850
+        Test.@test quast_min_contig(lambda_len; divisor = 100, ceiling_bp = 5_000) == 485
         Test.@test quast_min_contig(100; floor_bp = 1) == 10
         Test.@test quast_min_contig(1; floor_bp = 1) == 1
     end
@@ -125,18 +135,35 @@ Test.@testset "QUAST --min-contig policy (td-28o0)" begin
         Test.@test MIN_CONTIG_FLOOR_BP == 50
         # Anchored to the longest read length on the sweep's read-regime axis
         # (MYCELIA_RGV_READLEN default "150,5000").
-        Test.@test MIN_CONTIG_CEILING_BP == 5_000
-        # The ceiling must sit at or above Lambda's threshold, or Lambda moves.
-        Test.@test MIN_CONTIG_CEILING_BP >= _qmc_legacy(lambda_len)
+        Test.@test MIN_CONTIG_CEILING_BP == 500
+        # The ceiling IS QUAST's documented default; the scaling term must only
+        # ever reduce below it, never raise above it.
+        Test.@test all(quast_min_contig(g) <= 500 for g in
+        (300, phi29_len, sars_len, lambda_len, t4_len, ecoli_len))
     end
 
-    Test.@testset "the sweep harness uses the policy, not an inline expression" begin
-        sweep = read(
-            joinpath(@__DIR__, "..", "..", "benchmarking",
-                "rhizomorph_correction_validation_sweep.jl"), String)
-        Test.@test occursin("include(joinpath(@__DIR__, \"quast_min_contig.jl\"))", sweep)
-        Test.@test occursin("min_contig = quast_min_contig(glen)", sweep)
-        # The inline expression that caused the T4 failure must be gone.
-        Test.@test !occursin("min_contig = max(50, glen ÷ 10)", sweep)
+    Test.@testset "every harness uses the shared policy, not an inline formula" begin
+        # C2: claiming "exactly one definition" is only true if every call site
+        # actually uses it. Three harnesses still carried the inline expression
+        # after the first fix, and two of them (t4_ksweep, real_genome_benchmark)
+        # run T4 — so the original bug was still live on the organism it was found
+        # on. Assert the absence of the formula repo-wide rather than in one file.
+        bench = joinpath(@__DIR__, "..", "..", "benchmarking")
+        harnesses = ["rhizomorph_correction_validation_sweep.jl", "t4_ksweep.jl",
+            "real_genome_benchmark.jl", "e2e_phase_profile.jl"]
+        for h in harnesses
+            src = read(joinpath(bench, h), String)
+            Test.@test occursin("include(joinpath(@__DIR__, \"quast_min_contig.jl\"))", src)
+            Test.@test occursin("quast_min_contig(", src)
+        end
+        # No inline `max(50, <something> ÷ 10)` may survive in CODE anywhere under
+        # benchmarking/ (comments describing the old formula are fine).
+        for f in readdir(bench)
+            endswith(f, ".jl") || continue
+            for (i, line) in enumerate(eachline(joinpath(bench, f)))
+                startswith(strip(line), "#") && continue
+                Test.@test !occursin(r"max\(50,[^)]*÷\s*10\)", line)
+            end
+        end
     end
 end

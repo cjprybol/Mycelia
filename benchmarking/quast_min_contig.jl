@@ -24,58 +24,85 @@
 #
 # and the harness degrades to internal size-ratio metrics
 # (`metric_source="internal:quast-failed"`) while still reporting `ok=true`.
-# Observed live on Lawrencium job 24247925 (RGV T4 @ 30x).
 #
-# THE FIX: a CEILING, not a different scaling
-# -------------------------------------------
+# SOURCE OF THE 11,622 bp FIGURE: the dispatch note on bead td-28o0, recording
+# Lawrencium job 24247925 (RGV T4 NC_000866 @ 30x). The cluster log is not
+# reachable from a checkout, so that number is REPORTED, not reproduced here. The
+# defect does not rest on it: the threshold arithmetic (168,903 / 10 = 16,890) is
+# checkable in-repo, and `t4_ksweep.jl`'s own committed results contain T4 rows
+# with largest contigs of 174 bp and 5,800 bp — local proof that assemblies of
+# this organism land far below a 16,890 bp floor.
+#
+# THE FIX: clamp at QUAST's own default, which is what the term was for
+# ---------------------------------------------------------------------
 # `quast_min_contig` keeps the down-scaling for tiny references (the original,
-# correct intent) and clamps it from above so the threshold can never exceed a
-# length that a legitimately fragmented assembly is unable to reach.
+# correct intent) and clamps it from above at QUAST's own default:
 #
-#   min_contig = clamp(genome_len ÷ 10, 50, 5_000)
+#   min_contig = clamp(genome_len ÷ 10, 50, 500)
 #
-# WHY 5,000 bp as the ceiling. It is the longest read length on the sweep's own
-# read-regime axis (`MYCELIA_RGV_READLEN` defaults to `150,5000`). A contig
-# shorter than a single read carries no assembly evidence, so "at least as long
-# as the longest read" is the strongest filter that is still a filter. Past that
-# point the threshold stops excluding noise and starts requiring a particular
-# DEGREE of assembly success — which is the quantity under measurement, not a
-# precondition for measuring it.
+# The scaling term exists ONLY to go below 500 for references shorter than QUAST's
+# default assumes. Letting it go above 500 was never the intent, and every value
+# it produced above 500 was a threshold nobody chose.
 #
-# WHY NOT the two rejected alternatives (both weighed explicitly):
+# WHY NOT a 5,000 bp ceiling (this file's first attempt, corrected 2026-07-27)
+# ---------------------------------------------------------------------------
+# The first version clamped at 5,000 bp, anchored to the sweep's longest read
+# length, specifically to hold Lambda at 4,850 and so "preserve comparability with
+# results already committed". Both halves of that rationale were checked against
+# primary sources during review and neither survived:
 #
-#   * Clamp to QUAST's own default of 500 bp. Most principled reading of the
-#     original intent, but it MOVES every reference above 5 kb: Lambda
-#     4,850 -> 500, phi29 1,928 -> 500, SARS-CoV-2 2,990 -> 500. That silently
-#     redefines the metric for genomes that were already working and breaks
-#     comparability with results already committed and with the Lambda jobs in
-#     flight (Lawrencium 24247923 / 24247924). Rejected on comparability grounds,
-#     not on principle.
+#   * THERE ARE NO COMMITTED LAMBDA NUMBERS TO PRESERVE. `git log --all
+#     --diff-filter=A` over `benchmarking/results/rhizomorph_correction_validation_sweep_*.csv`
+#     returns exactly one file (commit 548dc984d): two rows of `synthetic_2000bp`
+#     with no QUAST columns at all, whose threshold is 200 under every candidate
+#     policy. The comparability being defended did not exist.
 #
-#   * Derive the threshold from the observed contig-length distribution
-#     (e.g. `min(glen ÷ 10, largest_observed_contig)`). This makes the metric
-#     definition a function of the assembly being scored: the naive and iterative
-#     arms of the SAME cell would be filtered at different thresholds, so any
-#     naive-vs-iterative delta would confound a real effect with a definition
-#     change. That is precisely the mixed-definition failure `td-9p91` exists to
-#     reject, hidden inside a single cell. Rejected.
+#   * LAMBDA WAS NOT "ALREADY WORKING" AT 4,850. Bead `td-4e19d.1` records the
+#     completed Lovelace Lambda sweep: QUAST failed on 8 of 12 cells
+#     (`metric_source=internal:quast-failed`) because the largest contigs at
+#     err>=0.05 were 163-1,939 bp against a 4,850 bp threshold. Holding Lambda at
+#     4,850 preserved the failure, not the measurement. At 500 the long-read
+#     err=0.05 cells (largest 1,100 and 1,939 bp) become scorable; the short-read
+#     err=0.10 cells (163-277 bp) remain unscored, which is correct — those
+#     assemblies are genuinely below any usable threshold.
+#
+# A third consequence, invisible until the guard and the policy were considered
+# together: a ceiling above 500 leaves `quast_min_contig` VARYING BY REFERENCE
+# (Lambda 4,850 / phi29 1,928 / SARS-CoV-2 2,990 / T4 5,000). The
+# pre-registration pools across organisms, so `metric_source_guard.jl` would
+# refuse the pooled analysis as mixed-definition, and the only escape would be the
+# `allow_mixed_src` override. Clamping at 500 makes the threshold UNIFORM across
+# every reference above 5 kb, so the pooled analysis is legal by construction
+# rather than by override. See beads td-28o0 / td-9p91.
+#
+# WHY NOT derive the threshold from the observed contig-length distribution
+# ------------------------------------------------------------------------
+# (e.g. `min(glen ÷ 10, largest_observed_contig)`). This makes the metric
+# definition a function of the assembly being scored: the naive and iterative arms
+# of the SAME cell would be filtered at different thresholds, so any
+# naive-vs-iterative delta would confound a real effect with a definition change.
+# That is precisely the mixed-definition failure `td-9p91` exists to reject,
+# hidden inside a single cell. Rejected.
 #
 # The chosen policy is deterministic, depends only on the reference, and is
-# identical for every arm of every cell — so arms stay comparable by
-# construction. Callers should also RECORD the value they used (the RGV sweep
-# writes it to the `quast_min_contig` CSV column) so the metric definition
-# travels with the data and any future change to this policy is detectable by
-# `metric_source_guard.jl` instead of silent.
+# identical for every arm of every cell — so arms stay comparable by construction.
+# Callers should also RECORD the value they used (the RGV sweep writes it to the
+# `quast_min_contig` CSV column) so the metric definition travels with the data and
+# any future change to this policy is detectable by `metric_source_guard.jl`
+# instead of silent.
 #
-# PRESERVED VALUES (regression-pinned in the unit test):
+# RESULTING THRESHOLDS (regression-pinned in the unit test):
 #
-#   reference     genome_len   before      after
-#   viroid               300       50         50   unchanged
-#   phi29             19,282    1,928      1,928   unchanged
-#   SARS-CoV-2        29,903    2,990      2,990   unchanged
-#   Lambda            48,502    4,850      4,850   unchanged  <- comparability
-#   T4               168,903   16,890      5,000   was FAILING
-#   E. coli        4,641,652  464,165      5,000   would have failed
+#   reference     genome_len   old inline   now
+#   viroid               300           50    50   unchanged (floor; intent preserved)
+#   phi29             19,282        1,928   500
+#   SARS-CoV-2        29,903        2,990   500
+#   Lambda            48,502        4,850   500   recovers cells 4,850 zeroed out
+#   T4               168,903       16,890   500   was FAILING outright
+#   E. coli        4,641,652      464,165   500   would have failed
+#
+# Every reference above 5 kb now shares one threshold, which is the property the
+# pooled pre-registered analysis needs.
 
 """
 Divisor applied to the reference length: the historical `genome_len ÷ 10`
@@ -91,12 +118,11 @@ references so short that `genome_len ÷ 10` would round toward zero.
 const MIN_CONTIG_FLOOR_BP = 50
 
 """
-Absolute upper bound in bp, anchored to the longest read length on the sweep's
-read-regime axis (`MYCELIA_RGV_READLEN` default `150,5000`). Above this the
-threshold would demand a particular degree of assembly success rather than
-filtering sub-read-length noise. See the file header for the full rationale.
+Absolute upper bound in bp: QUAST's own `--min-contig` default. The scaling term
+exists only to go BELOW this for viroid-scale references; it must never go above
+it. See the file header for why an earlier 5,000 bp ceiling was wrong.
 """
-const MIN_CONTIG_CEILING_BP = 5_000
+const MIN_CONTIG_CEILING_BP = 500
 
 """
     quast_min_contig(genome_len; divisor, floor_bp, ceiling_bp) -> Int
@@ -117,7 +143,7 @@ filtered identically.
 
 - `divisor`: down-scaling divisor (default `MIN_CONTIG_GENOME_DIVISOR` = 10).
 - `floor_bp`: absolute lower bound (default `MIN_CONTIG_FLOOR_BP` = 50).
-- `ceiling_bp`: absolute upper bound (default `MIN_CONTIG_CEILING_BP` = 5,000).
+- `ceiling_bp`: absolute upper bound (default `MIN_CONTIG_CEILING_BP` = 500, QUAST's own default).
 
 # Returns
 
@@ -126,9 +152,9 @@ filtered identically.
 # Example
 
 ```julia
-quast_min_contig(48_502)   # Lambda      -> 4850  (unchanged from `max(50, glen ÷ 10)`)
-quast_min_contig(168_903)  # T4          -> 5000  (was 16890, which made QUAST fail)
-quast_min_contig(300)      # viroid      -> 50    (floor)
+quast_min_contig(48_502)   # Lambda -> 500  (ceiling; was 4850 inline)
+quast_min_contig(168_903)  # T4     -> 500  (ceiling; was 16890, which made QUAST fail)
+quast_min_contig(300)      # viroid -> 50   (floor; the down-scaling term's real purpose)
 ```
 """
 function quast_min_contig(genome_len::Integer;
