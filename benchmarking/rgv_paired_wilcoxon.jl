@@ -833,7 +833,9 @@ function main()
     output_dir = something(_pw_arg("--output-dir"),
         joinpath(@__DIR__, "results", "rgv_paired_wilcoxon"))
 
-    println("=== RGV paired-Wilcoxon (pre-registered rule) ===")
+    println("=== RGV correction sweep — paired Wilcoxon (EXPLORATORY) ===")
+    println("    Applies the pre-registration's statistical RULE to a comparison it")
+    println("    does not describe (H1 is Viterbi DP vs greedy). Not confirmatory.")
     df = load_sweep_csvs(csv_paths)
     analysis = run_paired_analysis(df;
         treatment = treatment, control = control, metrics = metrics,
