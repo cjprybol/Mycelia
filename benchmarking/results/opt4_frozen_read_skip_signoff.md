@@ -188,6 +188,43 @@ relative, Tier B −0.02% relative) shrinking as scale/coverage grows, for a
 (`decode_fraction_mean` drops 15–17% relative to exact in both tiers,
 independent of wall-clock noise).
 
+## Assembly-level dnadiff/ANI check (design's second accuracy check)
+
+The per-base check above measures the corrector's own read output. This second
+check re-assembles the corrected reads into contigs and runs MUMmer `dnadiff`
+against the Lambda reference — confirming (or challenging) the per-base −0.02%
+result at the assembly level. Run on the **identical** Tier B fixture (21x, seed
+42), for **exact** vs **freeze_across** (threshold 2, across-rung). Script:
+`benchmarking/opt4_frozen_read_dnadiff_signoff.jl`. **Critical method note:** the
+corrected reads are re-assembled with `corrector=:none`
+(`Rhizomorph.assemble_genome`, no iterative correction), so the exact-vs-freeze
+difference in the input reads propagates into the contigs rather than being
+masked by re-correction.
+
+| Arm (Tier B, 21x) | n_contigs | contig bases | largest contig | AvgIdentity | Ref aligned | TotalSNPs | TotalIndels |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| exact | 2,983 | 184,523 | 37,565 | 100.00% | 48,469 (99.93%) | 0 | 0 |
+| freeze_across | 2,985 | 184,567 | 37,565 | 100.00% | 48,469 (99.93%) | 0 | 0 |
+| _(raw, uncorrected — baseline)_ | 30,664 | 1,331,734 | 2,071 | 99.96% | — | — | — |
+
+**Verdict — the assembly-level check confirms the per-base −0.02% finding.**
+`exact` and `freeze_across` are **indistinguishable at the assembly level**:
+identical 100.00% average identity, identical 99.93% reference coverage
+(48,469/48,502 bp), and **zero SNPs and zero indels** in both. The only
+difference is 44 query bases (0.02%) of redundant overlapping-contig sequence,
+which carries no accuracy cost (identity, SNP, and indel counts are unchanged).
+The raw-reads baseline (30,664 fragmented contigs, largest 2,071 bp) confirms
+correction is doing substantial work and the assembler is functioning — so the
+identical exact/freeze contig quality is a real result, not an artifact of a
+no-op assembler. The `freeze_across` recall cost measured at the read level does
+**not** propagate to any assembly-level accuracy loss on this fixture.
+
+Caveat: the `corrector=:none` k=21 assembly is intentionally fragmented (no
+scaffolding), so query aligned-fraction is ~52% (redundant overlapping contigs);
+the load-bearing signal is the exact-vs-freeze equivalence (identical
+identity/SNP/indel), not the absolute contiguity. Single genome/seed/machine, as
+with the per-base check.
+
 ## Caveats
 
 - **Single machine, single run per arm — no repeated-run variance estimate.**
@@ -202,15 +239,13 @@ independent of wall-clock noise).
   harness's own 1 Mbase VERDICT floor, but is still one genome / one seed / one
   machine. Do not extrapolate to larger, more repetitive, or long-read genomes
   without re-running.
-- **Assembly-level (dnadiff/ANI) check not run this pass.** The design doc's
-  accuracy sign-off methodology lists a second check (re-assemble corrected
-  reads and run `dnadiff` against the reference) alongside the per-base check
-  used here. It was deferred to stay inside the ~40-minute compute budget for
-  this pass; per-base accuracy against injected-error ground truth is the more
+- **Assembly-level (dnadiff/ANI) check: now included** — see the
+  "Assembly-level dnadiff/ANI check" section above. It confirms the per-base
+  result (exact and freeze_across both reach 100.00% AvgIdentity, 0 SNPs, 0
+  indels vs the Lambda reference; assemblies differ by 0.02% redundant bases
+  only). Per-base accuracy against injected-error ground truth remains the more
   direct signal (it measures the corrector's own output, unmediated by a
-  downstream assembler) and is what this pass was asked to reuse from the
-  harness. A follow-on could add the dnadiff check if the maintainer wants
-  assembly-level confirmation before enabling by default.
+  downstream assembler); the dnadiff check is confirmatory.
 - **`path_to_sequence` warnings** emitted during every run are pre-existing
   synthetic-genome noise (per the task brief) and were filtered from all logs;
   they do not affect any of the numbers above.

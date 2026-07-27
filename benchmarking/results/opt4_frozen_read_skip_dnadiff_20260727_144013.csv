@@ -1,0 +1,4 @@
+arm,n_contigs,total_contig_bases,largest_contig,avg_identity,aligned_pct_ref,aligned_pct_query,total_snps,total_indels
+raw,30664,1331734,2071,99.96,NaN,NaN,NaN,NaN
+exact,2983,184523,37565,100.0,NaN,NaN,NaN,NaN
+freeze_across,2985,184567,37565,100.0,NaN,NaN,NaN,NaN
