@@ -211,6 +211,61 @@ function read_set_stats(
 end
 
 """
+Canonical k-mer occurrence counts over `sequences`, keyed by the canonical window
+string. Mirrors `_kmer_count_spectrum`'s canonical convention but keeps the
+literal k-mer so the solid set can be split against the reference.
+"""
+function canonical_counts(sequences, k::Int)::Dict{String, Int}
+    counts = Dict{String, Int}()
+    for sequence in sequences
+        length(sequence) < k && continue
+        for start_index in 1:(length(sequence) - k + 1)
+            window = sequence[start_index:(start_index + k - 1)]
+            key = min(
+                string(window), string(BioSequences.reverse_complement(window))
+            )
+            counts[key] = get(counts, key, 0) + 1
+        end
+    end
+    return counts
+end
+
+"""
+Split the "solid" (occurrence `>= 2`) k-mer set that
+`median_solid_kmer_multiplicity` medians over into GENOMIC k-mers (present in the
+reference) and ERROR k-mers (absent), and report the median occurrence of each
+population separately.
+
+This is the audit that shows whether the statistic is measuring the genomic
+backbone it claims to measure. When the error population outnumbers the genomic
+one, the OVERALL median is an error-population statistic and no longer tracks
+read coverage.
+"""
+function solid_composition(
+        sequences,
+        reference::BioSequences.LongDNA{4},
+        k::Int
+)::NamedTuple
+    counts = canonical_counts(sequences, k)
+    genomic = Set(keys(canonical_counts([reference], k)))
+    solid = [(key, count) for (key, count) in counts if count >= 2]
+    genomic_solid = [count for (key, count) in solid if key in genomic]
+    error_solid = [count for (key, count) in solid if !(key in genomic)]
+    safe_median(values) = isempty(values) ? NaN : Statistics.median(values)
+    return (;
+        k = k,
+        n_solid = length(solid),
+        n_solid_genomic = length(genomic_solid),
+        n_solid_error = length(error_solid),
+        median_all = safe_median([count for (_, count) in solid]),
+        median_genomic = safe_median(genomic_solid),
+        median_error = safe_median(error_solid),
+        genomic_recall = isempty(genomic) ? NaN :
+                         length(genomic_solid) / length(genomic)
+    )
+end
+
+"""
 Read a FASTQ file into `LongDNA{4}` sequences.
 """
 function read_fastq_sequences(path::AbstractString)::Vector{BioSequences.LongDNA{4}}
@@ -456,6 +511,29 @@ function main(args::Vector{String} = ARGS)::Nothing
     end
     ladder_path = joinpath(output_dir, "k_ladder.csv")
     CSV.write(ladder_path, ladder)
+
+    # Audit the statistic itself: is the solid-k-mer median tracking the genomic
+    # backbone, or the error population?
+    composition = DataFrames.DataFrame(
+        label = String[], arm = String[], k = Int[], n_solid = Int[],
+        n_solid_genomic = Int[], n_solid_error = Int[], median_all = Float64[],
+        median_genomic = Float64[], median_error = Float64[],
+        genomic_recall = Float64[]
+    )
+    for (arm, arm_sequences) in
+        (("raw", raw_sequences), ("corrected", corrected_sequences))
+        isempty(arm_sequences) && continue
+        for k in (7, 11, 17, DIAG_MAX_K)
+            row = solid_composition(arm_sequences, reference, k)
+            push!(composition,
+                (label, arm, row.k, row.n_solid, row.n_solid_genomic,
+                    row.n_solid_error, row.median_all, row.median_genomic,
+                    row.median_error, row.genomic_recall))
+        end
+    end
+    composition_path = joinpath(output_dir, "solid_composition.csv")
+    CSV.write(composition_path, composition)
+    println("[$(label)] wrote $(composition_path)")
 
     println("[$(label)] wrote $(summary_path)")
     println("[$(label)] wrote $(ladder_path)")
