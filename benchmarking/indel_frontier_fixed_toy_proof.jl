@@ -12,6 +12,24 @@
 # so its <120 s acceptance check conservatively includes pair-HMM compilation.
 # Explicit `:illumina` is compared byte-for-byte with the default substitution-
 # only oracle. No classifier threshold is selected from the accuracy result.
+#
+# METRIC NAMING. The arm summary reports two ratios; only the second is an
+# accuracy statement.
+#   best_contig_reference_coverage — matches over GLOBAL-alignment columns.
+#     The global alignment pads a short contig out to the reference length
+#     and its match count saturates at the contig length, so this ratio is
+#     identically best_contig_length / reference_length: normalised
+#     best-contig reference coverage, i.e. CONTIGUITY. Through commit
+#     527c2d67 this column was named `identity`, and its 0.1-vs-0.0655
+#     headline read as a sequence-accuracy claim it never supported — those
+#     are 200 bp and 131 bp best contigs on a 2 kb reference.
+#   best_contig_fit_identity — matches over (matches + edit distance) of a
+#     unit-cost FIT alignment of the best contig into the reference. This is
+#     per-base accuracy over the window the contig covers.
+# The `matches`, `edit_distance`, and `aligned_bases` columns come from the
+# saturating global alignment and are retained only for continuity with the
+# published artifacts. See indel_bench_best_reference_alignment in
+# benchmarking/indel_benchmark_common.jl for the full derivation.
 
 import BioSequences
 import CSV
@@ -37,10 +55,13 @@ const INDEL_TOY_MAX_K = 31
 const INDEL_TOY_MAX_NANOPORE_WALL_SECONDS = 120.0
 # Bumped from 1 when minimum_observed_read_length was renamed to
 # minimum_required_read_length and the observed_read_length_{min,max} columns
-# were added. The manifest is a single-row provenance record with no downstream
-# parser, so the drift is contained; the version still has to move so a manifest
-# from either schema self-identifies.
-const INDEL_TOY_MANIFEST_SCHEMA_VERSION = 2
+# were added. Bumped to 3 when the arm-summary `identity` column was renamed to
+# best_contig_reference_coverage and the best_contig_fit_* columns were added.
+# The manifest's own columns did not change, but it carries summary_sha256, so
+# the version has to move for a manifest to self-identify which summary schema
+# it digests. The manifest is a single-row provenance record with no downstream
+# parser, so the drift is contained.
+const INDEL_TOY_MANIFEST_SCHEMA_VERSION = 3
 # Detached origin/master at the implementation base (548dc984) produced this
 # deterministic explicit-Illumina assembly byte stream. Keeping the golden hash
 # separate from the current default-profile comparison prevents both current arms
@@ -202,7 +223,12 @@ function _indel_toy_run_arm(
         label = label,
         sequencing_tech = sequencing_tech === nothing ? :default : sequencing_tech,
         wall_seconds = wall_seconds,
-        identity = alignment.identity,
+        best_contig_reference_coverage =
+            alignment.best_contig_reference_coverage,
+        best_contig_fit_identity = alignment.best_contig_fit_identity,
+        best_contig_fit_matches = alignment.best_contig_fit_matches,
+        best_contig_fit_edit_distance =
+            alignment.best_contig_fit_edit_distance,
         edit_distance = alignment.edit_distance,
         matches = alignment.matches,
         aligned_bases = alignment.aligned_bases,
@@ -236,7 +262,10 @@ function _indel_toy_summary_row(arm::NamedTuple)::NamedTuple
         arm = arm.label,
         sequencing_tech = string(arm.sequencing_tech),
         wall_seconds = arm.wall_seconds,
-        identity = arm.identity,
+        best_contig_reference_coverage = arm.best_contig_reference_coverage,
+        best_contig_fit_identity = arm.best_contig_fit_identity,
+        best_contig_fit_matches = arm.best_contig_fit_matches,
+        best_contig_fit_edit_distance = arm.best_contig_fit_edit_distance,
         edit_distance = arm.edit_distance,
         matches = arm.matches,
         aligned_bases = arm.aligned_bases,
@@ -439,9 +468,19 @@ function _indel_toy_checks(
                      "completed=$(nanopore.indel_completed)"
         ),
         (
-            check = "nanopore_beats_identical_read_illumina",
-            passed = nanopore.identity > illumina.identity,
-            detail = "nanopore=$(nanopore.identity), illumina=$(illumina.identity)"
+            check = "nanopore_reference_coverage_beats_identical_read_illumina",
+            passed = nanopore.best_contig_reference_coverage >
+                     illumina.best_contig_reference_coverage,
+            detail = "best-contig reference coverage (CONTIGUITY, not " *
+                     "sequence accuracy): nanopore=" *
+                     "$(nanopore.best_contig_reference_coverage) from a " *
+                     "$(nanopore.best_contig_length) bp contig, illumina=" *
+                     "$(illumina.best_contig_reference_coverage) from a " *
+                     "$(illumina.best_contig_length) bp contig, on a " *
+                     "$(INDEL_TOY_GENOME_LENGTH) bp reference. Best-contig " *
+                     "fit identity: nanopore=" *
+                     "$(nanopore.best_contig_fit_identity), illumina=" *
+                     "$(illumina.best_contig_fit_identity)"
         ),
         (
             check = "nanopore_under_120_seconds",
@@ -554,9 +593,22 @@ end
 function _indel_toy_print_arm(arm::NamedTuple)::Nothing
     println("\n$(arm.label) correction arm")
     println("  wall_seconds:          $(round(arm.wall_seconds; digits = 3))")
-    println("  identity:              $(round(arm.identity; digits = 6))")
-    println("  edit_distance:         $(arm.edit_distance)")
-    println("  matches/aligned:       $(arm.matches)/$(arm.aligned_bases)")
+    println(
+        "  best-contig ref cov:   " *
+        "$(round(arm.best_contig_reference_coverage; digits = 6)) " *
+        "(contiguity, not accuracy)"
+    )
+    println(
+        "  best-contig fit ident: " *
+        "$(round(arm.best_contig_fit_identity; digits = 6)) " *
+        "($(arm.best_contig_fit_matches) matches, " *
+        "$(arm.best_contig_fit_edit_distance) edits)"
+    )
+    println("  global edit_distance:  $(arm.edit_distance)")
+    println(
+        "  global matches/aligned: " *
+        "$(arm.matches)/$(arm.aligned_bases) (saturating; see header)"
+    )
     println("  contigs/total/largest: $(arm.n_contigs)/" *
             "$(arm.total_assembled_bases)/$(arm.largest_contig)")
     println("  N50:                   $(arm.n50)")

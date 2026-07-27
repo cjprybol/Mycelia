@@ -12,6 +12,7 @@
 
 import BioSequences
 import FASTX
+import Random
 import SHA
 import Test
 
@@ -80,6 +81,110 @@ Test.@testset "indel benchmark common" begin
                    INDEL_BENCH_TEST_FIXTURE_SHA256
         # Identifier scheme is part of the digested bytes.
         Test.@test FASTX.identifier(first(reads)) == "nanopore_read_1"
+    end
+
+    Test.@testset "best reference alignment metric semantics" begin
+        # A short contig against a much longer reference — the shape the
+        # td-jt7r fixed-toy proof actually produces. These assertions are the
+        # evidence for the `identity` -> `best_contig_reference_coverage`
+        # rename: they pin BOTH that the coverage ratio is contiguity and that
+        # the global match count it is built from is saturated. The reference
+        # is drawn from a LOCAL RNG so it is aperiodic; no digest is pinned
+        # here, only structure.
+        reference_rng = Random.MersenneTwister(20_260_727)
+        reference_string = String(rand(reference_rng, "ACGT", 2_000))
+        contig = reference_string[401:600]
+        reference = BioSequences.LongDNA{4}(reference_string)
+
+        alignment = indel_bench_best_reference_alignment([contig], reference)
+
+        # The global alignment pads the short contig out to the reference
+        # length, so `aligned_bases` is the REFERENCE length.
+        Test.@test alignment.orientation === :forward
+        Test.@test alignment.matches == 200
+        Test.@test alignment.aligned_bases == 2_000
+        Test.@test alignment.contig_length == 200
+
+        # Coverage therefore degenerates to contig_length / reference_length —
+        # the exact shape of the published 0.1 (200 bp) and 0.0655 (131 bp)
+        # figures on a 2 kb reference.
+        Test.@test alignment.best_contig_reference_coverage ≈ 200 / 2_000
+        Test.@test alignment.best_contig_reference_coverage ≈ 0.1
+
+        # The contig is flawless, and the fit alignment says so. One assembly,
+        # 0.1 by the coverage ratio and 1.0 by the accuracy ratio: this pair is
+        # why the coverage ratio must not be called `identity`.
+        Test.@test alignment.best_contig_fit_identity ≈ 1.0
+        Test.@test alignment.best_contig_fit_matches == 200
+        Test.@test alignment.best_contig_fit_edit_distance == 0
+
+        # SATURATION. A contig carrying a substitution still scores a full 200
+        # global matches, because the global alignment is free to match the
+        # wrong base somewhere else in the reference. The global `matches` and
+        # `edit_distance` columns therefore carry no accuracy information at
+        # this contig/reference length ratio; only the fit alignment moves.
+        substituted_base = contig[100] == 'A' ? 'C' : 'A'
+        mutated = string(contig[1:99], substituted_base, contig[101:end])
+        mutated_alignment = indel_bench_best_reference_alignment(
+            [mutated], reference
+        )
+        Test.@test mutated_alignment.matches == 200
+        Test.@test mutated_alignment.best_contig_reference_coverage ≈ 0.1
+        Test.@test mutated_alignment.best_contig_fit_matches == 199
+        Test.@test mutated_alignment.best_contig_fit_edit_distance == 1
+        Test.@test mutated_alignment.best_contig_fit_identity ≈ 199 / 200
+
+        # Indels inside the contig cost exactly their length in the fit
+        # alignment, so it reports unit-cost (Levenshtein) identity.
+        deleted = string(contig[1:99], contig[103:end])
+        deleted_alignment = indel_bench_best_reference_alignment(
+            [deleted], reference
+        )
+        Test.@test deleted_alignment.best_contig_fit_edit_distance == 3
+        Test.@test deleted_alignment.best_contig_fit_matches == 197
+        Test.@test deleted_alignment.best_contig_fit_identity ≈ 197 / 200
+
+        # Saturation extends to STRAND: a reverse-strand contig ties its own
+        # reverse complement at the coverage maximum, so the global
+        # alignment records `:forward` for a contig that is on the reverse
+        # strand. The fit identity must not inherit that arbitrary choice —
+        # it is recomputed over both orientations, so it still reports 1.0.
+        reverse_contig = string(
+            BioSequences.reverse_complement(BioSequences.LongDNA{4}(contig))
+        )
+        reverse_alignment = indel_bench_best_reference_alignment(
+            [reverse_contig], reference
+        )
+        Test.@test reverse_alignment.orientation === :forward
+        Test.@test reverse_alignment.matches == 200
+        Test.@test reverse_alignment.best_contig_reference_coverage ≈ 0.1
+        Test.@test reverse_alignment.best_contig_fit_identity ≈ 1.0
+        Test.@test reverse_alignment.best_contig_fit_edit_distance == 0
+
+        # Selection ranks contiguity: a longer flawless contig wins on coverage
+        # while both are 1.0 accurate. This is the long-standing selection
+        # rule, unchanged by the rename.
+        both = indel_bench_best_reference_alignment(
+            [contig, reference_string[401:900]], reference
+        )
+        Test.@test both.contig_length == 500
+        Test.@test both.best_contig_reference_coverage ≈ 0.25
+        Test.@test both.best_contig_fit_identity ≈ 1.0
+
+        # Empty assembly returns the all-zero `:none` sentinel, with no
+        # division by zero in either ratio.
+        empty_alignment = indel_bench_best_reference_alignment(
+            String[], reference
+        )
+        Test.@test empty_alignment.orientation === :none
+        Test.@test empty_alignment.best_contig_reference_coverage == 0.0
+        Test.@test empty_alignment.best_contig_fit_identity == 0.0
+        Test.@test empty_alignment.contig_length == 0
+
+        # The fit helper is well defined on an empty contig too.
+        Test.@test indel_bench_best_contig_fit_alignment(
+            "", reference_string
+        ).identity == 0.0
     end
 
     Test.@testset "n50" begin

@@ -35,6 +35,7 @@
 # `indel_bench_simulate_reads` is load-bearing and pinned by a golden hash in
 # `indel_benchmark_common_test.jl`. Do not reorder, add, or remove RNG draws.
 
+import BioAlignments
 import BioSequences
 import Distributions
 import FASTX
@@ -378,12 +379,104 @@ function indel_bench_assembly_bytes(
 end
 
 """
+    indel_bench_best_contig_fit_alignment(contig, target) -> NamedTuple
+
+Unit-cost FIT (semi-global) alignment of `contig` into `target`, returned as
+`(matches, edit_distance, identity)`. Reference bases before and after the
+contig's placement are free; everything inside the placement — mismatches,
+insertions, and internal deletions — costs exactly 1, so `edit_distance` is the
+Levenshtein distance between the contig and the reference window it covers, and
+
+    identity = matches / (matches + edit_distance)
+
+is per-base sequence accuracy over that window. Returns the all-zero record for
+an empty contig.
+
+`match = 0, mismatch = -1, gap_open = 0, gap_extend = -1` is not a tuned
+scoring choice: it makes the alignment score the negated unit-cost edit
+distance, so this is the edit-distance formulation, expressed in the score
+model `BioAlignments.pairalign` requires.
+
+This function exists because the global alignment used for contig SELECTION
+cannot answer an accuracy question at all — see
+`indel_bench_best_reference_alignment` below.
+"""
+function indel_bench_best_contig_fit_alignment(
+        contig::AbstractString,
+        target::AbstractString
+)::NamedTuple
+    isempty(contig) &&
+        return (matches = 0, edit_distance = 0, identity = 0.0)
+    model = BioAlignments.AffineGapScoreModel(
+        match = 0, mismatch = -1, gap_open = 0, gap_extend = -1
+    )
+    result = BioAlignments.pairalign(
+        BioAlignments.SemiGlobalAlignment(), contig, target, model
+    )
+    matches = Int(BioAlignments.count_matches(BioAlignments.alignment(result)))
+    edit_distance = -Int(BioAlignments.score(result))
+    denominator = matches + edit_distance
+    identity = denominator == 0 ? 0.0 : matches / denominator
+    return (
+        matches = matches,
+        edit_distance = edit_distance,
+        identity = identity
+    )
+end
+
+"""
     indel_bench_best_reference_alignment(contigs, reference) -> NamedTuple
 
 Best contig-to-reference alignment over both orientations, returned as
-`(identity, edit_distance, matches, aligned_bases, contig_length, orientation)`.
-Ties break on `matches`, then on lower `edit_distance`. Returns the zero-identity
-`:none` sentinel for an empty assembly.
+`(best_contig_reference_coverage, best_contig_fit_identity,
+best_contig_fit_matches, best_contig_fit_edit_distance, edit_distance, matches,
+aligned_bases, contig_length, orientation)`. Selection maximises
+`best_contig_reference_coverage`, then `matches`, then lower `edit_distance` —
+unchanged behaviour. Returns the all-zero `:none` sentinel for an empty
+assembly.
+
+METRIC SEMANTICS — read this before quoting any field.
+
+`Mycelia.assess_alignment` runs a GLOBAL (Levenshtein) alignment of one contig
+against the WHOLE reference. A contig shorter than the reference is padded out
+with reference-only deletion columns, so `aligned_bases` is the reference
+length, and
+
+    best_contig_reference_coverage = matches / aligned_bases
+
+is NORMALISED BEST-CONTIG REFERENCE COVERAGE — a contiguity measure — NOT
+sequence accuracy. Through commit 527c2d67 this field was named `identity`, and
+a headline "nanopore 0.1 vs illumina 0.0655" was read as a 10%-vs-6.6%
+accuracy claim it never supported. Those two numbers are 200/2000 and 131/2000:
+best contigs of 200 bp and 131 bp on a 2 kb reference.
+
+The degeneracy is exact, not incidental. Minimising global Levenshtein cost
+maximises `matches + paired_columns`, and a short contig on a long reference
+can always reach the maximum by scattering exactly-matching blocks across the
+reference. So `matches` SATURATES at the contig length no matter how wrong the
+contig is — a 200 bp contig carrying a substitution still scores 200 matches —
+and therefore
+
+    best_contig_reference_coverage == contig_length / reference_length
+
+identically, in this regime. `matches`, `edit_distance`, and `aligned_bases`
+are retained for continuity with the published artifacts, but they carry no
+accuracy information here; they are functions of the contig and reference
+lengths alone. Saturation also makes `orientation` arbitrary — a contig and
+its reverse complement both reach the maximum — so that field records which
+orientation won an effectively tied comparison, not which strand the contig
+came from.
+
+The accuracy statement comes instead from `indel_bench_best_contig_fit_alignment`
+above, run once on the selected contig:
+
+    best_contig_fit_identity = best_contig_fit_matches /
+        (best_contig_fit_matches + best_contig_fit_edit_distance)
+
+A fit alignment pins the contig to one reference window — internal indels and
+mismatches cost — so it cannot be gamed by scattering. Report the two ratios
+together: coverage answers "how much of the reference did the best contig
+reach", fit identity answers "was what it reached correct".
 """
 function indel_bench_best_reference_alignment(
         contigs::Vector{String},
@@ -392,13 +485,17 @@ function indel_bench_best_reference_alignment(
     reference_forward = string(reference)
     reference_reverse = string(BioSequences.reverse_complement(reference))
     best = (
-        identity = 0.0,
+        best_contig_reference_coverage = 0.0,
+        best_contig_fit_identity = 0.0,
+        best_contig_fit_matches = 0,
+        best_contig_fit_edit_distance = 0,
         edit_distance = typemax(Int),
         matches = 0,
         aligned_bases = 0,
         contig_length = 0,
         orientation = :none
     )
+    best_contig = ""
 
     for contig in contigs
         for (orientation, target) in (
@@ -407,27 +504,56 @@ function indel_bench_best_reference_alignment(
         )
             alignment = Mycelia.assess_alignment(contig, target)
             aligned_bases = alignment.total_matches + alignment.total_edits
-            identity = aligned_bases == 0 ?
+            coverage = aligned_bases == 0 ?
                        0.0 : alignment.total_matches / aligned_bases
             candidate = (
-                identity = identity,
+                best_contig_reference_coverage = coverage,
+                best_contig_fit_identity = 0.0,
+                best_contig_fit_matches = 0,
+                best_contig_fit_edit_distance = 0,
                 edit_distance = alignment.total_edits,
                 matches = alignment.total_matches,
                 aligned_bases = aligned_bases,
                 contig_length = length(contig),
                 orientation = orientation
             )
-            if candidate.identity > best.identity ||
-               (candidate.identity == best.identity &&
+            best_coverage = best.best_contig_reference_coverage
+            if coverage > best_coverage ||
+               (coverage == best_coverage &&
                 candidate.matches > best.matches) ||
-               (candidate.identity == best.identity &&
+               (coverage == best_coverage &&
                 candidate.matches == best.matches &&
                 candidate.edit_distance < best.edit_distance)
                 best = candidate
+                best_contig = contig
             end
         end
     end
-    return best
+
+    best.orientation === :none && return best
+    # Two extra alignments, for the winning contig only. The fit is
+    # recomputed over BOTH orientations rather than reusing the selected
+    # `best_target`, because saturation leaves `orientation` arbitrary: a
+    # reverse-strand contig ties its own reverse complement at the saturated
+    # coverage maximum, so the global alignment cannot resolve strand and the
+    # recorded orientation may be the wrong one. Assemblies are
+    # strand-agnostic, so the better fit is the accuracy answer.
+    forward_fit = indel_bench_best_contig_fit_alignment(
+        best_contig, reference_forward
+    )
+    reverse_fit = indel_bench_best_contig_fit_alignment(
+        best_contig, reference_reverse
+    )
+    fit = forward_fit.edit_distance <= reverse_fit.edit_distance ?
+          forward_fit : reverse_fit
+    return merge(
+        best,
+        (
+            best_contig_fit_identity = fit.identity,
+            best_contig_fit_matches = fit.matches,
+            best_contig_fit_edit_distance = fit.edit_distance
+        )
+    )
 end
 
 # ---------------------------------------------------------------------------

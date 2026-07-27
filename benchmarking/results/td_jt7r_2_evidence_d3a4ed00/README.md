@@ -65,3 +65,59 @@ these deterministic toy results to production assembly accuracy.
 
 `artifact-index.json` records SHA-256 digests, byte sizes, CSV schemas and row
 counts, and the exact validation values. It omits its own digest by construction.
+
+## Metric correction — the `identity` column is coverage, not identity
+
+Added after this snapshot was published. The recorded numbers below are
+unchanged; only their interpretation is corrected.
+
+The `identity` column in `fixed-toy/fixed_toy_arm_summary.csv` is the best
+contig's aligned-match count divided by the column count of a GLOBAL
+(Levenshtein) alignment of that contig against the whole reference. A contig
+shorter than the reference is padded out with reference-only deletion columns,
+so the denominator is the reference length and the column measures **normalised
+best-contig reference coverage — contiguity — not sequence identity**.
+
+The recorded values are exactly that ratio:
+
+| arm | `identity` | best contig | reference | ratio |
+| --- | --- | --- | --- | --- |
+| nanopore | `0.1` | 200 bp | 2,000 bp | 200 / 2000 |
+| illumina | `0.0655` | 131 bp | 2,000 bp | 131 / 2000 |
+
+A reader who takes `0.1` and `0.0655` as 10% and 6.6% sequence accuracy is
+reading a contig-length comparison. Both arms are severely fragmented —
+nanopore has 372 contigs, Illumina 526, on a 2 kb reference — so these figures
+are a contiguity comparison between two heavily fragmented assemblies and are
+not an accuracy claim about either.
+
+Two further columns in the same CSV are affected. Minimising global Levenshtein
+cost maximises matches plus paired columns, and a short contig on a long
+reference can always reach that maximum by scattering exactly-matching blocks
+across the reference. The global match count therefore saturates at the contig
+length regardless of how wrong the contig is: `matches` equals
+`best_contig_length` in every row above, and `edit_distance` and `aligned_bases`
+are fixed by the two lengths. Saturation also leaves `best_orientation`
+recording the winner of an effectively tied comparison rather than the contig's
+strand. None of these four columns carries accuracy information at this
+contig-to-reference length ratio.
+
+A later revision of the benchmark renames the column to
+`best_contig_reference_coverage` and adds a fit-alignment identity column that
+does measure per-base accuracy. Re-running it against the assemblies preserved
+here gives:
+
+| arm | assembly SHA-256 prefix | best-contig fit identity |
+| --- | --- | --- |
+| nanopore | `5bcd6730` | `0.995` (199 matches, 1 edit over 200 bp) |
+| illumina / oracle | `d36e3b6a` | `0.9924` (130 matches, 1 edit over 131 bp) |
+
+Each arm's best contig carries a single edit. The arms differ in contiguity,
+not in the accuracy of the fragment each recovered — which is the distinction
+the `identity` label obscured.
+
+
+The tiny-fixture oracle matrix reported above uses the same ratio, computed by
+the committed oracle test. Its 60 bp reference and near-reference-length
+contigs make the coverage confound much smaller there than in the fixed toy,
+but the quantity is the same one and is not a pure identity either.
