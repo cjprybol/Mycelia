@@ -62,6 +62,15 @@ function load_track_a(path::AbstractString)::DataFrames.DataFrame
     return CSV.read(path, DataFrames.DataFrame; delim = '\t')
 end
 
+function require_columns(df::DataFrames.DataFrame, path::AbstractString,
+        required::Vector{Symbol})
+    absent = [c for c in required if !hasproperty(df, c)]
+    isempty(absent) && return nothing
+    error("$(path) is missing required column(s): $(join(absent, ", ")). " *
+          "Present: $(join(DataFrames.names(df), ", ")). " *
+          "This table is likely from an older schema than the figures expect.")
+end
+
 # === Coefficient of variation ===
 
 """
@@ -72,7 +81,17 @@ silently — an all-zero group means every seed produced an assembly with no
 aligned contig, which is a result, not missing data.
 """
 function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.DataFrame
-    grouped = DataFrames.groupby(df, [:organism, :technology, :coverage, :decoder_arm])
+    # Group by :k too. A result tree can now hold several k (--k), and pooling them
+    # turns a between-SEED CV into a between-K CV — measured at up to ~39x inflation,
+    # enough to flip the pre-registration verdict under a y-axis still labelled
+    # "n = 3 seeds". Also drop non-ok cells: one crashed seed moved a group's CV from
+    # 0.005 to 0.87, and an error row is not a measurement.
+    if hasproperty(df, :status)
+        df = df[df.status .== "ok", :]
+    end
+    group_keys = [:organism, :technology, :coverage, :decoder_arm]
+    hasproperty(df, :k) && push!(group_keys, :k)
+    grouped = DataFrames.groupby(df, group_keys)
     rows = NamedTuple[]
     for group in grouped
         values = Float64.(group.NGA50)
@@ -85,6 +104,7 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
                 technology = String(group.technology[1]),
                 coverage = Int(group.coverage[1]),
                 decoder_arm = String(group.decoder_arm[1]),
+                k = hasproperty(group, :k) ? Int(group.k[1]) : -1,
                 n_seeds = n,
                 mean_nga50 = mean_value,
                 sd_nga50 = sd_value,
@@ -92,6 +112,16 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
                 computable = computable))
     end
     return DataFrames.DataFrame(rows)
+end
+
+# Report the k actually present in the table. The caption used to open "At k = 31"
+# as a literal, which the --k flag turned into a claim the script cannot honour: point
+# it at a k-sweep and it would print "At k = 31" over k=11 data.
+function describe_k(df::DataFrames.DataFrame)::String
+    hasproperty(df, :k) || return ""
+    ks = sort(unique(Int.(df.k)))
+    length(ks) == 1 && return "k = $(only(ks))."
+    return "MIXED k = $(join(ks, ", ")) — series pool incomparable k; facet before reading."
 end
 
 # === Figure 1: CV vs the assumed threshold ===
@@ -163,7 +193,11 @@ end
 
 function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractString)
     single_arm = df[df.decoder_arm .== "kmer", :]
+    hasproperty(single_arm, :status) && (single_arm = single_arm[single_arm.status .== "ok", :])
+    n_organisms = length(unique(single_arm.organism))
+    n_seeds = length(unique(single_arm.seed))
     figure = CairoMakie.Figure(size = (1450, 620), fontsize = 14)
+    series = Dict{String, NamedTuple}()
 
     axis_a = CairoMakie.Axis(figure[1, 1],
         title = "A. Reference coverage recovered (QUAST genome fraction)",
@@ -193,18 +227,39 @@ function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractSt
         CairoMakie.scatterlines!(axis_b, coverages, ratios;
             color = TECHNOLOGY_COLORS[technology], linewidth = 3, markersize = 12,
             label = technology)
+        series[technology] = (coverages = coverages, fractions = fractions, ratios = ratios)
     end
     CairoMakie.ylims!(axis_a, -3, 105)
     CairoMakie.ylims!(axis_b, -0.03, 1.05)
     CairoMakie.axislegend(axis_a; position = :rb)
     CairoMakie.axislegend(axis_b; position = :lt)
 
-    CairoMakie.Label(figure[0, 1:2],
-        "At k = 31, ONT reads recover the reference but never assemble it: genome " *
-        "fraction climbs 0.7% -> 98.6% from 10x to 100x,\nyet NGA50 reaches only " *
-        "14.9% of the reference length, versus ~83% for Illumina and PacBio. " *
-        "PacBio is already at\n99.7% genome fraction and 59% contiguity by 10x. " *
-        "Means over 4 organisms x 3 seeds; k-mer arm.";
+    # Every number below is computed from `series`, not written as a literal. The
+    # previous caption hard-coded all eleven of them, so pointing the script at a new
+    # table (an ONT k-sweep, say) would redraw the marks while the bold text above them
+    # kept asserting the old run's values — and a reader trusts the caption.
+    pct(x) = Printf.@sprintf("%.1f%%", x)
+    k_note = describe_k(single_arm)
+    ont = get(series, "ont", nothing)
+    caption = if ont === nothing
+        "Per-technology assembly envelope. Means over $(n_organisms) organisms x " *
+        "$(n_seeds) seeds; k-mer arm. $(k_note)"
+    else
+        others = [t for t in ("illumina", "pacbio") if haskey(series, t)]
+        plateau = isempty(others) ? "n/a" :
+                  pct(100 * Statistics.mean([last(series[t].ratios) for t in others]))
+        pac = get(series, "pacbio", nothing)
+        pac_note = pac === nothing ? "" :
+            " PacBio is already at $(pct(first(pac.fractions))) genome fraction and " *
+            "$(pct(100 * first(pac.ratios))) contiguity by $(first(pac.coverages))x."
+        "ONT reads recover the reference but never assemble it: genome fraction " *
+        "climbs $(pct(first(ont.fractions))) -> $(pct(last(ont.fractions))) from " *
+        "$(first(ont.coverages))x to $(last(ont.coverages))x,\nyet NGA50 reaches only " *
+        "$(pct(100 * last(ont.ratios))) of the reference length, versus ~$(plateau) " *
+        "for Illumina and PacBio.$(pac_note)\nMeans over $(n_organisms) organisms x " *
+        "$(n_seeds) seeds; k-mer arm. $(k_note)"
+    end
+    CairoMakie.Label(figure[0, 1:2], caption;
         fontsize = 15, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
@@ -216,7 +271,12 @@ end
 
 function figure_cross_host(primary::DataFrames.DataFrame,
         replicate::DataFrames.DataFrame, outdir::AbstractString)
-    cell_key(row) = (row.organism, row.technology, row.coverage, row.seed, row.decoder_arm)
+    # k is part of the identity: without it a mixed-k replicate table collapses to a
+    # last-write-wins Dict and a k=31 primary is silently compared against a k=19
+    # replicate, reporting the difference as cross-host non-reproducibility — exactly
+    # the conclusion this figure exists to draw.
+    cell_key(row) = (row.organism, row.technology, row.coverage, row.seed,
+        row.decoder_arm, hasproperty(row, :k) ? row.k : -1)
     replicate_index = Dict(cell_key(row) => row for row in eachrow(replicate))
 
     metrics = [:n_reads, :n_contigs, :NGA50, :genome_fraction,
@@ -240,7 +300,7 @@ function figure_cross_host(primary::DataFrames.DataFrame,
         end
     end
 
-    figure = CairoMakie.Figure(size = (1250, 560), fontsize = 14)
+    figure = CairoMakie.Figure(size = (1250, 620), fontsize = 14)
     axis = CairoMakie.Axis(figure[1, 1],
         title = "Cross-host disagreement on identical (organism, coverage, seed, arm) cells",
         xlabel = "sequencing technology", ylabel = "share of shared cells that disagree (%)",
@@ -257,13 +317,30 @@ function figure_cross_host(primary::DataFrames.DataFrame,
     end
     CairoMakie.ylims!(axis, 0, 108)
 
+    # Derive the verdict from the computed counts. It used to be the literal string
+    # "Illumina and ONT replicate exactly; PacBio does not", which would print
+    # unchanged over any pair of inputs — including a pair that disagreed everywhere.
+    clean = [t for t in present if differing[t] == 0]
+    dirty = [t for t in present if differing[t] > 0]
+    agrees(xs) = length(xs) == 1 ? "$(only(xs)) replicates exactly" :
+                 "$(join(xs, " and ")) replicate exactly"
+    verdict = isempty(dirty) ? "all technologies replicate exactly" :
+              isempty(clean) ? "no technology replicates exactly" :
+              "$(agrees(clean)); $(join(dirty, " and ")) $(length(dirty) == 1 ? "does" : "do") not"
+    organisms = sort(unique(String.(primary.organism)))
+    shared_organisms = sort(unique(String.(replicate.organism)))
+    scope = length(shared_organisms) < length(organisms) ?
+        "\nScope: only $(join(shared_organisms, ", ")) were run on both hosts, so this " *
+        "says nothing about $(join(setdiff(organisms, shared_organisms), ", "))." : ""
     CairoMakie.Label(figure[0, 1],
-        "Same seed, two hosts: Illumina and ONT replicate exactly; PacBio does not." *
-        "\nBadread's PacBio arm alone passes --identity, and its bioconda env is " *
-        "unpinned, so PacBio\n'seed variance' partly reflects simulator " *
-        "nondeterminism rather than assembler behaviour.\n($(shared) shared cells; " *
-        "Lovelace 218bfa378 vs LRC 250f7f26.)";
-        fontsize = 15, font = :bold, justification = :left, lineheight = 1.15,
+        "Same seed, two runs: $(verdict). ($(shared) shared cells.)" *
+        "\nBadread's PacBio arm alone passes --identity and its bioconda env is " *
+        "unpinned, which is CONSISTENT WITH\nsimulator nondeterminism — but the " *
+        "per-host badread versions were not compared, so the mechanism is inferred," *
+        "\nnot established. Note some PacBio cells disagree despite identical read " *
+        "counts.$(scope)\nThe two runs may also differ in code revision; this is a " *
+        "host+revision comparison unless both are pinned.";
+        fontsize = 14, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
     save_figure(figure, outdir, "track_a_cross_host_reproducibility")
@@ -302,6 +379,8 @@ function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
             regime
         end
 
+    headline = Dict{String, Tuple{Float64, Float64}}()
+    cell_counts = Dict{Tuple{String, String, Float64}, Int}()
     marker_for(regime) = regime == regimes[1] ? :circle : :utriangle
     for regime in regimes, arm in ("naive", "iterative")
 
@@ -312,8 +391,15 @@ function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
             cells = df[(df.regime .== regime) .& (df.arm .== arm) .& (Float64.(df.error_rate) .== rate), :]
             isempty(cells) && continue
             push!(xs, index)
-            push!(largest, Statistics.mean(Float64.(cells.largest_contig)))
+            mean_largest = Statistics.mean(Float64.(cells.largest_contig))
+            push!(largest, mean_largest)
             push!(runtimes, Statistics.mean(Float64.(cells.runtime_s)))
+            cell_counts[(regime, arm, rate)] = DataFrames.nrow(cells)
+            if rate == minimum(error_rates)
+                prev = get(headline, regime, (0.0, 0.0))
+                headline[regime] = arm == "naive" ? (mean_largest, prev[2]) :
+                                   (prev[1], mean_largest)
+            end
         end
         CairoMakie.scatterlines!(axis_a, xs, largest;
             color = arm_colors[arm], marker = marker_for(regime), markersize = 14,
@@ -334,14 +420,33 @@ function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
     CairoMakie.axislegend(axis_a; position = :lb, labelsize = 11)
     CairoMakie.axislegend(axis_b; position = :rb, labelsize = 11)
 
-    quast_ok = sum(.!ismissing.(df.quast_nga50))
+    # The only sweep CSV committed to the repo predates the quast_* columns (they
+    # landed ~8 h after it was written), so an unguarded `df.quast_nga50` threw
+    # ArgumentError here — after both panels were built and before save_figure, so
+    # figures 1-3 landed and figure 4 silently did not.
+    quast_ok = hasproperty(df, :quast_nga50) ? sum(.!ismissing.(df.quast_nga50)) : 0
+    # Derive the headline deltas, and name the metric they come from. The caption used
+    # to quote quast_nga50 while BOTH panels plot largest_contig — at err=0.01 short
+    # reads panel A shows 13,891 -> 31,195 against a caption saying 12,720 -> 31,181,
+    # so a reader taking values off the plot got different numbers with no explanation.
+    lowest = minimum(error_rates)
+    seeds_per_cell = maximum(values(cell_counts); init = 1)
+    replication = seeds_per_cell > 1 ? "$(seeds_per_cell) seeds/cell" :
+        "n = 1 SEED PER CELL — no variance estimate; treat the deltas as provisional"
+    deltas = String[]
+    for regime in regimes
+        pair = get(headline, regime, nothing)
+        pair === nothing && continue
+        push!(deltas, "$(regime_label(regime)) $(Int(round(pair[1]))) -> $(Int(round(pair[2])))")
+    end
     CairoMakie.Label(figure[0, 1:2],
-        "Iterative correction pays at 1% error and reverses by 10%: at err = 0.01 it lifts " *
-        "NGA50\n12,720 -> 31,181 (short reads) and 28,529 -> 44,523 (long reads), but at " *
-        "err = 0.10 it yields MORE and\nSHORTER contigs than naive. Reference-based QUAST " *
-        "metrics exist for only $(quast_ok)/$(DataFrames.nrow(df)) cells: above 1% error\nno " *
-        "contig clears the min-contig filter, so both panels use internal metrics.";
-        fontsize = 15, font = :bold, justification = :left, lineheight = 1.15,
+        "Iterative correction vs naive at the lowest simulated error rate " *
+        "(err = $(lowest)), by largest contig — the\nquantity both panels plot: " *
+        "$(join(deltas, "; ")).\nReference-based QUAST metrics exist for only " *
+        "$(quast_ok)/$(DataFrames.nrow(df)) cells: above err = $(lowest) no contig " *
+        "clears the min-contig\nfilter, so both panels use internal metrics. " *
+        "Replication: $(replication).";
+        fontsize = 14, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
     save_figure(figure, outdir, "rhizomorph_correction_by_error_regime")
@@ -373,6 +478,22 @@ function main()
     rgv_path = arg_value("--rgv")
 
     println("=== Track A harvest figures ===")
+    # Preflight: assert every column the figures and captions depend on exists BEFORE
+    # any plotting. Previously a missing column surfaced as an ArgumentError deep in a
+    # caption, after three figures had already been written — so the run half-succeeded
+    # and the reader had to notice figure 4 was absent.
+    isfile(track_a_path) || error("--track-a file not found: $(track_a_path)")
+    require_columns(load_track_a(track_a_path), track_a_path,
+        [:organism, :technology, :coverage, :seed, :decoder_arm, :NGA50,
+            :genome_fraction, :n_contigs])
+    if replicate_path !== nothing
+        isfile(replicate_path) || error("--track-a-replicate not found: $(replicate_path)")
+    end
+    if rgv_path !== nothing
+        isfile(rgv_path) || error("--rgv file not found: $(rgv_path)")
+        require_columns(CSV.read(rgv_path, DataFrames.DataFrame), rgv_path,
+            [:regime, :arm, :error_rate, :largest_contig, :runtime_s, :genome_len])
+    end
     track_a = load_track_a(track_a_path)
     println("Track A cells: $(DataFrames.nrow(track_a)) from $(track_a_path)")
 
@@ -402,4 +523,9 @@ function main()
     return nothing
 end
 
-main()
+# Guard so a test can `include()` this file for its pure helpers
+# (coefficient_of_variation_table, describe_k, require_columns) without argument
+# parsing or rendering. Matches the convention used across benchmarking/.
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

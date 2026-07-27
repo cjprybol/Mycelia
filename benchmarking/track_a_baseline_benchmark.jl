@@ -64,8 +64,25 @@ const SEEDS = [42, 123, 456]
 const DECODER_ARMS = ["qualmer", "kmer"]
 # k is settable so an ONT k-sweep can probe whether ANY k assembles high-error long
 # reads usefully (at k=31 every ONT cell at 10x/30x yields NGA50 = 0). Default unchanged.
+#
+# A bare trailing `--k` must ERROR, not fall back to the default. Because k is part of
+# the cell id, a silent fallback to 31 would make a `--k` run resume and republish the
+# COMPLETED k=31 tree as if it were the requested k — the exact wrong-answer path the
+# k-in-cell-id change exists to close, reintroduced through the argument parser.
 const K = let v = findfirst(==("--k"), ARGS)
-    (v !== nothing && v < length(ARGS)) ? parse(Int, ARGS[v + 1]) : 31
+    if v === nothing
+        31
+    elseif v == length(ARGS)
+        error("--k requires a value (got a bare trailing --k). Refusing to default to 31: " *
+              "k is part of the cell id, so defaulting would silently resume the k=31 tree.")
+    else
+        raw = ARGS[v + 1]
+        parsed = tryparse(Int, raw)
+        parsed === nothing && error("--k expects an integer, got $(repr(raw))")
+        parsed < 1 && error("--k must be >= 1, got $(parsed)")
+        iseven(parsed) && error("--k must be odd (canonical k-mers require it), got $(parsed)")
+        parsed
+    end
 end
 const CV_THRESHOLD = 0.15  # assumed NGA50 coefficient of variation in the power analysis
 
@@ -74,10 +91,11 @@ const ROW_KEYS = (
     :organism, :accession, :technology, :coverage, :seed, :decoder_arm, :k,
     :n_reads, :n_contigs, :NGA50, :misassemblies, :genome_fraction,
     :duplication_ratio, :largest_contig, :wall_seconds, :peak_rss_bytes,
-    :peak_rss_method, :status
+    :rss_baseline_bytes, :peak_rss_method, :status
 )
 const INT_KEYS = (
-    :coverage, :seed, :k, :n_reads, :n_contigs, :largest_contig, :peak_rss_bytes)
+    :coverage, :seed, :k, :n_reads, :n_contigs, :largest_contig, :peak_rss_bytes,
+    :rss_baseline_bytes)
 const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
 const STR_KEYS = (:organism, :accession, :technology, :decoder_arm, :peak_rss_method, :status)
@@ -131,16 +149,6 @@ end
 const N_CELLS = length(organisms) * length(technologies) * length(coverages) *
                 length(seeds) * length(arms)
 
-println("=== Track A baseline benchmark ===")
-println("Start: $(Dates.now())")
-println("Smoke mode: $SMOKE")
-println("Organisms: $(join((o[1] for o in organisms), ", "))")
-println("Technologies: $(join(technologies, ", "))")
-println("Coverages: $(join(coverages, ", "))x")
-println("Seeds: $(join(seeds, ", "))")
-println("Decoder arms: $(join(arms, ", "))")
-println("Cells to run: $N_CELLS")
-println("Output dir: $OUTPUT_DIR")
 
 # === Metrics + row helpers ===
 
@@ -150,7 +158,7 @@ function empty_metrics()
 end
 
 function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
-        wall_seconds, peak_rss_bytes, peak_rss_method, metrics, status)
+        wall_seconds, peak_rss_bytes, rss_baseline_bytes, peak_rss_method, metrics, status)
     return (
         organism = String(org), accession = String(acc), technology = String(tech),
         coverage = Int(cov), seed = Int(seed), decoder_arm = String(arm), k = K,
@@ -161,25 +169,41 @@ function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
         largest_contig = Int(round(Float64(metrics.largest_contig))),
         wall_seconds = round(Float64(wall_seconds); digits = 3),
         peak_rss_bytes = Int(peak_rss_bytes),
+        rss_baseline_bytes = Int(rss_baseline_bytes),
         peak_rss_method = String(peak_rss_method), status = String(status)
     )
 end
 
+# Keys whose absence from an on-disk checkpoint is genuinely benign: they are
+# PROVENANCE about how a cell was measured, added after some checkpoints were
+# written, and no analysis groups or averages on them.
+#
+# Everything NOT in this set is a scientific measurement or a grouping key, and a
+# missing one must fail loudly. Zero-filling those is not a safe default here: in
+# this dataset `NGA50 = 0.0` and `genome_fraction = 0.0` are the GENUINE values for
+# every ONT cell at 10x/30x, and `peak_rss_bytes = 0` was genuine for 271/288 cells
+# in the pre-fix run — so a zero-filled corrupt checkpoint is byte-identical to a
+# real result and would be pooled straight into the CV that gates the
+# pre-registration. A truncated checkpoint must not be able to move a verdict.
+const OPTIONAL_KEYS = (:peak_rss_method, :rss_baseline_bytes)
+
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).
 #
-# Missing keys are tolerated so a checkpoint written by an OLDER schema still
-# reloads: indexing `d[String(key)]` directly threw a KeyError the moment a new
-# column was added to ROW_KEYS, which silently made every existing cells/*.json
-# unresumable and forced a full re-run. Absent keys take a typed zero / "" and,
-# for peak_rss_method, the explicit "unknown" sentinel — never a value that could
-# be mistaken for a real measurement.
+# Absent OPTIONAL_KEYS take an explicit "unknown"/-1 sentinel that no real
+# measurement can produce. Any other absent key raises: indexing `d[String(key)]`
+# directly raised a bare KeyError naming only the key, which crashed the run on the
+# first cached cell with no indication that the tree simply predated a schema change.
 function canonical(d::AbstractDict)
     vals = map(ROW_KEYS) do key
         name = String(key)
         if !haskey(d, name)
-            return key in INT_KEYS ? 0 :
-                   key in FLOAT_KEYS ? 0.0 :
-                   key === :peak_rss_method ? "unknown" : ""
+            key === :peak_rss_method && return "unknown"
+            key === :rss_baseline_bytes && return -1
+            error("checkpoint is missing required key $(name). This is a measurement or " *
+                  "grouping column, so it cannot be defaulted — a zero here is " *
+                  "indistinguishable from a real result and would silently enter the " *
+                  "power analysis. Delete the checkpoint to recompute the cell, or add " *
+                  "$(name) to OPTIONAL_KEYS if it is genuinely provenance-only.")
         end
         v = d[name]
         if key in INT_KEYS
@@ -193,10 +217,15 @@ function canonical(d::AbstractDict)
     return (; (ROW_KEYS .=> vals)...)
 end
 
+# Write via temp + rename. A SIGKILL (SLURM timeout, OOM-killer) mid-write otherwise
+# leaves a truncated checkpoint that `isfile` accepts as a valid cache on the next
+# run. Same-filesystem rename is atomic, so a checkpoint is either absent or complete.
 function save_cell_json(path, row)
-    open(path, "w") do io
+    tmp = path * ".tmp"
+    open(tmp, "w") do io
         JSON.print(io, Dict(string(k) => v for (k, v) in pairs(row)), 2)
     end
+    mv(tmp, path; force = true)
     return path
 end
 
@@ -280,37 +309,72 @@ end
 
 # `Sys.maxrss()` is the process-lifetime high-water mark (ru_maxrss) and is
 # monotonically non-decreasing, so the old `max(0, Sys.maxrss() - rss0)` could only
-# be nonzero when a cell beat the all-time peak. In practice the first (qualmer)
-# cell of each pair set the mark and every kmer cell reported exactly 0 — 15/15 in
-# the 2026-07-25 run. It measured "excess over historical peak", not per-cell peak.
+# be nonzero when a cell beat the all-time PROCESS peak. It measured "excess over
+# historical peak", not per-cell peak.
+#
+# Measured on the 2026-07-25 Lovelace run (288 cells): 271/288 rows (94%) were
+# exactly 0 — 144/144 kmer AND 127/144 qualmer. The effect is a global ratchet, not
+# a per-pair alternation: all 17 nonzero rows are qualmer only because qualmer is
+# the inner loop's first arm, they sit in the first 48% of the run, and the ratchet
+# closes for good at T4/ont/100x/seed42 = 51.3 GiB — after which nothing beats it.
+# The 6% that survived understate true usage by orders of magnitude (e.g.
+# T4/illumina/100x/seed456 = 11 MiB for a multi-GiB cell), because each is a
+# delta over the previous all-time peak rather than a measurement. LRC's 144-cell
+# run agrees: 131/144 zero (72/72 kmer, 59/72 qualmer).
 #
 # Read VmRSS from /proc/self/status instead: it reports explicit kB, so unlike
 # /proc/self/statm it needs no Sys.PAGESIZE (which does not exist in Julia 1.10).
 function current_rss_bytes()
     status_path = "/proc/self/status"
     isfile(status_path) || return nothing
-    for line in eachline(status_path)
-        startswith(line, "VmRSS:") || continue
-        fields = split(line)
-        length(fields) >= 2 || return nothing
-        kilobytes = tryparse(Int, fields[2])
-        return kilobytes === nothing ? nothing : kilobytes * 1024
+    # `open(...) do` rather than bare `eachline(path)`: eachline closes its handle at
+    # end-of-iteration, and VmRSS sits near the top of the file so the early return
+    # below ALWAYS exits first. Measured: 2000 polls leaked 2000 descriptors, released
+    # only by GC. At 20 Hz that is ~72k/hour, and EMFILE would surface inside the
+    # sampler task where it is hardest to diagnose.
+    return open(status_path) do io
+        for line in eachline(io)
+            startswith(line, "VmRSS:") || continue
+            fields = split(line)
+            length(fields) >= 2 || return nothing
+            kilobytes = tryparse(Int, fields[2])
+            return kilobytes === nothing ? nothing : kilobytes * 1024
+        end
+        return nothing
     end
-    return nothing
 end
 
 """
-Run `f`, returning `(; value, wall_seconds, peak_rss_bytes, method)`.
+Run `f`, returning `(; value, wall_seconds, peak_rss_bytes, rss_baseline_bytes, method)`.
 
-A true per-cell peak needs sampling, because all cells share one Julia process.
-The sampler runs via `Threads.@spawn`, which requires a second thread: the
-assembly is CPU-bound Julia that never yields, so a same-thread `@async` sampler
-would never be scheduled. Both sbatch wrappers export JULIA_NUM_THREADS (32 on
-Lovelace, \$SLURM_CPUS_PER_TASK on LRC), so sampling is the production path.
+`peak_rss_bytes` is the highest WHOLE-PROCESS resident set observed while `f` ran.
+It is deliberately NOT called a per-cell figure: it includes the Julia runtime, the
+loaded package images, every other thread, and memory retained (not returned to the
+OS) by earlier cells. `rss_baseline_bytes` is the process RSS immediately before `f`,
+so a caller wanting a cell-attributable increment can take the difference — but the
+absolute level is what an HPC memory request actually needs, so that is what the
+primary column holds.
 
-`method` records how the number was obtained so a reader never has to guess:
-  "sampled"        - genuine per-cell peak from VmRSS polling
-  "highwater-delta"- single-threaded or no /proc; old semantics, may be 0
+The sampler runs via `Threads.@spawn`, which requires a second thread: the assembly
+is CPU-bound Julia that never yields, so a same-thread `@async` sampler would never
+be scheduled. The two committed sbatch wrappers export
+JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK — run_track_a_baseline_lrc.sbatch (16) and
+run_track_a_baseline_nersc.sbatch (4) — so sampling is the production path under
+SLURM. There is NO committed Lovelace wrapper, and Julia 1.10 defaults to ONE
+thread, so a bare `julia track_a_baseline_benchmark.jl` silently reverts to the
+broken high-water semantics. Launch with `julia -t N` or the column is meaningless.
+
+`method` records how the number was obtained, so a reader never has to infer it, and
+so rows measured different ways are never averaged together:
+  "sampled"          - process-RSS high-water, polled during the cell
+  "sampled-degraded" - the sampler never completed a single read (starved, or every
+                       /proc read failed); the number is the entry baseline, NOT a
+                       measurement. Note a flat cell whose RSS never exceeds the
+                       baseline is still "sampled" — that is a real observation.
+  "highwater-delta"  - single-threaded or no /proc: the old, known-broken semantics
+  "unknown"          - checkpoint predates this column
+Values under different methods are different quantities. Always filter on
+`peak_rss_method` before aggregating.
 """
 function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
     baseline = current_rss_bytes()
@@ -319,29 +383,59 @@ function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
         rss0 = Sys.maxrss()
         timed = @timed f()
         return (value = timed.value, wall_seconds = timed.time,
-            peak_rss_bytes = max(0, Sys.maxrss() - rss0), method = "highwater-delta")
+            peak_rss_bytes = max(0, Sys.maxrss() - rss0),
+            rss_baseline_bytes = baseline === nothing ? -1 : baseline,
+            method = "highwater-delta")
     end
 
     peak = Threads.Atomic{Int}(baseline)
     keep_sampling = Threads.Atomic{Bool}(true)
-    sampler = Threads.@spawn while keep_sampling[]
-        observed = current_rss_bytes()
-        if observed !== nothing && observed > peak[]
-            Threads.atomic_max!(peak, observed)
+    # Count SUCCESSFUL READS, not increases over the baseline. The failure worth
+    # flagging is a sampler that never observed anything — starved, or every /proc read
+    # failed — because it then returns the baseline as though it were a measurement: a
+    # large, stable, plausible byte count, strictly harder to spot than the exactly-0
+    # signature of the bug being replaced.
+    #
+    # A cell whose RSS never rises above the baseline is NOT degraded: the peak process
+    # RSS during that cell genuinely IS the baseline, which happens whenever the
+    # allocation fits inside already-resident heap. Counting improvements instead of
+    # reads mislabels those as failures and would tag most small cells degraded.
+    reads = Threads.Atomic{Int}(0)
+    sampler = Threads.@spawn begin
+        # The sampler must never be able to fail a good cell: a transient /proc read
+        # error is telemetry, not science. Swallow it here and let the improved-count
+        # downgrade the method instead.
+        try
+            while keep_sampling[]
+                observed = current_rss_bytes()
+                if observed !== nothing
+                    Threads.atomic_add!(reads, 1)
+                    observed > peak[] && Threads.atomic_max!(peak, observed)
+                end
+                sleep(interval_seconds)
+            end
+        catch
+            # deliberately swallowed; `reads == 0` reports the degradation
         end
-        sleep(interval_seconds)
     end
 
     timed = try
         @timed f()
     finally
-        # Always stop the sampler, even if f() throws, so a failing cell cannot
-        # leak a polling task for the remainder of the run.
+        # Stop AND reap the sampler here, not after the try. With `wait` outside the
+        # block, a sampler exception on the success path raised TaskFailedException
+        # and DISCARDED a completed assembly — telemetry destroying science — while on
+        # the throw path `wait` was never reached at all.
         keep_sampling[] = false
+        try
+            wait(sampler)
+        catch
+            # sampler already reported via `reads`; never let it mask f()'s outcome
+        end
     end
-    wait(sampler)
     return (value = timed.value, wall_seconds = timed.time,
-        peak_rss_bytes = peak[], method = "sampled")
+        peak_rss_bytes = peak[], rss_baseline_bytes = baseline,
+        method = reads[] > 0 ? "sampled" : "sampled-degraded")
 end
 
 # === Per-cell execution ===
@@ -358,6 +452,7 @@ function run_cell(org, acc, ref, tech, cov, seed, arm, cell_dir)
     wall_seconds = measured.wall_seconds
     peak_rss_bytes = measured.peak_rss_bytes
     peak_rss_method = measured.method
+    rss_baseline_bytes = measured.rss_baseline_bytes
 
     contigs_path = joinpath(cell_dir, "contigs.fasta")
     open(contigs_path, "w") do io
@@ -383,21 +478,58 @@ function run_cell(org, acc, ref, tech, cov, seed, arm, cell_dir)
 
     status = n_contigs == 0 ? "empty_assembly" : "ok"
     return cell_row(org, acc, tech, cov, seed, arm;
-        n_reads, n_contigs, wall_seconds, peak_rss_bytes, peak_rss_method,
-        metrics, status)
+        n_reads, n_contigs, wall_seconds, peak_rss_bytes, rss_baseline_bytes,
+        peak_rss_method, metrics, status)
 end
 
 # === Aggregation ===
 
+# Rebuild the aggregate by re-reading EVERY checkpoint under root/cells, not from the
+# in-memory rows of this invocation.
+#
+# `rows` holds only the cells in the current matrix. Since the file is truncate-written,
+# any narrower run — a shard (`--organisms Lambda`), a re-run, or another `--k` — used to
+# replace a complete table with its own slice. That is not hypothetical: six `--k`
+# invocations against one --output-dir left a 6-row TSV over 36 completed cells (83%
+# of the sweep), and regenerated power_analysis_summary.md to describe the surviving
+# sixth. The per-cell store was correct the whole time; only the published layer on
+# top of it lost data.
+#
+# Re-reading the store makes the aggregate monotone and idempotent by construction:
+# shards, sweeps and resumes all converge on the union rather than the last writer's
+# slice, and a no-op re-run repairs a previously truncated table.
 function write_aggregate(root, rows)
-    df = DataFrames.DataFrame(rows)
-    CSV.write(joinpath(root, "track_a_results.tsv"), df; delim = '\t')
+    cells_dir = joinpath(root, "cells")
+    all_rows = NamedTuple[]
+    if isdir(cells_dir)
+        for entry in sort(readdir(cells_dir))
+            ckpt = joinpath(cells_dir, entry, "cell_result.json")
+            isfile(ckpt) && push!(all_rows, canonical(JSON.parsefile(ckpt)))
+        end
+    end
+    # Fall back to the in-memory rows only when the store is unreadable, so an aggregate
+    # is still produced rather than silently emptied.
+    isempty(all_rows) && (all_rows = collect(rows))
+    df = DataFrames.DataFrame(all_rows)
+    target = joinpath(root, "track_a_results.tsv")
+    tmp = target * ".tmp"
+    CSV.write(tmp, df; delim = '\t')
+    mv(tmp, target; force = true)
     return df
 end
 
 function write_power_analysis(root, df)
     cv_rows = NamedTuple[]
-    for g in DataFrames.groupby(df, [:organism, :technology, :coverage, :decoder_arm])
+    # Group by :k as well. With --k in play a single tree can hold several k, and
+    # pooling them turns a between-SEED CV into a between-K CV — inflating it by up to
+    # ~39x in testing and flipping the pre-registration verdict with no warning.
+    #
+    # Exclude non-ok cells. A single crashed seed moved one group's CV from 0.005 to
+    # 0.87; an error row is not a measurement and must not enter a variance estimate.
+    n_excluded = DataFrames.nrow(df) - DataFrames.nrow(df[df.status .== "ok", :])
+    n_excluded > 0 && @warn "power analysis excludes non-ok cells" n_excluded
+    df = df[df.status .== "ok", :]
+    for g in DataFrames.groupby(df, [:organism, :technology, :coverage, :decoder_arm, :k])
         nga = Float64.(g.NGA50)
         m = Statistics.mean(nga)
         s = length(nga) > 1 ? Statistics.std(nga; corrected = true) : NaN
@@ -444,7 +576,52 @@ function write_power_analysis(root, df)
     return cv_df
 end
 
+# === Cell identity + error rows (extracted so both are unit-testable) ===
+
+# k is part of the cell id: without it, two runs at different --k write the same
+# cells/<id>/cell_result.json and the second silently resumes the first's result.
+#
+# But the suffix is applied ONLY for non-default k. Interpolating it unconditionally
+# renamed the DEFAULT k=31 cells too, which orphaned every checkpoint written before
+# the flag existed — 288 on Lovelace and 144 on LRC — turning the sbatch wrappers'
+# documented "just re-submit, completed cells are skipped" recovery into a silent
+# full recompute. Legacy trees are k=31 by definition (k was a hardcoded const), so
+# keying k=31 to the historical name is unambiguous and needs no migration.
+cell_id_for(org, tech, cov, seed, arm; k = K) =
+    k == 31 ? "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)" :
+    "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)__k$(k)"
+
+# The row recorded when a cell throws. Extracted from the catch block because it was
+# unreachable from any test there: adding a required `peak_rss_method` keyword to
+# cell_row without updating this call made the ERROR HANDLER ITSELF throw
+# UndefKeywordError, so the first failing cell aborted the whole matrix from inside
+# its own recovery path — and `--smoke` runs a single deliberately-successful cell,
+# so no test could reach it.
+error_row(org, acc, tech, cov, seed, arm) =
+    cell_row(org, acc, tech, cov, seed, arm;
+        n_reads = 0, n_contigs = 0, wall_seconds = 0.0, peak_rss_bytes = 0,
+        rss_baseline_bytes = -1, peak_rss_method = "unknown",
+        metrics = empty_metrics(), status = "error")
+
 # === Main ===
+
+# Guard the driver so a test can `include()` this file for its pure helpers without
+# downloading genomes or running assemblies. Matches the convention already used by
+# rhizomorph_benchmark_harness.jl, viterbi_accuracy_benchmark.jl and others, and is
+# what makes test/4_assembly/track_a_baseline_benchmark_test.jl possible. `if` does
+# not introduce scope at top level, so the globals below stay global.
+if abspath(PROGRAM_FILE) == @__FILE__
+
+println("=== Track A baseline benchmark ===")
+println("Start: $(Dates.now())")
+println("Smoke mode: $SMOKE")
+println("Organisms: $(join((o[1] for o in organisms), ", "))")
+println("Technologies: $(join(technologies, ", "))")
+println("Coverages: $(join(coverages, ", "))x")
+println("Seeds: $(join(seeds, ", "))")
+println("Decoder arms: $(join(arms, ", "))")
+println("Cells to run: $N_CELLS")
+println("Output dir: $OUTPUT_DIR")
 
 mkpath(OUTPUT_DIR)
 refs_dir = joinpath(OUTPUT_DIR, "refs")
@@ -486,7 +663,7 @@ for (org, acc, _expected) in organisms,
     # cells/<id>/cell_result.json and the second silently resumes the first's result.
     # Existing k=31 trees keep their old names, so point a k-sweep at its own
     # --output-dir rather than reusing a completed one.
-    cell_id = "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)__k$(K)"
+    cell_id = cell_id_for(org, tech, cov, seed, arm)
     cell_dir = joinpath(cells_dir, cell_id)
     ckpt = joinpath(cell_dir, "cell_result.json")
 
@@ -502,9 +679,7 @@ for (org, acc, _expected) in organisms,
         run_cell(org, acc, ref_paths[org], tech, cov, seed, arm, cell_dir)
     catch e
         @warn "cell failed" cell_id exception = (e, catch_backtrace())
-        cell_row(org, acc, tech, cov, seed, arm;
-            n_reads = 0, n_contigs = 0, wall_seconds = 0.0, peak_rss_bytes = 0,
-            metrics = empty_metrics(), status = "error")
+        error_row(org, acc, tech, cov, seed, arm)
     end
     save_cell_json(ckpt, row)
     push!(rows, row)
@@ -517,12 +692,17 @@ println("\n--- Phase 3: aggregate + power analysis ---")
 results_df = write_aggregate(OUTPUT_DIR, rows)
 cv_df = write_power_analysis(OUTPUT_DIR, results_df)
 
+const ARTIFACT_RUN_ID = "track_a_baseline_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))"
 if HAVE_ARTIFACT_WRITER
     try
         write_benchmark_artifacts(
             ["track_a_results" => results_df, "track_a_power_analysis_cv" => cv_df];
-            output_dir = joinpath(OUTPUT_DIR, "artifacts"),
-            run_id = "track_a_baseline_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))",
+            # Per-run subdirectory: a fixed "artifacts" path meant six --k invocations
+            # left ONE bundle whose provenance (git SHA, tool versions, command_args)
+            # described only the last run. Unlike the cell JSONs there is no second
+            # copy, so that loss is unrecoverable.
+            output_dir = joinpath(OUTPUT_DIR, "artifacts", ARTIFACT_RUN_ID),
+            run_id = ARTIFACT_RUN_ID,
             scale = SMOKE ? "smoke" : "full",
             dataset_ids = [o[2] for o in organisms],
             command_args = ARGS,
@@ -537,3 +717,4 @@ end
 n_ok = count(r -> r.status == "ok", rows)
 println("\nDone: $(length(rows)) cells, $n_ok ok. Results in $OUTPUT_DIR")
 println("End: $(Dates.now())")
+end  # PROGRAM_FILE guard
