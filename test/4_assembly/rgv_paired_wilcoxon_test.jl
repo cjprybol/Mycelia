@@ -40,7 +40,7 @@ end
 # Build a sweep-shaped table. `with_seed=false` reproduces the pre-td-59o7 schema.
 # `naive`/`iterative` give the per-cell metric values, one entry per (seed, cell).
 function _pwt_frame(cells; with_seed = true, metric_source = "quast",
-        min_contig = 4_850, metric = :quast_nga50, ok = true)
+        min_contig = 500, metric = :quast_nga50, ok = true)
     rows = []
     for c in cells
         for (arm, value) in (("naive", c.naive), ("iterative", c.iterative))
@@ -392,7 +392,7 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             report = write_paired_report(joinpath(dir, "report.md"), a;
                 csv_paths = ["fixture.csv"])
             text = read(report, String)
-            Test.@test occursin("paired-Wilcoxon", text)
+            Test.@test occursin("paired Wilcoxon", text)
             Test.@test occursin("42, 123, 456", text)            # seeds used
             Test.@test occursin("`seed`", text)                   # pairing key shown
             Test.@test occursin("quast_nga50", text)
@@ -430,5 +430,153 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         df = _pwt_frame([(seed = 42, error_rate = 0.01, naive = 1.0, iterative = 2.0)])
         _pwt_throws_with(() -> run_paired_analysis(df; metrics = (:not_a_column,)),
             ["metric column `not_a_column` not present"])
+    end
+
+    Test.@testset "C16: a shard lacking `seed` must NOT create pseudo-replicates" begin
+        # The worst failure available to this file, because it makes the result look
+        # BETTER. `load_sweep_csvs` concatenates with `cols = :union`, so a shard
+        # predating the `seed` column contributes rows with `seed = missing`. A
+        # presence-only schema check passed, `build_pairs` stringified the key, and
+        # `missing` became a distinct pseudo-seed that paired normally: the same
+        # physical runs supplied twice reported n = 12 for 6 replicates and deflated
+        # p by ~27x.
+        cells = [(seed = 42, error_rate = e, naive = 1000.0 + i, iterative = 1300.0 + i)
+                 for (i, e) in enumerate((0.01, 0.02, 0.03, 0.04, 0.05, 0.06))]
+        withseed = _pwt_frame(cells)
+        noseed = _pwt_frame(cells; with_seed = false)
+
+        # Correct baseline: 6 real cells.
+        a_ok = run_paired_analysis(withseed; metrics = (:quast_nga50,))
+        Test.@test a_ok.results[1].n_pairs == 6
+
+        merged = vcat(withseed, noseed; cols = :union)
+        Test.@test "seed" in DataFrames.names(merged)      # column IS present...
+        Test.@test count(ismissing, merged.seed) == 12     # ...but half is missing
+        msg = _pwt_throws_with(
+            () -> run_paired_analysis(merged; metrics = (:quast_nga50,)),
+            ["missing", "pairing column", "`seed`",
+                "pseudo-level", "inflating n", "deflating p"])
+        Test.@test occursin("rgv_seed_backfill.jl", msg)
+
+        # Every pairing key is checked, not just seed.
+        holed = DataFrames.DataFrame(withseed)
+        holed[!, :error_rate] = Vector{Union{Missing, Float64}}(holed.error_rate)
+        holed[1, :error_rate] = missing
+        _pwt_throws_with(() -> run_paired_analysis(holed; metrics = (:quast_nga50,)),
+            ["`error_rate`"])
+
+        # A `missing` arm belongs to neither side of a pair.
+        badarm = DataFrames.DataFrame(withseed)
+        badarm[!, :arm] = Vector{Union{Missing, String}}(badarm.arm)
+        badarm[1, :arm] = missing
+        _pwt_throws_with(() -> run_paired_analysis(badarm; metrics = (:quast_nga50,)),
+            ["`missing` `arm`"])
+    end
+
+    Test.@testset "C9: a significant HARM is FALSIFIED, not partially supported" begin
+        # The pre-registration's H1 row: "Falsified if p >= 0.05, THE DIRECTION IS
+        # NEGATIVE, or ...". `decide` branched only on magnitude, so a treatment
+        # worse on every pair reported as PARTIALLY SUPPORTED — the exact class of
+        # misreport this PR exists to prevent.
+        harm = _pwt_frame([(seed = s, error_rate = e, naive = 1000.0,
+                               iterative = 1000.0 - d)
+                           for (s, e, d) in [
+            (42, 0.01, 400.0), (42, 0.05, 450.0), (123, 0.01, 500.0),
+            (123, 0.05, 420.0), (456, 0.01, 470.0), (456, 0.05, 430.0),
+            (42, 0.10, 460.0), (123, 0.10, 440.0), (456, 0.10, 480.0)]])
+        a = run_paired_analysis(harm; metrics = (:quast_nga50,))
+        Test.@test a.adjusted_p[1] < RGV_ALPHA                       # significant
+        Test.@test a.results[1].median_relative_improvement < 0      # and WORSE
+        Test.@test occursin("FALSIFIED", a.verdicts[1])
+        Test.@test occursin("direction is", a.verdicts[1])
+        Test.@test !occursin("SUPPORTED (", a.verdicts[1])
+        # A positive-but-small effect is still PARTIALLY SUPPORTED, not falsified.
+        small = _pwt_frame([(seed = s, error_rate = e, naive = 1000.0,
+                                iterative = 1000.0 + d)
+                            for (s, e, d) in [
+            (42, 0.01, 10.0), (42, 0.05, 12.0), (123, 0.01, 11.0),
+            (123, 0.05, 13.0), (456, 0.01, 9.0), (456, 0.05, 14.0)]])
+        Test.@test occursin("PARTIALLY SUPPORTED",
+            run_paired_analysis(small; metrics = (:quast_nga50,)).verdicts[1])
+    end
+
+    Test.@testset "C12: an undefined effect size is not silently '<= 10%'" begin
+        # `NaN > 0.1` is false, so an undefined relative improvement fell through to
+        # the "<= 10%" branch. Routine for misassembly counts, where a clean control
+        # is zero on every pair.
+        zc = _pwt_frame([(seed = s, error_rate = e, naive = 0.0, iterative = 3.0)
+                         for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]])
+        a = run_paired_analysis(zc; metrics = (:quast_nga50,))
+        Test.@test a.adjusted_p[1] < RGV_ALPHA
+        Test.@test isnan(a.results[1].median_relative_improvement)
+        Test.@test a.results[1].n_zero_control_excluded_from_relative == 6
+        Test.@test occursin("INDETERMINATE", a.verdicts[1])
+        Test.@test !occursin("<= 10%", a.verdicts[1])
+    end
+
+    Test.@testset "C5: the mixed-src override is recorded in the deliverable" begin
+        mixed = _pwt_frame([
+            (seed = 42, error_rate = 0.01, naive = 1000.0, iterative = 1500.0,
+                metric_source = "quast"),
+            (seed = 123, error_rate = 0.01, naive = 900.0, iterative = 1400.0,
+                metric_source = "internal:quast-failed"),
+            (seed = 456, error_rate = 0.01, naive = 950.0, iterative = 1450.0,
+                metric_source = "quast")])
+        a = run_paired_analysis(mixed;
+            metrics = (:quast_nga50,), allow_mixed_src = true)
+        Test.@test a.allow_mixed_src
+        Test.@test a.override_bound                       # it actually BOUND
+        Test.@test "metric_source" in a.mixed_axes
+
+        mktempdir() do dir
+            text = read(write_paired_report(joinpath(dir, "r.md"), a;
+                csv_paths = ["f.csv"]), String)
+            # The artifact must say the guard was overridden...
+            Test.@test occursin("GUARD OVERRIDDEN", text)
+            Test.@test occursin("not validation-grade", lowercase(text))
+            # ...and must NOT go on to assert the guard was enforced.
+            Test.@test !occursin("enforced it — no override was used", text)
+            payload = paired_analysis_json(a; csv_paths = ["f.csv"])
+            Test.@test payload["metric_definition_override_bound"] == true
+            Test.@test payload["allow_mixed_src"] == true
+            Test.@test payload["exploratory"] == true
+        end
+
+        # An override that does NOT bind is reported differently — "available but
+        # unused" is a different provenance claim from "load-bearing".
+        clean = _pwt_frame([(seed = s, error_rate = 0.01, naive = 1000.0,
+                                iterative = 1500.0) for s in (42, 123, 456)])
+        b = run_paired_analysis(clean; metrics = (:quast_nga50,), allow_mixed_src = true)
+        Test.@test b.allow_mixed_src
+        Test.@test !b.override_bound
+        mktempdir() do dir
+            text = read(write_paired_report(joinpath(dir, "r.md"), b;
+                csv_paths = ["f.csv"]), String)
+            Test.@test occursin("did NOT bind", text)
+            Test.@test !occursin("GUARD OVERRIDDEN", text)
+        end
+    end
+
+    Test.@testset "C1/I3: the report does not claim to be a pre-registered test" begin
+        df = _pwt_frame([(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                         for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]])
+        a = run_paired_analysis(df; metrics = (:quast_nga50,))
+        mktempdir() do dir
+            text = read(write_paired_report(joinpath(dir, "r.md"), a;
+                csv_paths = ["f.csv"]), String)
+            # H1 is Viterbi-DP-vs-greedy; this compares correctors. Attributing it
+            # to H1 would put an unregistered comparison into a manuscript as
+            # confirmatory.
+            Test.@test occursin("EXPLORATORY", text)
+            Test.@test occursin("not a pre-registered test", text)
+            Test.@test occursin("Viterbi DP vs greedy", text)
+            Test.@test !occursin("(H1 test procedure + shared analysis rules)", text)
+            # I3: the axes actually swept must sit next to the numbers.
+            Test.@test occursin("Error rates swept", text)
+            Test.@test occursin("0.01, 0.05", text)
+            Test.@test occursin("~360 paired comparisons", text)
+        end
     end
 end

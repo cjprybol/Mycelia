@@ -1,16 +1,31 @@
 # Pre-registered paired-Wilcoxon analysis of the RGV correction-validation sweep.
 # ==============================================================================
 #
-# This is the analysis the pre-registration commits to
-# (`rhizomorph-paper/planning/PLAN-2026-03-28-rhizomorph-preregistration.md`,
-# hypothesis H1 and the shared analysis rules):
+# WHAT THIS IS, AND WHAT IT IS NOT
+# --------------------------------
+# It applies the pre-registration's STATISTICAL RULE — paired Wilcoxon signed-rank
+# over replicate seeds, Benjamini-Hochberg across metrics, and the
+# supported/partial/falsified/null decision thresholds
+# (`rhizomorph-paper/planning/PLAN-2026-03-28-rhizomorph-preregistration.md`) — to
+# the RGV correction-validation sweep.
 #
-#   "Apply paired Wilcoxon signed-rank test comparing [treatment] vs [control]
-#    across all organism/coverage/technology combinations"
-#   "Random seeds for subsampling: 42, 123, 456 (pre-specified)"
-#   Decision rule: FDR-adjusted p < 0.05 AND median improvement > 10% => supported;
-#                  p < 0.05 with < 10% => partially supported;
-#                  p >= 0.05 => not supported (report as a null with effect size).
+# It is NOT a pre-registered hypothesis test, and must not be reported as one.
+# The pre-registration's H1 is "Full Viterbi DP improves assembly quality over
+# greedy Viterbi" (:344), and its procedure says "comparing Viterbi DP vs. greedy"
+# (:52). This sweep compares `corrector=:none` against `corrector=:iterative`.
+# Grepping the entire pre-registration for `iterativ|corrector|naive` returns ZERO
+# hits: none of H1-H7 covers error correction. An earlier version of this header
+# quoted H1's procedure with the arms elided to "[treatment] vs [control]", which
+# read as though this comparison were pre-registered. It is not.
+#
+# Two further mismatches that must travel with any number this produces:
+#   * The pre-registration's design is 4 coverage levels x 3 replicates per
+#     organism/technology (~360 paired comparisons). The RGV sweep runs ONE
+#     coverage and varies `error_rate`, an axis the pre-registration never names.
+#   * `k` is pooled here; the pre-registration designates k=31 primary with
+#     k=21/51 as sensitivity analyses.
+# `write_paired_report` therefore prints the axes actually swept and the pair
+# count next to every p-value, and labels the analysis exploratory.
 #
 # It exists for two reasons beyond producing the number.
 #
@@ -278,13 +293,25 @@ function load_sweep_csvs(paths::AbstractVector{<:AbstractString})
     return reduce((a, b) -> vcat(a, b; cols = :union), frames)
 end
 
+const RGV_BACKFILL_HINT = "  julia --project=. benchmarking/rgv_seed_backfill.jl --csv <csv> " *
+                          "(--seed N | --run-log PATH | --assume-default-seed) " *
+                          "[--metric-source <src> --quast-min-contig <bp>]"
+
 """
     require_pairing_schema(df)
 
-Assert the table can be paired at all. Missing `seed` is called out specifically
-because that is bead td-59o7's whole point: without it the pre-registered paired
-test is not runnable, and the fix is `rgv_seed_backfill.jl` rather than a silently
-weaker analysis.
+Assert the table can be paired at all: every pairing key must be PRESENT **and
+fully populated**.
+
+Checking presence alone is not enough, and the gap was a real defect. Shards are
+concatenated with `cols = :union`, so a shard predating the `seed` column
+contributes rows whose `seed` is `missing` — the column is then present and a
+presence-only check passes. `build_pairs` stringifies the key, so `missing`
+becomes the literal pseudo-seed `"missing"`, a distinct cell that pairs normally.
+The same physical runs supplied twice then report n = 12 for 6 independent
+replicates and deflate p by ~27x. Pseudo-replication is the single worst failure
+available to this file, because it makes the result look BETTER, so the key
+columns are checked for missing VALUES, not just for existence.
 """
 function require_pairing_schema(df)
     cols = Set(Symbol.(DataFrames.names(df)))
@@ -293,15 +320,37 @@ function require_pairing_schema(df)
         error("this sweep CSV has no `seed` column, so replicate rows cannot be " *
               "paired and the pre-registration's paired-Wilcoxon rule over seeds " *
               "42/123/456 is NOT runnable against it (bead td-59o7). Backfill it " *
-              "first:\n" *
-              "  julia --project=. benchmarking/rgv_seed_backfill.jl --csv <csv> " *
-              "(--seed N | --run-log PATH | --assume-default-seed)")
+              "first:\n" * RGV_BACKFILL_HINT)
     end
     if !isempty(missing_keys)
         error("sweep CSV is missing pairing column(s): " *
               join(("`$k`" for k in missing_keys), ", "))
     end
     :arm in cols || error("sweep CSV is missing the `arm` column")
+
+    # Fully-populated check. A `missing` in any pairing key means some shard did
+    # not carry that column; `cols = :union` filled it in. Refuse rather than let
+    # `missing` become a pseudo-level of that key.
+    for k in RGV_PAIR_KEYS
+        col = getproperty(df, k)
+        n_missing = count(ismissing, col)
+        n_missing == 0 && continue
+        error("$(n_missing) of $(length(col)) rows have a `missing` value in the " *
+              "pairing column `$k`. That happens when shards with different schemas " *
+              "are concatenated (`cols = :union` fills the absent column with " *
+              "`missing`), and it is NOT safe to proceed: `missing` would become a " *
+              "distinct pseudo-level of `$k`, so the same physical runs supplied " *
+              "twice would be counted as independent replicates — inflating n and " *
+              "deflating p. Backfill the incomplete shard before merging it:\n" *
+              RGV_BACKFILL_HINT)
+    end
+
+    # `arm` is not a pairing key but it selects which side of the pair a row is on;
+    # a `missing` arm silently belongs to neither and would be dropped invisibly.
+    n_missing_arm = count(ismissing, getproperty(df, :arm))
+    n_missing_arm == 0 ||
+        error("$(n_missing_arm) row(s) have a `missing` `arm` and cannot be " *
+              "assigned to either side of a pair")
     return nothing
 end
 
@@ -414,10 +463,25 @@ end
 """
     decide(result, adjusted_p) -> String
 
-The pre-registration's decision rule verbatim, applied to one metric.
+The pre-registration's decision rule, applied to one metric.
+
+Four outcomes, not three. The rule's falsification clause is
+`"Falsified if p >= 0.05, THE DIRECTION IS NEGATIVE, or ..."`, so a
+statistically significant result in the WRONG direction is falsification, not
+weak support. An earlier version branched only on
+`improved > RGV_IMPROVEMENT_THRESHOLD`, which made every significant result that
+failed the 10% bar — including outright harm — read as "PARTIALLY SUPPORTED":
+a treatment worse on all 9 pairs, median -45%, FDR p = 0.0039, was reported as
+partial support. That is the one error class this whole PR exists to prevent, so
+the sign is now tested before the magnitude.
 
 `:none`-direction metrics get "reported (no directional claim)" rather than a
-verdict — the pre-registration does not define an improvement threshold for them.
+verdict — the pre-registration defines no improvement threshold for them.
+
+An undefined effect size (`NaN`, e.g. every control value zero so no relative
+improvement is computable) is reported as indeterminate rather than being allowed
+to fall through the `> threshold` comparison, where `NaN > 0.1 === false` would
+have silently rendered it as "<= 10%".
 """
 function decide(result, adjusted_p)
     if result.direction == :none
@@ -427,15 +491,26 @@ function decide(result, adjusted_p)
         return "indeterminate (test undefined — see n_pairs / dropped cells)"
     end
     improved = result.median_relative_improvement
-    if adjusted_p < RGV_ALPHA
-        if !isnan(improved) && improved > RGV_IMPROVEMENT_THRESHOLD
-            return "SUPPORTED (FDR-adjusted p < $RGV_ALPHA and median improvement > " *
-                   "$(round(Int, RGV_IMPROVEMENT_THRESHOLD * 100))%)"
-        end
-        return "PARTIALLY SUPPORTED (significant but median improvement <= " *
-               "$(round(Int, RGV_IMPROVEMENT_THRESHOLD * 100))%)"
+    pct = round(Int, RGV_IMPROVEMENT_THRESHOLD * 100)
+    if adjusted_p >= RGV_ALPHA
+        return "NOT SUPPORTED (FDR-adjusted p >= $RGV_ALPHA — report as a null with effect size)"
     end
-    return "NOT SUPPORTED (FDR-adjusted p >= $RGV_ALPHA — report as a null with effect size)"
+    # Significant. The sign decides between falsified and (partially) supported.
+    if isnan(improved)
+        return "INDETERMINATE (significant, but the effect size is undefined — " *
+               "every control value is zero, so relative improvement cannot be " *
+               "computed; read the median paired difference instead)"
+    end
+    if improved < 0
+        return "FALSIFIED (FDR-adjusted p < $RGV_ALPHA and the direction is " *
+               "NEGATIVE — the treatment is significantly WORSE by " *
+               "$(round(abs(improved) * 100; digits = 1))%)"
+    end
+    if improved > RGV_IMPROVEMENT_THRESHOLD
+        return "SUPPORTED (FDR-adjusted p < $RGV_ALPHA and median improvement > $pct%)"
+    end
+    return "PARTIALLY SUPPORTED (significant, direction positive, but median " *
+           "improvement <= $pct%)"
 end
 
 """
@@ -478,9 +553,17 @@ function run_paired_analysis(df;
               "metric_source=$(something(metric_source, "any")))")
 
     # Bead td-9p91: refuse to aggregate rows scored under two definitions.
+    # The override must leave a trace in the DELIVERABLE, not only in a stderr
+    # @warn that lands in a SLURM .out nobody reads: `report.md` / `results.json`
+    # are what reach a manuscript. Record both whether the override was PASSED and
+    # whether it actually BOUND (i.e. the table really was mixed), because
+    # "override available but unused" and "override load-bearing" are very
+    # different provenance claims.
     definition = assert_single_metric_definition(work;
         context = "RGV paired-Wilcoxon analysis",
         allow_mixed_src = allow_mixed_src)
+    mixed_axes = [String(col) for (col, vals) in definition if length(vals) > 1]
+    override_bound = allow_mixed_src && !isempty(mixed_axes)
 
     results = [analyze_metric(work, m; treatment = treatment, control = control)
                for m in metrics]
@@ -488,8 +571,17 @@ function run_paired_analysis(df;
     verdicts = [decide(results[i], adjusted[i]) for i in eachindex(results)]
 
     seeds = sort(unique(work.seed))
+    # The axes actually swept, so the report can state them next to every p-value
+    # (the pre-registration's thresholds were calibrated for a different design).
+    axes = Dict{Symbol, Vector{Any}}()
+    for col in (:reference, :error_rate, :readlen, :target_coverage, :k)
+        hasproperty(work, col) || continue
+        axes[col] = sort(unique(getproperty(work, col)))
+    end
     return (results = results, adjusted_p = adjusted, verdicts = verdicts,
         definition = definition, seeds = seeds,
+        axes = axes, allow_mixed_src = allow_mixed_src, mixed_axes = mixed_axes,
+        override_bound = override_bound,
         treatment = String(treatment), control = String(control),
         n_input_rows = n_input, n_rows_analyzed = DataFrames.nrow(work),
         n_dropped_not_ok = n_dropped_not_ok, n_dropped_metric_source = n_dropped_source,
@@ -509,11 +601,17 @@ dropped cell with its reason.
 """
 function write_paired_report(path::AbstractString, analysis; csv_paths)
     open(path, "w") do io
-        println(io, "# RGV paired-Wilcoxon analysis (pre-registered rule)\n")
+        println(io, "# RGV correction sweep — paired Wilcoxon (EXPLORATORY)\n")
         println(io, "Generated: $(Dates.now())\n")
         println(io,
-            "Pre-registration: `PLAN-2026-03-28-rhizomorph-preregistration.md` " *
-            "(H1 test procedure + shared analysis rules)\n")
+            "> **Status: exploratory, not a pre-registered test.** This applies the " *
+            "statistical RULE from `PLAN-2026-03-28-rhizomorph-preregistration.md` " *
+            "(paired Wilcoxon signed-rank over seeds, Benjamini-Hochberg across " *
+            "metrics, and its decision thresholds) to a comparison the " *
+            "pre-registration does not describe. Its H1 is *Viterbi DP vs greedy*; " *
+            "this compares `corrector=:none` vs `corrector=:iterative`, and no " *
+            "hypothesis H1-H7 covers error correction. Do not report these as " *
+            "confirmatory results.\n")
         println(io, "## Inputs\n")
         for p in csv_paths
             println(io, "- `$p`")
@@ -524,6 +622,19 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
         println(io, "- Pairing key: " *
                     join(("`$k`" for k in analysis.pair_keys), " x "))
         println(io, "- Seeds present: $(join(string.(analysis.seeds), ", "))")
+        # The axes ACTUALLY swept, next to the numbers. A p-value read without them
+        # invites the reader to assume the pre-registered design produced it.
+        for (label, col) in (("Error rates", :error_rate), ("Read lengths", :readlen),
+            ("Coverages", :target_coverage), ("k", :k), ("References", :reference))
+            haskey(analysis.axes, col) || continue
+            println(io, "- $label swept: " * join(string.(analysis.axes[col]), ", "))
+        end
+        println(io,
+            "\n_The pre-registration's design is 4 coverage levels x 3 replicates " *
+            "per organism/technology (~360 paired comparisons), varies coverage " *
+            "rather than error rate, and designates k=31 primary (k=21/51 " *
+            "sensitivity). Compare the axes above against that before reading the " *
+            "decision column — the thresholds were calibrated for that design._")
         println(io,
             "- Rows: $(analysis.n_input_rows) read, " *
             "$(analysis.n_rows_analyzed) analyzed " *
@@ -533,9 +644,34 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
         for (col, vals) in analysis.definition
             println(io, "- `$col`: " * join(("`$v`" for v in vals), ", "))
         end
-        println(io,
-            "\n_A single value per definition column is what makes the aggregate " *
-            "meaningful; `metric_source_guard.jl` (bead td-9p91) enforces it._\n")
+        # The artifact must never assert the guard was enforced when it was
+        # overridden. Previously this line printed unconditionally, so a run with
+        # `--allow-mixed-src` listed two definitions and then, one line later, told
+        # the reader single-definition-ness had been enforced. That is strictly
+        # worse than having no guard: it launders the override into an assurance.
+        if analysis.override_bound
+            println(io,
+                "\n> ## :warning: MIXED METRIC DEFINITIONS — GUARD OVERRIDDEN\n>\n" *
+                "> This analysis was run with `--allow-mixed-src`, and the override " *
+                "was **load-bearing**: the rows really do span more than one " *
+                "definition on " *
+                join(("`$a`" for a in analysis.mixed_axes), ", ") * ".\n>\n" *
+                "> Every number below therefore compares quantities produced under " *
+                "different definitions — for `metric_source`, an alignment-validated " *
+                "QUAST metric against an internal size-ratio proxy that is blind to " *
+                "misassembly. **These results are not validation-grade and must not " *
+                "be reported as a measured effect.**\n")
+        elseif analysis.allow_mixed_src
+            println(io,
+                "\n_`--allow-mixed-src` was passed but did NOT bind: the rows are " *
+                "single-definition on every checked axis, so the aggregate is " *
+                "well-defined._\n")
+        else
+            println(io,
+                "\n_A single value per definition column is what makes the aggregate " *
+                "meaningful; `metric_source_guard.jl` (bead td-9p91) enforced it — " *
+                "no override was used._\n")
+        end
 
         println(io, "## Results\n")
         println(io,
@@ -605,6 +741,15 @@ function paired_analysis_json(analysis; csv_paths)
         "n_rows_analyzed" => analysis.n_rows_analyzed,
         "metric_definition" => Dict(string(col) => vals
         for (col, vals) in analysis.definition),
+        "exploratory" => true,
+        "preregistration_status" =>
+            "Applies the pre-registration's statistical rule to a comparison it " *
+            "does not describe (H1 is Viterbi DP vs greedy; this is " *
+            "corrector=:none vs :iterative). Not a confirmatory test.",
+        "axes_swept" => Dict(string(k) => v for (k, v) in analysis.axes),
+        "allow_mixed_src" => analysis.allow_mixed_src,
+        "mixed_definition_axes" => analysis.mixed_axes,
+        "metric_definition_override_bound" => analysis.override_bound,
         "alpha" => RGV_ALPHA,
         "improvement_threshold" => RGV_IMPROVEMENT_THRESHOLD,
         "metrics" => [Dict(
@@ -641,9 +786,29 @@ end
 # === CLI ====================================================================
 
 function _pw_args(flag)
-    String[ARGS[i + 1]
-           for i in eachindex(ARGS)
-           if ARGS[i] == flag && i < length(ARGS)]
+    # Consume EVERY token after the flag until the next `--flag`, not just one, so
+    # both documented forms work:
+    #   --csv a.csv --csv b.csv       (repeated flag)
+    #   --csv results/sweep_*.csv     (shell glob -> --csv a.csv b.csv c.csv)
+    # Taking only `ARGS[i + 1]` silently used the first value and discarded the
+    # rest. Merging per-shard files is the entire purpose of the `seed` column, so
+    # that failure mode quietly analysed a fraction of the data behind an
+    # invocation this file's own header documents.
+    out = String[]
+    i = 1
+    while i <= length(ARGS)
+        if ARGS[i] == flag
+            j = i + 1
+            while j <= length(ARGS) && !startswith(ARGS[j], "--")
+                push!(out, ARGS[j])
+                j += 1
+            end
+            i = j
+        else
+            i += 1
+        end
+    end
+    return out
 end
 
 function _pw_arg(flag)
