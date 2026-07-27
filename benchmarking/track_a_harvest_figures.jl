@@ -49,6 +49,10 @@ const TECHNOLOGY_COLORS = Dict(
     "ont" => :firebrick3
 )
 
+# Colour lookup that tolerates a technology the palette does not know, rather than
+# throwing a KeyError partway through rendering.
+technology_color(t) = get(TECHNOLOGY_COLORS, String(t), :grey40)
+
 # === Argument parsing ===
 
 function arg_value(flag::AbstractString, default = nothing)
@@ -71,6 +75,16 @@ function require_columns(df::DataFrames.DataFrame, path::AbstractString,
           "This table is likely from an older schema than the figures expect.")
 end
 
+# Keep only successful cells. Missing-safe: `df.status .== "ok"` yields
+# Union{Missing,Bool} when any status is missing, and DataFrames throws on indexing
+# with that mask — so a single missing status would abort the figure rather than drop a
+# row. coalesce() makes missing mean "not ok". Shared by the CV table and the envelope
+# figure so the two cannot drift apart.
+function ok_cells(df::DataFrames.DataFrame)::DataFrames.DataFrame
+    hasproperty(df, :status) || return df
+    return df[coalesce.(df.status .== "ok", false), :]
+end
+
 # === Coefficient of variation ===
 
 """
@@ -86,9 +100,7 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
     # enough to flip the pre-registration verdict under a y-axis still labelled
     # "n = 3 seeds". Also drop non-ok cells: one crashed seed moved a group's CV from
     # 0.005 to 0.87, and an error row is not a measurement.
-    if hasproperty(df, :status)
-        df = df[df.status .== "ok", :]
-    end
+    df = ok_cells(df)
     group_keys = [:organism, :technology, :coverage, :decoder_arm]
     hasproperty(df, :k) && push!(group_keys, :k)
     grouped = DataFrames.groupby(df, group_keys)
@@ -134,11 +146,27 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
     computable = single_arm[single_arm.computable, :]
     undefined_groups = single_arm[.!single_arm.computable, :]
 
+    # Derive the two remaining literals: the seed count on the y-axis, and WHICH
+    # configurations are undefined. Both were hard-coded ("n = 3 seeds", "ONT at 10x and
+    # 30x") in a file whose whole convention is to compute its captions, so a different
+    # matrix would have mislabelled the axis and named the wrong cells.
+    seed_label = let n = sort(unique(single_arm.n_seeds))
+        length(n) == 1 ? "$(only(n)) seeds" : "$(minimum(n))-$(maximum(n)) seeds"
+    end
+    undefined_label = if DataFrames.nrow(undefined_groups) == 0
+        ""
+    else
+        techs = sort(unique(String.(undefined_groups.technology)))
+        covs = sort(unique(Int.(undefined_groups.coverage)))
+        "($(join(techs, ", ")) at $(join(string.(covs), "x and "))x)"
+    end
+
     figure = CairoMakie.Figure(size = (1450, 620), fontsize = 14)
 
     axis_a = CairoMakie.Axis(figure[1, 1],
         title = "A. NGA50 CV per configuration, by technology and coverage",
-        xlabel = "coverage (x)", ylabel = "NGA50 coefficient of variation (n = 3 seeds)",
+        xlabel = "coverage (x)",
+        ylabel = "NGA50 coefficient of variation (n = $(seed_label))",
         xticks = ([10, 30, 50, 100], ["10", "30", "50", "100"]))
 
     for (offset, technology) in zip((-4.0, 0.0, 4.0), TECHNOLOGY_ORDER)
@@ -146,7 +174,7 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
         isempty(subset) && continue
         CairoMakie.scatter!(axis_a,
             Float64.(subset.coverage) .+ offset, Float64.(subset.cv);
-            color = TECHNOLOGY_COLORS[technology], markersize = 13,
+            color = technology_color(technology), markersize = 13,
             strokewidth = 0.5, strokecolor = :white, label = technology)
     end
     CairoMakie.hlines!(axis_a, [CV_THRESHOLD];
@@ -168,7 +196,7 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
         CairoMakie.scatter!(axis_b,
             fill(Float64(coverage), DataFrames.nrow(subset)) .+ collect(jitter),
             Float64.(subset.cv);
-            color = [TECHNOLOGY_COLORS[t] for t in subset.technology], markersize = 12)
+            color = [technology_color(t) for t in subset.technology], markersize = 12)
         median_cv = Statistics.median(subset.cv)
         CairoMakie.lines!(axis_b, [coverage - 4.5, coverage + 4.5], [median_cv, median_cv];
             color = :black, linewidth = 3)
@@ -178,10 +206,11 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
 
     CairoMakie.Label(figure[0, 1:2],
         "Track A baseline: the assumed NGA50 CV of $(CV_THRESHOLD) is exceeded in " *
-        "$(exceed) of $(total) computable configurations (max $(Printf.@sprintf("%.3f", maximum(computable.cv))))." *
+        "$(exceed) of $(total) computable configurations$(total == 0 ? "" : " (max " *
+            Printf.@sprintf("%.3f", maximum(computable.cv)) * ")")." *
         "\nBlack bars in B are per-coverage medians. " *
         "$(DataFrames.nrow(undefined_groups)) further configurations " *
-        "(ONT at 10x and 30x) had NGA50 = 0 for every seed, so no CV is defined — see Figure 2.";
+        "$(undefined_label) had NGA50 = 0 for every seed, so no CV is defined — see Figure 2.";
         fontsize = 15, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
@@ -193,7 +222,7 @@ end
 
 function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractString)
     single_arm = df[df.decoder_arm .== "kmer", :]
-    hasproperty(single_arm, :status) && (single_arm = single_arm[single_arm.status .== "ok", :])
+    single_arm = ok_cells(single_arm)
     n_organisms = length(unique(single_arm.organism))
     n_seeds = length(unique(single_arm.seed))
     figure = CairoMakie.Figure(size = (1450, 620), fontsize = 14)
@@ -217,15 +246,24 @@ function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractSt
         for coverage in coverages
             cells = subset[subset.coverage .== coverage, :]
             push!(fractions, Statistics.mean(Float64.(cells.genome_fraction)))
+            # Skip organisms with no known reference length rather than throwing a
+            # KeyError halfway through rendering. A new organism in the table is a
+            # reason to extend REFERENCE_LENGTHS, not to lose the whole figure.
+            known = [row
+                     for row in eachrow(cells) if haskey(REFERENCE_LENGTHS, row.organism)]
+            unknown = setdiff(unique(String.(cells.organism)), collect(keys(REFERENCE_LENGTHS)))
+            isempty(unknown) ||
+                @warn "no reference length known; excluded from contiguity panel" unknown
             push!(ratios,
+                isempty(known) ? NaN :
                 Statistics.mean([Float64(row.NGA50) / REFERENCE_LENGTHS[row.organism]
-                                 for row in eachrow(cells)]))
+                                 for row in known]))
         end
         CairoMakie.scatterlines!(axis_a, coverages, fractions;
-            color = TECHNOLOGY_COLORS[technology], linewidth = 3, markersize = 12,
+            color = technology_color(technology), linewidth = 3, markersize = 12,
             label = technology)
         CairoMakie.scatterlines!(axis_b, coverages, ratios;
-            color = TECHNOLOGY_COLORS[technology], linewidth = 3, markersize = 12,
+            color = technology_color(technology), linewidth = 3, markersize = 12,
             label = technology)
         series[technology] = (coverages = coverages, fractions = fractions, ratios = ratios)
     end
@@ -250,8 +288,8 @@ function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractSt
                   pct(100 * Statistics.mean([last(series[t].ratios) for t in others]))
         pac = get(series, "pacbio", nothing)
         pac_note = pac === nothing ? "" :
-            " PacBio is already at $(pct(first(pac.fractions))) genome fraction and " *
-            "$(pct(100 * first(pac.ratios))) contiguity by $(first(pac.coverages))x."
+                   " PacBio is already at $(pct(first(pac.fractions))) genome fraction and " *
+                   "$(pct(100 * first(pac.ratios))) contiguity by $(first(pac.coverages))x."
         "ONT reads recover the reference but never assemble it: genome fraction " *
         "climbs $(pct(first(ont.fractions))) -> $(pct(last(ont.fractions))) from " *
         "$(first(ont.coverages))x to $(last(ont.coverages))x,\nyet NGA50 reaches only " *
@@ -308,7 +346,7 @@ function figure_cross_host(primary::DataFrames.DataFrame,
     present = [t for t in TECHNOLOGY_ORDER if totals[t] > 0]
     percentages = [100 * differing[t] / totals[t] for t in present]
     CairoMakie.barplot!(axis, 1:length(present), percentages;
-        color = [TECHNOLOGY_COLORS[t] for t in present], width = 0.55)
+        color = [technology_color(t) for t in present], width = 0.55)
     for (index, technology) in enumerate(present)
         CairoMakie.text!(axis, index, percentages[index] + 1.5;
             text = "$(differing[technology])/$(totals[technology]) cells\n" *
@@ -324,22 +362,35 @@ function figure_cross_host(primary::DataFrames.DataFrame,
     dirty = [t for t in present if differing[t] > 0]
     agrees(xs) = length(xs) == 1 ? "$(only(xs)) replicates exactly" :
                  "$(join(xs, " and ")) replicate exactly"
-    verdict = isempty(dirty) ? "all technologies replicate exactly" :
+    # `shared == 0` must never read as agreement. An empty comparison makes `dirty`
+    # empty, which would otherwise print the strongest possible claim — "all
+    # technologies replicate exactly" — from no evidence at all.
+    verdict = isempty(dirty) ?
+              "all $(length(clean)) compared technologies replicate exactly" :
               isempty(clean) ? "no technology replicates exactly" :
               "$(agrees(clean)); $(join(dirty, " and ")) $(length(dirty) == 1 ? "does" : "do") not"
     organisms = sort(unique(String.(primary.organism)))
     shared_organisms = sort(unique(String.(replicate.organism)))
     scope = length(shared_organisms) < length(organisms) ?
-        "\nScope: only $(join(shared_organisms, ", ")) were run on both hosts, so this " *
-        "says nothing about $(join(setdiff(organisms, shared_organisms), ", "))." : ""
-    CairoMakie.Label(figure[0, 1],
+            "\nScope: only $(join(shared_organisms, ", ")) were run on both hosts, so this " *
+            "says nothing about $(join(setdiff(organisms, shared_organisms), ", "))." : ""
+    # On the zero-shared path the mechanism and scope prose is not merely irrelevant, it
+    # reads as commentary on a result that does not exist. Emit a short self-contained
+    # caption instead, and never let an empty comparison print an agreement verdict.
+    caption = if shared == 0
+        "NO SHARED CELLS — the two tables have no cell in common,\nso this figure " *
+        "establishes NOTHING about reproducibility.\nCheck that both tables cover the " *
+        "same organisms,\ncoverages, seeds, decoder arms and k."
+    else
         "Same seed, two runs: $(verdict). ($(shared) shared cells.)" *
         "\nBadread's PacBio arm alone passes --identity and its bioconda env is " *
         "unpinned, which is CONSISTENT WITH\nsimulator nondeterminism — but the " *
         "per-host badread versions were not compared, so the mechanism is inferred," *
         "\nnot established. Note some PacBio cells disagree despite identical read " *
         "counts.$(scope)\nThe two runs may also differ in code revision; this is a " *
-        "host+revision comparison unless both are pinned.";
+        "host+revision comparison unless both are pinned."
+    end
+    CairoMakie.Label(figure[0, 1], caption;
         fontsize = 14, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
@@ -349,8 +400,7 @@ end
 
 # === Figure 4: iterative correction vs naive ===
 
-function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
-    df = CSV.read(path, DataFrames.DataFrame)
+function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractString)
     error_rates = sort(unique(Float64.(df.error_rate)))
     regimes = sort(unique(String.(df.regime)))
     arm_colors = Dict("naive" => :grey45, "iterative" => :seagreen4)
@@ -411,12 +461,20 @@ function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
             label = "$(arm) / $(regime_label(regime))")
     end
 
-    reference_length = Float64(first(df.genome_len))
-    CairoMakie.hlines!(axis_a, [reference_length];
-        color = :black, linestyle = :dot, linewidth = 2)
-    CairoMakie.text!(axis_a, length(error_rates) + 0.02, reference_length;
-        text = "reference $(Int(reference_length)) bp",
-        align = (:right, :bottom), fontsize = 12)
+    # Only draw the reference line when the sweep has ONE reference. Taking row 1's
+    # length and labelling it "reference N bp" across the whole panel silently asserts
+    # the wrong length for every other genome in a mixed sweep.
+    genome_lengths = unique(Float64.(df.genome_len))
+    reference_length = length(genome_lengths) == 1 ? only(genome_lengths) : nothing
+    length(genome_lengths) == 1 ||
+        @warn "sweep spans multiple reference lengths; omitting the reference line" genome_lengths
+    if reference_length !== nothing
+        CairoMakie.hlines!(axis_a, [reference_length];
+            color = :black, linestyle = :dot, linewidth = 2)
+        CairoMakie.text!(axis_a, length(error_rates) + 0.02, reference_length;
+            text = "reference $(Int(reference_length)) bp",
+            align = (:right, :bottom), fontsize = 12)
+    end
     CairoMakie.axislegend(axis_a; position = :lb, labelsize = 11)
     CairoMakie.axislegend(axis_b; position = :rb, labelsize = 11)
 
@@ -430,9 +488,16 @@ function figure_correction_sweep(path::AbstractString, outdir::AbstractString)
     # reads panel A shows 13,891 -> 31,195 against a caption saying 12,720 -> 31,181,
     # so a reader taking values off the plot got different numbers with no explanation.
     lowest = minimum(error_rates)
-    seeds_per_cell = maximum(values(cell_counts); init = 1)
-    replication = seeds_per_cell > 1 ? "$(seeds_per_cell) seeds/cell" :
-        "n = 1 SEED PER CELL — no variance estimate; treat the deltas as provisional"
+    # MINIMUM, not maximum. This caption exists to warn about thin replication, so
+    # taking the best-replicated cell would let one well-replicated cell hide the
+    # unreplicated ones it is meant to flag.
+    seeds_per_cell = minimum(values(cell_counts); init = 0)
+    seeds_max = maximum(values(cell_counts); init = 0)
+    replication = seeds_per_cell > 1 ?
+                  (seeds_per_cell == seeds_max ? "$(seeds_per_cell) seeds/cell" :
+                   "$(seeds_per_cell)-$(seeds_max) seeds/cell") :
+                  "n = 1 SEED PER CELL for at least one cell — no variance estimate there; " *
+                  "treat the deltas as provisional"
     deltas = String[]
     for regime in regimes
         pair = get(headline, regime, nothing)
@@ -482,20 +547,38 @@ function main()
     # any plotting. Previously a missing column surfaced as an ArgumentError deep in a
     # caption, after three figures had already been written — so the run half-succeeded
     # and the reader had to notice figure 4 was absent.
+    # Load each table ONCE and validate the loaded frame. The first version parsed the
+    # primary table twice (once to check, once to use) and never checked the replicate
+    # table at all — so a schema problem there still surfaced mid-render in figure 3,
+    # which is exactly what the preflight exists to prevent.
     isfile(track_a_path) || error("--track-a file not found: $(track_a_path)")
-    require_columns(load_track_a(track_a_path), track_a_path,
-        [:organism, :technology, :coverage, :seed, :decoder_arm, :NGA50,
-            :genome_fraction, :n_contigs])
+    track_a = load_track_a(track_a_path)
+    # Figure 3 compares on these metric columns, so they are required too.
+    cross_host_metrics = [:n_reads, :n_contigs, :NGA50, :genome_fraction,
+        :duplication_ratio, :largest_contig, :misassemblies]
+    require_columns(track_a, track_a_path,
+        vcat(
+            [:organism, :technology, :coverage, :seed, :decoder_arm, :genome_fraction,
+                :n_contigs],
+            cross_host_metrics) |> unique)
+    println("Track A cells: $(DataFrames.nrow(track_a)) from $(track_a_path)")
+
+    replicate = nothing
     if replicate_path !== nothing
         isfile(replicate_path) || error("--track-a-replicate not found: $(replicate_path)")
+        replicate = load_track_a(replicate_path)
+        require_columns(replicate, replicate_path,
+            vcat([:organism, :technology, :coverage, :seed, :decoder_arm],
+                cross_host_metrics) |> unique)
     end
+
+    rgv = nothing
     if rgv_path !== nothing
         isfile(rgv_path) || error("--rgv file not found: $(rgv_path)")
-        require_columns(CSV.read(rgv_path, DataFrames.DataFrame), rgv_path,
+        rgv = CSV.read(rgv_path, DataFrames.DataFrame)
+        require_columns(rgv, rgv_path,
             [:regime, :arm, :error_rate, :largest_contig, :runtime_s, :genome_len])
     end
-    track_a = load_track_a(track_a_path)
-    println("Track A cells: $(DataFrames.nrow(track_a)) from $(track_a_path)")
 
     cv_table = coefficient_of_variation_table(track_a)
     summary = figure_cv_vs_threshold(cv_table, outdir)
@@ -504,8 +587,7 @@ function main()
 
     figure_technology_envelope(track_a, outdir)
 
-    if replicate_path !== nothing
-        replicate = load_track_a(replicate_path)
+    if replicate !== nothing
         result = figure_cross_host(track_a, replicate, outdir)
         println("Cross-host: $(result.shared) shared cells; " *
                 "differing by technology = $(result.differing)")
@@ -513,8 +595,8 @@ function main()
         println("(no --track-a-replicate given; skipping cross-host figure)")
     end
 
-    if rgv_path !== nothing
-        figure_correction_sweep(rgv_path, outdir)
+    if rgv !== nothing
+        figure_correction_sweep(rgv, outdir)
     else
         println("(no --rgv given; skipping correction-sweep figure)")
     end

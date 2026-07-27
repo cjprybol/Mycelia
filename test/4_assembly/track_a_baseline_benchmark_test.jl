@@ -77,11 +77,26 @@ Test.@testset "track A baseline benchmark helpers" begin
         # specifically: NGA50 = 0.0 is the genuine value for every ONT cell at
         # 10x/30x, so a zero-filled corrupt checkpoint is byte-identical to a real
         # result and would enter the CV that gates the pre-registration.
+        # Assert the MESSAGE, not just the type. `@test_throws ErrorException` passes on
+        # any unrelated ErrorException — including one from a future refactor that
+        # happens to throw for a different reason — so it would keep passing while
+        # silently no longer testing missing-key handling.
         for key in ("NGA50", "genome_fraction", "status", "coverage")
             truncated = copy(complete)
             delete!(truncated, key)
-            Test.@test_throws ErrorException canonical(truncated)
+            thrown = nothing
+            try
+                canonical(truncated)
+            catch e
+                thrown = e
+            end
+            Test.@test thrown isa ErrorException
+            Test.@test occursin("missing required key $(key)", thrown.msg)
         end
+
+        # A key that IS provenance-only must be defaultable purely by being listed,
+        # which is the remediation the error message advertises.
+        Test.@test Set(OPTIONAL_KEYS) == Set(keys(OPTIONAL_KEY_DEFAULTS))
     end
 
     # --- Memory measurement labels itself ---------------------------------------

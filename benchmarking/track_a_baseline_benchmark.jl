@@ -11,7 +11,7 @@
 #   - decoder arm "kmer":    quality stripped (FASTQ -> FASTA records) -> plain k-mer graph,
 #     matching the existing FASTA-based benchmark and the future DP arm's graph type.
 #
-# Each cell: simulate reads -> assemble (k=31) -> QUAST vs reference -> parse NGA50 /
+# Each cell: simulate reads -> assemble (k = --k, default 31) -> QUAST vs reference -> parse NGA50 /
 # misassemblies / genome fraction / duplication ratio. Per-cell JSON checkpoint enables
 # crash-safe resume. A final step computes NGA50 CV per (organism x tech x coverage x arm)
 # and writes a pass/fail power-analysis summary.
@@ -22,6 +22,10 @@
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --organisms Lambda,T4 --arms kmer
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --coverages 30,100 --seeds 42 --technologies illumina,ont
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --output-dir /scratch/track_a
+#   julia --project=. benchmarking/track_a_baseline_benchmark.jl --k 19       # k-mer size; positive ODD integer, default 31
+#
+# --k changes the per-cell checkpoint namespace for any k != 31 (see cell_id_for), so a
+# k-sweep and the k=31 baseline can share one --output-dir without colliding.
 #
 # Shard flags (--organisms/--technologies/--coverages/--seeds/--arms) take comma-separated
 # values and compose, so an HPC array job can split the matrix and share one results tree.
@@ -185,7 +189,13 @@ end
 # in the pre-fix run — so a zero-filled corrupt checkpoint is byte-identical to a
 # real result and would be pooled straight into the CV that gates the
 # pre-registration. A truncated checkpoint must not be able to move a verdict.
-const OPTIONAL_KEYS = (:peak_rss_method, :rss_baseline_bytes)
+# Key => sentinel. Driving the defaulting from this table (rather than hardcoding the
+# two cases in canonical) is what makes the error message below TRUE: adding a key here
+# really does make it defaultable. Previously OPTIONAL_KEYS was declared but never read,
+# so a maintainer following the message's advice would still have hit the hard error.
+const OPTIONAL_KEY_DEFAULTS = Dict{Symbol, Any}(
+    :peak_rss_method => "unknown", :rss_baseline_bytes => -1)
+const OPTIONAL_KEYS = Tuple(sort(collect(keys(OPTIONAL_KEY_DEFAULTS))))
 
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).
 #
@@ -197,8 +207,7 @@ function canonical(d::AbstractDict)
     vals = map(ROW_KEYS) do key
         name = String(key)
         if !haskey(d, name)
-            key === :peak_rss_method && return "unknown"
-            key === :rss_baseline_bytes && return -1
+            haskey(OPTIONAL_KEY_DEFAULTS, key) && return OPTIONAL_KEY_DEFAULTS[key]
             error("checkpoint is missing required key $(name). This is a measurement or " *
                   "grouping column, so it cannot be defaulted — a zero here is " *
                   "indistinguishable from a real result and would silently enter the " *
@@ -377,7 +386,15 @@ Values under different methods are different quantities. Always filter on
 `peak_rss_method` before aggregating.
 """
 function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
-    baseline = current_rss_bytes()
+    # Guard the baseline read too. Everything else here is careful never to let
+    # telemetry fail science, but this one call sat outside any try — a /proc read
+    # error would have aborted the cell before f() was even invoked.
+    baseline = try
+        current_rss_bytes()
+    catch e
+        @warn "baseline RSS read failed; falling back to high-water semantics" exception = e
+        nothing
+    end
     can_sample = baseline !== nothing && Threads.nthreads() > 1
     if !can_sample
         rss0 = Sys.maxrss()
@@ -502,10 +519,25 @@ function write_aggregate(root, rows)
     cells_dir = joinpath(root, "cells")
     all_rows = NamedTuple[]
     if isdir(cells_dir)
+        skipped = String[]
         for entry in sort(readdir(cells_dir))
             ckpt = joinpath(cells_dir, entry, "cell_result.json")
-            isfile(ckpt) && push!(all_rows, canonical(JSON.parsefile(ckpt)))
+            isfile(ckpt) || continue
+            # Guard per checkpoint. canonical() now raises on a missing measurement
+            # (deliberately — a zero-filled corrupt cell is indistinguishable from a
+            # real ONT failure), and this loop touches every checkpoint in the tree, so
+            # ONE stale or truncated file would otherwise abort the aggregate and with
+            # it the whole run. Skip it loudly and keep the other cells.
+            try
+                push!(all_rows, canonical(JSON.parsefile(ckpt)))
+            catch e
+                push!(skipped, entry)
+                @warn "skipping unreadable checkpoint in aggregate" entry exception = e
+            end
         end
+        isempty(skipped) ||
+            @warn "aggregate omits $(length(skipped)) unreadable checkpoint(s); " *
+                  "delete them to force recompute" skipped
     end
     # Fall back to the in-memory rows only when the store is unreadable, so an aggregate
     # is still produced rather than silently emptied.
