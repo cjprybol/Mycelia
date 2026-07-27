@@ -76,10 +76,14 @@ Test.@testset "opt4 skip_frozen_reads disabled-path identity lock (td-jbjd)" beg
 
         out_omitted, = Mycelia.improve_read_set_likelihood(
             reads, graph, k; common...)
+        # opt4 pass 2 (td-jbjd, finding #1): `freeze_across_rungs` was removed from
+        # `improve_read_set_likelihood`'s kwarg list -- it was threaded through but
+        # never consumed by `_improve_read_set_likelihood_impl` (its only real
+        # effect is the outer k-loop reset inside `mycelia_iterative_assemble`,
+        # exercised by the integration testset below). Not passed here.
         out_explicit, = Mycelia.improve_read_set_likelihood(
             reads, graph, k; common...,
-            skip_frozen_reads = false, freeze_streak_threshold = 2,
-            freeze_across_rungs = false)
+            skip_frozen_reads = false, freeze_streak_threshold = 2)
 
         Test.@test _opt4_recs(out_omitted) == _opt4_recs(out_explicit)
     end
