@@ -1235,8 +1235,32 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             # whole-read, bounding a long read's decode to O(window) not
             # O(read_length) — the #375 long-read super-linear term.
             windowed_decode = true,
+            # Stage 2 soft-EM v2 (td-e70t) with the td-h6w9 support floor. E-step:
+            # each decoded read's COMPETING candidate paths (its own path plus a
+            # consensus alternative re-routed through the best-supported sibling
+            # branch) softmax-split one unit of responsibility by normalized-
+            # transition log-probability, and that responsibility is accumulated
+            # onto the edges each path traverses. M-step: the accumulated soft
+            # weights are registered onto the NEXT EM iteration's graph, so
+            # `compute_edge_weight` — and therefore the Viterbi transition score —
+            # sees the decayed weight and the next decode routes away from the
+            # error edge. The M-step also clamps any edge with at least
+            # `SOFT_EM_MIN_SUPPORT` backing reads to its raw coverage, so a real
+            # but SKEWED minority allele (a 10x branch in a 20x/10x bubble) cannot
+            # decay toward zero; only near-zero-support error edges are free to
+            # fall below the cleaning gate.
             soft_em = true,
-            cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
+            # Stage 0 cheap correction (td-bjnt): a LINEAR k-mer-spectrum pass
+            # (BFC/Lighter/Bloocoo-style) run BEFORE the expensive per-read graph
+            # Viterbi. A run of WEAK k-mers flanked by SOLID k-mers is the
+            # signature of a single-base substitution; the fix is applied only
+            # when EXACTLY ONE (position, base) candidate makes the whole run
+            # solid. Zero-candidate (real low-coverage allele) and multi-candidate
+            # (balanced heterozygous site) runs are left untouched for the graph
+            # decode, so Stage 0 never collapses real variation. This is the main
+            # decode-VOLUME lever: clearing the easy errors cheaply reserves
+            # Viterbi for genuine bubble/repeat ambiguity.
+            cheap_correct = true,
             beam_width = nothing,  # size-aware auto-beam (bounded on huge reads)
             # graph_mode=:doublestrand (td-nt69): forcing :canonical was THE cause of
             # the :scalable quality gap. On a controlled 1kb fixture, flipping ONLY
@@ -1272,8 +1296,14 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             skip_solid = false,
             hard_window = false,
             windowed_decode = false,
+            # Exact-ML tier: soft-EM is OFF, so edge weights stay raw observed
+            # counts and no accumulator is allocated or registered — the decode is
+            # a byte-identical passthrough of the pre-soft-EM behavior.
             soft_em = false,
-            cheap_correct = false,  # exact-ML tier: no cheap pre-correction
+            # No Stage 0 pre-correction: every read reaches the graph decode, so
+            # the tier's exact-ML claim covers the whole read set rather than only
+            # the residue the cheap pass left behind.
+            cheap_correct = false,
             beam_width = typemax(Int),  # exact ML decode
             # nothing ⇒ derive the corrector graph_mode from config.graph_mode below,
             # keeping :exhaustive a byte-identical passthrough of prior behavior.

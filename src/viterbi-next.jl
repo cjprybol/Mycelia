@@ -2071,6 +2071,22 @@ function _probe_indel_frontier(
             peak_frontier, completed_columns, :no_start_state)
     end
 
+    # Zero-probability parity with the scored kernel. `_viterbi_correct_observation_indel`
+    # never TRAVERSES a gap transition whose mass is zero: it drops the candidate on
+    # its `isfinite(cand)` guard because `T_MI = log(δ_I)`, `T_MD = log(δ_D)`,
+    # `T_II = log(γ_I)`, and `T_DD = log(γ_D)` are all `-Inf` at zero. The probe is
+    # score-free and cannot see those `-Inf`s, so it must reproduce the same
+    # reachability from the raw config or it would over-count frontier work and
+    # reject windows the decoder would have handled cheaply. The four flags below
+    # are exactly that restatement, and they are exhaustive because the constructor
+    # pins `error_rate ∈ (0, 0.5)`: `δ_I = error_rate·f_ins` and
+    # `δ_D = error_rate·f_del` can therefore only vanish through the fractions,
+    # which these flags already test. `*_open` additionally folds in the run caps
+    # (`max_insertion_run >= 1` / `deletion_max_run > 0`), matching the kernel's own
+    # `max_insertion_run >= 1` gate and `_relax_deletions!`'s `deletion_max_run <= 0`
+    # early return; `*_extend` caps the frontier at a single gap hop, matching the
+    # kernel's `-Inf` extend transitions. Any new gap move added to the kernel must
+    # add its zero-mass flag here in the same commit.
     insertion_open = config.insertion_fraction > 0.0 &&
                      config.max_insertion_run > 0
     insertion_extend = config.insertion_extend_probability > 0.0
