@@ -13,6 +13,15 @@
 # Run:
 #   julia --project=. test/4_assembly/track_a_baseline_benchmark_test.jl
 
+# Wrapped in a module. runtests.jl includes every test file into one shared `Main`
+# (include_all_tests), and the driver defines top-level consts — COVERAGES, SEEDS,
+# ORGANISMS — that collide with benchmarking/rhizomorph_stage2_toy_benchmark.jl, which
+# another test already includes there. A bare include therefore died with
+# "invalid redefinition of constant Main.COVERAGES" and took the whole suite with it.
+# A module gives the driver its own namespace; gap_calibration_fitters_test.jl can
+# include directly only because calibration_metrics.jl declares no such consts.
+module TrackABaselineBenchmarkTest
+
 import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "track_a_baseline_benchmark.jl"))
@@ -92,3 +101,5 @@ Test.@testset "track A baseline benchmark helpers" begin
         Test.@test_throws ErrorException timed_with_peak_rss(() -> error("boom"))
     end
 end
+
+end  # module TrackABaselineBenchmarkTest
