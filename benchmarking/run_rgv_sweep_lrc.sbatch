@@ -6,7 +6,14 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=04:00:00
+# 2 days. The 4h that was here is not merely tight, it is known-insufficient: the
+# 2026-07-25 submissions had to be overridden with --time=2-00:00:00 because 4h
+# was too short for a SINGLE seed. MYCELIA_RGV_SEED now defaults to three seeds,
+# so the sweep iterates the full (err x readlen x arm) matrix three times. A
+# timeout kills the job mid-sweep and the green-but-empty guard below never runs,
+# so the failure would present as a missing CSV rather than as a clear timeout.
+# lr_normal MaxWall is 3 days, so 2 days leaves headroom without hitting the cap.
+#SBATCH --time=2-00:00:00
 #SBATCH --output=rgv_sweep_lrc_%j.out
 #SBATCH --error=rgv_sweep_lrc_%j.err
 

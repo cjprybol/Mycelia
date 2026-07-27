@@ -533,6 +533,26 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test a.results[1].n_zero_control_excluded_from_relative == 6
         Test.@test occursin("INDETERMINATE", a.verdicts[1])
         Test.@test !occursin("<= 10%", a.verdicts[1])
+
+        # This is the analysis that carries NaN into the payload, so it is the one
+        # that must round-trip through JSON — the all-finite fixture elsewhere
+        # cannot pin `_json_num`. Non-finite values must serialize as `null`
+        # (which the figure script already reads as missing), not as a bare NaN
+        # token that no strict JSON parser accepts.
+        mktempdir() do dir
+            payload = paired_analysis_json(a; csv_paths = ["f.csv"])
+            Test.@test payload["metrics"][1]["median_relative_improvement"] === nothing
+            jp = joinpath(dir, "results.json")
+            open(jp, "w") do io
+                JSON.print(io, payload, 2)
+            end
+            text = read(jp, String)
+            Test.@test !occursin("NaN", text)
+            round = JSON.parsefile(jp)                      # must parse back
+            Test.@test round["metrics"][1]["median_relative_improvement"] === nothing
+            # And the figure can consume it without a NaN blowing up the axes.
+            Test.@test round["metrics"][1]["n_pairs"] == 6
+        end
     end
 
     Test.@testset "C5: the mixed-src override is recorded in the deliverable" begin

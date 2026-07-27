@@ -6,7 +6,14 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=04:00:00
+# MYCELIA_RGV_SEED now defaults to three seeds, so this sweep does 3x the work
+# the original 4h assumed — and 4h was already observed to be too short for one
+# seed on Lawrencium. 12h is the documented cap for the `regular` QOS on
+# Perlmutter CPU; VERIFY against current NERSC policy before submitting, and if
+# the three-seed sweep does not fit, shard it by seed
+# (MYCELIA_RGV_SEED=42 / 123 / 456 as three jobs) rather than raising this past
+# the cap — the analysis concatenates per-seed CSVs by design.
+#SBATCH --time=12:00:00
 #SBATCH --output=rgv_sweep_nersc_%j.out
 #SBATCH --error=rgv_sweep_nersc_%j.err
 
