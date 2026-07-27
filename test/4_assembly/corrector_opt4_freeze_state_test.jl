@@ -196,6 +196,114 @@ Test.@testset "opt4 skip_frozen_reads freeze-state + interactions (td-jbjd pass 
         Test.@test result[:metadata][:soft_em] != false
     end
 
+    Test.@testset "scope: direct observation of reset (within) vs persist (across) at k-advance" begin
+        rng = Random.MersenneTwister(9001)
+        ref = join(rand(rng, _OPT4FS_BASES, 1200))
+        reads = _opt4fs_reads(rng, ref; n_reads = 180, readlen = 80, n_err = 30)
+        k1 = 13
+        graph1 = Mycelia.Rhizomorph.build_qualmer_graph(reads, k1; mode = :canonical)
+        threshold = 2
+
+        common = (; graph_mode = :canonical, skip_solid = false,
+            cheap_correct = false, decode_enabled = true, batch_size = 50)
+
+        # Reproduce the SAME two-pass setup as the "freeze-state" testset above
+        # (identical rng seed / fixture / k) to reliably land reads at
+        # streak >= threshold BEFORE any k-advance.
+        streaks = zeros(Int, length(reads))
+        out1, = Mycelia.improve_read_set_likelihood(
+            reads, graph1, k1; common..., skip_frozen_reads = true,
+            freeze_streak_threshold = threshold, freeze_streaks = streaks)
+        out2, = Mycelia.improve_read_set_likelihood(
+            out1, graph1, k1; common..., skip_frozen_reads = true,
+            freeze_streak_threshold = threshold, freeze_streaks = streaks)
+        Test.@test count(>=(threshold), streaks) > 0   # setup sanity
+
+        # Simulate the k-advance: build the next-rung graph.
+        k2 = 17
+        graph2 = Mycelia.Rhizomorph.build_qualmer_graph(out2, k2; mode = :canonical)
+
+        # WITHIN-RUNG (default): `mycelia_iterative_assemble` resets
+        # `freeze_streaks` to `nothing` then lazily reallocates a fresh zero
+        # vector at every k-advance (iterative-assembly.jl ~:2309/:2341) —
+        # reproduce that reset explicitly here, rather than only inferring it
+        # from the aggregate `frozen_reads_skipped` inequality in the testset
+        # above (which cannot distinguish a working reset from a broken one,
+        # since `across >= within` also holds trivially when both are equal).
+        within_streaks = zeros(Int, length(out2))
+        diag_within = Mycelia.CorrectorDiagnostics()
+        Mycelia.improve_read_set_likelihood(
+            out2, graph2, k2; common..., skip_frozen_reads = true,
+            freeze_streak_threshold = threshold, freeze_streaks = within_streaks,
+            diagnostics = diag_within)
+        # Every streak starts this pass at 0 (< threshold), so NOTHING can be
+        # frozen-skipped on the very first pass of a fresh rung — the
+        # within-rung "everyone re-decodes fresh at a new rung" guarantee.
+        Test.@test diag_within.frozen_reads_skipped[] == 0
+
+        # ACROSS-RUNG (`freeze_across_rungs=true`): the streak vector is
+        # carried forward UNRESET across the k-advance instead — reproduce by
+        # reusing the already->=-threshold `streaks` vector unmodified against
+        # the new graph.
+        diag_across = Mycelia.CorrectorDiagnostics()
+        Mycelia.improve_read_set_likelihood(
+            out2, graph2, k2; common..., skip_frozen_reads = true,
+            freeze_streak_threshold = threshold, freeze_streaks = streaks,
+            diagnostics = diag_across)
+        # Streaks that already met the bar BEFORE this pass started are
+        # frozen-skipped immediately at the new k — no additional
+        # no-improvement passes required. This is the across-rung "streak
+        # survives the k-advance" behavior, observed directly rather than
+        # inferred.
+        Test.@test diag_across.frozen_reads_skipped[] > 0
+    end
+
+    Test.@testset "composition: skip_solid gate-skip never inflates the freeze streak" begin
+        rng = Random.MersenneTwister(2026)
+        ref = join(rand(rng, _OPT4FS_BASES, 900))
+        reads = _opt4fs_reads(rng, ref; n_reads = 150, readlen = 80, n_err = 20)
+        k = 13
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+
+        # Independently compute which reads `skip_solid` will gate-skip EVERY
+        # pass (every k-mer classifies solid/high-coverage) so we can assert
+        # their freeze streak never moves, without reaching into
+        # `_improve_read_set_likelihood_impl`'s internal closures.
+        solid_kmers = Mycelia._solid_kmer_set(graph)
+        solid_read_idx = findall(
+            r -> Mycelia._read_is_all_solid(
+                r, k, solid_kmers; graph_mode = :canonical),
+            reads)
+        Test.@test !isempty(solid_read_idx)   # setup sanity: gate has something to skip
+
+        threshold = 2
+        streaks = zeros(Int, length(reads))
+        diag = Mycelia.CorrectorDiagnostics()
+        out = reads
+        for _pass in 1:4
+            out, = Mycelia.improve_read_set_likelihood(
+                out, graph, k; graph_mode = :canonical, skip_solid = true,
+                cheap_correct = true, decode_enabled = true, batch_size = 50,
+                skip_frozen_reads = true, freeze_streak_threshold = threshold,
+                freeze_streaks = streaks, diagnostics = diag)
+        end
+
+        # finding #5: a read gate-skipped every pass was never EVALUATED for
+        # improvement, so it must never accrue freeze streak -- conflating
+        # "not looked at" with "converged" would let skip_solid silently
+        # inflate `frozen_reads_skipped`. A streak stuck at 0 (always below
+        # threshold) also mechanically proves such a read can never itself
+        # satisfy `_frozen_read_at` and be counted as frozen-skipped.
+        Test.@test all(==(0), streaks[solid_read_idx])
+
+        # Positive control: the two skip mechanisms compose (OR) without
+        # conflict -- reads OUTSIDE the solid set are genuinely decoded and,
+        # given 4 passes at threshold=2, some converge and are frozen-skipped
+        # for real, so the counter is not permanently pinned at 0 by the
+        # composition.
+        Test.@test diag.frozen_reads_skipped[] > 0
+    end
+
     Test.@testset "stop_on_no_change interaction: no premature/stalled k-advance" begin
         rng = Random.MersenneTwister(1717)
         ref = join(rand(rng, _OPT4FS_BASES, 900))
