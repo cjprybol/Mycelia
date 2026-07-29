@@ -184,7 +184,13 @@ struct ViterbiCorrectionConfig{F <: Function}
             band_width::Union{Nothing, Int} = nothing,
             insertion_emission_logp::Union{Nothing, Function} = nothing
     ) where {F <: Function}
-        if error_rate <= 0.0 || error_rate >= 0.5
+        # `isnan` FIRST: NaN is neither `<= 0.0` nor `>= 0.5`, so a bounds-only
+        # check admits it. A NaN `error_rate` makes `delta_I`/`delta_D` NaN, which
+        # the indel kernel silently drops on its `isfinite(cand)` guard while the
+        # score-free frontier probe (which reads only the fractions) keeps counting
+        # those moves — a probe/decoder divergence with no error surfaced. Same
+        # shape as the `beam_score_margin` check below.
+        if isnan(error_rate) || error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
         end
         if insertion_fraction < 0.0 || deletion_fraction < 0.0 ||
@@ -2071,22 +2077,41 @@ function _probe_indel_frontier(
             peak_frontier, completed_columns, :no_start_state)
     end
 
-    # Zero-probability parity with the scored kernel. `_viterbi_correct_observation_indel`
-    # never TRAVERSES a gap transition whose mass is zero: it drops the candidate on
-    # its `isfinite(cand)` guard because `T_MI = log(δ_I)`, `T_MD = log(δ_D)`,
+    # Zero-probability parity with the scored kernel, SCOPED to the CONFIG-LEVEL
+    # gap-transition masses. `_viterbi_correct_observation_indel` never TRAVERSES a
+    # gap transition whose configured mass is zero: it drops the candidate on its
+    # `isfinite(cand)` guard because `T_MI = log(δ_I)`, `T_MD = log(δ_D)`,
     # `T_II = log(γ_I)`, and `T_DD = log(γ_D)` are all `-Inf` at zero. The probe is
     # score-free and cannot see those `-Inf`s, so it must reproduce the same
     # reachability from the raw config or it would over-count frontier work and
     # reject windows the decoder would have handled cheaply. The four flags below
-    # are exactly that restatement, and they are exhaustive because the constructor
-    # pins `error_rate ∈ (0, 0.5)`: `δ_I = error_rate·f_ins` and
-    # `δ_D = error_rate·f_del` can therefore only vanish through the fractions,
-    # which these flags already test. `*_open` additionally folds in the run caps
-    # (`max_insertion_run >= 1` / `deletion_max_run > 0`), matching the kernel's own
-    # `max_insertion_run >= 1` gate and `_relax_deletions!`'s `deletion_max_run <= 0`
-    # early return; `*_extend` caps the frontier at a single gap hop, matching the
-    # kernel's `-Inf` extend transitions. Any new gap move added to the kernel must
-    # add its zero-mass flag here in the same commit.
+    # are exactly that restatement, and over THAT SCOPE — the config's own gap
+    # masses — they are complete: the constructor pins `error_rate ∈ (0, 0.5)` and
+    # rejects NaN, so `δ_I = error_rate·f_ins` and `δ_D = error_rate·f_del` can only
+    # vanish through the fractions these flags already test, and it pins
+    # `γ_I`/`γ_D ∈ [0, 1)`, so the return legs `T_IM = log1p(-γ_I)` /
+    # `T_DM = log1p(-γ_D)` cannot reach `-Inf` either. `*_open` additionally folds
+    # in the run caps (`max_insertion_run >= 1` / `deletion_max_run > 0`), matching
+    # the kernel's own `max_insertion_run >= 1` gate and `_relax_deletions!`'s
+    # `deletion_max_run <= 0` early return; `*_extend` caps the frontier at a single
+    # gap hop, matching the kernel's `-Inf` extend transitions.
+    #
+    # NOT covered — this is not a total parity claim. Per the successor comment
+    # above, the probe is deliberately WEIGHT- and EMISSION-blind, but
+    # `isfinite(cand)` is not: it also sees the per-edge weight `logE` (the M→D and
+    # D→D relaxations) and, on the insertion arm, `emission_ins` from the PUBLIC
+    # `config.insertion_emission_logp` callback. Either can be `-Inf` — a
+    # zero-weight edge, or a custom `insertion_emission_logp` returning `-Inf`,
+    # which disables the kernel's entire insertion block at its
+    # `max_insertion_run >= 1 && isfinite(emission_ins)` gate while `insertion_open`
+    # below stays `true`. In those cases the probe counts frontier work the kernel
+    # skips and can reject a window the decoder would have handled cheaply.
+    #
+    # Maintenance: (1) any new gap MOVE added to the kernel must add its zero-mass
+    # flag here in the same commit; (2) any new `isfinite(...)` gate on an EMISSION
+    # or WEIGHT factor (e.g. a future `isfinite(emission_del)` guarding the deletion
+    # arm) must either be mirrored here or be added to the NOT-covered list above —
+    # the flags below only track config-level masses and will not catch it.
     insertion_open = config.insertion_fraction > 0.0 &&
                      config.max_insertion_run > 0
     insertion_extend = config.insertion_extend_probability > 0.0

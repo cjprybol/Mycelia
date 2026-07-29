@@ -194,6 +194,15 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             Mycelia._iterative_viterbi_correction_config(
                 ; config_options..., substitution_error_rate = 0.0)
         end
+        # NaN satisfies NEITHER `<= 0.0` nor `>= 0.5`, so a bounds-only check would
+        # have admitted it. A NaN error_rate makes every gap mass NaN, which the
+        # indel kernel silently drops on `isfinite(cand)` while the score-free
+        # frontier probe keeps counting those moves — a probe/decoder divergence
+        # with no error raised. Pin the explicit rejection.
+        test_throws_message(ArgumentError, "error_rate must be in (0, 0.5)") do
+            Mycelia._iterative_viterbi_correction_config(
+                ; config_options..., substitution_error_rate = NaN)
+        end
 
         # Exercise the real non-windowed and windowed forwarding chains. The hard
         # set contains every canonical k-mer in the probe, guaranteeing that the
