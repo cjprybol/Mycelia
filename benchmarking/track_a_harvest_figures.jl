@@ -123,6 +123,13 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
                 cv = computable ? sd_value / mean_value : NaN,
                 computable = computable))
     end
+    # An empty `rows` yields a 0x0 DataFrame with no :decoder_arm, so the caller throws a
+    # bare ArgumentError from inside plotting instead of saying what is wrong. This is
+    # reachable — ok_cells drops every row on a harvest where nothing succeeded — so
+    # fail here, naming the cause.
+    isempty(rows) && error("no cells with status == \"ok\" to compute a CV over. " *
+        "Either the run failed everywhere, or the table's status column is not " *
+        "populated as expected.")
     return DataFrames.DataFrame(rows)
 end
 
@@ -169,9 +176,11 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
         ylabel = "NGA50 coefficient of variation (n = $(seed_label))",
         xticks = ([10, 30, 50, 100], ["10", "30", "50", "100"]))
 
+    plotted_any = false
     for (offset, technology) in zip((-4.0, 0.0, 4.0), TECHNOLOGY_ORDER)
         subset = computable[computable.technology .== technology, :]
         isempty(subset) && continue
+        plotted_any = true
         CairoMakie.scatter!(axis_a,
             Float64.(subset.coverage) .+ offset, Float64.(subset.cv);
             color = technology_color(technology), markersize = 13,
@@ -181,7 +190,10 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
         color = :black, linestyle = :dash, linewidth = 2.5)
     CairoMakie.text!(axis_a, 104, CV_THRESHOLD + 0.008;
         text = "assumed CV = $(CV_THRESHOLD)", align = (:right, :bottom), fontsize = 12)
-    CairoMakie.axislegend(axis_a; position = :rt, framevisible = true)
+    # axislegend errors outright when no plot in the axis carries a label, which happens
+    # whenever every technology subset is empty. A missing legend is a cosmetic loss; a
+    # thrown figure is not.
+    plotted_any && CairoMakie.axislegend(axis_a; position = :rt, framevisible = true)
 
     exceed = sum(computable.cv .> CV_THRESHOLD)
     total = DataFrames.nrow(computable)
@@ -369,11 +381,18 @@ function figure_cross_host(primary::DataFrames.DataFrame,
               "all $(length(clean)) compared technologies replicate exactly" :
               isempty(clean) ? "no technology replicates exactly" :
               "$(agrees(clean)); $(join(dirty, " and ")) $(length(dirty) == 1 ? "does" : "do") not"
+    # Gate on MEMBERSHIP, not count. Comparing lengths suppressed the caveat exactly
+    # where it matters most: two tables with equally many but DISJOINT organisms passed
+    # the length test while covering nothing in common. `replicate_organisms` is also
+    # the honest name — it is the replicate's list, not an intersection.
     organisms = sort(unique(String.(primary.organism)))
-    shared_organisms = sort(unique(String.(replicate.organism)))
-    scope = length(shared_organisms) < length(organisms) ?
-            "\nScope: only $(join(shared_organisms, ", ")) were run on both hosts, so this " *
-            "says nothing about $(join(setdiff(organisms, shared_organisms), ", "))." : ""
+    replicate_organisms = sort(unique(String.(replicate.organism)))
+    untested = setdiff(organisms, replicate_organisms)
+    covered = intersect(organisms, replicate_organisms)
+    scope = isempty(untested) ? "" :
+            "\nScope: only $(isempty(covered) ? "NOTHING" : join(covered, ", ")) " *
+            "$(length(covered) == 1 ? "appears" : "appear") in both tables, so this says " *
+            "nothing about $(join(untested, ", "))."
     # On the zero-shared path the mechanism and scope prose is not merely irrelevant, it
     # reads as commentary on a result that does not exist. Emit a short self-contained
     # caption instead, and never let an empty comparison print an agreement verdict.
@@ -491,8 +510,16 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
     # MINIMUM, not maximum. This caption exists to warn about thin replication, so
     # taking the best-replicated cell would let one well-replicated cell hide the
     # unreplicated ones it is meant to flag.
-    seeds_per_cell = minimum(values(cell_counts); init = 0)
-    seeds_max = maximum(values(cell_counts); init = 0)
+    # `init` is the value FOLDED INTO the reduction, not an empty-collection fallback.
+    # `minimum(v; init = 0)` is therefore 0 for any non-negative v, which pinned
+    # seeds_per_cell to 0 and made this caption print "n = 1 SEED PER CELL" on every
+    # sweep including well-replicated ones — inverting the fix it was part of, which
+    # moved from maximum to minimum precisely to stop overstating replication.
+    # `maximum(...; init = 0)` was safe by luck; the reducer changed and the idiom
+    # did not. Handle the empty case explicitly instead.
+    counts = collect(values(cell_counts))
+    seeds_per_cell = isempty(counts) ? 0 : minimum(counts)
+    seeds_max = isempty(counts) ? 0 : maximum(counts)
     replication = seeds_per_cell > 1 ?
                   (seeds_per_cell == seeds_max ? "$(seeds_per_cell) seeds/cell" :
                    "$(seeds_per_cell)-$(seeds_max) seeds/cell") :
