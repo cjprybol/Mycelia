@@ -249,10 +249,25 @@ function run_dnadiff_check()
             return something(tryparse(Float64, replace(s, "%" => "")), NaN)
         end
         avg_identity = _num(_find(["avgidentity", "avg_identity", "averageidentity"]))
-        aligned_pct_ref = _num(_find(["alignedbasesref", "aligned_bases_ref", "alignedref"]))
+        # parse_dnadiff_report's summary drops TotalSNPs/TotalIndels/AlignedBases
+        # (it matches the bare tokens SNPs/Indels, but dnadiff emits TotalSNPs/
+        # TotalIndels). Parse those fields DIRECTLY from the .report file, which
+        # is committed alongside this CSV as reproducible evidence. Report line
+        # format: `FieldName   <ref-col>   <query-col>` (ref col first).
+        function _report_field(report_path::String, field::String)
+            for line in eachline(report_path)
+                parts = split(strip(line))
+                if !isempty(parts) && parts[1] == field
+                    return length(parts) >= 2 ? parts[2] : nothing
+                end
+            end
+            return nothing
+        end
+        # AlignedBases ref col is like "48469(99.93%)" -> _num extracts 99.93.
+        aligned_pct_ref = _num(_report_field(dnadiff_paths.report, "AlignedBases"))
         aligned_pct_query = _num(_find(["alignedbasesquery", "aligned_bases_query", "alignedquery"]))
-        snps = _num(_find(["totalsnps", "snps"]))
-        indels = _num(_find(["totalindels", "indels"]))
+        snps = _num(_report_field(dnadiff_paths.report, "TotalSNPs"))
+        indels = _num(_report_field(dnadiff_paths.report, "TotalIndels"))
 
         println(
             "  dnadiff: avg_identity=$avg_identity aligned_pct_ref=$aligned_pct_ref " *

@@ -1,8 +1,19 @@
 # opt4: Opt-in approximate frozen-read skip (with dnadiff accuracy sign-off)
 
-Date: 2026-07-26 Status: Draft (design) Scope: skip re-decoding converged
-("frozen") reads across corrector iterations — an OPT-IN, APPROXIMATE tier,
-default off, gated by an accuracy sign-off. **NOT byte-identical.**
+Date: 2026-07-26 Status: Implemented (Rule-of-5 passes 1–5 landed; see
+`benchmarking/results/opt4_frozen_read_skip_signoff.md` for measured results)
+Scope: skip re-decoding converged ("frozen") reads across corrector iterations —
+an OPT-IN, APPROXIMATE tier, default off, gated by an accuracy sign-off.
+**NOT byte-identical.**
+
+> **Implementation update (pass 4/5):** the toy-genome positive control below
+> (methodology §3) was found **mechanically inert** at pass 4 — Stage 0 cheap
+> correction runs before the freeze gate and dominates toy-scale correction, and
+> the Viterbi decode (the only thing freezing gates) makes no edits at toy scale.
+> The working positive control therefore moved to **representative scale**
+> (Lambda phage 21x) in pass 5, where `freeze_max_aggressive` degrades recall
+> −1.0% to −4.8%. See the sign-off doc; the §3 toy methodology below is retained
+> for provenance but is superseded by the representative-scale control.
 
 ## Context
 
@@ -138,7 +149,10 @@ off — this IS byte-identical-when-disabled, and should be locked by a test).
 The frozen-skip must compose with, not replace, the existing per-pass
 `skip_solid`/`hard_window` gating; soft-EM (`soft_weights`/`soft_weights_sink`)
 accumulation; and `CorrectorDiagnostics`. A frozen read that is skipped
-contributes its frozen soft-weight (unchanged), and a new diagnostics counter
+contributes **nothing** to that pass's soft-EM E-step — the skipped read never
+reaches the `soft_weights` accumulator (a fresh per-pass accumulator), so it
+contributes no weight rather than a stale/replayed one, matching pre-existing
+`skip_solid`/`hard_window` skip behavior. A new diagnostics counter
 `frozen_reads_skipped` records the volume of skipped decodes (mirrors opt1's
 `parallel_decode_batches` counter, incl. the `fieldcount(CorrectorDiagnostics)`
 completeness guard + its `corrector_errors` export site — a struct field has
@@ -202,6 +216,16 @@ the results doc, not hardcoded.
   zero improvements and the existing zero-improvement early-stop fires, which is
   correct behavior (nothing left to do), but the test suite should confirm the
   frozen-skip doesn't cause premature k-advance that the exact path wouldn't.
+- **Interaction with `sufficient_improvements`** (a *second*, distinct early-stop
+  from `stop_on_no_change`) — `continue_current_k` is also gated on
+  `sufficient_improvements(improvements_made, ...)`, an aggregate improvement-rate
+  plateau check. Because frozen reads are structurally excluded from
+  `improvements_made`, a rung with many frozen reads shows a lower improvement
+  rate and can trip this plateau check **sooner** than the exact path. This is
+  directionally safe (frozen reads can only *lower* the rate → early-stop fires
+  sooner, never later, so the corrector never runs *more* than exact) but it is a
+  distinct vector from the zero-improvement case and is named here for
+  completeness.
 
 ## Out of scope
 

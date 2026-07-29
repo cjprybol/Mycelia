@@ -182,8 +182,9 @@ uniform accuracy loss. This is a real tradeoff the maintainer should weigh, not
 simply "worse."
 
 `freeze_across` (the non-default but non-maximal `threshold=2, across=true`
-scope) sits between the two: a small, real recall cost (Tier A −0.31%
-relative, Tier B −0.02% relative) shrinking as scale/coverage grows, for a
+scope) sits between the two: a small, real recall cost that was smaller at
+higher coverage in this run (Tier A −0.31% relative at 8x, Tier B −0.02%
+relative at 21x — two coverage points on one genome, not a fitted trend), for a
 ~22–34% single-run speedup and a genuine reduction in decode volume
 (`decode_fraction_mean` drops 15–17% relative to exact in both tiers,
 independent of wall-clock noise).
@@ -205,7 +206,14 @@ masked by re-correction.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | exact | 2,983 | 184,523 | 37,565 | 100.00% | 48,469 (99.93%) | 0 | 0 |
 | freeze_across | 2,985 | 184,567 | 37,565 | 100.00% | 48,469 (99.93%) | 0 | 0 |
-| _(raw, uncorrected — baseline)_ | 30,664 | 1,331,734 | 2,071 | 99.96% | — | — | — |
+| _(raw, uncorrected — baseline)_ | 30,664 | 1,331,734 | 2,071 | 99.96% | 99.9% | 4 | 0 |
+
+Data: `benchmarking/results/opt4_frozen_read_skip_dnadiff_20260729_142103.csv`;
+the raw MUMmer `.report` files (`opt4_dnadiff_{exact,freeze_across,raw}.report`)
+are committed alongside as reproducible evidence. (The `AlignedBases`/`TotalSNPs`/
+`TotalIndels` fields are parsed directly from the `.report` — `parse_dnadiff_report`'s
+summary drops them because it matches the bare tokens `SNPs`/`Indels` rather than
+dnadiff's `TotalSNPs`/`TotalIndels`; noted as a separate parser-fix follow-up.)
 
 **Verdict — the assembly-level check confirms the per-base −0.02% finding.**
 `exact` and `freeze_across` are **indistinguishable at the assembly level**:
@@ -213,10 +221,12 @@ identical 100.00% average identity, identical 99.93% reference coverage
 (48,469/48,502 bp), and **zero SNPs and zero indels** in both. The only
 difference is 44 query bases (0.02%) of redundant overlapping-contig sequence,
 which carries no accuracy cost (identity, SNP, and indel counts are unchanged).
-The raw-reads baseline (30,664 fragmented contigs, largest 2,071 bp) confirms
-correction is doing substantial work and the assembler is functioning — so the
-identical exact/freeze contig quality is a real result, not an artifact of a
-no-op assembler. The `freeze_across` recall cost measured at the read level does
+The raw-reads baseline (30,664 fragmented contigs, largest 2,071 bp, **4 SNPs**
+vs the reference) confirms correction is doing substantial work and the assembler
+is functioning — both `exact` and `freeze_across` drive those 4 SNPs to **0**, so
+freezing preserves every correction the exact path makes here; the identical
+exact/freeze contig quality is a real result, not an artifact of a no-op
+assembler. The `freeze_across` recall cost measured at the read level does
 **not** propagate to any assembly-level accuracy loss on this fixture.
 
 Caveat: the `corrector=:none` k=21 assembly is intentionally fragmented (no
@@ -282,8 +292,9 @@ At this scale (Lambda phage, 8x–21x coverage, production `:scalable` knobs):
   remains harmless).
 - The **aggressive scope** (`freeze_across_rungs=true`, still `threshold=2`)
   gives a real, nonzero decode-volume reduction (~15–17% fewer per-read
-  decodes) for a recall cost that is small and **shrinks with scale**
-  (−0.31% relative at 8x coverage, −0.02% relative at 21x coverage).
+  decodes) for a recall cost that is small and was **smaller at higher coverage
+  in this run** (−0.31% relative at 8x, −0.02% relative at 21x — two coverage
+  points, one genome; not a fitted trend).
 - The **positive control** (`threshold=1, across=true`) confirms the metric
   detects real degradation at this scale (recall −1.0% to −4.8% relative,
   precision improves), giving confidence the "no accuracy loss" verdicts above
