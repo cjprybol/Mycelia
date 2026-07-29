@@ -707,6 +707,92 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         end
     end
 
+    Test.@testset "C: a non-boolean `ok` column is not a check that found failures" begin
+        # `keep = coalesce.(okcol, false) .== true` is vacuously FALSE for a `String`
+        # element, and the counter split then attributes every such row to
+        # `n_dropped_not_ok` (only `ismissing` rows are subtracted out). So the
+        # report asserted the harness had OBSERVED N failed runs whose cells
+        # literally read "TRUE". Those runs succeeded: they are dropped, `n` shrinks,
+        # the p-value moves, and the "(status unknown, not an observed failure)"
+        # phrasing rules out the correct explanation.
+        #
+        # The trigger is ordinary. `CSV.read` infers a string type for an `ok` column
+        # containing `true,false,NA` — one sentinel poisons the whole column — and
+        # merging that shard with a Bool-typed shard under `cols = :union` produces
+        # exactly the mixed column below.
+        cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                 for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]]
+        base = _pwt_frame(cells; provenance = "observed")
+        n = DataFrames.nrow(base)
+
+        # A merged two-shard table: the string shard's rows all read as successes.
+        merged = DataFrames.DataFrame(base)
+        merged[!, :ok] = Union{Bool, String}[i <= 6 ? "TRUE" : true for i in 1:n]
+        a_mix = run_paired_analysis(merged; metrics = (:quast_nga50,))
+        Test.@test a_mix.ok_column_present
+        Test.@test !a_mix.ok_column_runnable
+        Test.@test !a_mix.ok_filter_applied
+        # The successful rows are NOT dropped, and nothing is reported as an
+        # observed failure.
+        Test.@test a_mix.n_rows_analyzed == n
+        Test.@test a_mix.n_dropped_not_ok == 0
+        Test.@test a_mix.n_dropped_ok_missing == 0
+
+        # A wholly string-typed column is the same epistemic state. Under the old
+        # filter every row dropped and the analysis died with "no rows left after
+        # filtering", which at least failed loudly — the mixed case above is the one
+        # that silently moved the p-value.
+        stringy = DataFrames.DataFrame(base)
+        stringy[!, :ok] = fill("TRUE", n)
+        a_str = run_paired_analysis(stringy; metrics = (:quast_nga50,))
+        Test.@test !a_str.ok_column_runnable
+        Test.@test a_str.n_rows_analyzed == n
+
+        mktempdir() do dir
+            for (name, a) in (("mix", a_mix), ("str", a_str))
+                text = read(
+                    write_paired_report(joinpath(dir, "$name.md"), a;
+                        csv_paths = ["f.csv"]), String)
+                Test.@test occursin("NOT a boolean", text)
+                Test.@test occursin("could NOT run", text)
+                # It must never render as a count of observed failures.
+                Test.@test !occursin("dropped for ok=false", text)
+                Test.@test !occursin("`ok` column ABSENT", text)
+                p = paired_analysis_json(a; csv_paths = ["f.csv"])
+                Test.@test p["ok_column_present"] == true
+                Test.@test p["ok_column_runnable"] == false
+                Test.@test p["ok_filter_applied"] == false
+                Test.@test occursin("String", p["ok_column_eltype"])
+            end
+        end
+
+        # Positive control: an INTEGER 0/1 column really can express success, so it
+        # must stay runnable and keep filtering. Widening the runnable predicate
+        # must not quietly stop checking a schema that works today.
+        ints = DataFrames.DataFrame(base)
+        okints = Union{Missing, Int}[1 for _ in 1:n]
+        okints[3] = 0
+        okints[4] = missing
+        ints[!, :ok] = okints
+        a_int = run_paired_analysis(ints; metrics = (:quast_nga50,))
+        Test.@test a_int.ok_column_runnable
+        Test.@test a_int.ok_filter_applied
+        Test.@test a_int.n_dropped_not_ok == 1
+        Test.@test a_int.n_dropped_ok_missing == 1
+        Test.@test a_int.n_rows_analyzed == n - 2
+        # Bool remains runnable, and an ABSENT column is still its own state.
+        a_bool = run_paired_analysis(base; metrics = (:quast_nga50,))
+        Test.@test a_bool.ok_column_runnable
+        Test.@test a_bool.ok_column_eltype == "Bool"
+        a_absent = run_paired_analysis(
+            DataFrames.select(base, DataFrames.Not(:ok)); metrics = (:quast_nga50,))
+        Test.@test !a_absent.ok_column_present
+        Test.@test !a_absent.ok_column_runnable
+        Test.@test paired_analysis_json(a_absent;
+            csv_paths = ["f.csv"])["ok_column_eltype"] === nothing
+    end
+
     Test.@testset "B: an OPERATOR-ASSERTED definition cannot earn the guard assurance" begin
         # `rgv_seed_backfill.jl --metric-source quast` writes a definition on
         # operator say-so, with nothing to verify it against. The guard can then

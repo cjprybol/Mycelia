@@ -663,7 +663,24 @@ function run_paired_analysis(df;
     # shown to be consistent, it is a table that cannot be checked — and `ok` is
     # the same kind of claim.
     ok_column_present = :ok in Symbol.(DataFrames.names(work))
-    ok_filter_applied = !keep_not_ok && ok_column_present
+    # A PRESENT `ok` column whose element type cannot express success is not a
+    # check that ran. `coalesce.(okcol, false) .== true` is vacuously FALSE for a
+    # `String` element, so every row was dropped and the counter split then
+    # attributed the drops to `ok=false` — the report asserted the harness had
+    # OBSERVED N failed runs whose cells literally read `"TRUE"`. The trigger is
+    # ordinary: `CSV.read` infers `String7` for an `ok` column containing
+    # `true,false,NA`, one sentinel poisons the column, and merging that shard with
+    # a Bool-typed shard under `cols = :union` propagates it. `n` then shrinks and
+    # the p-value moves, with the added "(status unknown, not an observed failure)"
+    # phrasing actively ruling out the correct explanation.
+    #
+    # `Bool <: Integer`, so the `Bool` arm below is redundant to the compiler and
+    # kept only to name the intended case; a 0/1 `Integer` column filters correctly
+    # (`1 == true`) and stays runnable.
+    ok_column_eltype = ok_column_present ? string(eltype(work.ok)) : nothing
+    ok_column_runnable = ok_column_present &&
+                         eltype(work.ok) <: Union{Missing, Bool, Integer}
+    ok_filter_applied = !keep_not_ok && ok_column_runnable
     n_dropped_not_ok = 0
     n_dropped_ok_missing = 0
     if ok_filter_applied
@@ -734,7 +751,10 @@ function run_paired_analysis(df;
         definition_provenance_undeterminable = definition_undeterminable,
         treatment = String(treatment), control = String(control),
         n_input_rows = n_input, n_rows_analyzed = DataFrames.nrow(work),
-        ok_column_present = ok_column_present, ok_filter_applied = ok_filter_applied,
+        ok_column_present = ok_column_present,
+        ok_column_runnable = ok_column_runnable,
+        ok_column_eltype = ok_column_eltype,
+        ok_filter_applied = ok_filter_applied,
         keep_not_ok = keep_not_ok,
         n_dropped_not_ok = n_dropped_not_ok,
         n_dropped_ok_missing = n_dropped_ok_missing,
@@ -793,6 +813,14 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
         ok_clause = if !analysis.ok_column_present
             "**`ok` column ABSENT — no row was verified; the ok=false check could " *
             "NOT run**"
+        elseif !analysis.ok_column_runnable
+            # Present but uninterpretable. Stated as its own outcome so it can never
+            # be read as a count of observed failures, and so the reader learns the
+            # actual defect (a non-boolean column, usually a sentinel like `NA`
+            # forcing `CSV.read` to infer a string type for the whole shard).
+            "**`ok` column is `$(analysis.ok_column_eltype)`, NOT a boolean — it " *
+            "cannot express success, so the ok=false check could NOT run; NO row " *
+            "was dropped by it (fix the column type or re-export the sweep)**"
         elseif !analysis.ok_filter_applied
             "`ok` filter DISABLED via --keep-not-ok — failed rows were KEPT"
         else
@@ -1009,6 +1037,12 @@ function paired_analysis_json(analysis; csv_paths)
         # Whether the ok=false check RAN, not only what it dropped. Without the
         # flag, "0 dropped" is indistinguishable from "could not be checked".
         "ok_column_present" => analysis.ok_column_present,
+        # Present is not the same as usable: a `String` `ok` column cannot express
+        # success, so the filter could not run over it. Without this field a
+        # consumer reading `ok_column_present: true, n_dropped_not_ok: 0` would
+        # conclude the check ran and found nothing.
+        "ok_column_runnable" => analysis.ok_column_runnable,
+        "ok_column_eltype" => analysis.ok_column_eltype,
         "ok_filter_applied" => analysis.ok_filter_applied,
         "n_dropped_not_ok" => analysis.n_dropped_not_ok,
         "n_dropped_ok_missing" => analysis.n_dropped_ok_missing,
