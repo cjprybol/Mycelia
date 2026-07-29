@@ -157,6 +157,17 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
     # configurations are undefined. Both were hard-coded ("n = 3 seeds", "ONT at 10x and
     # 30x") in a file whose whole convention is to compute its captions, so a different
     # matrix would have mislabelled the axis and named the wrong cells.
+    # The CV-table guard fires only when EVERY row is dropped, but this figure then
+    # narrows to the kmer arm, and that subset can be empty while the table is not — a
+    # qualmer-only harvest, say. The reductions below then threw
+    # "reducing over an empty collection ... consider supplying `init`", from inside
+    # figure construction, which is the uninformative-abort class the guard exists to
+    # remove. Note the advice in that message is a trap here: supplying `init` to
+    # `minimum` is exactly what produced the caption bug fixed in the previous commit.
+    # An explicit emptiness check is the correct instrument.
+    isempty(single_arm) && error("no kmer-arm rows in the CV table, so figure 1 has " *
+        "nothing to plot. Present arms: " *
+        "$(join(sort(unique(String.(cv_table.decoder_arm))), ", ")).")
     seed_label = let n = sort(unique(single_arm.n_seeds))
         length(n) == 1 ? "$(only(n)) seeds" : "$(minimum(n))-$(maximum(n)) seeds"
     end
@@ -249,6 +260,7 @@ function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractSt
         xlabel = "sequencing coverage (x)", ylabel = "NGA50 / reference length",
         xticks = ([10, 30, 50, 100], ["10", "30", "50", "100"]))
 
+    plotted_any = false
     for technology in TECHNOLOGY_ORDER
         subset = single_arm[single_arm.technology .== technology, :]
         isempty(subset) && continue
@@ -278,11 +290,18 @@ function figure_technology_envelope(df::DataFrames.DataFrame, outdir::AbstractSt
             color = technology_color(technology), linewidth = 3, markersize = 12,
             label = technology)
         series[technology] = (coverages = coverages, fractions = fractions, ratios = ratios)
+        plotted_any = true
     end
     CairoMakie.ylims!(axis_a, -3, 105)
     CairoMakie.ylims!(axis_b, -0.03, 1.05)
-    CairoMakie.axislegend(axis_a; position = :rb)
-    CairoMakie.axislegend(axis_b; position = :lt)
+    # Same guard as figure 1. Guarding only figure 1 was worse than guarding neither:
+    # figure 1 then survives a technology outside TECHNOLOGY_ORDER while figure 2 dies
+    # on it, so the run half-succeeds — exactly the outcome the preflight exists to
+    # prevent. Reproduced by renaming every technology to "nanopore".
+    if plotted_any
+        CairoMakie.axislegend(axis_a; position = :rb)
+        CairoMakie.axislegend(axis_b; position = :lt)
+    end
 
     # Every number below is computed from `series`, not written as a literal. The
     # previous caption hard-coded all eleven of them, so pointing the script at a new
@@ -389,8 +408,11 @@ function figure_cross_host(primary::DataFrames.DataFrame,
     replicate_organisms = sort(unique(String.(replicate.organism)))
     untested = setdiff(organisms, replicate_organisms)
     covered = intersect(organisms, replicate_organisms)
+    # `covered` cannot be empty here: no shared organism forces shared == 0, which routes
+    # the caption to the NO SHARED CELLS branch below that never interpolates `scope`.
+    # So this branch only ever runs with a non-empty `covered`.
     scope = isempty(untested) ? "" :
-            "\nScope: only $(isempty(covered) ? "NOTHING" : join(covered, ", ")) " *
+            "\nScope: only $(join(covered, ", ")) " *
             "$(length(covered) == 1 ? "appears" : "appear") in both tables, so this says " *
             "nothing about $(join(untested, ", "))."
     # On the zero-shared path the mechanism and scope prose is not merely irrelevant, it
@@ -448,7 +470,10 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
             regime
         end
 
-    headline = Dict{String, Tuple{Float64, Float64}}()
+    # The element type must admit `nothing`: a regime missing one arm stores a sentinel
+    # rather than a fabricated 0.0, and the concrete Tuple{Float64,Float64} rejected it
+    # with a convert MethodError on the canonical render.
+    headline = Dict{String, Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}}}()
     cell_counts = Dict{Tuple{String, String, Float64}, Int}()
     marker_for(regime) = regime == regimes[1] ? :circle : :utriangle
     for regime in regimes, arm in ("naive", "iterative")
@@ -465,7 +490,11 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
             push!(runtimes, Statistics.mean(Float64.(cells.runtime_s)))
             cell_counts[(regime, arm, rate)] = DataFrames.nrow(cells)
             if rate == minimum(error_rates)
-                prev = get(headline, regime, (0.0, 0.0))
+                # `nothing`, not (0.0, 0.0): a 0.0 default is indistinguishable from a
+                # measurement, and a missing naive arm rendered as "naive produced a
+                # 0 bp contig" — the most favourable possible reading of the iterative
+                # arm, printed in bold over the figure. Same class as the `init` bug.
+                prev = get(headline, regime, (nothing, nothing))
                 headline[regime] = arm == "naive" ? (mean_largest, prev[2]) :
                                    (prev[1], mean_largest)
             end
@@ -485,8 +514,11 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
     # the wrong length for every other genome in a mixed sweep.
     genome_lengths = unique(Float64.(df.genome_len))
     reference_length = length(genome_lengths) == 1 ? only(genome_lengths) : nothing
-    length(genome_lengths) == 1 ||
+    if isempty(genome_lengths)
+        @warn "sweep table has no rows; omitting the reference line"
+    elseif length(genome_lengths) > 1
         @warn "sweep spans multiple reference lengths; omitting the reference line" genome_lengths
+    end
     if reference_length !== nothing
         CairoMakie.hlines!(axis_a, [reference_length];
             color = :black, linestyle = :dot, linewidth = 2)
@@ -494,8 +526,11 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
             text = "reference $(Int(reference_length)) bp",
             align = (:right, :bottom), fontsize = 12)
     end
-    CairoMakie.axislegend(axis_a; position = :lb, labelsize = 11)
-    CairoMakie.axislegend(axis_b; position = :rb, labelsize = 11)
+    # Same exposure as figures 1 and 2: an empty sweep table means no labelled series.
+    if !isempty(regimes) && !isempty(error_rates)
+        CairoMakie.axislegend(axis_a; position = :lb, labelsize = 11)
+        CairoMakie.axislegend(axis_b; position = :rb, labelsize = 11)
+    end
 
     # The only sweep CSV committed to the repo predates the quast_* columns (they
     # landed ~8 h after it was written), so an unguarded `df.quast_nga50` threw
@@ -520,7 +555,8 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
     counts = collect(values(cell_counts))
     seeds_per_cell = isempty(counts) ? 0 : minimum(counts)
     seeds_max = isempty(counts) ? 0 : maximum(counts)
-    replication = seeds_per_cell > 1 ?
+    replication = isempty(counts) ? "NO CELLS matched — nothing was plotted" :
+                  seeds_per_cell > 1 ?
                   (seeds_per_cell == seeds_max ? "$(seeds_per_cell) seeds/cell" :
                    "$(seeds_per_cell)-$(seeds_max) seeds/cell") :
                   "n = 1 SEED PER CELL for at least one cell — no variance estimate there; " *
@@ -528,7 +564,8 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
     deltas = String[]
     for regime in regimes
         pair = get(headline, regime, nothing)
-        pair === nothing && continue
+        # Skip a regime missing either arm rather than printing a fabricated 0.
+        (pair === nothing || pair[1] === nothing || pair[2] === nothing) && continue
         push!(deltas, "$(regime_label(regime)) $(Int(round(pair[1]))) -> $(Int(round(pair[2])))")
     end
     CairoMakie.Label(figure[0, 1:2],
