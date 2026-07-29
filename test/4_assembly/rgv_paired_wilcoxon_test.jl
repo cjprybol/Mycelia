@@ -601,6 +601,91 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         end
     end
 
+    Test.@testset "C: an absent `ok` column is not 'every row verified ok=true'" begin
+        # `report.md` emitted the byte-identical line
+        #   `- Rows: 12 read, 12 analyzed (0 dropped for ok=false, ...)`
+        # both when the column was present and all-true, and when it was ABSENT
+        # entirely. "0 dropped for ok=false" reads as "the check ran and every row
+        # passed"; it was printed verbatim when the check could not run at all, and
+        # `results.json` carried neither the count nor a presence flag, so no
+        # consumer could recover the distinction from either artifact.
+        # `metric_source_guard.jl` applies the opposite doctrine to the definition
+        # columns: unverifiable is not the same as verified.
+        cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                 for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]]
+        with_ok = _pwt_frame(cells)                       # ok=true on every row
+        no_ok = DataFrames.select(with_ok, DataFrames.Not(:ok))
+
+        a_ok = run_paired_analysis(with_ok; metrics = (:quast_nga50,))
+        a_no = run_paired_analysis(no_ok; metrics = (:quast_nga50,))
+        # Identical numbers — the difference is what is KNOWN about them.
+        Test.@test a_ok.n_rows_analyzed == a_no.n_rows_analyzed == 12
+        Test.@test a_ok.ok_column_present && a_ok.ok_filter_applied
+        Test.@test !a_no.ok_column_present && !a_no.ok_filter_applied
+
+        mktempdir() do dir
+            t_ok = read(
+                write_paired_report(joinpath(dir, "ok.md"), a_ok;
+                    csv_paths = ["f.csv"]), String)
+            t_no = read(
+                write_paired_report(joinpath(dir, "no.md"), a_no;
+                    csv_paths = ["f.csv"]), String)
+            Test.@test occursin("0 dropped for ok=false", t_ok)
+            Test.@test !occursin("ABSENT", t_ok)
+            # The unrunnable case must SAY it was unrunnable, and must not claim a
+            # count of failures it never looked for.
+            Test.@test occursin("`ok` column ABSENT", t_no)
+            Test.@test occursin("could NOT run", t_no)
+            Test.@test !occursin("dropped for ok=false", t_no)
+
+            # And the distinction must survive into the machine-readable artifact.
+            p_ok = paired_analysis_json(a_ok; csv_paths = ["f.csv"])
+            p_no = paired_analysis_json(a_no; csv_paths = ["f.csv"])
+            Test.@test p_ok["ok_column_present"] == true
+            Test.@test p_no["ok_column_present"] == false
+            Test.@test p_ok["ok_filter_applied"] != p_no["ok_filter_applied"]
+            Test.@test p_ok["n_dropped_not_ok"] == 0
+            Test.@test p_ok["n_dropped_metric_source"] == 0
+        end
+
+        # `--keep-not-ok` is a THIRD state: the column is present and the check was
+        # deliberately disabled. That is not "0 failures" either.
+        a_keep = run_paired_analysis(with_ok;
+            metrics = (:quast_nga50,), keep_not_ok = true)
+        Test.@test a_keep.ok_column_present
+        Test.@test !a_keep.ok_filter_applied
+        mktempdir() do dir
+            t = read(
+                write_paired_report(joinpath(dir, "k.md"), a_keep;
+                    csv_paths = ["f.csv"]), String)
+            Test.@test occursin("filter DISABLED", t)
+            Test.@test !occursin("ABSENT", t)
+        end
+
+        # Sub-finding: `coalesce(missing, false)` counted an UNKNOWN status as an
+        # observed failure. "The harness said this run failed" and "we do not know
+        # whether it succeeded" are different claims and are counted separately.
+        holey = DataFrames.DataFrame(with_ok)
+        holey[!, :ok] = Vector{Union{Missing, Bool}}(holey.ok)
+        holey[1, :ok] = missing
+        holey[3, :ok] = false
+        a_h = run_paired_analysis(holey; metrics = (:quast_nga50,))
+        Test.@test a_h.n_dropped_ok_missing == 1
+        Test.@test a_h.n_dropped_not_ok == 1          # NOT 2
+        Test.@test a_h.n_rows_analyzed == 10
+        mktempdir() do dir
+            t = read(
+                write_paired_report(joinpath(dir, "h.md"), a_h;
+                    csv_paths = ["f.csv"]), String)
+            Test.@test occursin("1 dropped for ok=false", t)
+            Test.@test occursin("1 dropped for ok=missing", t)
+            p = paired_analysis_json(a_h; csv_paths = ["f.csv"])
+            Test.@test p["n_dropped_not_ok"] == 1
+            Test.@test p["n_dropped_ok_missing"] == 1
+        end
+    end
+
     Test.@testset "B: an OPERATOR-ASSERTED definition cannot earn the guard assurance" begin
         # `rgv_seed_backfill.jl --metric-source quast` writes a definition on
         # operator say-so, with nothing to verify it against. The guard can then

@@ -588,11 +588,29 @@ function run_paired_analysis(df;
 
     work = df
     n_input = DataFrames.nrow(work)
+    # "The ok check ran and every row passed" and "the ok check COULD NOT RUN"
+    # are different facts about the data, and they used to render identically:
+    # `0 dropped for ok=false` was emitted verbatim whether the column was present
+    # and all-true or absent entirely, and `results.json` carried neither count nor
+    # a presence flag, so no consumer could recover the distinction from either
+    # artifact. `metric_source_guard.jl` already applies the opposite doctrine to
+    # the definition columns — a table with no provenance column is not a table
+    # shown to be consistent, it is a table that cannot be checked — and `ok` is
+    # the same kind of claim.
+    ok_column_present = :ok in Symbol.(DataFrames.names(work))
+    ok_filter_applied = !keep_not_ok && ok_column_present
     n_dropped_not_ok = 0
-    if !keep_not_ok && (:ok in Symbol.(DataFrames.names(work)))
-        before = DataFrames.nrow(work)
-        work = work[coalesce.(work.ok, false) .== true, :]
-        n_dropped_not_ok = before - DataFrames.nrow(work)
+    n_dropped_ok_missing = 0
+    if ok_filter_applied
+        okcol = work.ok
+        keep = coalesce.(okcol, false) .== true
+        # `coalesce(missing, false)` drops an unknown-status row, which is the right
+        # default, but counting it as ok=false conflates "the harness SAID this run
+        # failed" with "we do not know whether it succeeded". Only the first is an
+        # observed failure, so the two are counted separately.
+        n_dropped_ok_missing = count(ismissing, okcol)
+        n_dropped_not_ok = count(!, keep) - n_dropped_ok_missing
+        work = work[keep, :]
     end
     n_dropped_source = 0
     if metric_source !== nothing
@@ -647,7 +665,11 @@ function run_paired_analysis(df;
         definition_operator_asserted = definition_asserted,
         treatment = String(treatment), control = String(control),
         n_input_rows = n_input, n_rows_analyzed = DataFrames.nrow(work),
-        n_dropped_not_ok = n_dropped_not_ok, n_dropped_metric_source = n_dropped_source,
+        ok_column_present = ok_column_present, ok_filter_applied = ok_filter_applied,
+        keep_not_ok = keep_not_ok,
+        n_dropped_not_ok = n_dropped_not_ok,
+        n_dropped_ok_missing = n_dropped_ok_missing,
+        n_dropped_metric_source = n_dropped_source,
         pair_keys = RGV_PAIR_KEYS)
 end
 
@@ -698,10 +720,21 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
             "rather than error rate, and designates k=31 primary (k=21/51 " *
             "sensitivity). Compare the axes above against that before reading the " *
             "decision column — the thresholds were calibrated for that design._")
+        # An absent `ok` column must never render as a check that ran and passed.
+        ok_clause = if !analysis.ok_column_present
+            "**`ok` column ABSENT — no row was verified; the ok=false check could " *
+            "NOT run**"
+        elseif !analysis.ok_filter_applied
+            "`ok` filter DISABLED via --keep-not-ok — failed rows were KEPT"
+        else
+            "$(analysis.n_dropped_not_ok) dropped for ok=false, " *
+            "$(analysis.n_dropped_ok_missing) dropped for ok=missing (status " *
+            "unknown, not an observed failure)"
+        end
         println(io,
             "- Rows: $(analysis.n_input_rows) read, " *
             "$(analysis.n_rows_analyzed) analyzed " *
-            "($(analysis.n_dropped_not_ok) dropped for ok=false, " *
+            "($ok_clause; " *
             "$(analysis.n_dropped_metric_source) dropped by metric_source filter)")
         println(io, "\n### Metric definition analyzed under\n")
         for (col, vals) in analysis.definition
@@ -865,6 +898,13 @@ function paired_analysis_json(analysis; csv_paths)
         "seeds" => collect(analysis.seeds),
         "n_input_rows" => analysis.n_input_rows,
         "n_rows_analyzed" => analysis.n_rows_analyzed,
+        # Whether the ok=false check RAN, not only what it dropped. Without the
+        # flag, "0 dropped" is indistinguishable from "could not be checked".
+        "ok_column_present" => analysis.ok_column_present,
+        "ok_filter_applied" => analysis.ok_filter_applied,
+        "n_dropped_not_ok" => analysis.n_dropped_not_ok,
+        "n_dropped_ok_missing" => analysis.n_dropped_ok_missing,
+        "n_dropped_metric_source" => analysis.n_dropped_metric_source,
         "metric_definition" => Dict(string(col) => vals
         for (col, vals) in analysis.definition),
         "exploratory" => true,
