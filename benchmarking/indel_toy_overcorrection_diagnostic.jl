@@ -1,19 +1,56 @@
-# Diagnostic for the 2 kb / 1.2 kb-read / 8x / 5%-error correction REGRESSION
-# (td-jt7r): at that cell `corrector = :iterative` produces a WORSE assembly than
-# `corrector = :none` (largest contig 413 -> 131 bp), while at larger genomes /
-# higher coverage correction helps.
+# Diagnostic harness for the td-jt7r QUESTION: at the 2 kb / 1.2 kb-read / 8x /
+# 5%-error cell, WHY does `corrector = :iterative` report a smaller largest contig
+# (131 bp) than `corrector = :none` (413 bp), when at larger genomes / higher
+# coverage correction helps?
+#
+# The harness was built around the working hypothesis that this is a CORRECTION
+# REGRESSION — that the corrector damages the reads. That hypothesis is REFUTED by
+# this harness's own output. Verdict as of this commit:
+#
+#   * Correction is NEUTRAL at the CEILING k. Re-assembling the RAW reads and the
+#     CORRECTED reads under ONE fixed, production-matching config at k = 31 gives
+#     the SAME largest contig, 492 bp (217 vs 219 contigs) — no correction cost at
+#     all (`--k-sweep`; see `reassembly_k_sweep.csv`).
+#   * The 413 -> 131 bp drop between the two arms is a k DROP-DOWN, not corrupted
+#     reads. `select_reassembly_k` picks k = 11 (ceiling 31) for the corrected
+#     reads, and under that same fixed config BOTH read sets collapse at k = 11:
+#     raw 128 bp / 610 contigs, corrected 131 bp / 526 contigs. The corrected k = 11
+#     sweep row REPRODUCES the corrected arm's production result exactly (526
+#     contigs, 131 bp), which is the check that the sweep config now matches
+#     production.
+#   * The 413 bp naive baseline is itself a CONFIG ARTIFACT: the same raw reads at
+#     the same k = 31 assemble to 492 bp once `dedup_revcomp` and `graph_cleanup`
+#     are set the way the corrector's re-assembly sets them. The naive arm runs the
+#     `corrector = :none` defaults, where both resolve FALSE, so the two arms differ
+#     in three config values, not one (see `run_arm`).
+#   * Provenance note: an earlier revision of this sweep left `dedup_revcomp` and
+#     `graph_cleanup` at the `corrector = :none` defaults and reported 413 bp (raw)
+#     vs 343 bp (corrected) at k = 31, and 166 bp for both at k = 11. Every one of
+#     those numbers was carrying the config confound described above; the figures in
+#     this block are the production-matched replacements.
 #
 # The script is a measurement harness, not a fix. For one (genome, read length,
-# coverage, error rate) cell it reports, for BOTH arms:
+# coverage, error rate) cell it reports:
 #
-#   * assembly quality (n_contigs, largest contig, largest/genome ratio)
+#   * assembly quality (n_contigs, largest contig, largest/genome ratio) — BOTH arms
 #   * the coverage-aware re-assembly k actually chosen (`reassembly_k`) and the
-#     ceiling it was chosen from, plus the `median_solid_kmer_multiplicity`
-#     ladder that drives the choice, on RAW and CORRECTED reads
+#     ceiling it was chosen from — CORRECTED ARM ONLY. `select_reassembly_k` lives on
+#     the corrector path, so `run_arm` returns `missing` for these on the `:none` arm
+#     and the summary columns are populated from the corrected arm alone. The
+#     `select_k_on_raw` column is a COUNTERFACTUAL computed here by `k_ladder` (what
+#     the chooser WOULD return on raw reads); production never evaluates it there.
+#   * the `median_solid_kmer_multiplicity` ladder that drives the choice, on RAW and
+#     on CORRECTED reads — both arms, but on a fixed DIAGNOSTIC ladder that is not
+#     production's candidate set (see `k_ladder`)
 #   * DIRECT over-correction evidence: per-read identity of RAW reads and of
-#     CORRECTED reads against the known reference (semi-global BioAlignments
-#     pairwise alignment, best orientation), plus the fraction of each read's
+#     CORRECTED reads against the known reference — LOCAL (Smith-Waterman)
+#     BioAlignments pairwise alignment, scored over the ALIGNED BLOCK ONLY, best of
+#     the two orientations. Semi-global alignment is deliberately REJECTED; see
+#     `reference_identity` for the arithmetic. Plus the fraction of each read's
 #     31-mers that occur in the reference.
+#   * a solid-k-mer COMPOSITION audit (`solid_composition`) splitting the solid set
+#     into genomic and error k-mers — this is what refutes
+#     `median_solid_kmer_multiplicity`'s backbone-coverage claim.
 #
 # Corrected reads are obtained by giving `assemble_genome` an `output_dir`, which
 # persists the Stage-1 corrector handoff at `<output_dir>/corrected.fastq`
@@ -23,10 +60,18 @@
 #   LD_LIBRARY_PATH='' julia --project=. \
 #     benchmarking/indel_toy_overcorrection_diagnostic.jl \
 #     --genome=2000 --read-length=1200 --coverage=8 --error=0.05 \
-#     --seed=42 --out=/tmp/diag-cell --label=baseline
+#     --seed=42 --out=/tmp/diag-cell --label=baseline \
+#     [--k-sweep=11,31] [--skip-alignment=true]
 #
-# Emits one CSV row per cell to `<out>/cell_summary.csv` and a k-ladder CSV to
-# `<out>/k_ladder.csv`.
+# `--k-sweep=<comma-separated ks>` is OFF by default and runs the decisive
+# raw-vs-corrected fixed-config re-assembly sweep (the expensive part).
+# `--skip-alignment=true` skips the per-read pairwise-alignment identity statistics.
+#
+# Emits, under `<out>/`:
+#   * `cell_summary.csv`        one row per cell
+#   * `k_ladder.csv`            median-solid-k-mer ladder, raw + corrected arms
+#   * `solid_composition.csv`   genomic-vs-error solid-k-mer audit
+#   * `reassembly_k_sweep.csv`  ONLY when `--k-sweep` is given
 
 import BioAlignments
 import BioSequences
@@ -55,10 +100,24 @@ function parse_args(args::Vector{String})::Dict{String, String}
 end
 
 """
-Build the read fixture exactly as `benchmarking/indel_frontier_fixed_toy_proof.jl`
+Build the read fixture the same way `benchmarking/indel_frontier_fixed_toy_proof.jl`
 does, but with genome length / read length / coverage / error rate as parameters.
 Reads are simulated through `Mycelia.observe(...; tech = :nanopore)` so they carry
-indels as well as substitutions.
+INDELS as well as substitutions.
+
+NOT byte-for-byte the sibling's procedure: the sibling hardcodes its cell and then
+ASSERTS a minimum observed read length (`INDEL_TOY_MIN_OBSERVED_READ_LENGTH`) before
+assembling. This harness has no such guard, because it is swept across cells where
+short observed reads are a legitimate outcome to measure rather than a fixture bug.
+Reads that `observe` returns empty are dropped, so `n_reads` requested is an upper
+bound on the reads actually emitted.
+
+Note the pairing this creates with `run_arm`: the reads carry INDELS (60% of the
+simulated errors at `tech = :nanopore`), but both of `run_arm`'s `assemble_genome`
+calls hardcode `sequencing_tech = :illumina`, which selects the SUBSTITUTION-ONLY
+corrector (Mycelia logs a warning to this effect on every run). That pairing is
+deliberate — it reproduces the production configuration under investigation — but it
+means "correction" in this harness never repairs an indel, only a substitution.
 """
 function make_fixture(
         genome_length::Int,
@@ -104,9 +163,31 @@ insertions + deletions)` INSIDE the aligned block, so indels are penalized while
 the unaligned reference flanks are not. `SemiGlobalAlignment` is deliberately NOT
 used: BioAlignments still emits the free reference end-gaps as deletion
 operations, so a 1.2 kb read against a 2 kb reference scores ~0.57 identity purely
-from the 800 bp of untouched flank. Returns the identity and the fraction of the
-query consumed by the local block (so a truncated alignment cannot masquerade as
-high identity).
+from the 800 bp of untouched flank.
+
+Returns `(identity, aligned_fraction)`, where `aligned_fraction` is the share of the
+query consumed by the local block. That fraction is REPORTED, not ENFORCED: the
+better orientation is selected on identity alone, and neither this function nor
+`read_set_stats` applies any coverage gate or threshold. A truncated alignment can
+therefore still post a high identity — it is DETECTABLE by reading
+`mean_aligned_fraction` alongside `mean_identity`, but nothing rejects or flags it.
+
+`score_model` MUST be MATCH-POSITIVE (positive match scores, negative mismatch and
+gap penalties). `LocalAlignment` MAXIMIZES score, so a DISTANCE model — matches
+costing 0 and every edit costing more — makes the empty alignment optimal and this
+function degenerates SILENTLY to the `(0.0, 0.0)` sentinel below on every read.
+`main` supplies `AffineGapScoreModel(EDNAFULL; gap_open = -10, gap_extend = -1)`:
+EDNAFULL is the standard match-positive nucleotide substitution matrix (+5 match /
+-4 mismatch), and `-10 / -1` is the conventional BLASTN-like affine setting, chosen
+so that a single indel — the dominant error class in this fixture — costs less than
+abandoning the block and does not split an otherwise-good local alignment in two.
+
+SENTINEL: when BOTH orientations yield an empty alignment (denominator 0, so both
+`continue`), the function returns `(0.0, 0.0)`. That is INDISTINGUISHABLE from a
+genuine zero-identity / zero-coverage alignment, and it enters the means in
+`read_set_stats` as a real 0.0, depressing `mean_identity` and
+`mean_aligned_fraction`. It should be rare for kilobase reads against a kilobase
+reference, but it is not detected or counted, so read those means accordingly.
 """
 function reference_identity(
         query::BioSequences.LongDNA{4},
@@ -138,8 +219,14 @@ function reference_identity(
 end
 
 """
-Canonical k-mer hash set of `sequence` at size `k`, as `String` windows over the
-canonical orientation. Used for the reference-k-mer-recovery statistic.
+The set of `sequence`'s canonical k-mers at size `k`. Each k-mer is represented by
+the `String` that is lexicographically smaller of the window and its reverse
+complement — a literal string, NOT a numeric hash, so representatives can be
+compared directly across read sets. Used for the reference-k-mer-recovery statistic.
+
+Returns an EMPTY set when `length(sequence) < k` (no window exists). Callers cannot
+distinguish that from a genuinely k-mer-free sequence; `reference_kmer_fraction`
+against an empty reference set scores every read 0.0.
 """
 function canonical_kmer_set(sequence::BioSequences.LongDNA{4}, k::Int)::Set{String}
     kmers = Set{String}()
@@ -157,6 +244,14 @@ end
 Fraction of `sequence`'s canonical k-mers that occur in `reference_kmers`. A read
 that has been corrected TOWARD the reference raises this; a read corrected toward
 a wrong consensus lowers it.
+
+Returns `nothing` — NOT `0.0` — when `length(sequence) < k` (no window exists), and
+`read_set_stats` DROPS those reads instead of scoring them. Consequence:
+`mean_reference_kmer_fraction` is averaged over only the reads at least
+`DIAG_IDENTITY_KMER` long, while `mean_identity` is averaged over ALL reads. The two
+headline read statistics therefore have DIFFERENT denominators whenever any read is
+shorter than `DIAG_IDENTITY_KMER`, and the harness does not report how many reads
+were dropped. Compare them with that in mind.
 """
 function reference_kmer_fraction(
         sequence::BioSequences.LongDNA{4},
@@ -179,6 +274,15 @@ end
 
 """
 Per-read identity + reference-k-mer-recovery statistics for one read set.
+
+Purely descriptive: every read is scored and every score is kept. There is NO
+coverage gate — a read whose local alignment consumed only a fraction of the query
+contributes its (possibly high) identity to `mean_identity` unchanged; the only
+signal that this happened is `mean_aligned_fraction`. See `reference_identity`.
+
+`mean_reference_kmer_fraction` is averaged over a SMALLER read set than the identity
+statistics whenever any read is shorter than `DIAG_IDENTITY_KMER` — see
+`reference_kmer_fraction`.
 """
 function read_set_stats(
         sequences::Vector{BioSequences.LongDNA{4}},
@@ -212,8 +316,14 @@ end
 
 """
 Canonical k-mer occurrence counts over `sequences`, keyed by the canonical window
-string. Mirrors `_kmer_count_spectrum`'s canonical convention but keeps the
-literal k-mer so the solid set can be split against the reference.
+string.
+
+Uses the SAME equivalence class as `_kmer_count_spectrum` (a window and its reverse
+complement are one k-mer) but a DIFFERENT representative: this keys on the
+lexicographically smaller window STRING, whereas `_kmer_count_spectrum` keys on the
+smaller of the two window HASHES. The resulting count multisets agree; the KEYS are
+not interchangeable and must not be joined across the two functions. The literal
+string is kept here precisely so the solid set can be split against the reference.
 """
 function canonical_counts(sequences, k::Int)::Dict{String, Int}
     counts = Dict{String, Int}()
@@ -231,10 +341,20 @@ function canonical_counts(sequences, k::Int)::Dict{String, Int}
 end
 
 """
-Split the "solid" (occurrence `>= 2`) k-mer set that
-`median_solid_kmer_multiplicity` medians over into GENOMIC k-mers (present in the
-reference) and ERROR k-mers (absent), and report the median occurrence of each
-population separately.
+Split the "solid" k-mer set that `median_solid_kmer_multiplicity` medians over into
+GENOMIC k-mers (present in the reference) and ERROR k-mers (absent), and report the
+median occurrence of each population separately.
+
+Also reports `genomic_recall` = (number of SOLID genomic k-mers) / (number of
+DISTINCT canonical k-mers in the REFERENCE at `k`) — the share of the true backbone
+that survives the solidity cut. The denominator is the reference's own canonical
+k-mer set, not the read set's, so `genomic_recall` is a backbone-completeness
+measure and is `NaN` when the reference is shorter than `k`.
+
+The solidity threshold is HARDCODED here at occurrence `>= 2`. That matches the
+DEFAULT `solid_min` of `median_solid_kmer_multiplicity` and `select_reassembly_k`,
+but production PARAMETERIZES it, so this audit tracks production only while callers
+leave that default in place; it is not wired to the production value.
 
 This is the audit that shows whether the statistic is measuring the genomic
 backbone it claims to measure. When the error population outnumbers the genomic
@@ -279,9 +399,29 @@ function read_fastq_sequences(path::AbstractString)::Vector{BioSequences.LongDNA
 end
 
 """
-`median_solid_kmer_multiplicity` at every prime candidate k up to `ceiling_k`,
-plus the k `select_reassembly_k` would choose. This is the signal that decides the
+`median_solid_kmer_multiplicity` at each k on a FIXED DIAGNOSTIC ladder, plus the k
+`select_reassembly_k` would choose. This is the signal that decides the
 corrected-read re-assembly k.
+
+The ladder is NOT "every prime candidate k up to `ceiling_k`". It is hardcoded as
+`[7, 11, 13, 17, 19, 23, 29, ceiling_k]`, then deduplicated and filtered to
+`<= ceiling_k`. So it EXCLUDES the primes 2, 3 and 5, and it APPENDS `ceiling_k`
+whether or not that value is prime.
+
+More importantly, the ladder is a READOUT, not production's candidate set. `chosen`
+calls `select_reassembly_k` with its default kwargs — including
+`genome_size_floor = true` and `size_ref_k = 17` — and that genome-size uniqueness
+floor (`_genome_size_floor_k`) can raise the EFFECTIVE floor well above 7. The
+emitted `k_ladder.csv` will therefore routinely show low rungs (7, 11, 13, ...) that
+the chooser can NEVER return for that read set. Any statement that the connectivity
+floor is unmet "at every candidate k" is a statement about THIS measured ladder, not
+about production's genome-size-floored candidate set.
+
+Corollary for `cell_summary.csv`: `select_k_on_raw` is a COUNTERFACTUAL. Production
+invokes `select_reassembly_k` only on the corrector path, so no production run ever
+evaluates it on raw reads; the column name reads like an observation but records a
+what-if computed here. `select_k_on_corrected` does correspond to the corrected
+arm's actual `reassembly_k`.
 """
 function k_ladder(reads, ceiling_k::Int)::NamedTuple
     candidate_ks = [7, 11, 13, 17, 19, 23, 29, ceiling_k]
@@ -295,6 +435,30 @@ end
 
 """
 Assemble one arm and return quality + provenance fields.
+
+Each arm calls production `assemble_genome` with the corrector setting under test
+and NO other config overrides, so each arm inherits THAT corrector's production
+defaults. This is faithful to production, but it means the two arms differ in THREE
+config values, not one:
+
+  * `corrector`     — `:none` vs `:iterative` (the variable under test)
+  * `dedup_revcomp` — resolved to `corrector == :iterative`
+                      (`src/rhizomorph/assembly.jl:271-272`), so FALSE on the naive
+                      arm and TRUE on the corrected arm's re-assembly, which is
+                      handed the outer resolved value at `assembly.jl:1654`
+  * `graph_cleanup` — the plain (`:none`) route cleans only on an EXPLICIT `true`
+                      (`assembly.jl:2163`), so FALSE here; the corrector's
+                      re-assembly defaults it ON (`assembly.jl:1651`, passed at
+                      `assembly.jl:1655`)
+
+So the naive-vs-corrected largest-contig delta reported by this function is a
+THREE-variable difference and cannot on its own attribute the change to correction.
+The `--k-sweep` path is the arm that isolates it: it re-assembles both read sets
+under ONE fixed config that matches the corrector's production re-assembly.
+
+`reassembly_k`, `reassembly_k_ceiling`, `reassembly_graph_reused` and
+`corrected_read_count` are emitted only on the corrector path, so the `:none` arm
+returns `missing` for all four.
 """
 function run_arm(
         reads::Vector{FASTX.FASTQ.Record},
@@ -383,6 +547,17 @@ function main(args::Vector{String} = ARGS)::Nothing
     # corrector's contribution and the k choice are separated. If corrected reads
     # at the ceiling k beat raw reads at the ceiling k, correction is fine and the
     # coverage-aware k drop-down is what costs the assembly.
+    #
+    # CONFIG: `corrector = :none` here is the SWEEP MECHANISM (it pins k instead of
+    # letting the corrector choose it), NOT the production corrector setting under
+    # test. Left at its defaults, a `corrector = :none` call resolves BOTH
+    # `dedup_revcomp` and `graph_cleanup` to FALSE (assembly.jl:271-272 and
+    # assembly.jl:2163) — which would make the sweep matched arm-to-arm but NOT
+    # matched to production, since the corrector's real re-assembly runs both TRUE
+    # (assembly.jl:1651, threaded at assembly.jl:1654-1655). That is the exact
+    # confound this sweep exists to remove, so both are passed EXPLICITLY TRUE
+    # below. Both sweep arms share that one config, so the only variables across
+    # rows are (read set, k).
     k_sweep_spec = get(parsed, "k-sweep", "")
     k_sweep = DataFrames.DataFrame(
         label = String[], arm = String[], k = Int[],
@@ -401,7 +576,8 @@ function main(args::Vector{String} = ARGS)::Nothing
                 assembly = Mycelia.Rhizomorph.assemble_genome(
                     deepcopy(arm_reads);
                     k = k, corrector = :none, strategy = :scalable,
-                    sequencing_tech = :illumina
+                    sequencing_tech = :illumina,
+                    dedup_revcomp = true, graph_cleanup = true
                 )
                 lengths = [length(contig) for contig in assembly.contigs]
                 largest = isempty(lengths) ? 0 : maximum(lengths)
