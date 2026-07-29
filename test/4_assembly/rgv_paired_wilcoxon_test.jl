@@ -1012,6 +1012,43 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test occursin("String(name) * \"_provenance\"", backfill)
     end
 
+    Test.@testset "B: the operator-asserted qualifier does not depend on --allow-mixed-src" begin
+        # This was the untested cell of the cross-product. A NON-BINDING
+        # `--allow-mixed-src` used to take the `elseif` arm and suppress the
+        # operator-asserted qualifier entirely, restoring an unqualified assurance
+        # over a table whose definition was never observed. The two facts are
+        # orthogonal, so the qualifier must appear in BOTH columns.
+        cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                 for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]]
+        asserted = _pwt_frame(cells; provenance = "observed")
+        asserted[!, :metric_source_provenance] = fill("operator-asserted (backfill)",
+            DataFrames.nrow(asserted))
+
+        for allow in (false, true)
+            a = run_paired_analysis(asserted;
+                metrics = (:quast_nga50,), allow_mixed_src = allow)
+            Test.@test a.definition_operator_asserted
+            Test.@test !a.override_bound          # the flag is non-binding either way
+            mktempdir() do dir
+                text = read(
+                    write_paired_report(joinpath(dir, "r.md"), a;
+                        csv_paths = ["f.csv"]), String)
+                Test.@test occursin("OPERATOR-ASSERTED, NOT OBSERVED", text)
+                Test.@test occursin(
+                    "does NOT establish that the aggregate spans a single MEASURED definition",
+                    text)
+                Test.@test !occursin("enforced it — no override was used", text)
+                # The specific phrase the non-binding branch used to restore. It is
+                # a claim about the VALUES and is not settled by whether a flag
+                # bound, so the report must never make it.
+                Test.@test !occursin("well-defined", text)
+                # And the non-binding flag still reports itself accurately.
+                Test.@test occursin("did NOT bind", text) == allow
+            end
+        end
+    end
+
     Test.@testset "C1/I3: the report does not claim to be a pre-registered test" begin
         df = _pwt_frame([(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
                          for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
