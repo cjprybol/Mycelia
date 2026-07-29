@@ -17,6 +17,13 @@ import SHA
 import Test
 
 include(joinpath(@__DIR__, "indel_benchmark_common.jl"))
+# `_indel_frontier_label_offsets` is a pure, deterministic figure-layout helper
+# that lives in indel_frontier_runtime.jl and had no coverage. That script's
+# `main()` is guarded by the `PROGRAM_FILE` check, so including it defines
+# constants and functions and runs nothing; the packages it imports are already
+# loaded by Mycelia. Covering it here avoids a second test entry point that
+# nothing would invoke.
+include(joinpath(@__DIR__, "indel_frontier_runtime.jl"))
 
 # Captured on the pre-consolidation base commit (origin/master 250f7f26) from
 # `_indel_toy_make_fixture` in indel_frontier_fixed_toy_proof.jl, using the
@@ -379,75 +386,199 @@ Test.@testset "indel benchmark common" begin
         end
     end
 
-    Test.@testset "signed rank" begin
-        # All-positive n=5: V = 15, exact two-sided p = 2/2^5 = 0.0625 (matches
-        # R's wilcox.test(1:5) exact result).
-        all_positive = indel_bench_signed_rank([1.0, 2.0, 3.0, 4.0, 5.0])
-        Test.@test all_positive.n_nonzero == 5
-        Test.@test all_positive.statistic == 15.0
-        Test.@test all_positive.method == :exact
-        Test.@test all_positive.p_two_sided ≈ 0.0625
-
-        # Sign symmetry: negating every delta flips V to the complementary rank
-        # sum and leaves the two-sided p-value unchanged.
-        all_negative = indel_bench_signed_rank([-1.0, -2.0, -3.0, -4.0, -5.0])
-        Test.@test all_negative.statistic == 0.0
-        Test.@test all_negative.p_two_sided ≈ all_positive.p_two_sided
-
-        # Zeros are dropped, not counted.
-        with_zeros = indel_bench_signed_rank(
-            [0.0, 1.0, 0.0, 2.0, 3.0, 4.0, 5.0]
+    Test.@testset "simulated read identifiers follow tech" begin
+        # `identifier_prefix` used to default to a hardcoded "nanopore_read"
+        # independently of `tech`, so an :illumina fixture silently carried
+        # nanopore identifiers into the digested bytes.
+        illumina_reads, _ = indel_bench_simulate_reads(
+            genome_length = 200,
+            source_read_length = 100,
+            coverage = 2,
+            error_rate = 0.01,
+            seed = 7,
+            tech = :illumina
         )
-        Test.@test with_zeros.n_nonzero == 5
-        Test.@test with_zeros.statistic == 15.0
-        Test.@test with_zeros.p_two_sided ≈ all_positive.p_two_sided
-
-        # Mixed signs, n=3: V = 5, exact two-sided p = 0.5 (R: V=5, p=0.5).
-        mixed = indel_bench_signed_rank([-1.0, 2.0, 3.0])
-        Test.@test mixed.n_nonzero == 3
-        Test.@test mixed.statistic == 5.0
-        Test.@test mixed.p_two_sided ≈ 0.5
-
-        # Tied magnitudes get midranks; every attainable rank sum is at least as
-        # extreme as the observed one here, so p = 1.
-        tied = indel_bench_signed_rank([1.0, 1.0, -1.0])
-        Test.@test tied.n_nonzero == 3
-        Test.@test tied.statistic == 4.0
-        Test.@test tied.method == :exact
-        Test.@test tied.p_two_sided ≈ 1.0
-
-        # No nonzero differences => undefined, not a spurious p-value.
-        empty_result = indel_bench_signed_rank(Float64[])
-        Test.@test empty_result.n_nonzero == 0
-        Test.@test empty_result.method == :undefined
-        Test.@test isnan(empty_result.p_two_sided)
-        all_zero = indel_bench_signed_rank([0.0, 0.0, 0.0])
-        Test.@test all_zero.n_nonzero == 0
-        Test.@test all_zero.method == :undefined
-        Test.@test isnan(all_zero.p_two_sided)
-
-        # Exact/approximate switch is at n_nonzero == 20.
-        Test.@test indel_bench_signed_rank(collect(1.0:20.0)).method == :exact
-        approximate = indel_bench_signed_rank(collect(1.0:21.0))
-        Test.@test approximate.n_nonzero == 21
-        Test.@test approximate.statistic == 231.0
-        Test.@test approximate.method == :normal_approximation
-        Test.@test 0.0 < approximate.p_two_sided < 1.0e-3
-
-        # A balanced large sample is nowhere near significant.
-        balanced = indel_bench_signed_rank(
-            Float64[iseven(index) ? index : -index for index in 1:30]
+        Test.@test !isempty(illumina_reads)
+        Test.@test all(
+            startswith(FASTX.identifier(record), "illumina_read_")
+            for record in illumina_reads
         )
-        Test.@test balanced.method == :normal_approximation
-        Test.@test balanced.p_two_sided > 0.5
 
-        # p-values stay in [0, 1] for both branches.
-        Test.@test 0.0 <= indel_bench_signed_rank([1.0, -1.0]).p_two_sided <= 1.0
-        Test.@test 0.0 <=
-                   indel_bench_signed_rank(fill(1.0, 25)).p_two_sided <= 1.0
+        # The default is derived, not removed: an explicit prefix still wins.
+        explicit_reads, _ = indel_bench_simulate_reads(
+            genome_length = 200,
+            source_read_length = 100,
+            coverage = 2,
+            error_rate = 0.01,
+            seed = 7,
+            tech = :illumina,
+            identifier_prefix = "custom"
+        )
+        Test.@test all(
+            startswith(FASTX.identifier(record), "custom_")
+            for record in explicit_reads
+        )
 
-        # Non-finite deltas are rejected rather than silently dropped.
-        Test.@test_throws ArgumentError indel_bench_signed_rank([NaN, 1.0])
-        Test.@test_throws ArgumentError indel_bench_signed_rank([Inf, 1.0])
+        # The :nanopore default is unchanged, so the golden digest above holds.
+        nanopore_reads, _ = indel_bench_simulate_reads(
+            genome_length = 200,
+            source_read_length = 100,
+            coverage = 2,
+            error_rate = 0.01,
+            seed = 7
+        )
+        Test.@test startswith(
+            FASTX.identifier(first(nanopore_reads)), "nanopore_read_"
+        )
+    end
+
+    Test.@testset "start-of-run precheck and run status sidecar" begin
+        artifact_names = ("data.csv", "manifest.csv")
+        output_dir = Base.Filesystem.mktempdir()
+        try
+            # Nothing recorded yet.
+            Test.@test isnothing(indel_bench_read_run_status(output_dir))
+
+            # begin_run marks the directory as having a run in flight.
+            indel_bench_begin_run(
+                output_dir, artifact_names; context = "unit-run"
+            )
+            running = indel_bench_read_run_status(output_dir)
+            Test.@test !isnothing(running)
+            Test.@test running["status"] == "running"
+            Test.@test running["context"] == "unit-run"
+            Test.@test running["generation_id"] == "pending"
+
+            # Publishing advances the marker to complete and records the
+            # generation, so an aborted run is distinguishable from a finished
+            # one by inspection of the output directory alone.
+            staging_dir = Base.Filesystem.mktempdir(
+                output_dir; prefix = ".unit-staging-"
+            )
+            try
+                for name in artifact_names
+                    write(joinpath(staging_dir, name), "new $(name)\n")
+                end
+                indel_bench_publish_artifacts(
+                    staging_dir,
+                    output_dir,
+                    artifact_names;
+                    context = "unit-run",
+                    generation_id = "abc123"
+                )
+            finally
+                Base.rm(staging_dir; recursive = true, force = true)
+            end
+            complete = indel_bench_read_run_status(output_dir)
+            Test.@test complete["status"] == "complete"
+            Test.@test complete["generation_id"] == "abc123"
+            Test.@test indel_bench_prior_generation_id(complete) == "abc123"
+
+            # A second run in flight must not erase the identifier of the
+            # generation currently on disk — that identifier is the whole point
+            # of the publish-time overwrite report.
+            indel_bench_begin_run(
+                output_dir, artifact_names; context = "unit-rerun"
+            )
+            rerunning = indel_bench_read_run_status(output_dir)
+            Test.@test rerunning["generation_id"] == "pending"
+            Test.@test rerunning["previous_generation_id"] == "abc123"
+            Test.@test indel_bench_prior_generation_id(rerunning) == "abc123"
+            Test.@test indel_bench_prior_generation_id(nothing) == "none"
+            Test.@test all(
+                isfile(joinpath(output_dir, name)) for name in artifact_names
+            )
+
+            # The squatting-directory guard is now a START-of-run failure, and
+            # it is non-destructive.
+            Base.rm(joinpath(output_dir, "data.csv"))
+            Base.Filesystem.mkpath(joinpath(output_dir, "data.csv"))
+            Test.@test_throws ErrorException indel_bench_assert_publishable(
+                output_dir, artifact_names
+            )
+            Test.@test_throws ErrorException indel_bench_begin_run(
+                output_dir, artifact_names; context = "unit-run"
+            )
+            Test.@test isdir(joinpath(output_dir, "data.csv"))
+            Test.@test isfile(joinpath(output_dir, "manifest.csv"))
+        finally
+            Base.rm(output_dir; recursive = true, force = true)
+        end
+
+        # A never-created output directory is publishable by definition.
+        Test.@test isnothing(
+            indel_bench_assert_publishable(
+            joinpath(Base.Filesystem.mktempdir(), "absent"), artifact_names
+        ),
+        )
+    end
+
+    Test.@testset "frontier figure label offsets" begin
+        base = INDEL_FRONTIER_LABEL_BASE_OFFSET
+        step = INDEL_FRONTIER_LABEL_LEVEL_OFFSET
+
+        Test.@test _indel_frontier_label_offsets(
+            Float64[], Float64[], Int[], Bool[]
+        ) == Int[]
+
+        # Mismatched input lengths are rejected rather than silently truncated.
+        Test.@test_throws ArgumentError _indel_frontier_label_offsets(
+            [1.0, 2.0], [1.0], [4, 4], [true, true]
+        )
+
+        # Two identical anchors with identical wide labels overlap: the first
+        # placed stays at the base offset, the second is raised by whole levels.
+        collided = _indel_frontier_label_offsets(
+            [10.0, 10.0], [1.0, 1.0], [20, 20], [true, true]
+        )
+        Test.@test collided[1] == base
+        Test.@test collided[2] > collided[1]
+        Test.@test (collided[2] - base) % step == 0
+
+        # Well-separated anchors with short labels do not collide.
+        separated = _indel_frontier_label_offsets(
+            [10.0, 10_000.0], [1.0, 1.0], [4, 4], [true, true]
+        )
+        Test.@test separated == [base, base]
+
+        # Alignment is load-bearing: a right-aligned label extends LEFT from its
+        # anchor, so opposite alignments at one anchor occupy disjoint boxes.
+        opposed = _indel_frontier_label_offsets(
+            [10.0, 10.0], [1.0, 1.0], [20, 20], [false, true]
+        )
+        Test.@test opposed == [base, base]
+
+        # Placement is top-down: of two colliding labels the HIGHER anchor is
+        # placed first and keeps the base offset, and the lower one is pushed up
+        # into empty space rather than the higher one being pushed onto it. The
+        # third, far-above point sets the y span so the first two land close
+        # enough in normalized space to collide.
+        stacked = _indel_frontier_label_offsets(
+            [10.0, 10.0, 10.0], [1.0, 1.01, 100.0], [20, 20, 20],
+            [true, true, true]
+        )
+        Test.@test stacked[3] == base
+        Test.@test stacked[2] == base
+        Test.@test stacked[1] > base
+
+        # Deterministic — the figure digest depends on it.
+        anchors_x = Float64[10.0^(index % 4) for index in 1:12]
+        anchors_y = Float64[1.0 + (index % 3) for index in 1:12]
+        lengths = Int[10 + index for index in 1:12]
+        alignments = Bool[isodd(index) for index in 1:12]
+        first_pass = _indel_frontier_label_offsets(
+            anchors_x, anchors_y, lengths, alignments
+        )
+        Test.@test first_pass == _indel_frontier_label_offsets(
+            anchors_x, anchors_y, lengths, alignments
+        )
+        Test.@test all(offset >= base for offset in first_pass)
+
+        # Levels are capped, so a degenerate pile cannot run away.
+        piled = _indel_frontier_label_offsets(
+            fill(10.0, 30), fill(1.0, 30), fill(24, 30), fill(true, 30)
+        )
+        Test.@test maximum(piled) <=
+                   base + INDEL_FRONTIER_LABEL_MAX_LEVELS * step
     end
 end

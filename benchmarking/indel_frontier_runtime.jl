@@ -5,7 +5,14 @@
 #
 # Fast harness smoke (synthetic graphs only; no fixed-toy decode):
 #   LD_LIBRARY_PATH='' julia --project=. benchmarking/indel_frontier_runtime.jl \
-#     --smoke --output-dir /tmp/indel-frontier-runtime-smoke
+#     --smoke
+#
+# `--smoke` publishes to its OWN default directory
+# (results/td-jt7r-2-frontier-runtime-smoke). Publication is a whole-generation
+# replace, so sharing the calibration default meant a one-repeat smoke run
+# silently overwrote a full calibration generation. `--output-dir` still
+# overrides either default, but pointing a smoke run at the calibration
+# directory is now an explicit act rather than the default behaviour.
 #
 # The scheduler is calibrated only against warmed pair-HMM runtime and topology-
 # only frontier work. Correction accuracy is neither measured nor available to
@@ -69,6 +76,21 @@ const INDEL_FRONTIER_LABEL_MAX_LEVELS = 12
 const INDEL_FRONTIER_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-frontier-runtime"
 )
+# Smoke runs publish elsewhere by default. A smoke generation is repeats=1 on
+# synthetic-only graphs at a single 50 bp window; publishing it over a full
+# calibration generation destroys hours of work and leaves a directory that
+# looks like a normal, complete generation.
+const INDEL_FRONTIER_SMOKE_DEFAULT_OUTPUT_DIR = joinpath(
+    @__DIR__, "results", "td-jt7r-2-frontier-runtime-smoke"
+)
+# Bumped from 1 when the summary CSV dropped `pair_hmm_samples` for the explicit
+# timed_samples / warmup_samples / validated_samples split, the replicates CSV
+# gained `feeds_timing_summary`, the manifest itself gained
+# timed_samples_per_cell / warmup_samples_per_cell, and the shared code
+# environment gained `common_source_sha256`. The manifest carries
+# summary_sha256 and replicates_sha256, so the version has to move for a
+# manifest to self-identify which summary and replicates schemas it digests.
+const INDEL_FRONTIER_MANIFEST_SCHEMA_VERSION = 2
 const INDEL_FRONTIER_ARTIFACT_NAMES = (
     "indel_frontier_runtime_summary.csv",
     "indel_frontier_runtime_replicates.csv",
@@ -94,6 +116,14 @@ function main(args::Vector{String} = ARGS)::Nothing
         options.smoke ? 1 : INDEL_FRONTIER_REPEATS
     )
     run_provenance = _indel_frontier_run_provenance(options.smoke, repeats)
+    # Fail fast on a directory squatting an artifact name, and mark the output
+    # directory as having a run in flight, BEFORE the expensive matrix runs.
+    indel_bench_begin_run(
+        options.output_dir,
+        INDEL_FRONTIER_ARTIFACT_NAMES;
+        context = options.smoke ? "frontier-runtime smoke" :
+                  "frontier-runtime calibration"
+    )
 
     graph_cases = _indel_frontier_calibration_graphs(options.smoke)
     window_bases = options.smoke ? (50,) : INDEL_FRONTIER_WINDOW_BASES
@@ -109,8 +139,14 @@ function main(args::Vector{String} = ARGS)::Nothing
         _indel_frontier_affordability_provenance(options.smoke, summary)
     )
     # Everything is staged out of tree and published only once the generation is
-    # complete, so an abort anywhere above leaves the previous complete
-    # generation untouched rather than an empty output directory.
+    # complete, so an abort anywhere ABOVE THIS POINT leaves the previous
+    # complete generation untouched rather than an empty output directory. That
+    # guarantee ends at `indel_bench_publish_artifacts`: publication removes the
+    # prior generation (manifest-first) and then renames, so a crash inside it
+    # leaves a partial generation with no manifest. The `.last_run_status`
+    # marker written by `indel_bench_begin_run` stays at `status=running` in
+    # both cases, which is what makes an aborted run distinguishable from a
+    # clean one after the fact.
     Base.Filesystem.mkpath(options.output_dir)
     staging_dir = Base.Filesystem.mktempdir(
         options.output_dir; prefix = ".frontier-runtime-staging-"
@@ -147,7 +183,12 @@ function main(args::Vector{String} = ARGS)::Nothing
             run_provenance, @__FILE__; context = "frontier runtime run"
         )
         indel_bench_publish_artifacts(
-            staging_dir, options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES
+            staging_dir,
+            options.output_dir,
+            INDEL_FRONTIER_ARTIFACT_NAMES;
+            context = options.smoke ? "frontier-runtime smoke" :
+                      "frontier-runtime calibration",
+            generation_id = run_provenance.generation_id
         )
     finally
         Base.rm(staging_dir; recursive = true, force = true)
@@ -1205,9 +1246,12 @@ function _indel_frontier_write_figure(
     return (png = png_path, svg = svg_path)
 end
 
+# `output_dir` is resolved AFTER the whole argument list is parsed, because the
+# default depends on `--smoke` and the flags may arrive in either order. An
+# explicit `--output-dir` always wins.
 function _indel_frontier_parse_args(args::Vector{String})::NamedTuple
     smoke = false
-    output_dir = INDEL_FRONTIER_DEFAULT_OUTPUT_DIR
+    output_dir::Union{String, Nothing} = nothing
     repeats::Union{Int, Nothing} = nothing
     seen = Set{String}()
     index = 1
@@ -1252,7 +1296,16 @@ function _indel_frontier_parse_args(args::Vector{String})::NamedTuple
         ),
         )
     end
-    return (smoke = smoke, output_dir = output_dir, repeats = repeats)
+    resolved_output_dir = something(
+        output_dir,
+        smoke ? INDEL_FRONTIER_SMOKE_DEFAULT_OUTPUT_DIR :
+        INDEL_FRONTIER_DEFAULT_OUTPUT_DIR
+    )
+    return (
+        smoke = smoke,
+        output_dir = resolved_output_dir,
+        repeats = repeats
+    )
 end
 
 # Thin run-provenance record: the shared code/worktree/host environment core
@@ -1276,7 +1329,7 @@ function _indel_frontier_run_provenance(
     generation_id = Base.bytes2hex(SHA.sha256(codeunits(run_fingerprint)))
     return merge(
         (
-            manifest_schema_version = 1,
+            manifest_schema_version = INDEL_FRONTIER_MANIFEST_SCHEMA_VERSION,
             generation_id = generation_id
         ),
         environment,

@@ -62,15 +62,19 @@ benchmarking/results/track_a_baseline/refs/
 benchmarking/results/track_a_baseline/cells/
 
 # td-jt7r indel benchmark working outputs (frontier runtime calibration,
-# fixed-toy proof, and later sub-tasks) are regenerable by re-running the
-# scripts, so the live output directories are not tracked.
+# fixed-toy proof, smoke runs, and later sub-tasks) are regenerable by
+# re-running the scripts, so the live output directories are not tracked.
 #
-# Curated evidence snapshots ARE committed and are deliberately NOT matched by
-# this glob: they use underscores (benchmarking/results/td_jt7r_*_evidence_<sha>/)
-# rather than the hyphenated working-output prefix. Keep that distinction when
-# adding directories — a hyphenated name is transient, an underscored
-# *_evidence_<sha> name is durable knowledge.
+# Curated evidence snapshots ARE committed. The negation below is what keeps
+# them visible, and it is deliberately NOT left to the hyphen-vs-underscore
+# naming convention: `git status` reporting a clean tree is indistinguishable
+# from evidence being correctly tracked, so a mis-named evidence directory would
+# vanish silently with no test able to fail. Any directory under
+# benchmarking/results/ whose name contains "evidence" is re-included regardless
+# of separator. This works because the parent benchmarking/results/ is not
+# itself excluded and a later pattern wins.
 benchmarking/results/td-jt7r-*/
+!benchmarking/results/*evidence*/
 
 # Agent worktrees
 trees/

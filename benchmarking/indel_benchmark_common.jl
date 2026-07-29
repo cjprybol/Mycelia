@@ -37,13 +37,24 @@
 
 import BioAlignments
 import BioSequences
-import Distributions
+import Dates
 import FASTX
 import Mycelia
 import Random
 import SHA
 
 const INDEL_BENCH_MISSING_DEPENDENCY_SENTINEL = "MISSING"
+
+# This file's own path, captured at include time. `indel_bench_code_environment`
+# digests it alongside the calling script: a benchmark's behaviour now depends on
+# BOTH files, so a manifest that named only the script would be a self-describing
+# record with a hole in it.
+const INDEL_BENCH_COMMON_SOURCE_PATH = @__FILE__
+
+# Sidecar written into a benchmark's output directory. Publication is a
+# whole-generation replace, so without this marker an aborted run and a
+# successful one leave byte-indistinguishable output directories.
+const INDEL_BENCH_RUN_STATUS_FILENAME = ".last_run_status"
 
 # ---------------------------------------------------------------------------
 # Hashing and dependency provenance
@@ -110,9 +121,17 @@ and derives its own `generation_id`. Only the environment is shared, because onl
 the environment is genuinely common.
 
 `code_environment_fingerprint` digests the git HEAD, the tracked-worktree diff,
-the benchmark source, the dependency digests, and the host/Julia identity. It is
-the value re-asserted by [`indel_bench_assert_environment_unchanged`](@ref)
-immediately before artifacts are published.
+the benchmark source, THIS shared helper file, the dependency digests, and the
+host/Julia identity. It is the value re-asserted by
+[`indel_bench_assert_environment_unchanged`](@ref) immediately before artifacts
+are published.
+
+`benchmark_source_sha256` and `common_source_sha256` are recorded separately
+because the executed logic is split across the two files; digesting only the
+script would leave a self-describing manifest that omits half the code it
+describes. The fingerprint already covered the shared file transitively via
+`git_head_sha` + `git_tracked_diff_sha256`, so this makes an existing guarantee
+explicit rather than adding one.
 """
 function indel_bench_code_environment(source_path::String)::NamedTuple
     repository_root = normpath(joinpath(@__DIR__, ".."))
@@ -127,11 +146,15 @@ function indel_bench_code_environment(source_path::String)::NamedTuple
     )
     tracked_diff_sha256 = Base.bytes2hex(SHA.sha256(tracked_diff))
     benchmark_source_sha256 = indel_bench_file_sha256(source_path)
+    common_source_sha256 = indel_bench_file_sha256(
+        INDEL_BENCH_COMMON_SOURCE_PATH
+    )
     dependency = indel_bench_dependency_provenance()
     code_environment_components = (
         git_head_sha,
         tracked_diff_sha256,
         benchmark_source_sha256,
+        common_source_sha256,
         dependency.project_toml_sha256,
         dependency.manifest_toml_sha256,
         string(VERSION),
@@ -150,6 +173,7 @@ function indel_bench_code_environment(source_path::String)::NamedTuple
         git_tracked_worktree_dirty = !isempty(tracked_diff),
         git_tracked_diff_sha256 = tracked_diff_sha256,
         benchmark_source_sha256 = benchmark_source_sha256,
+        common_source_sha256 = common_source_sha256,
         active_project_path = dependency.active_project_path,
         project_toml_sha256 = dependency.project_toml_sha256,
         manifest_toml_present = dependency.manifest_toml_present,
@@ -186,10 +210,169 @@ function indel_bench_assert_environment_unchanged(
         "active Manifest.toml changed during the $(context); refusing to " *
         "publish artifacts"
     )
+    current.common_source_sha256 == initial.common_source_sha256 || error(
+        "indel_benchmark_common.jl changed during the $(context); refusing " *
+        "to publish artifacts"
+    )
     current.code_environment_fingerprint ==
     initial.code_environment_fingerprint || error(
         "code/worktree/environment fingerprint changed during the " *
         "$(context); refusing to publish artifacts"
+    )
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Run status sidecar and start-of-run prechecks
+# ---------------------------------------------------------------------------
+
+"""
+    indel_bench_run_status_path(output_dir) -> String
+
+Path of the `.last_run_status` sidecar for `output_dir`.
+"""
+function indel_bench_run_status_path(output_dir::String)::String
+    return joinpath(output_dir, INDEL_BENCH_RUN_STATUS_FILENAME)
+end
+
+"""
+    indel_bench_read_run_status(output_dir) -> Union{Dict{String,String}, Nothing}
+
+Parse the `.last_run_status` sidecar, or `nothing` when absent. The format is
+`key=value` lines; unparseable lines are skipped, because a corrupt marker must
+not be able to abort a run.
+"""
+function indel_bench_read_run_status(
+        output_dir::String
+)::Union{Dict{String, String}, Nothing}
+    status_path = indel_bench_run_status_path(output_dir)
+    isfile(status_path) || return nothing
+    status = Dict{String, String}()
+    for line in eachline(status_path)
+        isempty(strip(line)) && continue
+        separator = findfirst(isequal('='), line)
+        separator === nothing && continue
+        status[String(line[1:(separator - 1)])] =
+            String(line[(separator + 1):end])
+    end
+    return status
+end
+
+"""
+    indel_bench_write_run_status(output_dir, fields)
+
+Write `fields` as `key=value` lines to the `.last_run_status` sidecar,
+replacing any previous marker.
+"""
+function indel_bench_write_run_status(
+        output_dir::String,
+        fields::Vector{Pair{String, String}}
+)::Nothing
+    Base.Filesystem.mkpath(output_dir)
+    open(indel_bench_run_status_path(output_dir), "w") do io
+        for (key, value) in fields
+            println(io, "$(key)=$(value)")
+        end
+    end
+    return nothing
+end
+
+"""
+    indel_bench_prior_generation_id(status) -> String
+
+Generation identifier described by a `.last_run_status` reading, or `"none"`
+when there is none.
+
+A run in flight has already replaced the marker with `generation_id=pending`,
+so the generation actually occupying the directory is carried in
+`previous_generation_id`. Without that carry-through, `begin_run` would erase
+the very identifier the publish-time report exists to surface.
+"""
+function indel_bench_prior_generation_id(
+        status::Union{Dict{String, String}, Nothing}
+)::String
+    status === nothing && return "none"
+    generation_id = get(status, "generation_id", "unknown")
+    return generation_id == "pending" ?
+           get(status, "previous_generation_id", "unknown") : generation_id
+end
+
+"""
+    indel_bench_assert_publishable(output_dir, artifact_names)
+
+Non-destructive precheck that publication into `output_dir` can succeed.
+
+[`indel_bench_remove_prior_artifacts`](@ref) refuses to delete a DIRECTORY
+squatting on an artifact name, which is correct but fires at publish time — at
+the end of a run that may have taken hours. This runs the same read-only check
+at start-of-run so the failure is immediate. It deletes and creates nothing, so
+calling it cannot itself destroy a prior generation.
+"""
+function indel_bench_assert_publishable(
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}}
+)::Nothing
+    isdir(output_dir) || return nothing
+    for artifact_name in artifact_names
+        artifact_path = joinpath(output_dir, artifact_name)
+        isdir(artifact_path) && error(
+            "refusing to start: a directory squats on the artifact name " *
+            "$(artifact_path); publication would fail at the end of the run"
+        )
+    end
+    return nothing
+end
+
+"""
+    indel_bench_begin_run(output_dir, artifact_names; context)
+
+Start-of-run entry point: precheck publishability, report the generation
+currently occupying `output_dir`, and mark the directory as having a run in
+flight.
+
+The marker exists because publication replaces a whole generation in place. An
+aborted run leaves the PREVIOUS generation intact — which is the desired
+durability property, but it also means the output directory of a failed run is
+byte-indistinguishable from that of a successful one. A `status=running` marker
+that is never advanced to `status=complete` is the difference.
+"""
+function indel_bench_begin_run(
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}};
+        context::String
+)::Nothing
+    indel_bench_assert_publishable(output_dir, artifact_names)
+    prior = indel_bench_read_run_status(output_dir)
+    if prior === nothing
+        println(
+            "run status: no prior $(INDEL_BENCH_RUN_STATUS_FILENAME) in " *
+            "$(output_dir)"
+        )
+    else
+        println(
+            "run status: prior status=$(get(prior, "status", "unknown")), " *
+            "generation_id=$(indel_bench_prior_generation_id(prior)), " *
+            "context=$(get(prior, "context", "unknown"))"
+        )
+        if get(prior, "status", "") == "running"
+            @warn(
+                "the previous run against this output directory never " *
+                "published; the artifacts present are from an older " *
+                "generation than that run",
+                output_dir = output_dir
+            )
+        end
+    end
+    indel_bench_write_run_status(
+        output_dir,
+        [
+            "status" => "running",
+            "context" => context,
+            "started_at" => string(Dates.now()),
+            "generation_id" => "pending",
+            "previous_generation_id" =>
+                indel_bench_prior_generation_id(prior)
+        ]
     )
     return nothing
 end
@@ -238,12 +421,29 @@ Every name in `artifact_names` must already exist in `staging_dir`; the
 completeness check runs BEFORE anything in `output_dir` is touched. Only once the
 new generation is known complete is the prior generation invalidated
 (manifest-first) and the staged files renamed into place. A failure at any point
-before this call therefore leaves the previous complete generation intact.
+BEFORE this call therefore leaves the previous complete generation intact.
+
+The window this does NOT cover is a crash DURING publication: the prior
+generation is removed manifest-first and only then are the staged files renamed
+in, so a crash between those two loops leaves a partial generation with no
+manifest. That is deliberate — manifest-first removal makes the partial state
+DETECTABLE rather than plausible — but it is not the same guarantee as the
+pre-publish window, and the `.last_run_status` marker left at `status=running`
+is what distinguishes it after the fact.
+
+This is a BLIND overwrite of whatever occupies `output_dir`: nothing here reads
+the prior manifest, so it cannot tell that the target is a newer or more
+expensive generation than the one being published. `generation_id` is printed
+before the replace so the overwrite is at least visible in the run log; callers
+that must not clobber a different KIND of run (a full calibration, say) are
+responsible for not pointing two kinds of run at one directory.
 """
 function indel_bench_publish_artifacts(
         staging_dir::String,
         output_dir::String,
-        artifact_names::Tuple{Vararg{String}}
+        artifact_names::Tuple{Vararg{String}};
+        context::Union{String, Nothing} = nothing,
+        generation_id::Union{String, Nothing} = nothing
 )::Nothing
     for artifact_name in artifact_names
         staging_path = joinpath(staging_dir, artifact_name)
@@ -251,11 +451,30 @@ function indel_bench_publish_artifacts(
             "staged artifact is missing: $(staging_path)"
         )
     end
+    prior = indel_bench_read_run_status(output_dir)
+    if prior !== nothing
+        println(
+            "publishing over prior generation " *
+            "$(indel_bench_prior_generation_id(prior)) " *
+            "(context=$(get(prior, "context", "unknown")))"
+        )
+    end
     indel_bench_remove_prior_artifacts(output_dir, artifact_names)
     for artifact_name in artifact_names
         Base.Filesystem.rename(
             joinpath(staging_dir, artifact_name),
             joinpath(output_dir, artifact_name)
+        )
+    end
+    if context !== nothing || generation_id !== nothing
+        indel_bench_write_run_status(
+            output_dir,
+            [
+                "status" => "complete",
+                "context" => something(context, "unknown"),
+                "completed_at" => string(Dates.now()),
+                "generation_id" => something(generation_id, "unknown")
+            ]
         )
     end
     return nothing
@@ -268,10 +487,17 @@ end
 """
     indel_bench_simulate_reads(; genome_length, source_read_length, coverage,
                                  error_rate, seed, tech = :nanopore,
-                                 identifier_prefix = "nanopore_read")
+                                 identifier_prefix = nothing)
 
 Simulate the shared deterministic long-read fixture and return
 `(reads, reference)`.
+
+`identifier_prefix` defaults to `"\$(tech)_read"` rather than to a hardcoded
+`"nanopore_read"`. Read identifiers are part of the digested fixture bytes, so
+two independent defaults meant a caller passing `tech = :illumina` silently got
+`nanopore_read_*` identifiers baked into the golden digest. Deriving one from
+the other makes that combination unrepresentable. The `:nanopore` default is
+unchanged, so the pinned golden digest is unaffected.
 
 BYTE IDENTITY IS LOAD-BEARING. `Mycelia.observe` samples its quality model from
 the GLOBAL RNG, so the output depends on the exact interleaving of local
@@ -295,8 +521,9 @@ function indel_bench_simulate_reads(;
         error_rate::Real,
         seed::Int,
         tech::Symbol = :nanopore,
-        identifier_prefix::String = "nanopore_read"
+        identifier_prefix::Union{String, Nothing} = nothing
 )::Tuple{Vector{FASTX.FASTQ.Record}, BioSequences.LongDNA{4}}
+    read_identifier_prefix = something(identifier_prefix, "$(tech)_read")
     reference_record = Mycelia.random_fasta_record(
         moltype = :DNA,
         seed = seed,
@@ -328,7 +555,7 @@ function indel_bench_simulate_reads(;
         push!(
             reads,
             FASTX.FASTQ.Record(
-                "$(identifier_prefix)_$(read_index)",
+                "$(read_identifier_prefix)_$(read_index)",
                 string(observed),
                 quality_string
             )
@@ -609,130 +836,4 @@ function indel_bench_rung_counter(
 )::Union{Int, Nothing}
     value = indel_bench_rung_value(rung, key, nothing)
     return value isa Int && value >= 0 ? value : nothing
-end
-
-# ---------------------------------------------------------------------------
-# Paired Wilcoxon signed-rank test
-# ---------------------------------------------------------------------------
-
-"""
-    indel_bench_signed_rank(deltas) -> NamedTuple
-
-Two-sided paired Wilcoxon signed-rank test on the paired differences `deltas`,
-returning `(n_nonzero, statistic, p_two_sided, method)`.
-
-- `n_nonzero` — count of nonzero differences. Zeros are dropped (Wilcoxon's
-  original handling), so `n_nonzero` is the effective sample size.
-- `statistic` — `V`, the sum of the ranks of the POSITIVE differences, ranking
-  `abs.(deltas)` ascending with midranks for ties. `Float64` because midranks are
-  half-integers.
-- `p_two_sided` — two-sided p-value; `NaN` when `n_nonzero == 0`.
-- `method` — `:exact`, `:normal_approximation`, or `:undefined`.
-
-For `n_nonzero <= 20` the exact conditional distribution of `V` is enumerated by
-subset-sum dynamic programming over the observed (possibly tied) ranks, which is
-the exact randomization distribution given `abs.(deltas)`; the two-sided p-value
-is the symmetric tail `P(|V - T/2| >= |v_obs - T/2|)` where `T` is the total rank
-sum. Above 20 a normal approximation is used, with the standard tie correction
-`-sum(t^3 - t)/48` on the variance and a continuity correction of 0.5 on the
-numerator.
-
-Implemented directly rather than via `HypothesisTests` so the benchmark family
-does not acquire a dependency for one test.
-
-Non-finite `deltas` are rejected — a silent `NaN` would otherwise be dropped as
-"not positive" and quietly shrink the sample.
-"""
-function indel_bench_signed_rank(deltas::AbstractVector{<:Real})::NamedTuple
-    all(isfinite, deltas) || throw(
-        ArgumentError("deltas must all be finite")
-    )
-    nonzero = Float64[Float64(delta) for delta in deltas if delta != 0]
-    n_nonzero = length(nonzero)
-    if n_nonzero == 0
-        return (
-            n_nonzero = 0,
-            statistic = 0.0,
-            p_two_sided = NaN,
-            method = :undefined
-        )
-    end
-
-    magnitudes = abs.(nonzero)
-    order = sortperm(magnitudes)
-    ranks = Vector{Float64}(undef, n_nonzero)
-    tie_sizes = Int[]
-    index = 1
-    while index <= n_nonzero
-        stop = index
-        while stop < n_nonzero &&
-            magnitudes[order[stop + 1]] == magnitudes[order[index]]
-            stop += 1
-        end
-        midrank = (index + stop) / 2
-        for tied_index in index:stop
-            ranks[order[tied_index]] = midrank
-        end
-        push!(tie_sizes, stop - index + 1)
-        index = stop + 1
-    end
-
-    statistic = sum(
-        ranks[position] for position in 1:n_nonzero if nonzero[position] > 0;
-        init = 0.0
-    )
-
-    if n_nonzero <= 20
-        # Midranks are half-integers; double them so the subset-sum DP is exact
-        # in integer arithmetic.
-        scaled_ranks = Int[round(Int, 2 * rank) for rank in ranks]
-        total = sum(scaled_ranks)
-        counts = zeros(Float64, total + 1)
-        counts[1] = 1.0
-        for scaled_rank in scaled_ranks
-            for target in total:-1:scaled_rank
-                counts[target + 1] += counts[target - scaled_rank + 1]
-            end
-        end
-        observed = round(Int, 2 * statistic)
-        center = total / 2
-        deviation = abs(observed - center)
-        tail = sum(
-            counts[value + 1]
-            for value in 0:total if abs(value - center) >= deviation - 1e-9;
-            init = 0.0
-        )
-        p_two_sided = min(1.0, tail / 2.0^n_nonzero)
-        return (
-            n_nonzero = n_nonzero,
-            statistic = statistic,
-            p_two_sided = p_two_sided,
-            method = :exact
-        )
-    end
-
-    mean_statistic = n_nonzero * (n_nonzero + 1) / 4
-    tie_adjustment = sum(
-        Float64(size)^3 - Float64(size) for size in tie_sizes; init = 0.0
-    )
-    variance = n_nonzero * (n_nonzero + 1) * (2 * n_nonzero + 1) / 24 -
-               tie_adjustment / 48
-    variance > 0 || return (
-        n_nonzero = n_nonzero,
-        statistic = statistic,
-        p_two_sided = NaN,
-        method = :normal_approximation
-    )
-    deviation = abs(statistic - mean_statistic)
-    corrected = max(deviation - 0.5, 0.0)
-    z = corrected / sqrt(variance)
-    p_two_sided = min(
-        1.0, 2 * Distributions.ccdf(Distributions.Normal(), z)
-    )
-    return (
-        n_nonzero = n_nonzero,
-        statistic = statistic,
-        p_two_sided = p_two_sided,
-        method = :normal_approximation
-    )
 end
