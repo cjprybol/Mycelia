@@ -783,24 +783,33 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
                 "misassembly. **These results are not validation-grade and must not " *
                 "be reported as a measured effect.**\n")
         elseif analysis.allow_mixed_src
+            # Deliberately does NOT say "so the aggregate is well-defined": that is
+            # a claim about the VALUES, and it is settled by the provenance block
+            # below, not by whether a flag bound. This branch reports only what it
+            # actually knows — that the override did not fire.
             println(io,
                 "\n_`--allow-mixed-src` was passed but did NOT bind: the rows are " *
-                "single-definition on every checked axis, so the aggregate is " *
-                "well-defined._\n")
-        elseif analysis.definition_operator_asserted
-            # The assurance is deliberately NOT printed here: it would certify an
-            # operator's claim as a checked fact. The warning block above stands in
-            # its place.
-            println(io,
-                "\n_`metric_source_guard.jl` (bead td-9p91) ran and no override was " *
-                "used, but the values it compared were operator-asserted for some " *
-                "rows (see the warning above), so this run does NOT establish that " *
-                "the aggregate spans a single MEASURED definition._\n")
-        else
+                "single-definition on every checked axis._\n")
+        elseif !analysis.definition_operator_asserted
             println(io,
                 "\n_A single value per definition column is what makes the aggregate " *
                 "meaningful; `metric_source_guard.jl` (bead td-9p91) enforced it — " *
                 "no override was used._\n")
+        end
+
+        # INDEPENDENT of the override state above. Whether the guard was overridden
+        # and whether the values it compared were observed are two orthogonal facts,
+        # and chaining them through one `if/elseif` let the weaker one shadow the
+        # stronger: a harmless NON-BINDING `--allow-mixed-src` suppressed this
+        # qualifier and restored an unqualified "the aggregate is well-defined" over
+        # a table whose definition was never observed — the exact assurance this
+        # machinery exists to withhold. Emitted last so it is the final word.
+        if analysis.definition_operator_asserted
+            println(io,
+                "\n_`metric_source_guard.jl` (bead td-9p91) checked what it was given, " *
+                "but the values it compared were operator-asserted for some rows " *
+                "(see the warning above), so this run does NOT establish that the " *
+                "aggregate spans a single MEASURED definition._\n")
         end
 
         println(io, "## Results\n")

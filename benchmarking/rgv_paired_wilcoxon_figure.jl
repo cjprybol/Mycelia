@@ -28,6 +28,46 @@ import JSON
 import Statistics
 
 """
+    paired_figure_caption(payload) -> String
+
+Caption for the paired figure, including any INTEGRITY CAVEAT the payload carries.
+
+Pure (no CairoMakie, no IO) so the caveats can be unit-tested without rendering.
+
+# Why the caveats belong here and not only in `report.md`
+
+The metric definition already belongs on the figure: a paired plot of QUAST NGA50
+and a paired plot of an internal size-ratio proxy look identical, so the caption is
+what keeps the reader from conflating them (bead td-9p91).
+
+The same argument applies with more force to the two facts that say the definition
+is not trustworthy. Under this repo's `1 notebook = 1 figure = 1 slide` model the
+SVG/PNG is what reaches a deck or a manuscript, detached from `report.md`. A run
+whose guard was overridden, or whose definition was asserted by an operator rather
+than observed, previously rendered a caption bit-for-bit identical to a measured
+run — so the artifact that travels furthest carried the least disclosure.
+
+Both flags are read with a `false` default so an older `results.json` (written
+before the fields existed) renders exactly as it did before.
+"""
+function paired_figure_caption(payload)
+    definition = join(
+        [string(k, "=", join(v, "/")) for (k, v) in payload["metric_definition"]], "  ")
+    seeds = join(string.(payload["seeds"]), ", ")
+    caveats = String[]
+    if get(payload, "metric_definition_override_bound", false) === true
+        push!(caveats,
+            "GUARD OVERRIDDEN — rows span more than one definition — NOT validation-grade")
+    end
+    if get(payload, "metric_definition_operator_asserted", false) === true
+        push!(caveats, "definition OPERATOR-ASSERTED (backfilled), not observed")
+    end
+    head = "RGV correction-validation sweep — pre-registered paired Wilcoxon\n" *
+           "seeds $seeds · definition: $definition"
+    return isempty(caveats) ? head : head * "\n⚠ " * join(caveats, "\n⚠ ")
+end
+
+"""
     draw_paired_figure(payload; output_dir, basename) -> (svg_path, png_path)
 
 Render the paired slope plot and paired-difference panel for every metric in
@@ -102,15 +142,7 @@ function draw_paired_figure(payload; output_dir::AbstractString,
         end
     end
 
-    # The metric definition belongs ON the figure: a paired plot of QUAST NGA50 and
-    # a paired plot of an internal size-ratio proxy look identical, so the caption
-    # is what keeps the reader from conflating them (bead td-9p91).
-    definition = join(
-        [string(k, "=", join(v, "/")) for (k, v) in payload["metric_definition"]], "  ")
-    seeds = join(string.(payload["seeds"]), ", ")
-    CairoMakie.Label(fig[0, 1:2],
-        "RGV correction-validation sweep — pre-registered paired Wilcoxon\n" *
-        "seeds $seeds · definition: $definition";
+    CairoMakie.Label(fig[0, 1:2], paired_figure_caption(payload);
         fontsize = 15, padding = (0, 0, 8, 0))
 
     mkpath(output_dir)
