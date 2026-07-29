@@ -23,6 +23,13 @@ import JSON
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "rgv_paired_wilcoxon.jl"))
 
+# The WRITER of the provenance labels this file's reader consumes, loaded so the
+# cross-file contract can be tested by round-trip rather than by grepping source.
+# Namespaced into a module because both scripts define `main` at top level.
+module _PWTBackfill
+include(joinpath(@__DIR__, "..", "..", "benchmarking", "rgv_seed_backfill.jl"))
+end
+
 function _pwt_throws_with(f, needles::Vector{String})
     try
         f()
@@ -39,8 +46,14 @@ end
 
 # Build a sweep-shaped table. `with_seed=false` reproduces the pre-td-59o7 schema.
 # `naive`/`iterative` give the per-cell metric values, one entry per (seed, cell).
+#
+# `provenance=nothing` (the default) reproduces the shape of EVERY sweep CSV the
+# documented backfill/analyse workflow produced before the provenance axis existed:
+# definition columns present, no `*_provenance` siblings. That is a table whose
+# provenance cannot be determined, NOT a table shown to be observed, so callers
+# that want the measured case must ask for it explicitly.
 function _pwt_frame(cells; with_seed = true, metric_source = "quast",
-        min_contig = 500, metric = :quast_nga50, ok = true)
+        min_contig = 500, metric = :quast_nga50, ok = true, provenance = nothing)
     rows = []
     for c in cells
         for (arm, value) in (("naive", c.naive), ("iterative", c.iterative))
@@ -57,6 +70,11 @@ function _pwt_frame(cells; with_seed = true, metric_source = "quast",
                 metric => value
             )
             with_seed && (row[:seed] = get(c, :seed, 42))
+            if provenance !== nothing
+                p = get(c, :provenance, provenance)
+                row[:metric_source_provenance] = p
+                row[:quast_min_contig_provenance] = p
+            end
             push!(rows, row)
         end
     end
@@ -632,7 +650,10 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
                 write_paired_report(joinpath(dir, "no.md"), a_no;
                     csv_paths = ["f.csv"]), String)
             Test.@test occursin("0 dropped for ok=false", t_ok)
-            Test.@test !occursin("ABSENT", t_ok)
+            # Scoped to the `ok` clause: bare "ABSENT" also matches unrelated
+            # disclosures elsewhere in the report and would silently stop testing
+            # this one.
+            Test.@test !occursin("`ok` column ABSENT", t_ok)
             # The unrunnable case must SAY it was unrunnable, and must not claim a
             # count of failures it never looked for.
             Test.@test occursin("`ok` column ABSENT", t_no)
@@ -660,7 +681,7 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
                 write_paired_report(joinpath(dir, "k.md"), a_keep;
                     csv_paths = ["f.csv"]), String)
             Test.@test occursin("filter DISABLED", t)
-            Test.@test !occursin("ABSENT", t)
+            Test.@test !occursin("`ok` column ABSENT", t)
         end
 
         # Sub-finding: `coalesce(missing, false)` counted an UNKNOWN status as an
@@ -698,8 +719,11 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
                  for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
             (123, 0.05), (456, 0.01), (456, 0.05)]]
-        observed = _pwt_frame(cells)
-        asserted = _pwt_frame(cells)
+        # Both tables must carry AFFIRMATIVE provenance on every definition axis:
+        # the assurance is granted for observed provenance, not for the absence of a
+        # contrary signal (see the "undeterminable" testset below).
+        observed = _pwt_frame(cells; provenance = "observed")
+        asserted = _pwt_frame(cells; provenance = "observed")
         asserted[!, :metric_source_provenance] = fill("operator-asserted (backfill)",
             DataFrames.nrow(asserted))
 
@@ -738,7 +762,7 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
 
         # ONE asserted row is enough: the rows the backfill did not touch stay
         # labelled observed, but the aggregate still spans a claim nobody verified.
-        partial = _pwt_frame(cells)
+        partial = _pwt_frame(cells; provenance = "observed")
         prov = fill("observed", DataFrames.nrow(partial))
         prov[1] = "operator-asserted (backfill)"
         partial[!, :metric_source_provenance] = prov
@@ -748,13 +772,15 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
 
         # The claim is evaluated over the rows actually ANALYZED. An assertion on
         # rows the `--metric-source` filter removed does not taint what is left.
-        filtered = _pwt_frame([
-            (seed = 42, error_rate = 0.01, naive = 1000.0, iterative = 1500.0,
-                metric_source = "quast"),
-            (seed = 123, error_rate = 0.01, naive = 900.0, iterative = 1400.0,
-                metric_source = "internal:quast-failed"),
-            (seed = 456, error_rate = 0.01, naive = 950.0, iterative = 1450.0,
-                metric_source = "quast")])
+        filtered = _pwt_frame(
+            [
+                (seed = 42, error_rate = 0.01, naive = 1000.0, iterative = 1500.0,
+                    metric_source = "quast"),
+                (seed = 123, error_rate = 0.01, naive = 900.0, iterative = 1400.0,
+                    metric_source = "internal:quast-failed"),
+                (seed = 456, error_rate = 0.01, naive = 950.0, iterative = 1450.0,
+                    metric_source = "quast")];
+            provenance = "observed")
         filtered[!, :metric_source_provenance] = [src == "quast" ? "observed" :
                                                   "operator-asserted (backfill)"
                                                   for src in filtered.metric_source]
@@ -764,10 +790,132 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test !a_filt.definition_operator_asserted
     end
 
+    Test.@testset "B: provenance that CANNOT be determined must not read as observed" begin
+        # The two-state reader was a BLACKLIST: anything not containing
+        # "operator-asserted" counted as observed. So it failed OPEN in exactly the
+        # cases it exists for, and reported `metric_definition_operator_asserted:
+        # false` — an affirmative claim the definition was MEASURED — over tables
+        # that carry no evidence either way.
+        cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                 for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]]
+
+        # (1) NO sibling provenance column — the shape of every sweep CSV the
+        # documented backfill -> analyse workflow produced before this PR.
+        none = _pwt_frame(cells)
+        a_none = run_paired_analysis(none; metrics = (:quast_nga50,))
+        Test.@test a_none.definition_provenance_undeterminable
+        Test.@test a_none.undeterminable_definition_axes ==
+                   ["metric_source", "quast_min_contig"]
+        # The existing boolean keeps its meaning — true iff a row was ASSERTED — so
+        # the third state is added alongside it rather than overloaded onto it.
+        Test.@test !a_none.definition_operator_asserted
+        Test.@test a_none.n_rows_operator_asserted == 0
+
+        # (2) A provenance column carrying a label the reader does not understand.
+        # This is STRONGER evidence that something wrote provenance metadata than an
+        # absent column is, yet a blacklist treated it more permissively.
+        drifted = _pwt_frame(cells; provenance = "backfilled-by-operator")
+        a_drift = run_paired_analysis(drifted; metrics = (:quast_nga50,))
+        Test.@test a_drift.definition_provenance_undeterminable
+        Test.@test !a_drift.definition_operator_asserted
+
+        # (3) A provenance column that is present but `missing` on some rows.
+        holey = _pwt_frame(cells; provenance = "observed")
+        holey[!, :metric_source_provenance] = Vector{Union{Missing, String}}(
+            holey.metric_source_provenance)
+        holey[1, :metric_source_provenance] = missing
+        a_holey = run_paired_analysis(holey; metrics = (:quast_nga50,))
+        Test.@test a_holey.undeterminable_definition_axes == ["metric_source"]
+        Test.@test !a_holey.definition_operator_asserted
+
+        # (4) One axis affirmatively observed, the other with no sibling column: the
+        # assurance is per-axis, so a partial disclosure does not earn it.
+        partial = _pwt_frame(cells; provenance = "observed")
+        DataFrames.select!(partial,
+            DataFrames.Not(:quast_min_contig_provenance))
+        a_partial = run_paired_analysis(partial; metrics = (:quast_nga50,))
+        Test.@test a_partial.undeterminable_definition_axes == ["quast_min_contig"]
+
+        # (5) The control: AFFIRMATIVELY observed on every present axis is the only
+        # state that earns the unqualified assurance.
+        observed = _pwt_frame(cells; provenance = "observed")
+        a_obs = run_paired_analysis(observed; metrics = (:quast_nga50,))
+        Test.@test !a_obs.definition_provenance_undeterminable
+        Test.@test isempty(a_obs.undeterminable_definition_axes)
+
+        mktempdir() do dir
+            for (name, a) in (("none", a_none), ("drift", a_drift),
+                ("holey", a_holey), ("partial", a_partial))
+                text = read(
+                    write_paired_report(joinpath(dir, "$name.md"), a;
+                        csv_paths = ["f.csv"]), String)
+                # The undeterminable state gets its own block, and the unqualified
+                # assurance is withheld: "no contrary signal" is not evidence.
+                Test.@test occursin("PROVENANCE UNDETERMINABLE", text)
+                Test.@test occursin("cannot be determined from this table", text)
+                Test.@test !occursin("enforced it — no override was used", text)
+                Test.@test occursin(
+                    "does NOT establish that the aggregate spans a single MEASURED definition",
+                    text)
+                p = paired_analysis_json(a; csv_paths = ["f.csv"])
+                Test.@test p["metric_definition_provenance_undeterminable"] == true
+                Test.@test p["undeterminable_definition_provenance_axes"] ==
+                           a.undeterminable_definition_axes
+                # NOT overloaded onto the asserted boolean.
+                Test.@test p["metric_definition_operator_asserted"] == false
+            end
+            t_obs = read(
+                write_paired_report(joinpath(dir, "obs.md"), a_obs;
+                    csv_paths = ["f.csv"]), String)
+            Test.@test occursin("enforced it — no override was used", t_obs)
+            Test.@test !occursin("PROVENANCE UNDETERMINABLE", t_obs)
+            p_obs = paired_analysis_json(a_obs; csv_paths = ["f.csv"])
+            Test.@test p_obs["metric_definition_provenance_undeterminable"] == false
+            Test.@test isempty(p_obs["undeterminable_definition_provenance_axes"])
+        end
+    end
+
+    Test.@testset "B: the reader detects what the backfill WRITES (round-trip)" begin
+        # A source grep certifies a coupling it cannot detect breaking. Leaving
+        # `DEFINITION_PROVENANCE_ASSERTED` defined verbatim while changing only the
+        # call site in `_mark_definition_provenance!` to emit another label keeps
+        # both grep assertions passing — Julia does not warn on a defined-but-unused
+        # const — while this reader stops detecting the writer's output entirely.
+        # So the coupling is pinned BEHAVIOURALLY: the writer produces a frame, the
+        # reader classifies it.
+        #
+        # Loaded into its own module because both scripts define `main`.
+        df = DataFrames.DataFrame(
+            arm = ["naive", "iterative"],
+            metric_source = ["quast", missing])
+        _PWTBackfill.insert_definition_column!(df, :metric_source, "quast")
+        asserted, undeterminable, n_asserted = definition_provenance_axes(df)
+        # The row the backfill FILLED is detected as an assertion...
+        Test.@test asserted == ["metric_source"]
+        Test.@test n_asserted == 1
+        # ...and the row it left alone is detected as affirmatively OBSERVED, which
+        # pins the other half of the contract: the reader must recognise the exact
+        # label the writer uses for untouched rows, or every backfilled table also
+        # reads as undeterminable.
+        Test.@test isempty(undeterminable)
+
+        # The writer's own constants must round-trip through the reader's two
+        # recognised categories, so neither end can be renamed unilaterally.
+        Test.@test occursin(RGV_ASSERTED_DEFINITION_MARKER,
+            _PWTBackfill.DEFINITION_PROVENANCE_ASSERTED)
+        Test.@test _PWTBackfill.DEFINITION_PROVENANCE_OBSERVED ==
+                   RGV_OBSERVED_DEFINITION_LABEL
+        # The column-naming convention the reader looks under, from the writer's own
+        # function rather than a grep of its source.
+        Test.@test _PWTBackfill.definition_provenance_column(:metric_source) ==
+                   :metric_source_provenance
+    end
+
     Test.@testset "B: the asserted marker matches what the backfill actually writes" begin
-        # The disclosure crosses a file boundary through a string literal, so the
-        # two ends have to be pinned together or the reader silently stops
-        # detecting what the writer emits.
+        # Retained as a cheap literal check ONLY. It cannot detect the call site
+        # drifting away from the const it declares — that is what the round-trip
+        # testset above is for.
         backfill = read(
             joinpath(@__DIR__, "..", "..", "benchmarking", "rgv_seed_backfill.jl"),
             String)
