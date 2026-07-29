@@ -430,7 +430,8 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             append!(ARGS, ["--metric-source", "quast"])
             Test.@test isempty(_pw_args("--csv"))                       # absent flag
         finally
-            empty!(ARGS); append!(ARGS, saved)
+            empty!(ARGS);
+            append!(ARGS, saved)
         end
     end
 
@@ -570,8 +571,9 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test "metric_source" in a.mixed_axes
 
         mktempdir() do dir
-            text = read(write_paired_report(joinpath(dir, "r.md"), a;
-                csv_paths = ["f.csv"]), String)
+            text = read(
+                write_paired_report(joinpath(dir, "r.md"), a;
+                    csv_paths = ["f.csv"]), String)
             # The artifact must say the guard was overridden...
             Test.@test occursin("GUARD OVERRIDDEN", text)
             Test.@test occursin("not validation-grade", lowercase(text))
@@ -591,11 +593,104 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test b.allow_mixed_src
         Test.@test !b.override_bound
         mktempdir() do dir
-            text = read(write_paired_report(joinpath(dir, "r.md"), b;
-                csv_paths = ["f.csv"]), String)
+            text = read(
+                write_paired_report(joinpath(dir, "r.md"), b;
+                    csv_paths = ["f.csv"]), String)
             Test.@test occursin("did NOT bind", text)
             Test.@test !occursin("GUARD OVERRIDDEN", text)
         end
+    end
+
+    Test.@testset "B: an OPERATOR-ASSERTED definition cannot earn the guard assurance" begin
+        # `rgv_seed_backfill.jl --metric-source quast` writes a definition on
+        # operator say-so, with nothing to verify it against. The guard can then
+        # only check that the asserted labels agree with EACH OTHER, and a
+        # backfilled label agrees with itself by construction — so a legacy table
+        # that genuinely mixed an alignment-validated NGA50 with a size-ratio proxy
+        # passes, and the report went on to assert the guard had enforced
+        # single-definition-ness. That is the same laundering the `--allow-mixed-src`
+        # disclosure exists to prevent, reached by a different route.
+        cells = [(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                 for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]]
+        observed = _pwt_frame(cells)
+        asserted = _pwt_frame(cells)
+        asserted[!, :metric_source_provenance] = fill("operator-asserted (backfill)",
+            DataFrames.nrow(asserted))
+
+        a_obs = run_paired_analysis(observed; metrics = (:quast_nga50,))
+        a_ast = run_paired_analysis(asserted; metrics = (:quast_nga50,))
+        # The two tables produce IDENTICAL definition summaries — that is the point.
+        Test.@test Dict(a_obs.definition) == Dict(a_ast.definition)
+        Test.@test !a_obs.definition_operator_asserted
+        Test.@test a_ast.definition_operator_asserted
+        Test.@test a_ast.operator_asserted_axes == ["metric_source"]
+        Test.@test a_ast.n_rows_operator_asserted == DataFrames.nrow(asserted)
+
+        mktempdir() do dir
+            t_obs = read(
+                write_paired_report(joinpath(dir, "obs.md"), a_obs;
+                    csv_paths = ["f.csv"]), String)
+            t_ast = read(
+                write_paired_report(joinpath(dir, "ast.md"), a_ast;
+                    csv_paths = ["f.csv"]), String)
+            # A measured definition still earns the unqualified assurance...
+            Test.@test occursin("enforced it — no override was used", t_obs)
+            Test.@test !occursin("OPERATOR-ASSERTED", t_obs)
+            # ...an asserted one must not, and must say so before the numbers.
+            Test.@test !occursin("enforced it — no override was used", t_ast)
+            Test.@test occursin("OPERATOR-ASSERTED, NOT OBSERVED", t_ast)
+            Test.@test occursin("operator assertion", t_ast)
+
+            p_ast = paired_analysis_json(a_ast; csv_paths = ["f.csv"])
+            Test.@test p_ast["metric_definition_operator_asserted"] == true
+            Test.@test p_ast["operator_asserted_definition_axes"] == ["metric_source"]
+            Test.@test p_ast["n_rows_operator_asserted_definition"] == 12
+            p_obs = paired_analysis_json(a_obs; csv_paths = ["f.csv"])
+            Test.@test p_obs["metric_definition_operator_asserted"] == false
+            Test.@test isempty(p_obs["operator_asserted_definition_axes"])
+        end
+
+        # ONE asserted row is enough: the rows the backfill did not touch stay
+        # labelled observed, but the aggregate still spans a claim nobody verified.
+        partial = _pwt_frame(cells)
+        prov = fill("observed", DataFrames.nrow(partial))
+        prov[1] = "operator-asserted (backfill)"
+        partial[!, :metric_source_provenance] = prov
+        a_part = run_paired_analysis(partial; metrics = (:quast_nga50,))
+        Test.@test a_part.definition_operator_asserted
+        Test.@test a_part.n_rows_operator_asserted == 1
+
+        # The claim is evaluated over the rows actually ANALYZED. An assertion on
+        # rows the `--metric-source` filter removed does not taint what is left.
+        filtered = _pwt_frame([
+            (seed = 42, error_rate = 0.01, naive = 1000.0, iterative = 1500.0,
+                metric_source = "quast"),
+            (seed = 123, error_rate = 0.01, naive = 900.0, iterative = 1400.0,
+                metric_source = "internal:quast-failed"),
+            (seed = 456, error_rate = 0.01, naive = 950.0, iterative = 1450.0,
+                metric_source = "quast")])
+        filtered[!, :metric_source_provenance] = [src == "quast" ? "observed" :
+                                                  "operator-asserted (backfill)"
+                                                  for src in filtered.metric_source]
+        a_filt = run_paired_analysis(filtered;
+            metrics = (:quast_nga50,), metric_source = "quast")
+        Test.@test a_filt.n_rows_operator_asserted == 0
+        Test.@test !a_filt.definition_operator_asserted
+    end
+
+    Test.@testset "B: the asserted marker matches what the backfill actually writes" begin
+        # The disclosure crosses a file boundary through a string literal, so the
+        # two ends have to be pinned together or the reader silently stops
+        # detecting what the writer emits.
+        backfill = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking", "rgv_seed_backfill.jl"),
+            String)
+        Test.@test occursin(
+            "DEFINITION_PROVENANCE_ASSERTED = \"$(RGV_ASSERTED_DEFINITION_MARKER)",
+            backfill)
+        # And the column-naming convention the reader looks under.
+        Test.@test occursin("String(name) * \"_provenance\"", backfill)
     end
 
     Test.@testset "C1/I3: the report does not claim to be a pre-registered test" begin
@@ -604,8 +699,9 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             (123, 0.05), (456, 0.01), (456, 0.05)]])
         a = run_paired_analysis(df; metrics = (:quast_nga50,))
         mktempdir() do dir
-            text = read(write_paired_report(joinpath(dir, "r.md"), a;
-                csv_paths = ["f.csv"]), String)
+            text = read(
+                write_paired_report(joinpath(dir, "r.md"), a;
+                    csv_paths = ["f.csv"]), String)
             # H1 is Viterbi-DP-vs-greedy; this compares correctors. Attributing it
             # to H1 would put an unregistered comparison into a manuscript as
             # confirmatory.

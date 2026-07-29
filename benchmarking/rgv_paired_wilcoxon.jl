@@ -42,6 +42,15 @@
 #    size-ratio proxy. Selecting a definition is explicit (`--metric-source quast`)
 #    or the run fails.
 #
+#    A definition column can also be SUPPLIED after the fact by
+#    `rgv_seed_backfill.jl --metric-source`, on operator say-so, with nothing to
+#    verify it against. The guard cannot see the difference — a backfilled label
+#    agrees with itself by construction — so a genuinely mixed legacy table becomes
+#    one the guard certifies as uniform. This script therefore reads the
+#    `<column>_provenance` column the backfill writes and refuses to print the
+#    "guard enforced it" assurance over operator-asserted rows; `results.json`
+#    carries the same fact in `metric_definition_operator_asserted`.
+#
 # HOW PAIRS ARE FORMED
 # --------------------
 # One pair per (reference, error_rate, readlen, target_coverage, k, seed) cell:
@@ -514,6 +523,49 @@ function decide(result, adjusted_p)
 end
 
 """
+Substring identifying a metric definition that was ASSERTED BY AN OPERATOR rather
+than observed by the run that produced the metrics.
+
+`rgv_seed_backfill.jl` writes `"operator-asserted (backfill)"` into
+`<definition-column>_provenance` for every row it supplies a definition for. The
+match is on the substring so the writer can extend the label (with a tool name, a
+date) without breaking the reader; the coupling is pinned by a test that greps the
+backfill tool's source.
+"""
+const RGV_ASSERTED_DEFINITION_MARKER = "operator-asserted"
+
+"""
+    operator_asserted_definitions(df) -> (axes, n_rows)
+
+Definition axes whose value was operator-asserted for at least one row of `df`,
+and the number of rows carrying an assertion on any axis.
+
+This is the fact `assert_single_metric_definition` structurally CANNOT establish.
+The guard checks that the definition labels agree with each other; when those
+labels were written by `rgv_seed_backfill.jl --metric-source`, agreement is
+guaranteed by construction and says nothing about how the runs were scored. A
+legacy table that genuinely mixed QUAST-scored and degraded rows, backfilled with
+a single `--metric-source`, passes the guard perfectly. Only the provenance column
+distinguishes that case, so the report and `results.json` must surface it.
+"""
+function operator_asserted_definitions(df)
+    cols = Set(String.(DataFrames.names(df)))
+    axes = String[]
+    asserted_rows = falses(DataFrames.nrow(df))
+    for col in METRIC_DEFINITION_COLUMNS
+        prov = String(col) * "_provenance"
+        prov in cols || continue
+        flags = Bool[!ismissing(v) &&
+                     occursin(RGV_ASSERTED_DEFINITION_MARKER, string(v))
+                     for v in getproperty(df, Symbol(prov))]
+        any(flags) || continue
+        push!(axes, String(col))
+        asserted_rows .|= flags
+    end
+    return axes, count(asserted_rows)
+end
+
+"""
     run_paired_analysis(df; treatment, control, metrics, metric_source=nothing,
                         allow_mixed_src=false, keep_not_ok=false) -> NamedTuple
 
@@ -565,6 +617,14 @@ function run_paired_analysis(df;
     mixed_axes = [String(col) for (col, vals) in definition if length(vals) > 1]
     override_bound = allow_mixed_src && !isempty(mixed_axes)
 
+    # A definition the guard CHECKED is not the same as a definition anyone
+    # OBSERVED. `rgv_seed_backfill.jl --metric-source` can write a uniform label
+    # onto a table that really did mix definitions, which the guard then certifies
+    # as consistent. That fact has to reach the deliverable, for the same reason
+    # `override_bound` does.
+    asserted_axes, n_asserted_rows = operator_asserted_definitions(work)
+    definition_asserted = !isempty(asserted_axes)
+
     results = [analyze_metric(work, m; treatment = treatment, control = control)
                for m in metrics]
     adjusted = benjamini_hochberg(Float64[r.test.pvalue for r in results])
@@ -582,6 +642,9 @@ function run_paired_analysis(df;
         definition = definition, seeds = seeds,
         axes = axes, allow_mixed_src = allow_mixed_src, mixed_axes = mixed_axes,
         override_bound = override_bound,
+        operator_asserted_axes = asserted_axes,
+        n_rows_operator_asserted = n_asserted_rows,
+        definition_operator_asserted = definition_asserted,
         treatment = String(treatment), control = String(control),
         n_input_rows = n_input, n_rows_analyzed = DataFrames.nrow(work),
         n_dropped_not_ok = n_dropped_not_ok, n_dropped_metric_source = n_dropped_source,
@@ -644,6 +707,31 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
         for (col, vals) in analysis.definition
             println(io, "- `$col`: " * join(("`$v`" for v in vals), ", "))
         end
+        # Same doctrine as the override block below, applied to the other way the
+        # assurance can be false. A definition SUPPLIED by `rgv_seed_backfill.jl`
+        # is uniform by construction, so the guard passing over it is not evidence
+        # about how the runs were scored — a legacy table that genuinely mixed
+        # QUAST-scored and degraded rows, backfilled with one `--metric-source`,
+        # produces exactly this artifact. The reader must be told before reading
+        # the numbers, and the unqualified assurance below is suppressed.
+        if analysis.definition_operator_asserted
+            println(io,
+                "\n> ## :warning: METRIC DEFINITION OPERATOR-ASSERTED, NOT OBSERVED\n>\n" *
+                "> $(analysis.n_rows_operator_asserted) of " *
+                "$(analysis.n_rows_analyzed) analyzed rows carry a definition that " *
+                "was **supplied by `rgv_seed_backfill.jl`** on operator say-so, on " *
+                join(("`$a`" for a in analysis.operator_asserted_axes), ", ") *
+                " (see the `*_provenance` column(s) in the input CSV).\n>\n" *
+                "> Nothing verified that claim: unlike `seed`, which can be " *
+                "recovered from a run log, there is no record of which definition " *
+                "produced a historical metric. `metric_source_guard.jl` can only " *
+                "confirm that the asserted labels agree with EACH OTHER, and a " *
+                "backfilled label agrees with itself by construction — a table that " *
+                "genuinely mixed an alignment-validated QUAST metric with an " *
+                "internal size-ratio proxy passes this check once it is backfilled " *
+                "with a single value. **Treat the definition below as an operator " *
+                "assertion, not as measured provenance.**\n")
+        end
         # The artifact must never assert the guard was enforced when it was
         # overridden. Previously this line printed unconditionally, so a run with
         # `--allow-mixed-src` listed two definitions and then, one line later, told
@@ -666,6 +754,15 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
                 "\n_`--allow-mixed-src` was passed but did NOT bind: the rows are " *
                 "single-definition on every checked axis, so the aggregate is " *
                 "well-defined._\n")
+        elseif analysis.definition_operator_asserted
+            # The assurance is deliberately NOT printed here: it would certify an
+            # operator's claim as a checked fact. The warning block above stands in
+            # its place.
+            println(io,
+                "\n_`metric_source_guard.jl` (bead td-9p91) ran and no override was " *
+                "used, but the values it compared were operator-asserted for some " *
+                "rows (see the warning above), so this run does NOT establish that " *
+                "the aggregate spans a single MEASURED definition._\n")
         else
             println(io,
                 "\n_A single value per definition column is what makes the aggregate " *
@@ -778,6 +875,12 @@ function paired_analysis_json(analysis; csv_paths)
         "allow_mixed_src" => analysis.allow_mixed_src,
         "mixed_definition_axes" => analysis.mixed_axes,
         "metric_definition_override_bound" => analysis.override_bound,
+        # Whether the definition the guard checked was MEASURED or merely ASSERTED.
+        # A consumer that reads only `metric_definition` cannot tell the two apart,
+        # and they are very different provenance claims.
+        "metric_definition_operator_asserted" => analysis.definition_operator_asserted,
+        "operator_asserted_definition_axes" => analysis.operator_asserted_axes,
+        "n_rows_operator_asserted_definition" => analysis.n_rows_operator_asserted,
         "alpha" => RGV_ALPHA,
         "improvement_threshold" => RGV_IMPROVEMENT_THRESHOLD,
         "metrics" => [Dict(

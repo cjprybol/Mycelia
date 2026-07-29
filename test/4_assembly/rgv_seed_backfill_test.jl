@@ -354,6 +354,63 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         end
     end
 
+    Test.@testset "B: a supplied definition is labelled IN THE CSV, not just the sidecar" begin
+        # `--metric-source` states, on operator say-so, which definition produced
+        # every metric in the file — a claim nothing verifies, and one no
+        # `--run-log` equivalent could recover. Recording it only in the sidecar is
+        # not a disclosure, because NO consumer reads the sidecar: the analysis
+        # calls `load_sweep_csvs(csv_paths)` and nothing else. So a legacy table
+        # that genuinely mixed QUAST-scored and degraded rows, backfilled with one
+        # `--metric-source`, produced a file the guard certifies as uniform and a
+        # report asserting the guard was enforced. The disclosure has to ride in
+        # the CSV.
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            out, sidecar,
+            _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)",
+                metric_source = "quast", quast_min_contig = 500)
+            df = CSV.read(out, DataFrames.DataFrame)
+
+            for col in ("metric_source_provenance", "quast_min_contig_provenance")
+                Test.@test col in DataFrames.names(df)
+            end
+            # Every row of a column this tool SUPPLIED is an assertion.
+            Test.@test all(occursin.("operator-asserted", df.metric_source_provenance))
+            Test.@test all(occursin.("operator-asserted", df.quast_min_contig_provenance))
+            # The sidecar names the columns that carry the disclosure, so the two
+            # records cannot drift apart.
+            meta = JSON.parsefile(sidecar)
+            Test.@test "metric_source_provenance" in meta["definition_provenance_columns"]
+            Test.@test occursin("operator-asserted",
+                meta["definition_provenance_asserted_label"])
+
+            # A backfill that supplies no definition asserts nothing, so it must not
+            # gain a provenance column claiming otherwise.
+            out2, _,
+            _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)",
+                output_path = joinpath(dir, "seed_only.csv"))
+            names2 = DataFrames.names(CSV.read(out2, DataFrames.DataFrame))
+            Test.@test !any(endswith.(names2, "_provenance"))
+        end
+
+        # Rows that ALREADY carried the value are evidence, not assertions: only
+        # the rows the tool actually writes are labelled asserted.
+        partial = DataFrames.DataFrame(
+            arm = ["naive", "iterative"],
+            metric_source = ["quast", missing])
+        marked = insert_definition_column!(partial, :metric_source, "quast")
+        Test.@test marked.metric_source_provenance ==
+                   [DEFINITION_PROVENANCE_OBSERVED, DEFINITION_PROVENANCE_ASSERTED]
+
+        # Re-running can only ADD assertions. Downgrading an already-asserted row to
+        # "observed" would launder the claim away on a second pass.
+        again = insert_definition_column!(copy(marked), :metric_source, "quast")
+        Test.@test again.metric_source_provenance ==
+                   [DEFINITION_PROVENANCE_OBSERVED, DEFINITION_PROVENANCE_ASSERTED]
+    end
+
     Test.@testset "I1: the launchers actually request the replicate seeds" begin
         # The seed axis was asserted by the schema but not produced by anything: a
         # scalar MYCELIA_RGV_SEED and no loop meant a pairable multi-seed table
