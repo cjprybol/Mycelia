@@ -172,28 +172,42 @@ Test.@testset "DataFrame schema push! guards column-name drift" begin
     df = DataFrames.DataFrame(
         reference = String[], genome_len = Int[], error_rate = Float64[],
         regime = String[], readlen = Int[], tech = String[], target_coverage = Float64[],
-        effective_coverage = Float64[], k = Int[], arm = String[], ok = Bool[],
+        effective_coverage = Float64[], k = Int[],
+        # `seed` and `quast_min_contig` are production columns this testset used
+        # to omit, which is precisely the drift it exists to catch — a schema
+        # guard that lags the schema guards nothing. Keep this DataFrame a
+        # complete mirror of run_sweep's `rows` (the three columns appended AFTER
+        # the loop — mode / scale_metric_bases / scale_floor_bases — are not part
+        # of the push! contract and stay out).
+        seed = Int[],
+        arm = String[], ok = Bool[],
         n_contigs = Int[], total_length = Int[], largest_contig = Int[], n50 = Int[],
         genome_fraction = Float64[], runtime_s = Float64[],
         corrector_sequencing_tech = String[],
+        corrector_indel_engaged = Union{Missing, Int}[],
         quast_genome_fraction = Union{Missing, Float64}[],
         quast_nga50 = Union{Missing, Float64}[],
         quast_num_misassemblies = Union{Missing, Float64}[],
         quast_duplication_ratio = Union{Missing, Float64}[],
-        metric_source = String[]
+        metric_source = String[],
+        quast_min_contig = Int[]
     )
 
     # Non-QUAST columns for a row (mirrors what run_arm + the loop supply).
     base = (
         reference = "synthetic_2000bp", genome_len = 2_000, error_rate = 0.01,
         regime = "short-low-error", readlen = 150, tech = "illumina",
-        target_coverage = 30.0, effective_coverage = 29.5, k = 21, arm = "naive",
+        target_coverage = 30.0, effective_coverage = 29.5, k = 21, seed = 42,
+        arm = "naive",
         ok = true, n_contigs = 5, total_length = 1_980, largest_contig = 620,
         n50 = 410, genome_fraction = 99.0, runtime_s = 1.234,
         # `corrector_sequencing_tech` is asserted in BOTH the DataFrame above and
         # this NamedTuple: a column added to only one side is exactly the drift
-        # this testset exists to catch.
-        corrector_sequencing_tech = "n/a"
+        # this testset exists to catch. Same for `corrector_indel_engaged`, which
+        # is `missing` here because the naive arm stamps no corrector telemetry.
+        corrector_sequencing_tech = "n/a",
+        corrector_indel_engaged = missing,
+        quast_min_contig = 500
     )
 
     mktempdir() do dir
@@ -214,15 +228,35 @@ Test.@testset "DataFrame schema push! guards column-name drift" begin
         # Row 2: an internal-fallback arm via the shared helper.
         e = empty_quast_metrics("internal:quast-disabled")
         Test.@test_nowarn push!(df, merge(base, e))
+
+        # Row 3: an ITERATIVE arm. The corrector stamps both provenance fields,
+        # so this row carries a concrete tech AND a concrete engagement count —
+        # proving the Union{Missing,Int} column accepts the stamped case, not
+        # only the naive arm's `missing`.
+        iter_row = merge(base,
+            (arm = "iterative", corrector_sequencing_tech = "nanopore",
+                corrector_indel_engaged = 4))
+        Test.@test_nowarn push!(df, merge(iter_row, e))
     end
 
     # Both pushes succeeded with no field-name mismatch, and provenance labels
     # landed in the metric_source column exactly as the helpers set them.
-    Test.@test DataFrames.nrow(df) == 2
-    Test.@test df.metric_source == ["quast", "internal:quast-disabled"]
+    Test.@test DataFrames.nrow(df) == 3
+    Test.@test df.metric_source ==
+               ["quast", "internal:quast-disabled", "internal:quast-disabled"]
     Test.@test df.quast_nga50[1] == 8421.0
     Test.@test df.quast_genome_fraction[2] === missing
     # The corrector-profile column landed with its declared element type.
-    Test.@test df.corrector_sequencing_tech == ["n/a", "n/a"]
+    Test.@test df.corrector_sequencing_tech == ["n/a", "n/a", "nanopore"]
     Test.@test eltype(df.corrector_sequencing_tech) == String
+    # The runtime-engagement column keeps `missing` (unstamped) and a stamped
+    # count distinguishable — collapsing an unstamped arm to 0 would read as
+    # "the gap moves were available and never fired", the opposite claim.
+    Test.@test eltype(df.corrector_indel_engaged) == Union{Missing, Int}
+    Test.@test df.corrector_indel_engaged[1] === missing
+    Test.@test df.corrector_indel_engaged[2] === missing
+    Test.@test df.corrector_indel_engaged[3] == 4
+    # The two columns PR #439 added to production and not to this fixture.
+    Test.@test df.seed == [42, 42, 42]
+    Test.@test df.quast_min_contig == [500, 500, 500]
 end

@@ -17,10 +17,13 @@
 #        the read-back (an echo would report the input and pass regardless).
 #
 #   T5 — passing `sequencing_tech` to the NAIVE arm (corrector=:none) is inert.
-#        `run_arm` passes the tech to BOTH arms; `AssemblyConfig` only consults
-#        it in the `:olc` layout branch and in the iterative corrector's error
-#        profile, and the sweep pins `layout=:native`. That reasoning is
-#        VERIFIED here byte-for-byte on the emitted contig FASTA, not assumed.
+#        `run_arm` passes the tech to BOTH arms. `AssemblyConfig` consults it in
+#        THREE places: unconditionally at construction to VALIDATE the symbol,
+#        in the `:olc` layout branch, and in the iterative corrector's error
+#        profile. Only the last two can change output and the sweep pins
+#        `layout=:native`, so the naive arm now merely VALIDATES a tech it
+#        previously never saw. That reasoning is VERIFIED here byte-for-byte on
+#        the emitted contig FASTA, not assumed.
 #
 # This file loads Mycelia (unlike the fast test file, which must stay
 # dependency-free). Run:
@@ -47,7 +50,8 @@ Test.@testset "run_arm forwards sequencing_tech and reads the stamp back" begin
             recorded[] = Dict(kwargs)
             return (contigs = String[], contig_names = String[],
                 assembly_stats = Dict{String, Any}(
-                    "sequencing_tech" => String(kwargs[:sequencing_tech])))
+                    "sequencing_tech" => String(kwargs[:sequencing_tech]),
+                    "indel_engaged" => 7))
         end
 
         # --- Long-read cell: the regime maps to :nanopore, which must reach the
@@ -64,6 +68,8 @@ Test.@testset "run_arm forwards sequencing_tech and reads the stamp back" begin
         Test.@test recorded[][:graph_mode] === Mycelia.Rhizomorph.DoubleStrand
         Test.@test res_iter.ok
         Test.@test res_iter.corrector_sequencing_tech == "nanopore"
+        # The runtime-engagement counter is read back from the same stats dict.
+        Test.@test res_iter.corrector_indel_engaged == 7
 
         # --- Short-read cell: the naive arm gets the tech too (see T5 for the
         # inertness proof) and reports the assembler's stamp.
@@ -99,6 +105,26 @@ Test.@testset "corrector_sequencing_tech is read back, never echoed" begin
         res_silent = run_arm(FASTX.FASTQ.Record[], :none, 21, 1_000, dir, "silent";
             sequencing_tech = :nanopore, assembler = silent)
         Test.@test res_silent.corrector_sequencing_tech == "n/a"
+        # An UNSTAMPED route must stay `missing`, not collapse to 0 — 0 would
+        # assert "the gap moves were available and never fired", which is a
+        # different (and false) claim about a route that has no gap moves.
+        Test.@test res_silent.corrector_indel_engaged === missing
+    end
+end
+
+Test.@testset "a failed arm records the distinct \"error\" sentinel" begin
+    # An arm that THREW and a healthy naive arm both used to report "n/a",
+    # disambiguated only by ok=false. Give the exception path its own sentinel so
+    # the CSV distinguishes "this route does not stamp the field" from "this arm
+    # never got far enough to stamp anything".
+    mktempdir() do dir
+        boom = (reads; kwargs...) -> error("assembler exploded")
+        res = Test.@test_logs (:warn,) run_arm(
+            FASTX.FASTQ.Record[], :iterative, 21, 1_000, dir, "boom";
+            sequencing_tech = :nanopore, assembler = boom)
+        Test.@test !res.ok
+        Test.@test res.corrector_sequencing_tech == "error"
+        Test.@test res.corrector_indel_engaged === missing
     end
 end
 
@@ -148,5 +174,9 @@ Test.@testset "naive arm is inert to sequencing_tech (T5)" begin
         # the "n/a" sentinel on both — NOT the tech that was passed in.
         Test.@test res_with.corrector_sequencing_tech == "n/a"
         Test.@test res_without.corrector_sequencing_tech == "n/a"
+        # Likewise the runtime-engagement counter: the naive route stamps no
+        # corrector telemetry at all, so both arms report `missing`.
+        Test.@test res_with.corrector_indel_engaged === missing
+        Test.@test res_without.corrector_indel_engaged === missing
     end
 end

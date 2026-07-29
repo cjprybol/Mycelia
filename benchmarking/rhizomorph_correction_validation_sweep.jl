@@ -88,7 +88,20 @@
 #                       echoed column would read green even with the wiring
 #                       broken, which is the whole failure mode it exists to
 #                       make non-recurring. "n/a" on the naive arm, whose route
-#                       does not stamp the field.
+#                       does not stamp the field; "error" when the arm itself
+#                       threw, so an exception is distinguishable from a healthy
+#                       naive arm (ok=false alone did not disambiguate them).
+#   corrector_indel_engaged
+#                     — read BACK from `assembly_stats["indel_engaged"]`: the
+#                       runtime count of reads on which the pair-HMM gap moves
+#                       actually FIRED. `corrector_sequencing_tech` proves only
+#                       that the tech reached `AssemblyConfig`; assembly.jl
+#                       deliberately separates `indel_moves` (profile INTENT)
+#                       from `indel_engaged` (runtime OUTCOME), so a "nanopore"
+#                       row with corrector_indel_engaged==0 is an indel-aware
+#                       profile that never engaged — the residual the tech column
+#                       cannot see. `missing` where the route stamps no corrector
+#                       telemetry (the naive arm) or where the arm threw.
 #   metric_source     — WHICH metric definition produced this row: "quast"
 #                       (alignment-validated) vs "internal*" (size-ratio proxy).
 #   quast_min_contig  — the --min-contig threshold QUAST was run at. Part of the
@@ -224,16 +237,36 @@ end
 # === One assembly arm ======================================================
 
 """
+Read an integer telemetry counter back out of an assembler's `assembly_stats`.
+Returns `missing` when the key is absent — the naive route stamps no corrector
+telemetry — or when the value is not interpretable as an integer, so an UNSTAMPED
+route can never be confused with a stamped zero (the two mean opposite things for
+`indel_engaged`).
+"""
+function _stat_int(stats, key::AbstractString)
+    v = get(stats, key, missing)
+    v === missing && return missing
+    v isa Integer && return Int(v)
+    v isa Real && return round(Int, v)
+    parsed = tryparse(Int, string(v))
+    return parsed === nothing ? missing : parsed
+end
+
+"""
 Run one assembly ARM (`corrector` = :none or :iterative) on `reads`, both pinned
 to DoubleStrand, write contigs to FASTA, and return a metrics NamedTuple. On
 failure the arm is recorded with `ok=false` rather than aborting the whole sweep.
 
 `sequencing_tech` is REQUIRED (no default) so a caller cannot silently fall back
 to the assembler's `:illumina` default on nanopore-simulated reads — that silent
-fallback is exactly the defect this keyword fixes. It is passed to BOTH arms: on
-`corrector=:none` with the sweep's `layout=:native` it is inert (`AssemblyConfig`
-only consults it in the `:olc` layout branch and in the iterative corrector's
-error-profile lookup), and
+fallback is exactly the defect this keyword fixes. It is passed to BOTH arms.
+`AssemblyConfig` consults it in THREE places, not two: unconditionally at
+construction to VALIDATE the symbol against `_correction_profile_technologies()`
+(src/rhizomorph/assembly.jl), in the `:olc` layout branch, and in the iterative
+corrector's error-profile lookup. Only the latter two can change output, and the
+sweep pins `layout=:native`, so on `corrector=:none` the tech is inert for the
+RESULT — it is merely validated on an arm that previously never saw it. Both
+symbols `regime_for_readlen` emits are valid, and
 `rhizomorph_correction_validation_sweep_wiring_test.jl` asserts that inertness
 byte-for-byte on the contig FASTA rather than assuming it.
 
@@ -243,6 +276,11 @@ production `Mycelia.Rhizomorph.assemble_genome`, so runtime behavior is unchange
 The returned `corrector_sequencing_tech` is read back from the assembler's own
 `assembly_stats["sequencing_tech"]` stamp — never echoed from the argument — so a
 future re-break of the wiring shows up in the CSV instead of reading green.
+`corrector_indel_engaged` is read back the same way from
+`assembly_stats["indel_engaged"]` and answers what the tech column cannot: not
+that the indel-aware profile was SELECTED, but that its gap moves actually FIRED.
+On the exception path the tech is recorded as `"error"` — a sentinel distinct
+from the healthy naive arm's `"n/a"`.
 """
 function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String,
         tag::String; sequencing_tech::Symbol,
@@ -264,13 +302,20 @@ function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String,
             e, catch_backtrace())
         return (ok = false, corrector = corrector, n_contigs = 0, total_length = 0,
             largest_contig = 0, n50 = 0, genome_fraction = 0.0, runtime_s = time() - t0,
-            contigs_path = "", corrector_sequencing_tech = "n/a")
+            contigs_path = "", corrector_sequencing_tech = "error",
+            corrector_indel_engaged = missing)
     end
     runtime = time() - t0
     # Read BACK from the assembler's own stamp (assembly.jl stamps this on the
     # iterative and hybrid-OLC routes). The naive route does not stamp it, so
     # "n/a" is the expected value there.
     corrector_tech = string(get(result.assembly_stats, "sequencing_tech", "n/a"))
+    # Runtime OUTCOME of the indel-aware profile, as distinct from the profile
+    # INTENT that `corrector_tech` records. assembly.jl separates `indel_moves`
+    # (the profile requested gap moves) from `indel_engaged` (a gap move actually
+    # fired), so a "nanopore" row with 0 engagements is a selected-but-never-used
+    # profile — invisible to the tech column alone.
+    corrector_indel = _stat_int(result.assembly_stats, "indel_engaged")
 
     open(contigs_path, "w") do io
         for (i, contig) in enumerate(result.contigs)
@@ -299,7 +344,8 @@ function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String,
     return (ok = true, corrector = corrector, n_contigs = n_contigs,
         total_length = total_length, largest_contig = largest_contig, n50 = n50,
         genome_fraction = genome_fraction, runtime_s = round(runtime; digits = 3),
-        contigs_path = contigs_path, corrector_sequencing_tech = corrector_tech)
+        contigs_path = contigs_path, corrector_sequencing_tech = corrector_tech,
+        corrector_indel_engaged = corrector_indel)
 end
 
 # === Main sweep ============================================================
@@ -382,6 +428,11 @@ function run_sweep()
         # argument — an echoed column would read green even if the wiring
         # regressed. "n/a" on the naive arm, which does not stamp the field.
         corrector_sequencing_tech = String[],
+        # Whether the indel-aware pair-HMM moves actually FIRED at runtime, read
+        # back from assembly_stats["indel_engaged"]. The tech column proves only
+        # that the profile was SELECTED; this proves it was USED. `missing` on
+        # the naive arm, which stamps no corrector telemetry.
+        corrector_indel_engaged = Union{Missing, Int}[],
         # Alignment-validated QUAST metrics (populated per arm when QUAST ran);
         # `genome_fraction` above stays the INTERNAL total_length/glen size ratio.
         quast_genome_fraction = Union{Missing, Float64}[],
@@ -488,6 +539,7 @@ function run_sweep()
                         n50 = res.n50, genome_fraction = res.genome_fraction,
                         runtime_s = res.runtime_s,
                         corrector_sequencing_tech = res.corrector_sequencing_tech,
+                        corrector_indel_engaged = res.corrector_indel_engaged,
                         quast_genome_fraction = quast.quast_genome_fraction,
                         quast_nga50 = quast.quast_nga50,
                         quast_num_misassemblies = quast.quast_num_misassemblies,
@@ -498,6 +550,7 @@ function run_sweep()
                         "total=$(res.total_length)bp largest=$(res.largest_contig) " *
                         "n50=$(res.n50) frac=$(res.genome_fraction)% " *
                         "corr_tech=$(res.corrector_sequencing_tech) " *
+                        "indel_engaged=$(res.corrector_indel_engaged) " *
                         "src=$(quast.metric_source) $(res.runtime_s)s")
             end
         end

@@ -106,6 +106,22 @@ echo ""
 # ever produced a comparable pair. The seed column is OPTIONAL (its absence is
 # NOT an exit-2 header error) so this guard still validates CSVs written before
 # the seed column existed; those degrade correctly to the old single-seed key.
+#
+# The guard ALSO asserts, for every ok=true `iterative` row, that
+# `corrector_sequencing_tech` (read back from the assembler's own stamp) equals
+# the `tech` the reads were simulated with. That column exists to make a re-break
+# of the corrector wiring visible, but a column nothing reads is provenance, not
+# a detector — this post-check is its automated consumer. Both columns are
+# OPTIONAL: `corrector_sequencing_tech` is absent from pre-wiring CSVs, and that
+# absence is precisely what identifies them, so a missing column skips the check
+# rather than failing it.
+#
+# The awk status is CAPTURED into `guard_rc`, never consumed by `! awk ...`:
+# `!` is true for ANY non-zero status, so exit 1 (green-but-empty), exit 2 (bad
+# header) and exit 3 (tech mismatch) all took the same branch and printed the
+# same green-but-empty message. sacct showing FAILED is only half the point —
+# the job .out has to say WHY, and the awk-level exit codes have no other
+# consumer.
 if [[ "${rc}" -eq 0 ]]; then
   # Bind to THIS job's CSV via the path the .jl printed; fail loud if absent.
   csv_line="$(grep '^CSV written: ' "${runlog}" 2>/dev/null | tail -1)"
@@ -114,10 +130,12 @@ if [[ "${rc}" -eq 0 ]]; then
     echo ">>> FAIL: sweep exited 0 but printed no 'CSV written:' path" >&2; rc=1
   elif [[ ! -f "${csv}" ]]; then
     echo ">>> FAIL: printed CSV path does not exist: ${csv}" >&2; rc=1
-  # awk guard assumes comma-free CSV fields: CSV.jl quotes any embedded comma,
-  # which would shift these -F, column positions. Safe for the current schema
-  # (only numeric + bare-word columns: reference/regime/tech/arm/mode).
-  elif ! awk -F, '
+  else
+    # awk guard assumes comma-free CSV fields: CSV.jl quotes any embedded comma,
+    # which would shift these -F, column positions. Safe for the current schema
+    # (only numeric + bare-word columns: reference/regime/tech/arm/mode).
+    guard_rc=0
+    awk -F, '
       NR==1 {
         for (i=1;i<=NF;i++) {
           if ($i=="arm")        a=i
@@ -127,12 +145,15 @@ if [[ "${rc}" -eq 0 ]]; then
           if ($i=="mode")       m=i
           if ($i=="n_contigs")  nc=i
           if ($i=="seed")       sd=i
+          if ($i=="tech")       t=i
+          if ($i=="corrector_sequencing_tech") ct=i
         }
         # `hdr_bad` is re-checked in END: awk runs END even after `exit`, and an
         # END-block `exit` OVERRIDES an earlier one — so a bare `exit 2` here was
         # unreachable and a malformed header got reported with the exit-1
-        # "green-but-empty" reason. Both codes fail the job either way; the flag
-        # keeps the REASON honest.
+        # "green-but-empty" reason. The caller branches on the captured status,
+        # so the distinction now reaches the operator instead of dying at the
+        # awk layer.
         if (!a || !er || !rl || !ok || !m || !nc) { hdr_bad=1; exit 2 }
         next
       }
@@ -141,15 +162,38 @@ if [[ "${rc}" -eq 0 ]]; then
         if ($a=="naive")          naive[key]=1
         else if ($a=="iterative") iter[key]=1
       }
+      t && ct && ($ok=="true") && ($a=="iterative") {
+        checked++
+        if ($ct != $t) {
+          tech_bad=1
+          if (!tech_shown) {
+            print "GUARD-DETAIL: line " NR ": iterative row simulated tech=" $t " but corrector ran corrector_sequencing_tech=" $ct
+            tech_shown=1
+          }
+        }
+      }
       END {
-        if (hdr_bad) exit 2
+        if (hdr_bad)  exit 2
+        # Say out loud whether the corrector-profile check actually RAN. A
+        # summary that silently covered zero rows is the same overclaim this
+        # post-check exists to prevent, one level up.
+        if (!ct)      print "GUARD-NOTE: no corrector_sequencing_tech column (pre-wiring CSV) — corrector-profile consistency NOT checked"
+        else if (!t)  print "GUARD-NOTE: no tech column — corrector-profile consistency NOT checked"
+        else          print "GUARD-NOTE: corrector-profile consistency checked on " checked+0 " ok=true iterative row(s)"
+        if (tech_bad) exit 3
         for (key in naive) if (key in iter) found=1
         exit found ? 0 : 1
       }
-    ' "${csv}"; then
-    echo ">>> FAIL: ${csv} has no (error_rate, readlen, seed) cell with BOTH naive and iterative ok=true VERDICT arms (n_contigs>0) — green-but-empty" >&2; rc=1
-  else
-    echo ">>> OK: verified >=1 (error_rate, readlen, seed) cell with BOTH naive+iterative ok=true VERDICT n_contigs>0 arms in ${csv}"
+    ' "${csv}" || guard_rc=$?
+    if [[ "${guard_rc}" -eq 2 ]]; then
+      echo ">>> FAIL: ${csv} is missing a required column (need arm/error_rate/readlen/ok/mode/n_contigs) — SCHEMA error, the table was never checked; this is NOT green-but-empty" >&2; rc=1
+    elif [[ "${guard_rc}" -eq 3 ]]; then
+      echo ">>> FAIL: ${csv} has an ok=true iterative row whose corrector_sequencing_tech disagrees with the simulated tech — the CORRECTOR ran a different error profile than the reads (see GUARD-DETAIL above); results are not comparable" >&2; rc=1
+    elif [[ "${guard_rc}" -ne 0 ]]; then
+      echo ">>> FAIL: ${csv} has no (error_rate, readlen, seed) cell with BOTH naive and iterative ok=true VERDICT arms (n_contigs>0) — green-but-empty" >&2; rc=1
+    else
+      echo ">>> OK: verified >=1 (error_rate, readlen, seed) cell with BOTH naive+iterative ok=true VERDICT n_contigs>0 arms in ${csv} — see the GUARD-NOTE line above for how many iterative rows the corrector-profile check actually covered"
+    fi
   fi
 fi
 
