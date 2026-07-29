@@ -475,6 +475,19 @@ const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
 # here without bumping `_ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION`; purely
 # additive fields belong in the accept-list above and must normalize from an
 # empty default so absent-in-old-checkpoint stays legal.
+#
+# The compatibility this buys is ONE-WAY, and deliberately so. FORWARD (this
+# build reads a checkpoint an earlier build wrote) is safe: an additive field
+# that is absent normalizes from its empty default. BACKWARD (an EARLIER build
+# reads a checkpoint this build wrote) is NOT: `_checkpoint_symbolized_dict`
+# rejects any field outside that build's accept-list, and
+# `_symbolize_indel_frontier_metric` rejects a row carrying more fields than it
+# knows, so the earlier build fails with an unsupported-field error rather than
+# ignoring the addition. Bumping
+# `_ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION` does NOT fix that -- it would
+# additionally break the forward direction, converting a downgrade-only failure
+# into an upgrade failure too. Resume a checkpoint with the build that wrote it
+# or a newer one.
 const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS = Set{Symbol}((
     :profile_requested,
     :requested,
@@ -594,6 +607,19 @@ const _INDEL_FRONTIER_PROBE_REJECTION_CAUSES = Dict{Symbol, Symbol}(
     reason => Symbol("probe_", reason)
     for reason in values(_CHECKPOINT_FRONTIER_REASONS) if reason !== :complete
 )
+# Probe reasons emitted with `anchored = false` for a reason OTHER than "the
+# probe ran and found no start vertex". `:encode_error` is a harness sentinel
+# from `_probe_indel_window_metric` (the probe never ran at all), while
+# `:empty_graph` and `:empty_observation` are structural pre-checks inside
+# `_probe_indel_frontier` that return BEFORE the start-vertex lookup. All three
+# are classified ahead of the anchor conjunct so `:unanchored` keeps its literal
+# meaning -- it is reachable from `:unanchored_start` and nothing else -- rather
+# than becoming a four-way union bucket that hides which of the four occurred.
+const _INDEL_FRONTIER_PRE_ANCHOR_REASONS = Base.Set{Symbol}((
+    :encode_error,
+    :empty_graph,
+    :empty_observation,
+))
 const _INDEL_FRONTIER_REJECTION_CAUSES = Base.Set{Symbol}((
     :admitted,
     :unanchored,
@@ -1078,8 +1104,13 @@ function _empty_indel_rung_telemetry(profile_requested::Bool)::Dict{Symbol, Any}
         :cleaned_frontier_metrics => Dict{Symbol, Any}[],
         :raw_frontier_rejection_causes => Dict{Symbol, Int}(),
         :cleaned_frontier_rejection_causes => Dict{Symbol, Int}(),
-        :raw_frontier_work_summary => Dict{Symbol, Int}(),
-        :cleaned_frontier_work_summary => Dict{Symbol, Int}(),
+        # Zero-filled six-key form, NOT an empty object: the
+        # `:no_candidate_windows` scheduler path already emits
+        # `_indel_frontier_work_summary(Int[])`, and two different "no work
+        # data" encodings would make `summary[:count]` a `KeyError` on one of
+        # them and a `0` on the other. One total shape, always.
+        :raw_frontier_work_summary => _indel_frontier_work_summary(Int[]),
+        :cleaned_frontier_work_summary => _indel_frontier_work_summary(Int[]),
         :graph_cleanup => Dict{String, Any}(),
     )
 end
@@ -1346,8 +1377,11 @@ function _checkpoint_indel_work_summary(
 )::Dict{Symbol, Int}
     value isa AbstractDict || throw(ArgumentError(
         "checkpoint $field must be an object"))
-    # Absent in every pre-diagnostics checkpoint, so an empty object is legal.
-    isempty(value) && return Dict{Symbol, Int}()
+    # An empty object stays legal ON THE WIRE because every pre-diagnostics
+    # checkpoint omits the field entirely. It normalizes to the zero-filled
+    # six-key form this build always writes (including for profile-disabled
+    # rungs), so no consumer ever has to handle two "no work data" shapes.
+    isempty(value) && return _indel_frontier_work_summary(Int[])
     summary = Dict{Symbol, Int}()
     for (key, statistic) in value
         name = _checkpoint_enum_symbol(
@@ -1485,17 +1519,6 @@ function _normalize_indel_rung_telemetry(
             "indel telemetry $key",
         )
     end
-    # These diagnostics are ADDITIVE and self-describing: an absent (empty)
-    # container is legal at any schema version, and the checks above are
-    # intra-field only (taxonomy, nonnegative exact `Int`, monotone order
-    # statistics). They are deliberately NOT cross-checked against
-    # `raw_frontier_evaluated` / `cleaned_frontier_evaluated` here. The
-    # scheduler is the sole producer and emits exactly one cause per
-    # evaluated window, an invariant the tests assert against live scheduler
-    # output and the on-disk checkpoint; coupling an additive diagnostic to
-    # the core counters would instead make hand-constructed v2 rows that
-    # legitimately restate those counters (to exercise unrelated checks)
-    # fail on a field they never touch, and would buy no resume safety.
     if require_schema_v2
         sample_limit = normalized[:frontier_metric_sample_limit]
         for (metric_key, evaluated_key) in (
@@ -1584,6 +1607,38 @@ function _normalize_indel_rung_telemetry(
         normalized[:cleaned_frontier_evaluated] <=
             normalized[:raw_frontier_evaluated] || throw(ArgumentError(
             "checkpoint cleaned frontier evaluations exceed raw evaluations"))
+    end
+    # EXACTNESS CROSS-CHECK. The scheduler records exactly one cause per
+    # evaluated window, so a populated histogram MUST sum to its evaluated
+    # counter. This is the same class of check `raw_frontier_metrics` already
+    # gets against `raw_frontier_evaluated` above, and it is what makes the
+    # histogram usable as evidence rather than merely well-formed -- an exact
+    # breakdown that is never reconciled against the count it breaks down is
+    # not stronger than the sampled prefix it replaced.
+    #
+    # Gated on non-emptiness because the field is ADDITIVE. A schema-v2
+    # checkpoint written before these diagnostics existed carries no histogram
+    # and normalizes to an empty one, which must stay legal (see the FROZEN
+    # required-key note above). An empty histogram beside a non-zero counter is
+    # therefore indistinguishable at the wire level from a legacy row, and
+    # cannot be rejected without a version bump that would break the forward
+    # direction. Every producer in THIS build populates the histogram whenever
+    # it evaluates a window, so the check binds on all of them; emptiness is a
+    # legacy escape hatch, not a live producer shape.
+    #
+    # Ordered AFTER the counter cross-checks above on purpose: a row whose
+    # COUNTER is corrupt should report the counter's own error, not have it
+    # masked by the histogram that faithfully described the original count.
+    for (cause_key, evaluated_key) in (
+            (:raw_frontier_rejection_causes, :raw_frontier_evaluated),
+            (:cleaned_frontier_rejection_causes, :cleaned_frontier_evaluated),
+    )
+        causes = normalized[cause_key]
+        isempty(causes) && continue
+        total = sum(values(causes))
+        total == normalized[evaluated_key] || throw(ArgumentError(
+            "checkpoint indel telemetry $cause_key sums to $total, which does " *
+            "not match $evaluated_key=$(normalized[evaluated_key])"))
     end
     if !profile_requested && any(
             normalized[key] != 0 for key in (
@@ -2967,8 +3022,11 @@ end
 # graph Viterbi for genuine ambiguity is the critical-path lever: on err=0.01 data
 # ~78% of reads carry an error k-mer, so cheaply clearing the simple ones collapses
 # the graph-decode fraction toward the true bubble/repeat ~5–15%.
-# Only invoked on the :scalable tier (`cheap_correct=true`, canonical graph); the
-# :exhaustive path never calls it and is byte-identical.
+# Only invoked on the :scalable tier (`cheap_correct=true`). The live gate is
+# `graph_mode != :singlestrand`, NOT `graph_mode == :canonical`: :scalable builds
+# a :doublestrand graph, so a canonical-only reading would describe Stage 0 as
+# OFF on the production tier. The :exhaustive path never calls it and is
+# byte-identical.
 # ------------------------------------------------------------------------------
 
 # Graph-label lookup key for the k-mer at 1-based read position `i` (bases
@@ -3383,9 +3441,9 @@ the frontier budget, and touches no graph. `:admitted` is returned exactly when
 `_indel_frontier_admitted` would return `true` for the same window, so the
 histogram built from this function reconciles with the admission counters.
 
-Apart from the `:encode_error` pre-check the branch order mirrors the `&&` chain
-in `_indel_frontier_admitted` conjunct for conjunct, so the FIRST failing
-conjunct names the cause:
+Apart from the `_INDEL_FRONTIER_PRE_ANCHOR_REASONS` pre-check the branch order
+mirrors the `&&` chain in `_indel_frontier_admitted` conjunct for conjunct, so
+the FIRST failing conjunct names the cause:
 
 | Conjunct                             | Cause when it fails      |
 |:-------------------------------------|:-------------------------|
@@ -3397,20 +3455,44 @@ conjunct names the cause:
 A window that is BOTH unanchored and over budget therefore reports
 `:unanchored`, matching the short-circuit that actually rejected it.
 
-`:encode_error` is a harness sentinel emitted by `_probe_indel_window_metric`
-when the window sequence cannot be encoded: the probe never ran, so its
-`anchored = false` is synthetic rather than an anchor finding. It is classified
-before the anchor conjunct so that `:unanchored` keeps its literal meaning --
-the probe ran and found no start vertex -- which is the distinction the
-diagnostic exists to make. `_indel_frontier_admitted` is never consulted for
-that sentinel, so the `:admitted` equivalence above is unaffected.
+PRE-ANCHOR REASONS. The anchor conjunct is checked before the reason lookup, so
+without a pre-check every reason that carries `anchored = false` would collapse
+into `:unanchored`. FOUR do: `:encode_error` (a harness sentinel from
+`_probe_indel_window_metric` -- the probe never ran, so `anchored = false` is
+synthetic rather than an anchor finding), `:empty_graph` and
+`:empty_observation` (structural pre-checks in `_probe_indel_frontier` that
+return before the start-vertex lookup), and `:unanchored_start` (the genuine
+anchor finding). The first three are therefore classified BEFORE the anchor
+conjunct, leaving `:unanchored` reachable from `:unanchored_start` and nothing
+else. `_indel_frontier_admitted` is `false` for all four -- they are all
+`anchored = false` -- so the `:admitted` equivalence above is unaffected by
+where in the chain they are named.
+
+REACHABILITY of the persisted taxonomy is deliberately uneven, and the uneven
+members are the defensive ones:
+
+  * `:probe_unanchored_start` is UNREACHABLE by construction -- that reason is
+    absorbed by the `:unanchored` bucket above, which is the more informative
+    name for it.
+  * `:partial_columns` and `:work_limit_exceeded` are DEFENSIVE ONLY from a
+    real probe: `_probe_indel_frontier` returns `:complete` exactly when it
+    consumed every column within budget, so `reason == :complete` already
+    implies both remaining conjuncts. Either bucket appearing in a histogram
+    built from live scheduler output signals a broken probe kernel invariant,
+    not an ordinary rejection. They are kept because the classifier is a pure
+    function over a dictionary and must stay total for hand-built and
+    round-tripped metrics.
+  * `:probe_unknown` is the catch-all for a probe reason outside
+    `_CHECKPOINT_FRONTIER_REASONS`; it degrades loudly instead of silently
+    mapping onto a real bucket.
 """
 function _indel_frontier_rejection_cause(
         metric::AbstractDict,
         work_limit::Int,
 )::Symbol
     reason = get(metric, :reason, nothing)
-    reason === :encode_error && return :probe_encode_error
+    reason isa Symbol && reason in _INDEL_FRONTIER_PRE_ANCHOR_REASONS &&
+        return _INDEL_FRONTIER_PROBE_REJECTION_CAUSES[reason]
     get(metric, :anchored, false) === true || return :unanchored
     if reason !== :complete
         return get(
@@ -3440,7 +3522,12 @@ function _record_indel_frontier_work!(
         metric::AbstractDict,
 )::Nothing
     frontier_work = get(metric, :frontier_work, nothing)
-    frontier_work isa Int && push!(works, frontier_work)
+    # `=== nothing` is the ONLY benign case (the `:encode_error` sentinel omits
+    # the field). Everything else is pushed unconverted, so a future widening of
+    # the metric's numeric type throws HERE rather than being silently dropped
+    # from the order statistics by an `isa Int` guard.
+    frontier_work === nothing && return nothing
+    push!(works, frontier_work)
     return nothing
 end
 
@@ -3458,7 +3545,10 @@ function _indel_frontier_work_summary(
         return Dict{Symbol, Int}(
             key => 0 for key in _INDEL_FRONTIER_WORK_SUMMARY_KEYS)
     end
-    sorted = sort(works)
+    # `works` is dead in every caller once the summary is built, so sort in
+    # place: this runs on a memory-gated path where a second full copy of the
+    # per-window vector is the largest avoidable allocation.
+    sorted = sort!(works)
     n = length(sorted)
     nearest_rank(quantile) = sorted[clamp(ceil(Int, quantile * n), 1, n)]
     return Dict{Symbol, Int}(
@@ -3922,9 +4012,17 @@ function _evaluate_indel_frontier_schedule_impl(
             out_of_memory || rethrow()
             cleaned_graph = nothing
             cleaned_weighted_graph = nothing
-            empty!(cleaned_metrics)
-            empty!(cleaned_causes)
-            empty!(cleaned_works)
+            # Resetting the diagnostics is LOAD-BEARING, not hygiene: the
+            # per-window loop above already recorded one cause and one work
+            # value for every window it probed before the throw, while this
+            # branch reports `cleaned_evaluated = 0`. Leaving either container
+            # populated would publish a histogram that cannot sum to its
+            # evaluated counter. Rebind rather than `empty!` -- this is the one
+            # path whose PURPOSE is releasing memory, and `empty!` retains the
+            # buffer's capacity.
+            cleaned_metrics = Dict{Symbol, Any}[]
+            cleaned_causes = Dict{Symbol, Int}()
+            cleaned_works = Int[]
             cleaned_evaluated = 0
             fill!(cleaned_admitted, false)
             for (candidate_index, (read_index, window)) in enumerate(candidates)
@@ -4838,7 +4936,7 @@ thread-safe under parallel decode: each read/window's staged contributions are
 captured and folded into this accumulator in read×window order after the
 `Threads.@threads` loop, byte-identical to serial.
 
-`cheap_correct` (td-bjnt): when `true` (and `graph_mode==:canonical`), run the
+`cheap_correct` (td-bjnt): when `true` (and `graph_mode != :singlestrand`), run the
 Stage 0 k-mer-spectrum correction pass (`_stage0_cheap_correct`) over the read set
 BEFORE any gating/decode, cheaply fixing simple single-substitution errors with a
 linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
@@ -5027,7 +5125,9 @@ function _improve_read_set_likelihood_impl(
     # Stage 0 CHEAP correction (td-bjnt): fix simple single-substitution errors
     # with a linear k-mer-spectrum scan BEFORE any gating/decode, so graph Viterbi
     # is reserved for genuine ambiguity. The decode below then runs on the
-    # cheaply-corrected reads. Gated on :scalable (cheap_correct=true, canonical).
+    # cheaply-corrected reads. Gated on :scalable (`cheap_correct=true`); the
+    # graph-mode condition is `!= :singlestrand`, which :doublestrand (:scalable)
+    # and :canonical both satisfy.
     cheap_corrections = 0
     work_reads = reads
     if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
@@ -7453,7 +7553,13 @@ end
 # FLOOR — an edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is clamped to at least
 # its raw coverage, so a real but SKEWED minority allele (e.g. a 10x branch in a
 # 20x/10x bubble) NEVER decays toward zero regardless of a heavier sibling. Only
-# near-zero-support (error) edges are free to decay below the cleaning gate. This
+# near-zero-support (error) edges are free to decay toward zero. That decay does
+# NOT reach any cleaning predicate: `clean_corrector_graph!` gates on RAW vertex
+# evidence and never consults the soft weight (`evidence-functions.jl` states the
+# soft signal acts through `compute_edge_weight` / the Viterbi transition score
+# and warns against exactly this conflation). The mechanism is transition-score
+# decay -- the next decode routes AWAY from the decayed edge, so the graph
+# REBUILT from those decoded reads carries less support for it. This
 # fixes the prior v2's collapse of skewed variants (the responsibility split alone
 # gave `W_min' = N*W/(W_maj+W_min)`, a geometric decay to zero for any imbalance).
 

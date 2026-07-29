@@ -339,6 +339,16 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
             Base.deepcopy(template_metric) for _ in 1:64
         ]
         truncated_sample_row["cleaned_frontier_metrics"] = Any[]
+        # This row is derived from a REAL on-disk checkpoint and then overrides
+        # the evaluated counters to a synthetic 65 to exercise the sample cap.
+        # The inherited cause histogram describes the real run, so it must be
+        # restated to match, exactly as the sample vector above already is --
+        # the normalizer now cross-checks a populated histogram against its
+        # counter.
+        truncated_sample_row["raw_frontier_rejection_causes"] =
+            Dict{String, Any}("probe_work_limit" => 65)
+        truncated_sample_row["cleaned_frontier_rejection_causes"] =
+            Dict{String, Any}()
         normalized_truncated_sample = Mycelia._normalize_indel_rung_telemetry(
             truncated_sample_row, true)
         Test.@test normalized_truncated_sample[:raw_frontier_evaluated] == 65
@@ -353,6 +363,10 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
         independent_samples_row["cleaned_frontier_metrics"] = Any[
             Base.deepcopy(template_metric) for _ in 1:64
         ]
+        independent_samples_row["raw_frontier_rejection_causes"] =
+            Dict{String, Any}("probe_work_limit" => 64)
+        independent_samples_row["cleaned_frontier_rejection_causes"] =
+            Dict{String, Any}("probe_work_limit" => 64)
         normalized_independent_samples =
             Mycelia._normalize_indel_rung_telemetry(
                 independent_samples_row, true)
@@ -403,6 +417,10 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
             maximum_span_metric,
         ]
         boundary_row["cleaned_frontier_metrics"] = Any[]
+        boundary_row["raw_frontier_rejection_causes"] =
+            Dict{String, Any}("admitted" => 2)
+        boundary_row["cleaned_frontier_rejection_causes"] =
+            Dict{String, Any}()
         normalized_boundaries = Mycelia._normalize_indel_rung_telemetry(
             boundary_row, true)
         Test.@test Base.first(normalized_boundaries[:raw_frontier_metrics])[
@@ -2014,8 +2032,57 @@ Test.@testset "Populated cleaned frontier metrics survive a v2 round trip" begin
     end
     legacy_normalized = checkpoint_cause_roundtrip(legacy_row)
     Test.@test Base.isempty(legacy_normalized[:raw_frontier_rejection_causes])
-    Test.@test Base.isempty(legacy_normalized[:raw_frontier_work_summary])
+    Test.@test Base.isempty(
+        legacy_normalized[:cleaned_frontier_rejection_causes])
+    # The work summaries default to the ZERO-FILLED six-key form, not an empty
+    # object: one "no work data" encoding across every producer and every
+    # vintage of checkpoint, so `summary[:count]` is total.
+    Test.@test legacy_normalized[:raw_frontier_work_summary] ==
+               Mycelia._indel_frontier_work_summary(Int[])
+    Test.@test legacy_normalized[:cleaned_frontier_work_summary] ==
+               Mycelia._indel_frontier_work_summary(Int[])
+    Test.@test legacy_normalized[:raw_frontier_work_summary][:count] == 0
     Test.@test Base.length(legacy_normalized[:cleaned_frontier_metrics]) == 2
+
+    # The FROZEN required-key set is a wire contract, so pin its exact content
+    # rather than two sampled memberships: a silent deletion from the literal
+    # would otherwise relax a mandatory field with nothing failing.
+    Test.@test Mycelia._CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS ==
+               Base.Set{Symbol}((
+        :profile_requested,
+        :requested,
+        :attempted,
+        :completed,
+        :truncated,
+        :engaged,
+        :admitted,
+        :admitted_windows,
+        :rejected_windows,
+        :graph_source,
+        :decision_reason,
+        :frontier_work_limit,
+        :frontier_metric_sample_limit,
+        :raw_frontier_evaluated,
+        :cleaned_frontier_evaluated,
+        :bounded_windowing_forced,
+        :substitution_decode_memory_gated,
+        :raw_frontier_metrics,
+        :cleaned_frontier_metrics,
+        :graph_cleanup,
+        :ladder_index,
+        :k,
+        :iteration,
+    ))
+    Test.@test Base.length(
+        Mycelia._CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS) == 23
+    Test.@test Mycelia._CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS ⊆
+               Base.Set(Base.values(Mycelia._CHECKPOINT_INDEL_TELEMETRY_KEYS))
+
+    # Normalization is a fixed point: feeding a normalized row back through the
+    # normalizer must change nothing, so no check silently rewrites a value it
+    # then accepts on the second pass.
+    idempotent = Mycelia._normalize_indel_rung_telemetry(normalized, true)
+    Test.@test idempotent == normalized
 end
 
 Test.@testset "Inconsistent frontier diagnostics are rejected" begin
@@ -2089,6 +2156,62 @@ Test.@testset "Inconsistent frontier diagnostics are rejected" begin
         checkpoint_cause_roundtrip(partial_summary)
     end
 
+    # A zero `count` beside non-zero statistics passes taxonomy, nonnegativity,
+    # completeness AND monotonicity, so it reaches the count branch -- the one
+    # validator branch nothing else exercises.
+    zero_count_summary = checkpoint_cause_row()
+    zero_count_summary["raw_frontier_work_summary"] = Dict{String, Any}(
+        "count" => 0,
+        "min" => 5,
+        "p50" => 5,
+        "p90" => 5,
+        "p99" => 5,
+        "max" => 5,
+    )
+    checkpoint_test_error(
+        ArgumentError, "zero count requires zero statistics") do
+        checkpoint_cause_roundtrip(zero_count_summary)
+    end
+
+    # NEGATIVE for the exactness cross-check: a populated histogram whose counts
+    # no longer sum to the counter it breaks down. Every intra-field check
+    # (taxonomy, nonnegative exact `Int`, no repeats) still passes, so this is
+    # the only thing standing between the histogram and a silently wrong
+    # breakdown. Both sides are covered because they are validated independently.
+    raw_sum_mismatch = checkpoint_cause_row()
+    raw_sum_mismatch["raw_frontier_rejection_causes"] = Dict{String, Any}(
+        "admitted" => 1,
+        "probe_work_limit" => 1,
+    )
+    checkpoint_test_error(
+        ArgumentError,
+        "raw_frontier_rejection_causes sums to 2, which does not match " *
+        "raw_frontier_evaluated=3",
+    ) do
+        checkpoint_cause_roundtrip(raw_sum_mismatch)
+    end
+
+    cleaned_sum_mismatch = checkpoint_cause_row()
+    cleaned_sum_mismatch["cleaned_frontier_rejection_causes"] =
+        Dict{String, Any}("admitted" => 1, "probe_work_limit" => 5)
+    checkpoint_test_error(
+        ArgumentError,
+        "cleaned_frontier_rejection_causes sums to 6, which does not match " *
+        "cleaned_frontier_evaluated=2",
+    ) do
+        checkpoint_cause_roundtrip(cleaned_sum_mismatch)
+    end
+
+    # The exemption is emptiness, NOT absence-of-checking: a row that omits the
+    # histogram entirely still normalizes even though its counters are non-zero,
+    # because a pre-diagnostics checkpoint is indistinguishable from it at the
+    # wire level. That is the deliberate limit of the cross-check above.
+    exempt_row = checkpoint_cause_row()
+    exempt_row["raw_frontier_rejection_causes"] = Dict{String, Any}()
+    exempt_row["cleaned_frontier_rejection_causes"] = Dict{String, Any}()
+    exempt_normalized = checkpoint_cause_roundtrip(exempt_row)
+    Test.@test exempt_normalized[:raw_frontier_evaluated] == 3
+    Test.@test Base.isempty(exempt_normalized[:raw_frontier_rejection_causes])
 end
 
 Test.@testset "Frontier diagnostics reach the on-disk checkpoint" begin
@@ -2123,17 +2246,40 @@ Test.@testset "Frontier diagnostics reach the on-disk checkpoint" begin
                 cause in Mycelia._INDEL_FRONTIER_REJECTION_CAUSES
                 for cause in Base.keys(causes)
             )
-            # Raw-admitted windows are a subset of all admitted windows: a
-            # cleaned-graph rescue is counted in `admitted_windows` but appears
-            # in the CLEANED histogram, not the raw one.
-            Test.@test Base.get(causes, :admitted, 0) <= row[:admitted_windows]
+            # Raw- and cleaned-admitted windows are DISJOINT (the cleaning pass
+            # skips every raw-admitted candidate), so the two histograms
+            # PARTITION `admitted_windows` -- an identity, not a bound. A `<=`
+            # on the raw side alone is satisfied by `0`, i.e. by a collector
+            # that never recorded an admission.
+            cleaned_causes = row[:cleaned_frontier_rejection_causes]
+            if row[:decision_reason] in (
+                :weighted_graph_memory_limit,
+                :weighted_graph_out_of_memory,
+                :cleaning_out_of_memory,
+            )
+                # These three tuples force `admitted_windows = 0` while the
+                # histograms keep reporting what the frontier actually found, so
+                # not even `<=` holds on them.
+                Test.@test row[:admitted_windows] == 0
+            else
+                Test.@test Base.get(causes, :admitted, 0) +
+                           Base.get(cleaned_causes, :admitted, 0) ==
+                           row[:admitted_windows]
+            end
+            # `:encode_error` sentinels are the ONLY evaluated windows that
+            # carry no `frontier_work`, so the order-statistic count is exactly
+            # the evaluated count minus those. `<=` is satisfied by a count of
+            # zero, i.e. by a fully broken collector.
             summary = row[:raw_frontier_work_summary]
-            Test.@test summary[:count] <= row[:raw_frontier_evaluated]
+            Test.@test summary[:count] == row[:raw_frontier_evaluated] -
+                       Base.get(causes, :probe_encode_error, 0)
             Test.@test summary[:min] <= summary[:p50] <= summary[:p90] <=
                        summary[:p99] <= summary[:max]
-            Test.@test Base.sum(
-                Base.values(row[:cleaned_frontier_rejection_causes])) ==
+            Test.@test Base.sum(Base.values(cleaned_causes)) ==
                        row[:cleaned_frontier_evaluated]
+            Test.@test row[:cleaned_frontier_work_summary][:count] ==
+                       row[:cleaned_frontier_evaluated] -
+                       Base.get(cleaned_causes, :probe_encode_error, 0)
         end
 
         checkpoint_file = Base.joinpath(
