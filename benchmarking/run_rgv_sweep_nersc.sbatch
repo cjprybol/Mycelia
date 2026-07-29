@@ -85,11 +85,19 @@ fi
 
 echo ""
 # Post-check: a green exit is a silent failure UNLESS at least one
-# (error_rate, readlen) cell has BOTH the naive AND the iterative arm passing —
-# ok=true, mode=VERDICT, and n_contigs>0. The .jl records a failed/empty arm as
-# ok=false (or n_contigs=0) and still writes the CSV + exits 0; and the sweep's
-# whole purpose IS the naive-vs-iterative comparison, so one lone naive arm is
-# NOT a result. Fail loud so sacct shows FAILED rather than green-but-empty.
+# (error_rate, readlen, seed) cell has BOTH the naive AND the iterative arm
+# passing — ok=true, mode=VERDICT, and n_contigs>0. The .jl records a
+# failed/empty arm as ok=false (or n_contigs=0) and still writes the CSV + exits
+# 0; and the sweep's whole purpose IS the naive-vs-iterative comparison, so one
+# lone naive arm is NOT a result. Fail loud so sacct shows FAILED rather than
+# green-but-empty.
+#
+# The cell key includes `seed`. MYCELIA_RGV_SEED now defaults to THREE seeds, so
+# an (error_rate, readlen)-only key can be satisfied by a naive arm from seed 42
+# paired with an iterative arm from seed 123 — green, yet no single replicate
+# ever produced a comparable pair. The seed column is OPTIONAL (its absence is
+# NOT an exit-2 header error) so this guard still validates CSVs written before
+# the seed column existed; those degrade correctly to the old single-seed key.
 if [[ "${rc}" -eq 0 ]]; then
   # Bind to THIS job's CSV via the path the .jl printed; fail loud if absent.
   csv_line="$(grep '^CSV written: ' "${runlog}" 2>/dev/null | tail -1)"
@@ -110,20 +118,30 @@ if [[ "${rc}" -eq 0 ]]; then
           if ($i=="ok")         ok=i
           if ($i=="mode")       m=i
           if ($i=="n_contigs")  nc=i
+          if ($i=="seed")       sd=i
         }
-        if (!a || !er || !rl || !ok || !m || !nc) exit 2
+        # `hdr_bad` is re-checked in END: awk runs END even after `exit`, and an
+        # END-block `exit` OVERRIDES an earlier one — so a bare `exit 2` here was
+        # unreachable and a malformed header got reported with the exit-1
+        # "green-but-empty" reason. Both codes fail the job either way; the flag
+        # keeps the REASON honest.
+        if (!a || !er || !rl || !ok || !m || !nc) { hdr_bad=1; exit 2 }
         next
       }
       ($ok=="true") && ($m=="VERDICT") && (($nc+0)>0) {
-        key = $er SUBSEP $rl
+        key = $er SUBSEP $rl SUBSEP (sd ? $sd : "-")
         if ($a=="naive")          naive[key]=1
         else if ($a=="iterative") iter[key]=1
       }
-      END { for (key in naive) if (key in iter) found=1; exit found ? 0 : 1 }
+      END {
+        if (hdr_bad) exit 2
+        for (key in naive) if (key in iter) found=1
+        exit found ? 0 : 1
+      }
     ' "${csv}"; then
-    echo ">>> FAIL: ${csv} has no cell with BOTH naive and iterative ok=true VERDICT arms (n_contigs>0) — green-but-empty" >&2; rc=1
+    echo ">>> FAIL: ${csv} has no (error_rate, readlen, seed) cell with BOTH naive and iterative ok=true VERDICT arms (n_contigs>0) — green-but-empty" >&2; rc=1
   else
-    echo ">>> OK: verified >=1 cell with BOTH naive+iterative ok=true VERDICT n_contigs>0 arms in ${csv}"
+    echo ">>> OK: verified >=1 (error_rate, readlen, seed) cell with BOTH naive+iterative ok=true VERDICT n_contigs>0 arms in ${csv}"
   fi
 fi
 
