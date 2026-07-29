@@ -126,11 +126,73 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         mktempdir() do dir
             src = joinpath(dir, "empty_col.csv")
             write(src, "arm,k,seed,metric_source\nnaive,21,,\niterative,21,,\n")
-            out, _, _ = backfill_seed(src;
+            out, _,
+            _ = backfill_seed(src;
                 seed = 42, provenance = "explicit (test)", metric_source = "quast")
             df = CSV.read(out, DataFrames.DataFrame)
             Test.@test all(df.seed .== 42)
             Test.@test all(df.metric_source .== "quast")
+        end
+    end
+
+    Test.@testset "a PARTIALLY populated column is completed, not reported as done" begin
+        # The hole between "entirely empty" (filled above) and "conflicting"
+        # (refused below): SOME rows carry the value and others are `missing`.
+        # `unique(skipmissing(...))` hides the holes, so the equal-value branch
+        # returned the frame UNCHANGED and reported success while leaving the table
+        # unpairable — and `require_pairing_schema` in rgv_paired_wilcoxon.jl then
+        # rejects it with a hint pointing back at THIS tool, so the operator
+        # ping-pongs between the two forever.
+        mktempdir() do dir
+            src = joinpath(dir, "partial.csv")
+            write(src,
+                "arm,k,seed,metric_source\n" *
+                "naive,21,42,quast\n" *
+                "iterative,21,,\n")
+
+            out, _,
+            _ = backfill_seed(src;
+                seed = 42, provenance = "explicit (test)", metric_source = "quast")
+            df = CSV.read(out, DataFrames.DataFrame)
+            # The contract: after a successful backfill NO row is left unlabelled.
+            Test.@test count(ismissing, df.seed) == 0
+            Test.@test all(df.seed .== 42)
+            Test.@test count(ismissing, df.metric_source) == 0
+            Test.@test all(df.metric_source .== "quast")
+
+            # The same holds at the function level, for both columns.
+            partial_seed = DataFrames.DataFrame(
+                arm = ["naive", "iterative"],
+                k = [21, 21],
+                seed = [42, missing])
+            filled = insert_seed_column!(partial_seed, 42)
+            Test.@test collect(filled.seed) == [42, 42]
+
+            partial_def = DataFrames.DataFrame(
+                arm = ["naive", "iterative"],
+                metric_source = ["quast", missing])
+            filled_def = insert_definition_column!(partial_def, :metric_source, "quast")
+            Test.@test collect(filled_def.metric_source) == ["quast", "quast"]
+
+            # Filling holes is only legitimate because the populated rows AGREE with
+            # the supplied value. A partially populated column whose populated value
+            # DISAGREES is a conflict and must still raise — completing it would
+            # rewrite an observed value, which is the failure this tool exists to
+            # prevent.
+            _sbf_throws_with(
+                () -> insert_seed_column!(
+                    DataFrames.DataFrame(k = [21, 21], seed = [42, missing]), 99),
+                ["already has a `seed` column", "refusing to overwrite", "99"])
+            _sbf_throws_with(
+                () -> insert_definition_column!(
+                    DataFrames.DataFrame(metric_source = ["quast", missing]),
+                    :metric_source, "internal:quast-failed"),
+                ["already has a `metric_source` column", "refusing to overwrite"])
+            # And a fully populated CONFLICTING column is refused as before.
+            _sbf_throws_with(
+                () -> insert_seed_column!(
+                    DataFrames.DataFrame(k = [21, 21], seed = [42, 99]), 42),
+                ["already has a `seed` column", "refusing to overwrite"])
         end
     end
 
@@ -247,7 +309,8 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         # nothing could supply one. The workflow the tools document has to finish.
         mktempdir() do dir
             src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
-            out, sidecar, _ = backfill_seed(src;
+            out, sidecar,
+            _ = backfill_seed(src;
                 seed = 42, provenance = "explicit (test)",
                 metric_source = "internal:quast-disabled", quast_min_contig = 200)
             df = CSV.read(out, DataFrames.DataFrame)
@@ -264,18 +327,19 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
 
             # Never inferred: with no flags the columns stay absent, so the
             # analysis still fails closed rather than getting a fabricated value.
-            out2, _, _ = backfill_seed(src;
+            out2, _,
+            _ = backfill_seed(src;
                 seed = 42, provenance = "explicit (test)",
                 output_path = joinpath(dir, "seed_only.csv"))
-            Test.@test !("metric_source" in
-                         DataFrames.names(CSV.read(out2, DataFrames.DataFrame)))
+            Test.@test !("metric_source" in DataFrames.names(CSV.read(out2, DataFrames.DataFrame)))
         end
     end
 
     Test.@testset "an existing definition column is not silently overwritten" begin
         mktempdir() do dir
             src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
-            out, _, _ = backfill_seed(src;
+            out, _,
+            _ = backfill_seed(src;
                 seed = 42, provenance = "t", metric_source = "quast")
             df = CSV.read(out, DataFrames.DataFrame)
             # Same value is a no-op, so a re-run is safe: the column keeps its

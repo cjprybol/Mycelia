@@ -145,6 +145,16 @@ function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
             return df
         end
         if length(existing) == 1 && first(existing) == seed
+            # PARTIALLY populated is the case between "all missing" and "conflicting":
+            # some rows carry `seed`, others are `missing`. `skipmissing` above hides
+            # those holes, so returning early here reported success while leaving the
+            # table unpairable — and `require_pairing_schema` then rejects it with a
+            # hint pointing back at THIS tool, so the operator ping-pongs forever.
+            # The populated values already agree with `seed`, so filling the holes
+            # asserts nothing new.
+            if any(ismissing, df.seed)
+                df[!, :seed] = fill(Int(seed), DataFrames.nrow(df))
+            end
             return df
         end
         error("CSV already has a `seed` column with value(s) " *
@@ -177,6 +187,16 @@ function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value
             return df
         end
         if length(existing) == 1 && first(existing) == value
+            # PARTIALLY populated, exactly as in `insert_seed_column!`: `skipmissing`
+            # above hides the holes, so returning early reported success while
+            # leaving rows whose definition is still `missing`. The metric-definition
+            # guard renders `missing` as the literal `"missing"` and counts it as a
+            # DISTINCT value, so those holes make the guard raise later with a
+            # message that points nowhere. The populated values already agree with
+            # `value`, so filling the holes asserts nothing new about them.
+            if any(ismissing, getproperty(df, name))
+                df[!, name] = fill(value, DataFrames.nrow(df))
+            end
             return df
         end
         error("CSV already has a `$col` column with value(s) " *
@@ -232,10 +252,10 @@ function backfill_seed(csv_path::AbstractString;
                 "output_csv" => abspath(out),
                 "seed" => Int(seed),
                 "seed_provenance" => String(provenance),
-                "metric_source_backfilled" =>
-                    metric_source === nothing ? nothing : String(metric_source),
-                "quast_min_contig_backfilled" =>
-                    quast_min_contig === nothing ? nothing : Int(quast_min_contig),
+                "metric_source_backfilled" => metric_source === nothing ? nothing :
+                                              String(metric_source),
+                "quast_min_contig_backfilled" => quast_min_contig === nothing ? nothing :
+                                                 Int(quast_min_contig),
                 "rows" => DataFrames.nrow(df),
                 "backfilled_at" => string(Dates.now()),
                 "tool" => "benchmarking/rgv_seed_backfill.jl",
