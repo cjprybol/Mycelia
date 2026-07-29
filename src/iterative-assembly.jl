@@ -893,6 +893,15 @@ function _iterative_checkpoint_configuration(;
         graph_mode::Symbol,
         qualmer_prefilter_min_count::Int,
         enable_parallel::Bool,
+        # opt4 (td-jbjd, review fix C2): captured for exact-equality resume
+        # validation, same as every other behavior-affecting kwarg below --
+        # resuming a checkpoint under DIFFERENT freeze settings would otherwise
+        # silently switch an exact run into an approximate one (or vice versa)
+        # rather than tripping `_validate_checkpoint_configuration`'s mismatch
+        # guard.
+        skip_frozen_reads::Bool,
+        freeze_streak_threshold::Int,
+        freeze_across_rungs::Bool,
         skip_solid::Bool,
         hard_window::Bool,
         windowed_decode::Bool,
@@ -920,6 +929,9 @@ function _iterative_checkpoint_configuration(;
         "graph_mode" => string(graph_mode),
         "qualmer_prefilter_min_count" => qualmer_prefilter_min_count,
         "enable_parallel" => enable_parallel,
+        "skip_frozen_reads" => skip_frozen_reads,
+        "freeze_streak_threshold" => freeze_streak_threshold,
+        "freeze_across_rungs" => freeze_across_rungs,
         "skip_solid" => skip_solid,
         "hard_window" => hard_window,
         "windowed_decode" => windowed_decode,
@@ -1781,6 +1793,19 @@ function mycelia_iterative_assemble(input_fastq::String;
         throw(ArgumentError("indel_schedule must be :unrestricted or " *
                             ":frontier_budgeted; got :$(indel_schedule)"))
 
+    # opt4 (td-jbjd, review fix C3): freeze_streak_threshold=0 would make
+    # `freeze_streaks[i] >= freeze_streak_threshold` (see `_frozen_read_at`,
+    # below) true for EVERY read from pass 1 onward (streaks start all-zero),
+    # silently disabling the corrector entirely whenever skip_frozen_reads=true.
+    # Fail closed instead: a threshold this permissive is never a legitimate
+    # configuration, so reject it independent of skip_frozen_reads (a caller
+    # that later flips skip_frozen_reads=true without revisiting the threshold
+    # must not be silently broken).
+    freeze_streak_threshold >= 1 || throw(ArgumentError(
+        "freeze_streak_threshold must be at least 1 (got " *
+        "$freeze_streak_threshold); a threshold of 0 marks every read frozen " *
+        "from pass 1, disabling correction entirely when skip_frozen_reads=true"))
+
     isfile(input_fastq) || throw(ArgumentError(
         "input FASTQ file does not exist: $input_fastq"))
     canonical_input_fastq = realpath(input_fastq)
@@ -1906,6 +1931,9 @@ function mycelia_iterative_assemble(input_fastq::String;
         graph_mode = graph_mode,
         qualmer_prefilter_min_count = qualmer_prefilter_min_count,
         enable_parallel = enable_parallel,
+        skip_frozen_reads = skip_frozen_reads,
+        freeze_streak_threshold = freeze_streak_threshold,
+        freeze_across_rungs = freeze_across_rungs,
         skip_solid = skip_solid,
         hard_window = hard_window,
         windowed_decode = windowed_decode,
@@ -4522,6 +4550,23 @@ linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
 (bubbles/repeats). The decode then operates on the cheaply-corrected reads. Only
 enabled on the :scalable tier.
 
+`skip_frozen_reads`/`freeze_streak_threshold`/`freeze_streaks` (opt4, td-jbjd):
+when `skip_frozen_reads=true`, a read whose per-read decode has produced NO
+improvement for `freeze_streak_threshold` (default 2) consecutive calls against
+the CALLER-supplied `freeze_streaks` vector is treated as converged and skipped
+this pass (OR'd into the existing skip-solid/hard-window gate) — an approximate,
+opt-in optimization that trades a bounded amount of accuracy for skipped work
+(default OFF). `freeze_streaks` is caller-owned: this function only reads and
+mutates the vector it is given (a decoded read resets its entry to 0 on
+improvement or advances it by 1 otherwise; a frozen-skipped read's entry also
+advances). It defaults to `nothing`, in which case `skip_frozen_reads=true` is
+INERT (no read is ever frozen) and a `@warn` fires to surface the
+misconfiguration. `freeze_across_rungs` is NOT a parameter of this function — it
+only governs whether `mycelia_iterative_assemble`'s outer k-loop resets or
+persists the `freeze_streaks` vector it threads into each call across a k-advance;
+a direct caller of this function controls that scope itself by choosing whether
+to pass a fresh or a carried-forward `freeze_streaks` vector.
+
 Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
 decode_gated)` where `skip_fraction` is the fraction of reads passed through WITHOUT
 a decode (solid + hard-window skips, plus the whole set when the low-k decode gate
@@ -4671,6 +4716,13 @@ function _improve_read_set_likelihood_impl(
     end
     if cheap_correct && graph_mode == :singlestrand
         @warn "cheap_correct is not supported for graph_mode=:singlestrand; disabling Stage 0 cheap correction." graph_mode
+    end
+    # opt4 (td-jbjd, review fix I5): skip_frozen_reads=true with no
+    # freeze_streaks vector supplied is a silent no-op (`_frozen_read_at` below
+    # is unconditionally `false` when `freeze_streaks === nothing`) -- surface
+    # the misconfiguration rather than let a caller believe freezing is active.
+    if skip_frozen_reads && freeze_streaks === nothing
+        @warn "skip_frozen_reads=true but freeze_streaks not supplied; freezing is inert this call"
     end
     # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
     # corrector needs the solid set. Compute once, share both consumers.
@@ -5046,7 +5098,20 @@ function _improve_read_set_likelihood_impl(
                     if skip_flags[i]
                         if _frozen_read_at(read_index)
                             freeze_streaks[read_index] += 1
-                            Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                            # opt4 (td-jbjd, review fix I6): a read that is
+                            # ALREADY frozen (streak >= threshold) still counts
+                            # as frozen when a global `pass_decode_off` pass also
+                            # skips every other read -- but this pass's skip was
+                            # NOT caused by freezing specifically (every read was
+                            # skipped regardless of its streak), so attributing
+                            # it to `frozen_reads_skipped` would over-count vs
+                            # the counter's documented contract ("NOT reads
+                            # skipped for pass-decode-off reasons"). The streak
+                            # itself still advances (state stays correct); only
+                            # the diagnostic attribution is gated.
+                            if !pass_decode_off
+                                Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                            end
                         end
                     else
                         freeze_streaks[read_index] =
@@ -5085,7 +5150,15 @@ function _improve_read_set_likelihood_impl(
                     # "converged". No-op when freeze_streaks is nothing.
                     if freeze_streaks !== nothing && _frozen_read_at(batch_start + i - 1)
                         freeze_streaks[batch_start + i - 1] += 1
-                        Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                        # opt4 (td-jbjd, review fix I6): mirror the parallel
+                        # branch -- do not attribute this skip to
+                        # `frozen_reads_skipped` when a global
+                        # `pass_decode_off` pass is why EVERY read (frozen or
+                        # not) was skipped this pass. The streak still
+                        # advances; only the diagnostic counter is gated.
+                        if !pass_decode_off
+                            Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                        end
                     end
                     continue
                 end

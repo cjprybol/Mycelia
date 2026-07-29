@@ -67,9 +67,13 @@ Test.@testset "opt4 skip_frozen_reads disabled-path identity lock (td-jbjd)" beg
         graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
         hard = Mycelia._hard_vertex_set(graph, k)
 
-        # batch_size < n_reads => multiple batches, exercising both the serial
-        # and (with enable_parallel) the parallel collect-results freeze-streak
-        # bookkeeping sites — all of which must be no-ops here.
+        # batch_size < n_reads => multiple batches, exercising the SERIAL
+        # freeze-streak bookkeeping sites (this test never sets
+        # enable_parallel=true, so the parallel collect-results sites are NOT
+        # exercised here — that path is locked separately by
+        # corrector_opt4_parallel_freeze_byte_identity_test.jl under real
+        # `-t4` concurrency). All of the serial sites are no-ops here since
+        # skip_frozen_reads is never true in this testset.
         common = (; graph_mode = :canonical, skip_solid = true,
             cheap_correct = true, hard_vertices = hard, decode_enabled = true,
             batch_size = 50)
