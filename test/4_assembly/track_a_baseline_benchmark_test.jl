@@ -100,6 +100,64 @@ Test.@testset "track A baseline benchmark helpers" begin
         # sampler is reaped in the finally, so telemetry can never discard science.
         Test.@test_throws ErrorException timed_with_peak_rss(() -> error("boom"))
     end
+
+    # --- A mid-run sampler failure must not be labelled a clean measurement ------
+    # The `try` used to wrap the WHOLE polling loop, so the first probe exception
+    # ended sampling permanently for that cell. If any poll had already succeeded,
+    # `reads > 0` labelled the frozen, silently-truncated peak "sampled" — a
+    # plausible number presented as a measurement, which is precisely the failure the
+    # read count was introduced to make visible.
+    #
+    # `probe` is injected because there is no portable way to make a real /proc read
+    # fail on the third poll, and `current_rss_bytes` returns `nothing` on macOS.
+    Test.@testset "a truncated sampler downgrades its own label" begin
+        # Three good reads (the first is consumed by the baseline), then every read
+        # throws forever.
+        calls = Threads.Atomic{Int}(0)
+        flaky = () -> begin
+            n = Threads.atomic_add!(calls, 1) + 1
+            n <= 3 && return 1_000_000 * n
+            error("simulated /proc read failure")
+        end
+        result = timed_with_peak_rss(() -> (sleep(0.3); 42);
+            interval_seconds = 0.005, probe = flaky)
+        # Telemetry never discards science, whichever path was taken.
+        Test.@test result.value == 42
+
+        if Threads.nthreads() > 1
+            Test.@test result.method == "sampled-partial"
+            # The peak is the last SUCCESSFUL observation, and it is reported as a
+            # lower bound rather than as "sampled".
+            Test.@test result.peak_rss_bytes == 3_000_000
+            Test.@test result.rss_baseline_bytes == 1_000_000
+            # Sampling CONTINUED past the first failure instead of exiting the loop:
+            # 3 successes + 1 failure would be the whole story under the old code.
+            Test.@test calls[] > 4
+        else
+            # Single-threaded, so the sampler is not used at all and the row is
+            # honestly labelled with the known-broken fallback semantics.
+            Test.@test result.method == "highwater-delta"
+        end
+
+        # A probe that never fails is still a clean "sampled" measurement — the
+        # downgrade must be caused by the failures, not by injecting a probe.
+        rising = Threads.Atomic{Int}(0)
+        healthy = () -> 1_000_000 * (Threads.atomic_add!(rising, 1) + 1)
+        clean = timed_with_peak_rss(() -> (sleep(0.05); 7);
+            interval_seconds = 0.005, probe = healthy)
+        Test.@test clean.value == 7
+        Test.@test clean.method ==
+                   (Threads.nthreads() > 1 ? "sampled" : "highwater-delta")
+
+        # A probe that fails on EVERY call, including the baseline, cannot sample at
+        # all and must not claim to have.
+        always_bad = () -> error("simulated /proc read failure")
+        dead = timed_with_peak_rss(() -> 3; interval_seconds = 0.005,
+            probe = always_bad)
+        Test.@test dead.value == 3
+        Test.@test dead.method == "highwater-delta"
+        Test.@test dead.rss_baseline_bytes == -1
+    end
 end
 
 end  # module TrackABaselineBenchmarkTest
