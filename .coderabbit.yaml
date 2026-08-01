@@ -1,68 +1,99 @@
 # .coderabbit.yaml — CodeRabbit config for cjprybol/Mycelia.
 #
-# Deployed from the canonical fleet template
-# (todo/protocols/coderabbit-config.example.yaml) per the third-party bot audit
-# (todo/protocols/third-party-bot-audit.md) and the 2026-08-01 value audit
-# (todo/stakeholders/system/planning/2026-08-01-coderabbit-value-audit.md).
+# Generated from todo/protocols/coderabbit-config.example.yaml — edit the
+# TEMPLATE and redeploy, never this file directly. Schema:
+# https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
 #
-# Why on-demand: CodeRabbit's fair-usage policy pins this account at 1 review/
-# hour on a trailing 7-day window at our PR volume, on every plan tier. In July
-# 2026, 55% of review attempts were rate-limited and 529 PRs were never reviewed
-# at all. Auto-review spends that scarce slot on whatever PR happens to be open;
-# opt-in spends it on the PR that needs it.
+# Key design choices:
+#   - auto_review disabled — CodeRabbit's fair-usage policy pins this account
+#     at a low reviews/hour ceiling at our PR volume, so an automatic pass
+#     spends a scarce slot on whichever PR happens to be open. Request one with
+#     `@coderabbitai review` on PRs meeting an opt-in trigger (see the
+#     "Opt-in routing" table in protocols/third-party-bot-audit.md).
+#   - path_filters restrict review to code + executable-prose surfaces.
+#   - tone_instructions (ROOT level — see note below) keep output terse.
+#   - chat.auto_reply: false — CodeRabbit will not reply in chat threads
+#     without an explicit @-mention. This is an EFFECTIVE setting, not a
+#     default; it is what keeps an on-demand repo quiet between requests.
 #
-# Request a pass by commenting `@coderabbitai review` on PRs meeting an opt-in
-# trigger (money/credentials, concurrency or shell composition, safety gates,
-# figures/reported numbers, data-integrity surfaces, or a non-trivial pre-merge
-# second opinion). See the "Opt-in routing" table in third-party-bot-audit.md.
-# Routine PRs are covered by /comprehensive-pr-review + the Codex connector.
+# Settings deliberately omitted because they equal the schema default and
+# would only be noise: request_changes_workflow, high_level_summary, poem,
+# auto_review.drafts.
 #
-# Key design choices (unchanged from the fleet template):
-#   - auto_review disabled (dominant spam + rate-limit source)
-#   - path_filters restrict review to actual code/scripts
-#   - tone_instructions enforce terse output focused on real bugs
-#   - poem disabled (no decorative output)
+# TWO SCHEMA/SEMANTICS NOTES, both learned the hard way (2026-08-01 review):
+#
+# 1. `tone_instructions` is a ROOT-level property (string, maxLength 250).
+#    It is NOT under `reviews:`. The `reviews` object does not set
+#    additionalProperties:false, so a misplaced `tone_instructions` is
+#    SILENTLY ACCEPTED AND DISCARDED — no error, no warning. It sat nested
+#    (and therefore inert) in this template from 2026-05-21 to 2026-08-01.
+#
+# 2. path_filters ordering is NOT documented by the vendor: it is unresolved
+#    whether a later include re-admits an earlier `!` exclusion (gitignore
+#    last-match-wins) or whether exclusions always win. We therefore put ALL
+#    INCLUDES FIRST AND ALL EXCLUSIONS LAST, so the exclusions hold under
+#    EITHER semantics. Do not reorder without re-verifying. Confirm the
+#    resolved config on a live PR with `@coderabbitai configuration`.
 
 reviews:
   auto_review:
     enabled: false
-    drafts: false
-  request_changes_workflow: false
-  high_level_summary: true
-  poem: false
   review_status: false
   path_filters:
-    # Skip docs + generated artifacts
+    # ---- INCLUDES (must come first; see note 2 above) ----
+    # Code surfaces
+    - "**/*.jl"
+    - "**/*.py"
+    - "**/*.sh"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "src/**"
+    - "scripts/**"
+    - "lib/**"
+    # Executable non-code surfaces. These carry real defects and were invisible
+    # to the pre-2026-08-01 filter: a flock self-deadlock shipped in a .sbatch
+    # file, and 4 of 18 Critical findings were invalid-JSON verdict artifacts.
+    - "bin/**"
+    - "**/*.sbatch"
+    - "**/*.toml"
+    - "**/Dockerfile*"
+    - ".github/workflows/**"
+    # ---- PROSE-PRIMARY REPOS ONLY ----
+    # Uncomment in repos where markdown IS the executable artifact (dotfiles,
+    # todo, context-iorgan): agent skills, protocols, and memory files are
+    # instructions an agent follows literally, not documentation about code.
+    # Evidence: dotfiles#190 was a markdown-only PR and CodeRabbit returned a
+    # Major Security & Privacy finding (prompt injection) plus a Major
+    # correctness finding. Excluding these makes such findings unreachable.
+    # - ".claude/skills/**/*.md"
+    # - "protocols/**/*.md"
+    # - "**/memory/*.md"
+    # - "docs/superpowers/specs/**/*.md"
+    # - "docs/superpowers/plans/**/*.md"
+    # ---- EXCLUDES (must come last; see note 2 above) ----
+    # Prose + generated artifacts
     - "!**/*.md"
     - "!**/*.rst"
     - "!**/CHANGELOG*"
     - "!**/LICENSE*"
-    # Skip notebook + beads + telemetry state
+    # Tracker / telemetry / worktree state
     - "!**/.beads/**"
     - "!**/notebooks/**/output/**"
     - "!**/telemetry/**"
     - "!**/.worktrees/**"
-    # Skip lockfiles + vendored deps
+    # Lockfiles + vendored deps (must follow **/*.toml to beat it)
     - "!**/package-lock.json"
     - "!**/yarn.lock"
     - "!**/Cargo.lock"
     - "!**/poetry.lock"
     - "!**/Manifest.toml"
     - "!**/vendor/**"
-    # Include actual code surfaces
-    - "src/**"
-    - "scripts/**"
-    - "lib/**"
-    - "**/*.jl"
-    - "**/*.py"
-    - "**/*.sh"
-    - "**/*.ts"
-    - "**/*.tsx"
-  tone_instructions: |
-    Be terse. Only flag correctness, security, or data-loss bugs.
-    Skip style/preference feedback unless there is a project linter rule
-    being violated. Do not repeat findings from prior review comments on
-    the same PR.
+
+# ROOT level — see note 1. Nesting this under `reviews:` silently disables it.
+tone_instructions: |
+  Be terse. Only flag correctness, security, or data-loss bugs. Skip
+  style/preference feedback unless a project linter rule is violated. Do not
+  repeat findings from prior review comments on the same PR.
 
 chat:
   auto_reply: false
