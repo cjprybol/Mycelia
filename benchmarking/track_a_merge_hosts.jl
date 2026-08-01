@@ -489,25 +489,55 @@ Read `OPTIONAL_KEY_DEFAULTS` out of the harness SOURCE and compare it to
 [`TRACK_A_ABSENT_DEFAULTS`].
 
 Every other constant mirrored from the harness in this file is pinned against the
-harness source; this one was not, and its only assertions compared the constant to
-the literals written into it in the same commit — a tautology, and the same shape
-this file's round-4 note congratulates itself for eliminating for TRACK_A_ROW_KEYS.
-Demonstrated: drifting the harness sentinel to "not-recorded"/-2 left the merge
-suite fully green while the two files disagreed about exactly the columns the
-mirror exists to keep in step.
+harness source; this one was not, and its first assertions compared the constant to
+the literals written into it in the same commit — a tautology.
 
-Fails closed: an unreadable or unparseable harness returns `ok = false`.
+The first attempt at this guard was a regex over the pairs, and it FALSE-PASSED on
+the very drift class the mirror exists to catch. Two ways, both measured:
+
+  * the numeric alternative had no right boundary, so a sentinel of `-1.5` or
+    `-1_000_000` parsed as `-1` and compared equal.
+  * a pair whose value the regex could not match was silently DROPPED rather than
+    failing, so the harness could gain a THIRD optional column that this file does
+    not mirror — exactly the original defect — and the two-key comparison still
+    succeeded. 11/11 genuinely-drifted harnesses returned ok = true.
+
+So parse the literal instead of pattern-matching it, and reject anything that is not
+a plain `:symbol => &lt;String|Int&gt; ` pair. Unrecognised syntax is a MISMATCH, never a
+pass: this guard is only worth having if the failure direction is right.
+
+The match is line-anchored (`^const`) so a commented-out or docstring copy cannot
+shadow a drifted live definition — `match` returns the first hit in the file, and an
+unanchored pattern read the stale copy instead.
+
+The harness cannot be `include`d from here (it parses global `ARGS` at load and
+imports Mycelia), so source inspection is the only cross-file guard available.
 """
 function track_a_absent_defaults_match_harness()
     harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
     isfile(harness) || return (false, Dict{String, Any}())
     src = read(harness, String)
-    m = match(r"const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*Dict\{Symbol,\s*Any\}\((.*?)\)\s*\n"s, src)
+    m = match(
+        r"(?m)^const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*(Dict\{Symbol,\s*Any\}\(.*?\))\s*$"s,
+        src)
     m === nothing && return (false, Dict{String, Any}())
+    expr = try
+        Meta.parse(m.captures[1])
+    catch
+        return (false, Dict{String, Any}())
+    end
+    (expr isa Expr && expr.head === :call) || return (false, Dict{String, Any}())
     parsed = Dict{String, Any}()
-    for pair in eachmatch(r":(\w+)\s*=>\s*(\"[^\"]*\"|-?\d+)", m.captures[1])
-        key, raw = pair.captures[1], pair.captures[2]
-        parsed[key] = startswith(raw, "\"") ? String(raw[2:(end - 1)]) : parse(Int, raw)
+    for arg in expr.args[2:end]
+        (arg isa Expr && arg.head === :call && length(arg.args) == 3 &&
+         arg.args[1] === :(=>)) || return (false, Dict{String, Any}())
+        key, value = arg.args[2], arg.args[3]
+        key isa QuoteNode || return (false, Dict{String, Any}())
+        # Only plain String/Int literals are comparable to this file's mirror. A Float,
+        # a Symbol, `nothing`, `missing`, or any computed expression means the harness
+        # says something this guard cannot represent -> report a mismatch, not a pass.
+        (value isa String || value isa Integer) || return (false, Dict{String, Any}())
+        parsed[String(key.value)] = value
     end
     isempty(parsed) && return (false, parsed)
     return (parsed == TRACK_A_ABSENT_DEFAULTS, parsed)

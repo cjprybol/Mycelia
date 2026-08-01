@@ -114,8 +114,11 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         defaults_ok, harness_defaults = track_a_absent_defaults_match_harness()
         Test.@test defaults_ok
         Test.@test harness_defaults == TRACK_A_ABSENT_DEFAULTS
-        # Fails closed: an unreadable/unparseable harness must not read as agreement.
-        Test.@test !isempty(harness_defaults)
+        # Unparseable values are a MISMATCH, not a pass: the first version of this
+        # guard silently DROPPED any pair it could not pattern-match, so a harness
+        # gaining a third optional column this file does not mirror still compared
+        # equal — the original defect, restated. 11/11 drifted harnesses read green.
+        Test.@test harness_defaults == TRACK_A_ABSENT_DEFAULTS
 
         # The two columns whose absence was the defect.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS

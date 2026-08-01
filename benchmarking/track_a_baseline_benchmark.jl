@@ -603,10 +603,21 @@ function write_power_analysis(root, df)
     # zeros. The min-contig threshold is the CAUSE of that error, not evidence that a
     # measurement happened. track_a_merge_hosts.jl states the same implication.
     #
-    # This is why the exclusion needs no judgement call about a borderline class, and
-    # why it cannot bias the verdict: a value that was never measured carries no
-    # information about variance either way. n_excluded is still recorded in the
-    # summary artifact so a reader can see how much of the matrix went unscored.
+    # So the exclusion needs no judgement call about a borderline class: every row it
+    # matches is provably a non-measurement.
+    #
+    # It IS one-directional on the verdict, though, and not through the CV magnitude —
+    # through the DENOMINATOR. Dropping a row shrinks its group's n; at n == 1 the
+    # sd is NaN, the cv is NaN, and the group leaves `evaluable` entirely, so a group
+    # that would have FAILED the threshold is removed from `n_pass == n_eval` rather
+    # than counted against it. Measured on a two-group fixture, varying only the
+    # exclusion: with it, 1 evaluable cell and "supported"; without it, 2 evaluable
+    # cells, max CV 1.41 and "NOT fully supported". The verdict flips toward
+    # "supported" — the favourable direction for the pre-registration this gates.
+    #
+    # Excluding non-measurements is still right; a reader just has to be able to see
+    # how much of the matrix went unscored, which is why n_excluded is printed in the
+    # summary artifact next to the counts rather than left in a @warn.
     #
     # Same implication track_a_merge_hosts.jl's `quast_evidence` uses, and the same
     # predicate as ok_cells() in track_a_harvest_figures.jl — the figures and this

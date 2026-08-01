@@ -89,7 +89,8 @@ end
 #
 # The detector is the implication track_a_merge_hosts.jl's `quast_evidence` already
 # uses: n_contigs > 0 AND largest_contig == 0 means QUAST did not score this cell
-# (it failed, or nothing cleared min_contig). Both columns are already required, so
+# (QUAST exits non-zero when nothing clears min_contig, so both routes land in the
+# same empty_metrics() fallback). Both columns are already required, so
 # the data was loaded and unused.
 #
 # Filtered HERE rather than by changing `status` at the source, because the 432
