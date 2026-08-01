@@ -51,6 +51,12 @@ import Random
 import Printf
 import Dates
 
+# Shared QUAST --min-contig policy (bead td-28o0). Replaces the inline
+# `max(50, <len> ÷ 10)` this file used to carry, which for any reference above
+# ~5 kb raised the threshold ABOVE QUAST's default and, for T4 (168,903 bp),
+# demanded a 16,890 bp contig that a fragmented assembly cannot reach.
+include(joinpath(@__DIR__, "quast_min_contig.jl"))
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -210,7 +216,7 @@ function profile_cell(glen::Int)
                 String[iter_contigs, naive_contigs];
                 outdir = joinpath(score_dir, "quast"),
                 reference = ref_path,
-                min_contig = max(50, glen ÷ 10))
+                min_contig = quast_min_contig(glen))
         catch e
             @warn "run_quast unavailable / failed — reporting t_quast=0" exception = e
         end

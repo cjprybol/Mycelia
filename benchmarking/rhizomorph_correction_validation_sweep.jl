@@ -44,7 +44,11 @@
 #   MYCELIA_RGV_READLEN        comma-separated read lengths (default 150,5000)
 #   MYCELIA_RGV_COVERAGE       target fold coverage per cell (default 30; smoke default 10)
 #   MYCELIA_RGV_K              assembly k-mer size (default 21)
-#   MYCELIA_RGV_SEED           RNG seed for reproducibility (default 42)
+#   MYCELIA_RGV_SEED           comma-separated RNG seeds; each is an independent
+#                              replicate of the whole (err x readlen) grid and is
+#                              written to the `seed` CSV column (default 42). Use
+#                              "42,123,456" to produce the replicate axis the
+#                              paired-Wilcoxon analysis pairs over.
 #   MYCELIA_RGV_SCALE_FLOOR    override the scale-guard floor in bases
 #   MYCELIA_RUN_EXTERNAL       truthy -> run QUAST per arm and parse its
 #                              alignment-validated metrics (Genome fraction,
@@ -52,6 +56,23 @@
 #                              into the CSV (metric_source="quast"); degrades
 #                              gracefully to internal size-ratio metrics
 #                              (metric_source="internal") if QUAST is absent
+#
+# CSV columns that exist for RESULT INTEGRITY (not for the science directly):
+#
+#   seed              — the RNG seed this run used (MYCELIA_RGV_SEED). REQUIRED to
+#                       make seed a usable parallelization axis and to run the
+#                       pre-registration's paired-Wilcoxon rule over seeds
+#                       42/123/456: once shards are merged, replicate rows are
+#                       indistinguishable without it, so pairs cannot be formed.
+#                       See bead td-59o7 and `rgv_paired_wilcoxon.jl`.
+#   metric_source     — WHICH metric definition produced this row: "quast"
+#                       (alignment-validated) vs "internal*" (size-ratio proxy).
+#   quast_min_contig  — the --min-contig threshold QUAST was run at. Part of the
+#                       metric definition too: two rows both labelled "quast" but
+#                       filtered at different thresholds are not comparable.
+#                       Recording it makes a future change to the threshold policy
+#                       trip `metric_source_guard.jl` instead of silently moving
+#                       numbers. See beads td-28o0 / td-9p91.
 
 import Pkg
 if isinteractive()
@@ -72,6 +93,11 @@ include(joinpath(@__DIR__, "rhizomorph_scale_guard.jl"))
 # Pure, dependency-free QUAST report.tsv parser + per-arm metric attribution
 # (shared with the unit test and with mode_comparison.jl).
 include(joinpath(@__DIR__, "quast_report_parsing.jl"))
+# Pure, dependency-free QUAST --min-contig threshold policy (bead td-28o0). The
+# inline `max(50, glen ÷ 10)` this replaces demanded a 16,890 bp contig for T4,
+# which the naive arm cannot reach, so QUAST failed and the run degraded to
+# internal metrics. See that file's header for the ceiling rationale.
+include(joinpath(@__DIR__, "quast_min_contig.jl"))
 
 # === Configuration parsing =================================================
 
@@ -234,7 +260,13 @@ function run_sweep()
     readlens = _parse_int_list(get(ENV, "MYCELIA_RGV_READLEN", ""), [150, 5000])
     coverage = parse(Float64, get(ENV, "MYCELIA_RGV_COVERAGE", smoke ? "10" : "30"))
     k = parse(Int, get(ENV, "MYCELIA_RGV_K", "21"))
-    seed = parse(Int, get(ENV, "MYCELIA_RGV_SEED", "42"))
+    # Seed is a LIST, matching ERR and READLEN. It was a scalar, so no launcher
+    # could produce the replicate axis the paired analysis needs: a pairable
+    # multi-seed table required three separate manual submissions plus a
+    # three-way `--csv` merge, a procedure documented nowhere. The axis was
+    # asserted by the schema and not wired by the harness (bead td-59o7).
+    seeds = _parse_int_list(get(ENV, "MYCELIA_RGV_SEED", ""), [42])
+    seed = first(seeds)   # the reference seed, for the banner and for k clamping
     scale_floor = parse(Float64, get(ENV, "MYCELIA_RGV_SCALE_FLOOR", string(SCALE_FLOOR_BASES)))
     run_external = _truthy(get(ENV, "MYCELIA_RUN_EXTERNAL", "false"))
 
@@ -245,6 +277,9 @@ function run_sweep()
     println("Read lengths   : $readlens")
     println("Coverage       : $(coverage)x")
     println("k              : $k")
+    # Printed so the seed is recoverable from a run log even for runs whose CSV
+    # predates the `seed` column (see rgv_seed_backfill.jl).
+    println("Seeds          : $(join(seeds, ", "))")
     println("Arms           : naive (corrector=:none) vs iterative (corrector=:iterative), both DoubleStrand")
     println("Scale floor    : $(scale_floor) bases")
     println("QUAST          : $(run_external ? "enabled" : "disabled (set MYCELIA_RUN_EXTERNAL=true)")")
@@ -260,6 +295,15 @@ function run_sweep()
     glen = length(refseq)
     println("Reference: $ref_label ($glen bp)")
 
+    # QUAST --min-contig for this reference. Fixed by the reference alone (never by
+    # the assembly being scored), so every arm of every cell is filtered
+    # identically and the arms stay comparable by construction. See
+    # quast_min_contig.jl for why this is clamped from above.
+    min_contig = quast_min_contig(glen)
+    println("QUAST --min-contig: $min_contig bp (genome_len ÷ " *
+            "$(MIN_CONTIG_GENOME_DIVISOR), clamped to " *
+            "[$(MIN_CONTIG_FLOOR_BP), $(MIN_CONTIG_CEILING_BP)])")
+
     # k must not exceed the shortest read; clamp and warn rather than fail.
     min_readlen = minimum(min.(readlens, glen))
     if k > min_readlen
@@ -267,12 +311,18 @@ function run_sweep()
         k = min_readlen
     end
 
-    rng = Random.MersenneTwister(seed)
+    # One RNG per seed, constructed inside the loop, so each replicate is
+    # reproducible on its own rather than depending on how many cells preceded it.
 
     rows = DataFrames.DataFrame(
         reference = String[], genome_len = Int[], error_rate = Float64[],
         regime = String[], readlen = Int[], tech = String[], target_coverage = Float64[],
-        effective_coverage = Float64[], k = Int[], arm = String[], ok = Bool[],
+        effective_coverage = Float64[], k = Int[],
+        # First-class replicate identifier (bead td-59o7): without it, merged
+        # shards cannot be paired, so the pre-reg's paired-Wilcoxon over seeds
+        # 42/123/456 is not runnable.
+        seed = Int[],
+        arm = String[], ok = Bool[],
         n_contigs = Int[], total_length = Int[], largest_contig = Int[], n50 = Int[],
         genome_fraction = Float64[], runtime_s = Float64[],
         # Alignment-validated QUAST metrics (populated per arm when QUAST ran);
@@ -281,20 +331,26 @@ function run_sweep()
         quast_nga50 = Union{Missing, Float64}[],
         quast_num_misassemblies = Union{Missing, Float64}[],
         quast_duplication_ratio = Union{Missing, Float64}[],
-        metric_source = String[]
+        metric_source = String[],
+        # The --min-contig threshold QUAST was run at: part of the metric
+        # DEFINITION, recorded so a change to the policy is detectable rather
+        # than silent (beads td-28o0 / td-9p91).
+        quast_min_contig = Int[]
     )
 
     # Track the minimum effective coverage across cells for the scale guard: the
     # weakest cell governs whether the whole sweep earns a VERDICT.
     min_effective_coverage = Inf
 
-    println("\n--- Sweeping (error_rate x read-regime) x {naive, iterative} ---")
-    for err in errs
+    println("\n--- Sweeping (seed x error_rate x read-regime) x {naive, iterative} ---")
+    for seed in seeds
+        rng = Random.MersenneTwister(seed)
+        for err in errs
         for readlen in readlens
             regime, tech = regime_for_readlen(readlen)
-            cell_dir = joinpath(workdir, "err$(err)_len$(readlen)")
+            cell_dir = joinpath(workdir, "seed$(seed)_err$(err)_len$(readlen)")
             mkpath(cell_dir)
-            println("\n[cell] err=$err  regime=$regime  readlen=$readlen  tech=$tech")
+            println("\n[cell] seed=$seed  err=$err  regime=$regime  readlen=$readlen  tech=$tech")
 
             reads,
             sampled_bases = simulate_regime_reads(refseq, readlen, coverage, err, tech, rng)
@@ -303,7 +359,7 @@ function run_sweep()
             println("  simulated $(length(reads)) reads, effective coverage $(eff_cov)x")
 
             for corrector in (:none, :iterative)
-                tag = "$(ref_label)_err$(err)_len$(readlen)"
+                tag = "$(ref_label)_seed$(seed)_err$(err)_len$(readlen)"
                 arm_name = corrector == :none ? "naive" : "iterative"
                 res = run_arm(reads, corrector, k, glen, cell_dir, tag)
 
@@ -335,7 +391,7 @@ function run_sweep()
                         Mycelia.run_quast(res.contigs_path;
                             outdir = quast_dir,
                             reference = ref_path,
-                            min_contig = max(50, glen ÷ 10))
+                            min_contig = min_contig)
                         ran = true
                     catch e
                         @warn "QUAST external tool unavailable/failed — falling back to internal metrics" arm_name exception = (
@@ -365,6 +421,7 @@ function run_sweep()
                         reference = ref_label, genome_len = glen, error_rate = err,
                         regime = regime, readlen = readlen, tech = String(tech),
                         target_coverage = coverage, effective_coverage = eff_cov, k = k,
+                        seed = seed,
                         arm = arm_name, ok = res.ok, n_contigs = res.n_contigs,
                         total_length = res.total_length, largest_contig = res.largest_contig,
                         n50 = res.n50, genome_fraction = res.genome_fraction,
@@ -373,12 +430,14 @@ function run_sweep()
                         quast_nga50 = quast.quast_nga50,
                         quast_num_misassemblies = quast.quast_num_misassemblies,
                         quast_duplication_ratio = quast.quast_duplication_ratio,
-                        metric_source = quast.metric_source))
+                        metric_source = quast.metric_source,
+                        quast_min_contig = min_contig))
                 println("    $(rpad(arm_name, 9)) -> ok=$(res.ok) contigs=$(res.n_contigs) " *
                         "total=$(res.total_length)bp largest=$(res.largest_contig) " *
                         "n50=$(res.n50) frac=$(res.genome_fraction)% " *
                         "src=$(quast.metric_source) $(res.runtime_s)s")
             end
+        end
         end
     end
 

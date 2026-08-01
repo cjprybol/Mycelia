@@ -6,7 +6,14 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=04:00:00
+# 2 days. The 4h that was here is not merely tight, it is known-insufficient: the
+# 2026-07-25 submissions had to be overridden with --time=2-00:00:00 because 4h
+# was too short for a SINGLE seed. MYCELIA_RGV_SEED now defaults to three seeds,
+# so the sweep iterates the full (err x readlen x arm) matrix three times. A
+# timeout kills the job mid-sweep and the green-but-empty guard below never runs,
+# so the failure would present as a missing CSV rather than as a clear timeout.
+# lr_normal MaxWall is 3 days, so 2 days leaves headroom without hitting the cap.
+#SBATCH --time=2-00:00:00
 #SBATCH --output=rgv_sweep_lrc_%j.out
 #SBATCH --error=rgv_sweep_lrc_%j.err
 
@@ -58,7 +65,10 @@ export MYCELIA_RGV_ERR="${MYCELIA_RGV_ERR:-0.01,0.05,0.10}"     # low / mid / hi
 export MYCELIA_RGV_READLEN="${MYCELIA_RGV_READLEN:-150,5000}"   # short-Illumina / long-Nanopore
 export MYCELIA_RGV_COVERAGE="${MYCELIA_RGV_COVERAGE:-30}"       # 48.5kb x 30x ~= 1.46 Mbase > scale floor
 export MYCELIA_RGV_K="${MYCELIA_RGV_K:-21}"
-export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42}"
+# Three pre-registered replicate seeds. The sweep loops over this list, so one
+# submission yields a table the paired analysis can pair over; a single seed
+# would need three manual submissions plus a three-way --csv merge.
+export MYCELIA_RGV_SEED="${MYCELIA_RGV_SEED:-42,123,456}"
 # Enable QUAST (Mycelia auto-provisions it via Conda.jl); harness degrades
 # gracefully to internal metrics if QUAST/Conda is unavailable.
 export MYCELIA_RUN_EXTERNAL="${MYCELIA_RUN_EXTERNAL:-true}"
@@ -67,7 +77,7 @@ cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 
 echo ""
 echo ">>> RUN rhizomorph_correction_validation_sweep.jl  $(date)"
-echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  QUAST=${MYCELIA_RUN_EXTERNAL}"
+echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  SEED=${MYCELIA_RGV_SEED}  QUAST=${MYCELIA_RUN_EXTERNAL}"
 
 # Capture julia stdout to a runlog while still streaming it to the job .out (tee),
 # so the guard can bind to THIS run's CSV by the path the .jl prints
