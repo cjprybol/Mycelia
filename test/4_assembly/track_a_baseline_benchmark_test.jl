@@ -115,6 +115,45 @@ Test.@testset "track A baseline benchmark helpers" begin
         # sampler is reaped in the finally, so telemetry can never discard science.
         Test.@test_throws ErrorException timed_with_peak_rss(() -> error("boom"))
     end
+
+    Test.@testset "power analysis counts only measurements" begin
+        # Two ways a row carries zeros that are not measurements, and `status` sees
+        # only the first. On a QUAST exception run_cell substitutes empty_metrics()
+        # and then derives status from n_contigs ALONE, so a QUAST failure on a
+        # NON-EMPTY assembly is written as status="ok" with NGA50 = 0. Pooling that
+        # into a variance estimate is the same defect the status filter was added to
+        # close, reached through a different door. Mirrors ok_cells() in
+        # track_a_harvest_figures.jl — the two consumers must not disagree about
+        # which rows are measurements.
+        row(; nga,
+            status,
+            n_contigs,
+            largest_contig) = (
+            organism = "Lambda", technology = "ont", coverage = 30,
+            decoder_arm = "kmer", k = 31, NGA50 = nga, status = status,
+            n_contigs = n_contigs, largest_contig = largest_contig)
+        measured = [
+            row(nga = 1000.0, status = "ok", n_contigs = 12,
+                largest_contig = 1000),
+            row(nga = 1010.0, status = "ok", n_contigs = 12,
+                largest_contig = 1010),
+            row(nga = 990.0, status = "ok", n_contigs = 12,
+                largest_contig = 990)]
+        # status="ok", non-empty assembly, but QUAST never scored it.
+        unscored = row(nga = 0.0, status = "ok", n_contigs = 1200,
+            largest_contig = 0)
+
+        mktempdir() do dir
+            clean = write_power_analysis(dir, DataFrames.DataFrame(measured))
+            mixed = write_power_analysis(dir,
+                DataFrames.DataFrame(vcat(measured, [unscored])))
+            # The unscored row must not enter the group at all...
+            Test.@test only(clean.n) == 3
+            Test.@test only(mixed.n) == 3
+            # ...and therefore must not move the variance it would otherwise inflate.
+            Test.@test only(mixed.cv_nga50) == only(clean.cv_nga50)
+        end
+    end
 end
 
 end  # module TrackABaselineBenchmarkTest

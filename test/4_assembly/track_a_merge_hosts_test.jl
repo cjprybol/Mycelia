@@ -82,6 +82,27 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         Test.@test occursin(
             "\"\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)__k\$(k)\"", harness)
         Test.@test occursin("cell_id = cell_id_for(org, tech, cov, seed, arm)", harness)
+
+        # The ROW SCHEMA is mirrored too, and it silently fell two columns behind for
+        # four review rounds: peak_rss_method and rss_baseline_bytes were added to the
+        # harness so a reader can tell a sampled per-cell peak from a high-water delta,
+        # and the merge kept emitting the 17-column schema — so the cross-host table,
+        # the ONE table where the two hosts' methods actually mix, carried the value
+        # and dropped the provenance that makes it interpretable.
+        #
+        # Nothing caught it because the only assertions on this constant compare the
+        # merge's OUTPUT against the merge's OWN constant (below, and again in the
+        # merged-table testsets). That is self-consistent by construction: it is a
+        # tautology, not a drift guard. This compares against the harness instead.
+        schema_ok, harness_row_keys = track_a_row_keys_match_harness()
+        Test.@test schema_ok
+        Test.@test harness_row_keys == TRACK_A_ROW_KEYS
+        # Fails closed: an unreadable or unparseable harness must not read as agreement.
+        Test.@test !isempty(harness_row_keys)
+        # The two columns whose absence was the defect.
+        Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
+        Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
+
         # And the mirror holds for a non-default k in both directions.
         Test.@test track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 19) ==
                    "T4__pacbio__50x__seed123__kmer__k19"
@@ -447,7 +468,8 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             Test.@test :unreachable_source in [p.kind for p in problems]
             # NOT waivable: --allow-incomplete says the matrix is partial, not that
             # a requested source may vanish.
-            code2, problems2 = merge_exit_status(result;
+            code2,
+            problems2 = merge_exit_status(result;
                 allow_incomplete = true, allow_collisions = true)
             Test.@test code2 == 1
             Test.@test any(p -> p.kind == :unreachable_source && p.fatal, problems2)
@@ -564,25 +586,31 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
     Test.@testset "CR: nested values canonicalize stably" begin
         # Falling through to `string(v)` rendered a nested object in Dict iteration
         # order, so two hosts with EQUAL content could digest differently.
-        a = _tam_cell(); a["extra"] = Dict("z" => 1, "a" => 2, "m" => [1, 2, 3])
-        b = _tam_cell(); b["extra"] = Dict("a" => 2, "m" => [1, 2, 3], "z" => 1)
+        a = _tam_cell();
+        a["extra"] = Dict("z" => 1, "a" => 2, "m" => [1, 2, 3])
+        b = _tam_cell();
+        b["extra"] = Dict("a" => 2, "m" => [1, 2, 3], "z" => 1)
         Test.@test cell_digest(a) == cell_digest(b)
         Test.@test isempty(differing_fields(a, b))
-        c = _tam_cell(); c["extra"] = Dict("z" => 9, "a" => 2, "m" => [1, 2, 3])
+        c = _tam_cell();
+        c["extra"] = Dict("z" => 9, "a" => 2, "m" => [1, 2, 3])
         Test.@test cell_digest(a) != cell_digest(c)
     end
 
     Test.@testset "CR: a non-numeric shard flag is usage error, not a stacktrace" begin
         saved = copy(ARGS)
         try
-            empty!(ARGS); append!(ARGS, ["--coverages", "10,notanumber"])
+            empty!(ARGS);
+            append!(ARGS, ["--coverages", "10,notanumber"])
             Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) === nothing
-            empty!(ARGS); append!(ARGS, ["--coverages", "10,30"])
+            empty!(ARGS);
+            append!(ARGS, ["--coverages", "10,30"])
             Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) == [10, 30]
             empty!(ARGS)
             Test.@test _parse_int_flag("--seeds", TRACK_A_SEEDS) == TRACK_A_SEEDS
         finally
-            empty!(ARGS); append!(ARGS, saved)
+            empty!(ARGS);
+            append!(ARGS, saved)
         end
     end
 end

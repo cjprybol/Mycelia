@@ -405,7 +405,8 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
     unexpected_ids = sort(collect(setdiff(Set{String}(keys(seen)), expected)))
 
     unreachable = [h.host for h in per_host if !h.exists]
-    malformed = sort([cid for (cid, cell) in merged
+    malformed = sort([cid
+                      for (cid, cell) in merged
                       if is_malformed_evidence(quast_evidence(cell))])
     return (merged = merged, origin = origin, digests = digests,
         collisions = collisions, duplicates = duplicates,
@@ -418,11 +419,47 @@ end
 
 # Harness row order, so `track_a_results.tsv` written here is drop-in compatible
 # with `track_a_baseline_benchmark.jl`'s own aggregate.
+#
+# This MIRRORS `ROW_KEYS` in track_a_baseline_benchmark.jl and must stay equal to it.
+# It silently fell two columns behind: `peak_rss_method` and `rss_baseline_bytes`
+# were added to the harness so a reader can tell a sampled per-cell peak from a
+# high-water delta ("Values under different methods are different quantities.
+# Always filter on peak_rss_method before aggregating"), but the merge kept the
+# 17-column schema — so the merged matrix carried the VALUE and dropped the
+# provenance that makes it interpretable, on the one table where the two hosts'
+# methods actually mix. `track_a_row_keys_match_harness()` below now pins the
+# equality; the previous test compared this constant against output built FROM it,
+# which is a tautology and could not detect drift.
 const TRACK_A_ROW_KEYS = String[
 "organism", "accession", "technology", "coverage", "seed", "decoder_arm", "k",
 "n_reads", "n_contigs", "NGA50", "misassemblies", "genome_fraction",
-"duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes", "status"
+"duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes",
+"rss_baseline_bytes", "peak_rss_method", "status"
 ]
+
+"""
+    track_a_row_keys_match_harness() -> (ok::Bool, harness_keys::Vector{String})
+
+Read `ROW_KEYS` out of the harness SOURCE and compare it to [`TRACK_A_ROW_KEYS`].
+
+The harness cannot be `include`d from here (it parses the global `ARGS` at load
+and imports Mycelia), so this parses the literal instead. A source parse is a weak
+guard in general, but it is the only one available across the two files and it
+fails closed: an unreadable or unparseable harness returns `ok = false` rather
+than silently reporting agreement.
+"""
+function track_a_row_keys_match_harness()
+    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
+    isfile(harness) || return (false, String[])
+    src = read(harness, String)
+    m = match(r"const\s+ROW_KEYS\s*=\s*\((.*?)\)\s*\n"s, src)
+    m === nothing && return (false, String[])
+    keys = [String(strip(k))
+            for k in split(replace(m.captures[1], "\n" => " "), ",")
+            if !isempty(strip(k))]
+    keys = [startswith(k, ":") ? k[2:end] : k for k in keys]
+    return (keys == TRACK_A_ROW_KEYS, keys)
+end
 
 """
     merged_tables(result) -> (results_df, provenance_df)
@@ -917,7 +954,8 @@ function main()
     report_path = write_merge_report(
         joinpath(output_dir, "merge_report.md"), result; output_dir = output_dir)
 
-    rc, problems = merge_exit_status(result;
+    rc,
+    problems = merge_exit_status(result;
         allow_collisions = allow_collisions, allow_incomplete = allow_incomplete,
         report_hint = report_path)
     for p in problems
@@ -937,8 +975,7 @@ function main()
         # run. Malformed cells are excluded here only because they are already a
         # separate FATAL problem above; they are never silently tolerated.
         scored = provenance_df[
-            .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .&
-            .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
+        .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .& .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
         if DataFrames.nrow(scored) == 0
             println("\nmetric-definition check: no scored cells to compare — skipped")
         else

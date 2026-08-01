@@ -75,14 +75,73 @@ function require_columns(df::DataFrames.DataFrame, path::AbstractString,
           "This table is likely from an older schema than the figures expect.")
 end
 
-# Keep only successful cells. Missing-safe: `df.status .== "ok"` yields
-# Union{Missing,Bool} when any status is missing, and DataFrames throws on indexing
-# with that mask — so a single missing status would abort the figure rather than drop a
-# row. coalesce() makes missing mean "not ok". Shared by the CV table and the envelope
-# figure so the two cannot drift apart.
+# Keep only cells whose metrics are real measurements. Two independent ways a row can
+# carry zeros that are NOT measurements, and `status` only detects the first:
+#
+#   1. status != "ok" — the cell errored, or assembled nothing.
+#   2. status == "ok" but QUAST never scored it. On a QUAST exception the harness
+#      substitutes empty_metrics() — NGA50, genome_fraction and largest_contig all
+#      0.0 — and then derives status from n_contigs ALONE, so a QUAST failure on a
+#      NON-EMPTY assembly is written as "ok" with a full row of zeros. Filtering on
+#      status alone misses it completely, i.e. through the same door the status
+#      filter was added to close. Not hypothetical: QUAST was failing on one host
+#      (conda ProcessExited(4)), and the merged matrix mixes metric sources by host.
+#
+# The detector is the implication track_a_merge_hosts.jl's `quast_evidence` already
+# uses: n_contigs > 0 AND largest_contig == 0 means QUAST did not score this cell
+# (it failed, or nothing cleared min_contig). Both columns are already required, so
+# the data was loaded and unused.
+#
+# Filtered HERE rather than by changing `status` at the source, because the 432
+# checkpoints already on disk record "ok" — a source-side fix would only protect
+# future runs and would leave every existing tree misreported.
+#
+# Missing-safe throughout: `df.status .== "ok"` yields Union{Missing,Bool} when any
+# status is missing and DataFrames throws on indexing with that mask, so a single
+# missing field would abort the figure rather than drop a row. coalesce() makes
+# missing mean "not a measurement". Shared by the CV table and the envelope figure
+# so the two cannot drift apart.
 function ok_cells(df::DataFrames.DataFrame)::DataFrames.DataFrame
     hasproperty(df, :status) || return df
-    return df[coalesce.(df.status .== "ok", false), :]
+    keep = coalesce.(df.status .== "ok", false)
+    if hasproperty(df, :n_contigs) && hasproperty(df, :largest_contig)
+        unscored = coalesce.(df.n_contigs .> 0, false) .&
+                   coalesce.(df.largest_contig .== 0, false)
+        keep = keep .& .!unscored
+    end
+    return df[keep, :]
+end
+
+"""
+    quast_coverage_clause(quast_ok, n_rows, metric_sources) -> String
+
+The figure-4 caption sentence describing how much of the sweep QUAST actually
+scored. Pure and separately callable so it can be pinned by a test — the previous
+version was an inline literal, and no assertion could reach it.
+
+Two behaviours worth stating, because the literal got both wrong:
+
+  * It is emitted as a SHORTFALL warning only when there is a shortfall. The old
+    text printed "exists for only N/N cells: above err = X no contig clears the
+    min-contig filter" even when QUAST had scored every row — a caption that always
+    warns, which is the defect class this file's tests exist to close.
+  * It does not assert WHY. The old clause blamed the min-contig filter; the
+    committed sweep records `metric_source = "internal:quast-failed"` for all eight
+    unscored rows (QUAST itself failed), and four of those eight have
+    `largest_contig > 500`, so they would have cleared the ceiling #439 settled on.
+    The sweep carries no `quast_min_contig` column, so no caption can name a
+    threshold honestly. Report `metric_source`, which is a fact in the data.
+"""
+function quast_coverage_clause(quast_ok::Integer, n_rows::Integer,
+        metric_sources::AbstractVector{<:AbstractString} = String[])
+    if quast_ok >= n_rows
+        return "Reference-based QUAST metrics cover all $(quast_ok) cells; both " *
+               "panels plot the internal metric so the arms stay comparable."
+    end
+    others = sort(unique(filter(!=("quast"), metric_sources)))
+    why = isempty(others) ? "" : " (metric_source: $(join(others, ", ")))"
+    return "Reference-based QUAST metrics exist for only $(quast_ok)/$(n_rows) " *
+           "cells$(why), so both panels use internal metrics."
 end
 
 # === Coefficient of variation ===
@@ -128,8 +187,8 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
     # reachable — ok_cells drops every row on a harvest where nothing succeeded — so
     # fail here, naming the cause.
     isempty(rows) && error("no cells with status == \"ok\" to compute a CV over. " *
-        "Either the run failed everywhere, or the table's status column is not " *
-        "populated as expected.")
+          "Either the run failed everywhere, or the table's status column is not " *
+          "populated as expected.")
     return DataFrames.DataFrame(rows)
 end
 
@@ -166,8 +225,8 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
     # `minimum` is exactly what produced the caption bug fixed in the previous commit.
     # An explicit emptiness check is the correct instrument.
     isempty(single_arm) && error("no kmer-arm rows in the CV table, so figure 1 has " *
-        "nothing to plot. Present arms: " *
-        "$(join(sort(unique(String.(cv_table.decoder_arm))), ", ")).")
+          "nothing to plot. Present arms: " *
+          "$(join(sort(unique(String.(cv_table.decoder_arm))), ", ")).")
     seed_label = let n = sort(unique(single_arm.n_seeds))
         length(n) == 1 ? "$(only(n)) seeds" : "$(minimum(n))-$(maximum(n)) seeds"
     end
@@ -568,12 +627,24 @@ function figure_correction_sweep(df::DataFrames.DataFrame, outdir::AbstractStrin
         (pair === nothing || pair[1] === nothing || pair[2] === nothing) && continue
         push!(deltas, "$(regime_label(regime)) $(Int(round(pair[1]))) -> $(Int(round(pair[2])))")
     end
+    # Emit the QUAST-shortfall clause ONLY when there is a shortfall, and take the
+    # reason from the data rather than asserting one.
+    #
+    # This was a literal that printed even when quast_ok == nrow(df) — precisely the
+    # "caption that always warns" defect this file's tests exist to pin, still live in
+    # the delivered figure. Its stated cause was also wrong: the committed sweep
+    # records metric_source = "internal:quast-failed" for all 8 unscored rows (QUAST
+    # itself failed), not a min-contig shortfall — and 4 of those 8 have
+    # largest_contig > 500, so they would have cleared the ceiling #439 settled on.
+    # The CSV carries no quast_min_contig column, so the caption cannot name a
+    # threshold even in principle; metric_source is the fact it does have.
+    sources = hasproperty(df, :metric_source) ?
+              String.(collect(skipmissing(df.metric_source))) : String[]
+    quast_clause = quast_coverage_clause(quast_ok, DataFrames.nrow(df), sources)
     CairoMakie.Label(figure[0, 1:2],
         "Iterative correction vs naive at the lowest simulated error rate " *
         "(err = $(lowest)), by largest contig — the\nquantity both panels plot: " *
-        "$(join(deltas, "; ")).\nReference-based QUAST metrics exist for only " *
-        "$(quast_ok)/$(DataFrames.nrow(df)) cells: above err = $(lowest) no contig " *
-        "clears the min-contig\nfilter, so both panels use internal metrics. " *
+        "$(join(deltas, "; ")).\n$(quast_clause)\n" *
         "Replication: $(replication).";
         fontsize = 14, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)

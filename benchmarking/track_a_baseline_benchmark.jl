@@ -556,11 +556,24 @@ function write_power_analysis(root, df)
     # pooling them turns a between-SEED CV into a between-K CV — inflating it by up to
     # ~39x in testing and flipping the pre-registration verdict with no warning.
     #
-    # Exclude non-ok cells. A single crashed seed moved one group's CV from 0.005 to
-    # 0.87; an error row is not a measurement and must not enter a variance estimate.
-    n_excluded = DataFrames.nrow(df) - DataFrames.nrow(df[df.status .== "ok", :])
-    n_excluded > 0 && @warn "power analysis excludes non-ok cells" n_excluded
-    df = df[df.status .== "ok", :]
+    # Exclude rows that are not measurements. An error row is not a measurement and
+    # must not enter a variance estimate.
+    #
+    # `status` alone is insufficient, and this is the second door into the same bug:
+    # on a QUAST exception run_cell substitutes empty_metrics() (NGA50 and
+    # largest_contig both 0.0) and then derives status from n_contigs ALONE, so a
+    # QUAST failure on a NON-EMPTY assembly is recorded as "ok" carrying a full row
+    # of zeros. Those zeros would be pooled into the CV as if measured.
+    #
+    # Same implication track_a_merge_hosts.jl's `quast_evidence` uses, and the same
+    # predicate as ok_cells() in track_a_harvest_figures.jl — the figures and this
+    # power analysis must not disagree about which rows are measurements.
+    measured = (df.status .== "ok") .&
+               .!((df.n_contigs .> 0) .& (df.largest_contig .== 0))
+    n_excluded = DataFrames.nrow(df) - count(measured)
+    n_excluded > 0 &&
+        @warn "power analysis excludes non-ok and QUAST-unscored cells" n_excluded
+    df = df[measured, :]
     for g in DataFrames.groupby(df, [:organism, :technology, :coverage, :decoder_arm, :k])
         nga = Float64.(g.NGA50)
         m = Statistics.mean(nga)

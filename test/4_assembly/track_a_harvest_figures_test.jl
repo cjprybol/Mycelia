@@ -43,7 +43,8 @@ Test.@testset "track A harvest figures helpers" begin
         allowmissing[2, :status] = missing
         Test.@test DataFrames.nrow(ok_cells(allowmissing)) == 1
         # A frame with no status column is passed through, not emptied.
-        Test.@test DataFrames.nrow(ok_cells(DataFrames.select(df, DataFrames.Not(:status)))) == 2
+        Test.@test DataFrames.nrow(ok_cells(DataFrames.select(df, DataFrames.Not(:status)))) ==
+                   2
     end
 
     Test.@testset "CV table groups by k and keeps non-computable groups" begin
@@ -124,6 +125,49 @@ Test.@testset "track A harvest figures helpers" begin
         # A KeyError here aborted rendering partway through a figure.
         Test.@test technology_color("illumina") == :dodgerblue3
         Test.@test technology_color("nanopore") == :grey40
+    end
+
+    Test.@testset "ok_cells drops QUAST-unscored cells, not just non-ok ones" begin
+        # A QUAST exception makes run_cell substitute empty_metrics() and then derive
+        # status from n_contigs ALONE, so a QUAST failure on a NON-EMPTY assembly is
+        # written as status="ok" carrying NGA50/largest_contig = 0. Filtering on
+        # status alone let those zeros into the CV as if they were measurements —
+        # through the same door the status filter was added to close.
+        df = DataFrames.DataFrame(
+            label = ["scored", "quast-unscored", "errored", "empty-assembly"],
+            status = ["ok", "ok", "error", "empty_assembly"],
+            n_contigs = [5357, 1200, 0, 0],
+            largest_contig = [48058, 0, 0, 0],
+            NGA50 = [48058.0, 0.0, 0.0, 0.0])
+        kept = ok_cells(df).label
+        Test.@test kept == ["scored"]
+        # The load-bearing half: this row is status="ok", so it survived before.
+        Test.@test !("quast-unscored" in kept)
+        # Absent columns must not turn the guard into a silent no-op or an error.
+        lean = DataFrames.DataFrame(status = ["ok", "error"], NGA50 = [1.0, 0.0])
+        Test.@test DataFrames.nrow(ok_cells(lean)) == 1
+    end
+
+    Test.@testset "quast_coverage_clause warns only on a real shortfall" begin
+        # The clause was an inline literal asserting "no contig clears the min-contig
+        # filter", printed even when QUAST had scored every row. Both halves were
+        # wrong: it always warned, and the committed sweep attributes its 8 unscored
+        # rows to metric_source="internal:quast-failed", not a min-contig shortfall.
+        short = quast_coverage_clause(4, 12,
+            vcat(fill("quast", 4), fill("internal:quast-failed", 8)))
+        Test.@test occursin("only 4/12", short)
+        Test.@test occursin("internal:quast-failed", short)
+        Test.@test !occursin("min-contig", short)
+
+        full = quast_coverage_clause(12, 12, fill("quast", 12))
+        Test.@test occursin("all 12", full)
+        Test.@test !occursin("only", full)      # must not warn when nothing is missing
+        Test.@test !occursin("min-contig", full)
+
+        # No metric_source column: report the shortfall without inventing a reason.
+        bare = quast_coverage_clause(1, 3)
+        Test.@test occursin("only 1/3", bare)
+        Test.@test !occursin("metric_source", bare)
     end
 end
 
