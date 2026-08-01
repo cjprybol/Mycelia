@@ -69,10 +69,16 @@ benchmarking/results/track_a_baseline/cells/
 # them visible, and it is deliberately NOT left to the hyphen-vs-underscore
 # naming convention: `git status` reporting a clean tree is indistinguishable
 # from evidence being correctly tracked, so a mis-named evidence directory would
-# vanish silently with no test able to fail. Any directory under
+# vanish silently with no test able to fail. Any DIRECT CHILD of
 # benchmarking/results/ whose name contains "evidence" is re-included regardless
 # of separator. This works because the parent benchmarking/results/ is not
 # itself excluded and a later pattern wins.
+#
+# The negation reaches direct children ONLY. `*` does not cross `/`, and git
+# does not descend into a directory already excluded by the pattern below, so an
+# evidence directory NESTED inside an ignored run directory — e.g.
+# benchmarking/results/td-jt7r-2-run/evidence_x/ — stays ignored. Evidence
+# snapshots must be siblings of the run directories, not children of them.
 benchmarking/results/td-jt7r-*/
 !benchmarking/results/*evidence*/
 

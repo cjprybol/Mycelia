@@ -11,6 +11,7 @@
 # per-script fixture helpers it replaced, not merely an equivalent-looking one.
 
 import BioSequences
+import DataFrames
 import FASTX
 import Random
 import SHA
@@ -24,6 +25,20 @@ include(joinpath(@__DIR__, "indel_benchmark_common.jl"))
 # loaded by Mycelia. Covering it here avoids a second test entry point that
 # nothing would invoke.
 include(joinpath(@__DIR__, "indel_frontier_runtime.jl"))
+# The fixed-toy proof's gate/advisory split and exit decision had no coverage at
+# all, and the evidence offered for downgrading its wall-clock check to an
+# advisory was an 18/18 HEALTHY run — the one observation that cannot tell "the
+# wall-clock check stopped being fatal" apart from "the correctness detectors
+# were switched off". Including the script defines its constants and helpers and
+# runs nothing, because its `main()` sits behind the same `PROGRAM_FILE` guard
+# relied on for the runtime include above.
+#
+# It goes in a module because both scripts define `main`; a bare second include
+# would silently overwrite the first one's method. Qualifying the calls also
+# keeps it obvious which entry points are under test.
+module IndelToyProof
+include(joinpath(@__DIR__, "indel_frontier_fixed_toy_proof.jl"))
+end
 
 # Captured on the pre-consolidation base commit (origin/master 250f7f26) from
 # `_indel_toy_make_fixture` in indel_frontier_fixed_toy_proof.jl, using the
@@ -580,5 +595,237 @@ Test.@testset "indel benchmark common" begin
         )
         Test.@test maximum(piled) <=
                    base + INDEL_FRONTIER_LABEL_MAX_LEVELS * step
+    end
+end
+
+# --- Positive control for the fixed-toy gate/advisory split -----------------
+#
+# The synthetic arms below never assemble anything: `_indel_toy_checks` reads
+# only counters, telemetry rows, and byte strings off the arm NamedTuples, so
+# the whole control runs in milliseconds and can therefore live in the ordinary
+# unit-test entry point rather than behind the expensive proof.
+
+"""
+    _indel_toy_test_reads() -> Vector{FASTX.FASTQ.Record}
+
+Two reads long enough to clear `INDEL_TOY_MIN_REQUIRED_READ_LENGTH`. Only the
+lengths are read by the checks, so the bases are arbitrary.
+"""
+function _indel_toy_test_reads()::Vector{FASTX.FASTQ.Record}
+    sequence = repeat("A", 1_200)
+    quality = repeat("I", 1_200)
+    return FASTX.FASTQ.Record[
+        FASTX.FASTQ.Record("toy_read_$(index)", sequence, quality)
+        for index in 1:2
+    ]
+end
+
+"""
+    _indel_toy_test_rung(k; requested, attempted, completed, truncated, engaged)
+
+One per-rung telemetry record in the shape the proof's validator expects: exact
+nonnegative `Int` counters keyed by `Symbol`.
+"""
+function _indel_toy_test_rung(
+        k::Int;
+        requested::Int,
+        attempted::Int,
+        completed::Int,
+        truncated::Int,
+        engaged::Int
+)::Dict{Symbol, Any}
+    return Dict{Symbol, Any}(
+        :k => k,
+        :requested => requested,
+        :attempted => attempted,
+        :completed => completed,
+        :truncated => truncated,
+        :engaged => engaged
+    )
+end
+
+"""
+    _indel_toy_test_arm(; ...) -> NamedTuple
+
+Minimal stand-in for `_indel_toy_run_arm`'s return value carrying exactly the
+fields `_indel_toy_checks` reads.
+"""
+function _indel_toy_test_arm(;
+        label::String,
+        wall_seconds::Float64,
+        telemetry::Vector{Dict{Symbol, Any}},
+        requested::Int,
+        attempted::Int,
+        completed::Int,
+        truncated::Int,
+        engaged::Int,
+        reference_coverage::Float64,
+        assembly_bytes::Vector{UInt8}
+)::NamedTuple
+    return (
+        label = label,
+        wall_seconds = wall_seconds,
+        best_contig_reference_coverage = reference_coverage,
+        best_contig_fit_identity = 0.99,
+        best_contig_length = 200,
+        n_contigs = 1,
+        k_progression = [11, 17],
+        telemetry = telemetry,
+        indel_requested = requested,
+        indel_attempted = attempted,
+        indel_completed = completed,
+        indel_truncated = truncated,
+        indel_engaged = engaged,
+        trace_contract_errors = 0,
+        window_divergences = 0,
+        assembly_bytes = assembly_bytes
+    )
+end
+
+"""
+    _indel_toy_test_outcome(; wall_seconds, oracle_matches) -> NamedTuple
+
+Run the real `_indel_toy_checks` + `_indel_toy_evaluate_checks` over a synthetic
+fixture in which every correctness gate passes, then perturb exactly two inputs:
+the nanopore wall clock (the check that was downgraded to an advisory) and the
+pre-wiring oracle digest (a correctness gate that must NOT have been affected).
+
+`oracle_matches = false` is injected through the `prewiring_sha256` seam rather
+than by mutating the assembly bytes, because sha256 is not invertible: a
+fabricated byte stream can never satisfy the committed golden digest, so a
+healthy baseline is otherwise unconstructible.
+"""
+function _indel_toy_test_outcome(;
+        wall_seconds::Float64,
+        oracle_matches::Bool
+)::NamedTuple
+    reads = _indel_toy_test_reads()
+    substitution_only_bytes = Vector{UInt8}(">toy_contig\nACGTACGTACGT\n")
+    nanopore = _indel_toy_test_arm(
+        label = "nanopore",
+        wall_seconds = wall_seconds,
+        telemetry = Dict{Symbol, Any}[
+            _indel_toy_test_rung(
+                11; requested = 0, attempted = 0, completed = 0,
+                truncated = 0, engaged = 0
+            ),
+            _indel_toy_test_rung(
+                17; requested = 4, attempted = 4, completed = 4,
+                truncated = 0, engaged = 2
+            )
+        ],
+        requested = 4,
+        attempted = 4,
+        completed = 4,
+        truncated = 0,
+        engaged = 2,
+        reference_coverage = 0.1,
+        assembly_bytes = Vector{UInt8}(">toy_contig\nACGTACGTACGTACGT\n")
+    )
+    zero_rung = Dict{Symbol, Any}[
+        _indel_toy_test_rung(
+            11; requested = 0, attempted = 0, completed = 0,
+            truncated = 0, engaged = 0
+        )
+    ]
+    illumina = _indel_toy_test_arm(
+        label = "illumina",
+        wall_seconds = 1.0,
+        telemetry = zero_rung,
+        requested = 0,
+        attempted = 0,
+        completed = 0,
+        truncated = 0,
+        engaged = 0,
+        reference_coverage = 0.0655,
+        assembly_bytes = substitution_only_bytes
+    )
+    oracle = _indel_toy_test_arm(
+        label = "default_illumina_oracle",
+        wall_seconds = 1.0,
+        telemetry = zero_rung,
+        requested = 0,
+        attempted = 0,
+        completed = 0,
+        truncated = 0,
+        engaged = 0,
+        reference_coverage = 0.0655,
+        assembly_bytes = substitution_only_bytes
+    )
+    prewiring_sha256 = oracle_matches ?
+                       Base.bytes2hex(SHA.sha256(substitution_only_bytes)) :
+                       repeat("0", 64)
+    checks = IndelToyProof._indel_toy_checks(
+        reads, nanopore, illumina, oracle; prewiring_sha256 = prewiring_sha256
+    )
+    return (
+        checks = checks,
+        outcome = IndelToyProof._indel_toy_evaluate_checks(checks)
+    )
+end
+
+Test.@testset "fixed-toy severity split and exit decision" begin
+    Test.@testset "healthy run: all gates pass, nothing breached" begin
+        result = _indel_toy_test_outcome(
+            wall_seconds = 79.7, oracle_matches = true
+        )
+        Test.@test result.outcome.passed
+        Test.@test isempty(result.outcome.failed)
+        Test.@test isempty(result.outcome.breached)
+        Test.@test result.outcome.gate_total ==
+                   IndelToyProof.INDEL_TOY_EXPECTED_GATE_COUNT
+        Test.@test result.outcome.advisory_total == 1
+    end
+
+    # The change this branch makes, and the ONLY case whose verdict it moves.
+    # 141.2 s is the wall clock the reviewer actually measured on a loaded host.
+    Test.@testset "wall breached, correctness intact: PASSES" begin
+        result = _indel_toy_test_outcome(
+            wall_seconds = 141.2, oracle_matches = true
+        )
+        Test.@test result.outcome.passed
+        Test.@test isempty(result.outcome.failed)
+        Test.@test result.outcome.breached == ["nanopore_under_120_seconds"]
+    end
+
+    # The downgrade must not have blinded any correctness detector.
+    Test.@testset "oracle hash mismatch: still FAILS" begin
+        result = _indel_toy_test_outcome(
+            wall_seconds = 79.7, oracle_matches = false
+        )
+        Test.@test !result.outcome.passed
+        Test.@test result.outcome.failed ==
+                   ["illumina_byte_identical_to_prewiring_oracle"]
+        Test.@test isempty(result.outcome.breached)
+    end
+
+    # The discriminating case: an advisory breach must not be able to absorb a
+    # gate failure that happens at the same time, which is the failure mode a
+    # severity split introduces and neither of the single-fault cases can see.
+    Test.@testset "advisory breach cannot mask a concurrent gate failure" begin
+        result = _indel_toy_test_outcome(
+            wall_seconds = 141.2, oracle_matches = false
+        )
+        Test.@test !result.outcome.passed
+        Test.@test result.outcome.failed ==
+                   ["illumina_byte_identical_to_prewiring_oracle"]
+        Test.@test result.outcome.breached == ["nanopore_under_120_seconds"]
+    end
+
+    Test.@testset "advisory set is pinned to the wall-clock check alone" begin
+        result = _indel_toy_test_outcome(
+            wall_seconds = 79.7, oracle_matches = true
+        )
+        checks = result.checks
+        advisories = String[
+            row.check for row in DataFrames.eachrow(checks)
+            if row.severity == "advisory"
+        ]
+        Test.@test advisories == ["nanopore_under_120_seconds"]
+        Test.@test IndelToyProof.INDEL_TOY_ADVISORY_CHECKS ==
+                   ("nanopore_under_120_seconds",)
+        Test.@test Set(checks.severity) == Set(["gate", "advisory"])
+        Test.@test DataFrames.nrow(checks) ==
+                   IndelToyProof.INDEL_TOY_EXPECTED_GATE_COUNT + 1
     end
 end

@@ -81,6 +81,19 @@ const INDEL_TOY_MAX_NANOPORE_WALL_SECONDS = 120.0
 # `severity=advisory` so a breach stays auditable. A durable runtime claim needs
 # a controlled-host measurement, which this proof is not.
 const INDEL_TOY_ADVISORY_CHECKS = ("nanopore_under_120_seconds",)
+# PIN for the advisory mechanism itself, checked in `_indel_toy_checks`.
+# INDEL_TOY_ADVISORY_CHECKS is the only lever that decides which rows gate
+# the exit status, so appending a CORRECTNESS check's name to it demotes that
+# check and the proof still exits 0. That was demonstrated by execution during
+# review, before this pin existed: with
+# "illumina_byte_identical_to_prewiring_oracle" demoted, the proof reported
+# success while the pre-wiring oracle hash was mismatched. The
+# `unknown_advisories` guard only rejects names that do not exist, so it cannot
+# see a demotion, and the human-visible signals (a `[advisory] … WARN` line, a
+# `@warn`, a summary denominator dropping 18→17) are invisible to CI. The pin
+# in `_indel_toy_checks` turns a demotion into a hard failure that has to edit a
+# line labelled PIN to get through.
+const INDEL_TOY_EXPECTED_GATE_COUNT = 18
 # Bumped from 1 when minimum_observed_read_length was renamed to
 # minimum_required_read_length and the observed_read_length_{min,max} columns
 # were added. Bumped to 3 when the arm-summary `identity` column was renamed to
@@ -147,31 +160,26 @@ function main(args::Vector{String} = ARGS)::Nothing
                  (row.severity == "advisory" ? "WARN" : "FAIL")
         println("  [$(row.severity)] $(row.check): $(status) — $(row.detail)")
     end
-    gate_rows = [row for row in DataFrames.eachrow(checks) if row.severity == "gate"]
-    advisory_rows = [
-        row for row in DataFrames.eachrow(checks) if row.severity == "advisory"
-    ]
-    failed = String[row.check for row in gate_rows if !row.passed]
-    breached = String[row.check for row in advisory_rows if !row.passed]
+    outcome = _indel_toy_evaluate_checks(checks)
     # The denominator is stated explicitly, split by severity, so the move of
     # one check out of the gate set is visible in the summary line rather than
     # showing up as a quietly smaller "N/N".
     println(
-        "  summary: $(length(gate_rows) - length(failed))/" *
-        "$(length(gate_rows)) correctness gates PASS, " *
-        "$(length(advisory_rows) - length(breached))/" *
-        "$(length(advisory_rows)) advisories within threshold " *
+        "  summary: $(outcome.gate_total - length(outcome.failed))/" *
+        "$(outcome.gate_total) correctness gates PASS, " *
+        "$(outcome.advisory_total - length(outcome.breached))/" *
+        "$(outcome.advisory_total) advisories within threshold " *
         "($(DataFrames.nrow(checks)) checks recorded)"
     )
-    for check in breached
+    for check in outcome.breached
         @warn(
             "advisory threshold exceeded; this does not fail the proof and no " *
             "correctness gate is affected",
             check = check
         )
     end
-    if !isempty(failed)
-        error("td-jt7r.2 fixed-toy proof failed: $(join(failed, ", "))")
+    if !outcome.passed
+        error("td-jt7r.2 fixed-toy proof failed: $(join(outcome.failed, ", "))")
     end
 
     # Everything is staged out of tree and published only once the generation is
@@ -493,7 +501,14 @@ function _indel_toy_checks(
         reads::Vector{FASTX.FASTQ.Record},
         nanopore::NamedTuple,
         illumina::NamedTuple,
-        oracle::NamedTuple
+        oracle::NamedTuple;
+        # Test seam, defaulted to the production constant so `main` is
+        # unchanged. The golden digest cannot be met by a fabricated byte
+        # stream — sha256 is not invertible — so without this parameter the
+        # severity/exit control could never construct a case in which every
+        # correctness gate passes, and "wall breached but correctness intact
+        # still passes" would be untestable.
+        prewiring_sha256::String = INDEL_TOY_PREWIRING_ILLUMINA_SHA256
 )::DataFrames.DataFrame
     observed_lengths = length.(FASTX.sequence.(String, reads))
     telemetry_validation = _indel_toy_validate_rung_telemetry(
@@ -593,9 +608,9 @@ function _indel_toy_checks(
         ),
         (
             check = "illumina_byte_identical_to_prewiring_oracle",
-            passed = illumina_sha256 == INDEL_TOY_PREWIRING_ILLUMINA_SHA256,
+            passed = illumina_sha256 == prewiring_sha256,
             detail = "sha256=$(illumina_sha256), " *
-                     "origin_master=$(INDEL_TOY_PREWIRING_ILLUMINA_SHA256)"
+                     "origin_master=$(prewiring_sha256)"
         ),
         (
             check = "per_rung_telemetry_schema_complete",
@@ -659,7 +674,59 @@ function _indel_toy_checks(
         "INDEL_TOY_ADVISORY_CHECKS names checks that do not exist: " *
         "$(join(unknown_advisories, ", "))"
     )
+    # PIN (see INDEL_TOY_EXPECTED_GATE_COUNT). Two independent equalities,
+    # because they fail for different reasons. Set equality — not
+    # `length(INDEL_TOY_ADVISORY_CHECKS) == 1` — pins WHICH check may be
+    # advisory, since a one-element list naming a different check satisfies a
+    # length test while switching a correctness detector off. The gate count
+    # pins the size of the surviving gate set, catching the complementary
+    # cases: a gate deleted outright, or a newly added check landing on the
+    # advisory side. `error`, not `@assert`: assertions may be elided at higher
+    # optimisation levels, and this is the guard CI depends on.
+    INDEL_TOY_ADVISORY_CHECKS == ("nanopore_under_120_seconds",) || error(
+        "INDEL_TOY_ADVISORY_CHECKS is pinned to " *
+        "(\"nanopore_under_120_seconds\",); demoting a correctness check to " *
+        "advisory requires editing that pin deliberately. Got: " *
+        "$(INDEL_TOY_ADVISORY_CHECKS)"
+    )
+    gate_count = count(severity -> severity == "gate", table.severity)
+    gate_count == INDEL_TOY_EXPECTED_GATE_COUNT || error(
+        "expected $(INDEL_TOY_EXPECTED_GATE_COUNT) correctness gates, found " *
+        "$(gate_count); a gate was added, removed, or demoted — update " *
+        "INDEL_TOY_EXPECTED_GATE_COUNT deliberately if the change is intended"
+    )
     return table
+end
+
+"""
+    _indel_toy_evaluate_checks(checks) -> NamedTuple
+
+Split a checks table by severity and derive the proof's exit status: `gate` rows
+decide `passed`, `advisory` rows only populate `breached`.
+
+Extracted from `main` so the gate/advisory split is directly exercisable. The
+evidence offered for softening the wall-clock check was a healthy run in which
+everything passed, and that is precisely the observation that cannot distinguish
+"one wall-clock check stopped being fatal" from "the correctness detectors were
+switched off" — see the severity/exit control in
+benchmarking/indel_benchmark_common_test.jl.
+"""
+function _indel_toy_evaluate_checks(
+        checks::DataFrames.DataFrame
+)::NamedTuple
+    gate_rows = [row for row in DataFrames.eachrow(checks) if row.severity == "gate"]
+    advisory_rows = [
+        row for row in DataFrames.eachrow(checks) if row.severity == "advisory"
+    ]
+    failed = String[row.check for row in gate_rows if !row.passed]
+    breached = String[row.check for row in advisory_rows if !row.passed]
+    return (
+        gate_total = length(gate_rows),
+        advisory_total = length(advisory_rows),
+        failed = failed,
+        breached = breached,
+        passed = isempty(failed)
+    )
 end
 
 function _indel_toy_print_fixture(
