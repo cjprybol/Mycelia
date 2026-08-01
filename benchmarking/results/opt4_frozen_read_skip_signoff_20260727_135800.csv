@@ -1,0 +1,5 @@
+arm,skip_frozen_reads,freeze_streak_threshold,freeze_across_rungs,runtime_s,frozen_reads_skipped,decode_fraction_mean,decode_fraction_max,total_improvements,cheap_corrections_total,decode_attributable_edits,reads_scored,injected_errors,total_edits,true_fixes,mis_fixes,over_corrections,recall,precision,over_correction_rate,correction_rate
+exact,false,2,false,123.59,0,0.2559,0.6233,16149,13168,2981,6791,20373,18751,18337,8,406,0.900064,0.977921,0.000407,0.018408
+freeze_within,true,2,false,111.11,0,0.2559,0.6233,16149,13168,2981,6791,20373,18751,18337,8,406,0.900064,0.977921,0.000407,0.018408
+freeze_across,true,2,true,95.835,1276,0.2125,0.6233,16145,13168,2977,6791,20373,18747,18333,8,406,0.899867,0.977916,0.000407,0.018404
+freeze_max_aggressive,true,1,true,98.546,2922,0.1587,0.6233,15993,13167,2826,6791,20373,18156,18146,6,4,0.890689,0.999449,4.0e-6,0.017824
