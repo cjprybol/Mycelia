@@ -515,6 +515,33 @@ end
 # Re-reading the store makes the aggregate monotone and idempotent by construction:
 # shards, sweeps and resumes all converge on the union rather than the last writer's
 # slice, and a no-op re-run repairs a previously truncated table.
+# Atomic publish with a PER-PROCESS temp name.
+#
+# A FIXED temp path (`target * ".tmp"`) is safe for a single writer and unsafe here:
+# write_aggregate runs once per cell, and sharding is the documented workflow — the
+# harness header advertises that "an HPC array job can split the matrix and share one
+# results tree", and run_track_a_baseline_lrc.sbatch shows a shard invocation with no
+# --output-dir, so every shard defaults to the same directory. Two shards then open
+# the SAME temp inode and both rename it, and the rename publishes interleaved content
+# as a complete table. That is worse than the truncation bug the store-rebuild fixed:
+# a short table is detectable, a corrupt one is not.
+#
+# tempname(dir) is unique per call, so concurrent shards can no longer collide, and the
+# rename stays atomic because the temp is on the same filesystem as the target.
+function _publish_atomically(write!, target::AbstractString)
+    dir = dirname(target)
+    mkpath(dir)
+    tmp = tempname(dir)
+    try
+        write!(tmp)
+        mv(tmp, target; force = true)
+    catch
+        isfile(tmp) && rm(tmp; force = true)
+        rethrow()
+    end
+    return target
+end
+
 function write_aggregate(root, rows)
     cells_dir = joinpath(root, "cells")
     all_rows = NamedTuple[]
@@ -544,9 +571,7 @@ function write_aggregate(root, rows)
     isempty(all_rows) && (all_rows = collect(rows))
     df = DataFrames.DataFrame(all_rows)
     target = joinpath(root, "track_a_results.tsv")
-    tmp = target * ".tmp"
-    CSV.write(tmp, df; delim = '\t')
-    mv(tmp, target; force = true)
+    _publish_atomically(tmp -> CSV.write(tmp, df; delim = '\t'), target)
     return df
 end
 
@@ -588,7 +613,11 @@ function write_power_analysis(root, df)
                 passes = (isfinite(cv) && cv <= CV_THRESHOLD)))
     end
     cv_df = DataFrames.DataFrame(cv_rows)
-    CSV.write(joinpath(root, "power_analysis_cv.tsv"), cv_df; delim = '\t')
+    # Same publish discipline as the aggregate: these two derived files were bare
+    # truncating writes, so a concurrent shard (or a crash mid-write) could leave a
+    # half-written verdict beside a complete results table.
+    _publish_atomically(tmp -> CSV.write(tmp, cv_df; delim = '\t'),
+        joinpath(root, "power_analysis_cv.tsv"))
 
     evaluable = filter(r -> isfinite(r.cv_nga50), cv_rows)
     n_eval = length(evaluable)
@@ -597,26 +626,28 @@ function write_power_analysis(root, df)
     verdict = (n_eval > 0 && n_pass == n_eval) ? "supported" :
               n_eval == 0 ? "indeterminate (no evaluable cells)" : "NOT fully supported"
 
-    open(joinpath(root, "power_analysis_summary.md"), "w") do io
-        println(io, "# Track A power-analysis check — NGA50 CV vs assumed $(CV_THRESHOLD)\n")
-        println(io, "Generated: $(Dates.now())\n")
-        println(io, "- Evaluable cells (organism×tech×coverage×arm, ≥2 seeds, nonzero NGA50): $n_eval")
-        println(io, "- Cells with CV ≤ $(CV_THRESHOLD): $n_pass / $n_eval")
-        println(io, "- Max CV observed: $(round(max_cv; digits = 4))")
-        println(io, "- **Verdict: assumed CV ≈ $(CV_THRESHOLD) is $verdict.**\n")
-        fails = filter(r -> isfinite(r.cv_nga50) && !r.passes, cv_rows)
-        if !isempty(fails)
-            println(io, "## Cells exceeding CV $(CV_THRESHOLD)\n")
-            for r in fails
-                println(io,
-                    "- $(r.organism) / $(r.technology) / $(r.coverage)x / $(r.decoder_arm): " *
-                    "CV=$(r.cv_nga50) (mean NGA50 $(r.mean_nga50), n=$(r.n))")
+    _publish_atomically(joinpath(root, "power_analysis_summary.md")) do path
+        open(path, "w") do io
+            println(io, "# Track A power-analysis check — NGA50 CV vs assumed $(CV_THRESHOLD)\n")
+            println(io, "Generated: $(Dates.now())\n")
+            println(io, "- Evaluable cells (organism×tech×coverage×arm, ≥2 seeds, nonzero NGA50): $n_eval")
+            println(io, "- Cells with CV ≤ $(CV_THRESHOLD): $n_pass / $n_eval")
+            println(io, "- Max CV observed: $(round(max_cv; digits = 4))")
+            println(io, "- **Verdict: assumed CV ≈ $(CV_THRESHOLD) is $verdict.**\n")
+            fails = filter(r -> isfinite(r.cv_nga50) && !r.passes, cv_rows)
+            if !isempty(fails)
+                println(io, "## Cells exceeding CV $(CV_THRESHOLD)\n")
+                for r in fails
+                    println(io,
+                        "- $(r.organism) / $(r.technology) / $(r.coverage)x / $(r.decoder_arm): " *
+                        "CV=$(r.cv_nga50) (mean NGA50 $(r.mean_nga50), n=$(r.n))")
+                end
+                println(io)
             end
-            println(io)
+            println(io,
+                "_Caveat: n=3 seeds makes each CV estimate noisy; treat this as directional " *
+                "evidence for the power analysis, not a definitive variance estimate._")
         end
-        println(io,
-            "_Caveat: n=3 seeds makes each CV estimate noisy; treat this as directional " *
-            "evidence for the power analysis, not a definitive variance estimate._")
     end
     return cv_df
 end

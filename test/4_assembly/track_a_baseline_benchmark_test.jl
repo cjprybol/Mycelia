@@ -154,6 +154,44 @@ Test.@testset "track A baseline benchmark helpers" begin
             Test.@test only(mixed.cv_nga50) == only(clean.cv_nga50)
         end
     end
+    Test.@testset "aggregate publish is atomic and shard-safe" begin
+        # write_aggregate runs once per CELL, and sharding into one results tree is the
+        # documented workflow (the header advertises "an HPC array job can split the
+        # matrix and share one results tree"; the LRC wrapper shows a shard invocation
+        # with no --output-dir). A FIXED temp path therefore let two shards open the
+        # same inode and both rename it, publishing interleaved content as a complete
+        # table — worse than the truncation it replaced, because a short table is
+        # detectable and a corrupt one is not.
+        mktempdir() do dir
+            target = joinpath(dir, "results.tsv")
+            temps = String[]
+            for i in 1:5
+                _publish_atomically(target) do tmp
+                    push!(temps, tmp)
+                    write(tmp, "payload-$(i)")
+                end
+            end
+            # The load-bearing property: a distinct temp per call. With a fixed name
+            # this is 1, and concurrent shards collide.
+            Test.@test length(unique(temps)) == 5
+            Test.@test read(target, String) == "payload-5"
+
+            # A failed write leaves no temp behind and does not damage the target.
+            threw = try
+                _publish_atomically(target) do tmp
+                    write(tmp, "half-written")
+                    error("simulated writer failure")
+                end
+                nothing
+            catch e
+                e
+            end
+            Test.@test threw isa ErrorException
+            Test.@test occursin("simulated writer failure", threw.msg)
+            Test.@test read(target, String) == "payload-5"
+            Test.@test readdir(dir) == ["results.tsv"]
+        end
+    end
 end
 
 end  # module TrackABaselineBenchmarkTest
