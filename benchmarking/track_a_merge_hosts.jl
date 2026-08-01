@@ -437,6 +437,23 @@ const TRACK_A_ROW_KEYS = String[
 "rss_baseline_bytes", "peak_rss_method", "status"
 ]
 
+# Absent-value sentinels, MIRRORING OPTIONAL_KEY_DEFAULTS in the harness.
+#
+# Adding the two provenance columns to TRACK_A_ROW_KEYS was not enough on its own:
+# `get(cell, k, missing)` filled them with `missing` for every pre-schema checkpoint —
+# which is all 432 currently on disk — so the merged table carried the column names
+# and no usable values, and the very operation the harness docstring prescribes
+# ("Always filter on peak_rss_method before aggregating") threw
+# `ArgumentError: unable to check bounds for indices of type Missing`.
+#
+# The harness defaults these to "unknown" / -1 deliberately: an explicit sentinel no
+# real measurement can produce. Merging must produce the SAME sentinel, or a merged
+# table is not the drop-in the docstring claims. Keys absent from this table keep
+# `missing`, which is correct for genuinely-required columns — their absence is a
+# defect, not a default.
+const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
+    "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1)
+
 """
     track_a_row_keys_match_harness() -> (ok::Bool, harness_keys::Vector{String})
 
@@ -478,7 +495,9 @@ function merged_tables(result)
     prov_rows = Any[]
     for cell_id in ids
         cell = result.merged[cell_id]
-        base = Dict{String, Any}(k => get(cell, k, missing) for k in TRACK_A_ROW_KEYS)
+        base = Dict{String, Any}(
+            k => get(cell, k, get(TRACK_A_ABSENT_DEFAULTS, k, missing))
+            for k in TRACK_A_ROW_KEYS)
         push!(rows, NamedTuple{Tuple(Symbol.(TRACK_A_ROW_KEYS))}(
             Tuple(base[k] for k in TRACK_A_ROW_KEYS)))
         prov_keys = vcat(["cell_id"], TRACK_A_ROW_KEYS,

@@ -587,8 +587,20 @@ function write_power_analysis(root, df)
     # `status` alone is insufficient, and this is the second door into the same bug:
     # on a QUAST exception run_cell substitutes empty_metrics() (NGA50 and
     # largest_contig both 0.0) and then derives status from n_contigs ALONE, so a
-    # QUAST failure on a NON-EMPTY assembly is recorded as "ok" carrying a full row
-    # of zeros. Those zeros would be pooled into the CV as if measured.
+    # cell QUAST never scored is recorded as "ok" carrying a full row of zeros.
+    # Those zeros would be pooled into the CV as if measured.
+    #
+    # The predicate cannot say WHY, and neither should the prose: n_contigs is the
+    # UNFILTERED assembly count while QUAST runs with min_contig = 500, so
+    # `n_contigs > 0 && largest_contig == 0` covers both "QUAST threw" and "QUAST ran
+    # and nothing cleared 500 bp" — a real measurement of a fragmented assembly.
+    # track_a_merge_hosts.jl names this class "unknown:quast-unscored" for exactly
+    # that reason. Excluding it is still right (a zero that is not a measurement must
+    # not enter a variance estimate), but the exclusion is ONE-DIRECTIONAL: every
+    # dropped row carries NGA50 = 0, so dropping can only LOWER a group's CV and push
+    # the verdict toward "supported" — the favourable direction for the
+    # pre-registration this gates. n_excluded is therefore recorded in the summary
+    # artifact, not just in a @warn nobody reads in a 15-hour SLURM log.
     #
     # Same implication track_a_merge_hosts.jl's `quast_evidence` uses, and the same
     # predicate as ok_cells() in track_a_harvest_figures.jl — the figures and this
@@ -634,6 +646,9 @@ function write_power_analysis(root, df)
             println(io, "- Cells with CV ≤ $(CV_THRESHOLD): $n_pass / $n_eval")
             println(io, "- Max CV observed: $(round(max_cv; digits = 4))")
             println(io, "- **Verdict: assumed CV ≈ $(CV_THRESHOLD) is $verdict.**\n")
+            println(io,
+                "- Rows excluded as non-measurements (status != ok, or QUAST " *
+                "unscored): $n_excluded\n")
             fails = filter(r -> isfinite(r.cv_nga50) && !r.passes, cv_rows)
             if !isempty(fails)
                 println(io, "## Cells exceeding CV $(CV_THRESHOLD)\n")

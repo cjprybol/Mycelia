@@ -99,6 +99,16 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         Test.@test harness_row_keys == TRACK_A_ROW_KEYS
         # Fails closed: an unreadable or unparseable harness must not read as agreement.
         Test.@test !isempty(harness_row_keys)
+        # Absent provenance values must land as the HARNESS sentinels, not `missing`.
+        # Mirroring the column NAMES was not enough: `get(cell, k, missing)` filled
+        # them with `missing` for every pre-schema checkpoint (all 432 on disk), so
+        # the merged table carried the names and no usable values, and the operation
+        # the harness docstring prescribes — filter on peak_rss_method before
+        # aggregating — threw ArgumentError on Missing. _tam_cell omits both keys, so
+        # every other merge test runs this exact path and asserts nothing about it.
+        Test.@test TRACK_A_ABSENT_DEFAULTS["peak_rss_method"] == "unknown"
+        Test.@test TRACK_A_ABSENT_DEFAULTS["rss_baseline_bytes"] == -1
+
         # The two columns whose absence was the defect.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
         Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
@@ -363,6 +373,17 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             # Drop-in compatible with the harness's own aggregate.
             Test.@test DataFrames.names(results_df) == TRACK_A_ROW_KEYS
             Test.@test DataFrames.nrow(results_df) == 2
+            # _tam_cell omits both provenance keys, i.e. the shape of all 432
+            # checkpoints on disk. They must merge to the HARNESS sentinels, not
+            # `missing`: with `missing` the merged table carried the column names and
+            # no usable values, and the operation the harness docstring prescribes —
+            # "always filter on peak_rss_method before aggregating" — threw
+            # ArgumentError on Missing. Column names alone were not the fix.
+            Test.@test all(results_df.peak_rss_method .== "unknown")
+            Test.@test all(results_df.rss_baseline_bytes .== -1)
+            # The prescribed filter must actually run on the merged table.
+            Test.@test DataFrames.nrow(
+                results_df[results_df.peak_rss_method .== "unknown", :]) == 2
             Test.@test "host" in DataFrames.names(prov_df)
             Test.@test "quast_evidence" in DataFrames.names(prov_df)
             Test.@test "source_digest" in DataFrames.names(prov_df)
