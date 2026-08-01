@@ -66,16 +66,47 @@ Test.@testset "RGV paired-Wilcoxon figure caption" begin
         Test.@test !occursin("OPERATOR-ASSERTED", caption)
     end
 
-    Test.@testset "the two caveats are independent, not exclusive" begin
-        # They answer different questions — whether the guard was overridden, and
-        # whether the values it compared were observed — so a run in both states
-        # must show both. Chaining them would let the weaker one shadow the stronger.
+    Test.@testset "undeterminable provenance is stamped on the figure" begin
+        # The third state `report.md` can report. Carrying two of three would
+        # recreate the partial-propagation defect this series has been closing: a
+        # fact computed in one file, routed to two of its three consumers, dropped
+        # by the third. This is the state EVERY pre-provenance CSV lands in.
+        caption = _RGVFigure.paired_figure_caption(
+            _figt_payload(metric_definition_provenance_undeterminable = true))
+        Test.@test occursin("PROVENANCE UNDETERMINABLE", caption)
+        Test.@test occursin("measured-vs-asserted is unknown", caption)
+        Test.@test !occursin("OPERATOR-ASSERTED", caption)
+        Test.@test !occursin("GUARD OVERRIDDEN", caption)
+    end
+
+    Test.@testset "the caveats are independent, not exclusive" begin
+        # They answer different questions — whether the guard was overridden,
+        # whether the values it compared were observed, and whether that is knowable
+        # at all — so a run in several states must show each. Chaining them would let
+        # a weaker one shadow a stronger one, which is exactly how the report's own
+        # branch chain let a non-binding flag suppress the asserted qualifier.
         caption = _RGVFigure.paired_figure_caption(
             _figt_payload(metric_definition_operator_asserted = true,
             metric_definition_override_bound = true))
         Test.@test occursin("GUARD OVERRIDDEN", caption)
         Test.@test occursin("OPERATOR-ASSERTED", caption)
         Test.@test count("⚠", caption) == 2
+
+        all_three = _RGVFigure.paired_figure_caption(
+            _figt_payload(metric_definition_operator_asserted = true,
+            metric_definition_override_bound = true,
+            metric_definition_provenance_undeterminable = true))
+        Test.@test count("⚠", all_three) == 3
+    end
+
+    Test.@testset "the caption does not call an exploratory run pre-registered" begin
+        # `report.md` opens by stating the run is exploratory: the pre-registration's
+        # H1 is Viterbi DP vs greedy, while this sweep compares corrector arms. A
+        # figure captioned "pre-registered" contradicts its own report, in the
+        # artifact least likely to be read alongside the correction.
+        caption = _RGVFigure.paired_figure_caption(_figt_payload())
+        Test.@test occursin("EXPLORATORY", caption)
+        Test.@test !occursin("pre-registered", caption)
     end
 
     Test.@testset "an older results.json renders exactly the clean caption" begin

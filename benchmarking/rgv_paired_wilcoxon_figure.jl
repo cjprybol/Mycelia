@@ -40,15 +40,29 @@ The metric definition already belongs on the figure: a paired plot of QUAST NGA5
 and a paired plot of an internal size-ratio proxy look identical, so the caption is
 what keeps the reader from conflating them (bead td-9p91).
 
-The same argument applies with more force to the two facts that say the definition
-is not trustworthy. Under this repo's `1 notebook = 1 figure = 1 slide` model the
+The same argument applies with more force to every fact that says the definition is
+not trustworthy. Under this repo's `1 notebook = 1 figure = 1 slide` model the
 SVG/PNG is what reaches a deck or a manuscript, detached from `report.md`. A run
-whose guard was overridden, or whose definition was asserted by an operator rather
-than observed, previously rendered a caption bit-for-bit identical to a measured
-run — so the artifact that travels furthest carried the least disclosure.
+whose guard was overridden, whose definition was asserted by an operator rather than
+observed, or whose provenance cannot be determined at all, previously rendered a
+caption bit-for-bit identical to a measured run — so the artifact that travels
+furthest carried the least disclosure.
 
-Both flags are read with a `false` default so an older `results.json` (written
-before the fields existed) renders exactly as it did before.
+ALL THREE states `report.md` can report are rendered here. Carrying two of the three
+would recreate the partial-propagation defect this series has spent several rounds
+closing: a fact computed in one file, routed to two of its three consumers, and
+dropped by the third.
+
+The title says EXPLORATORY for the same reason. This analysis applies the
+pre-registration's statistical RULE to a comparison the pre-registration does not
+describe — its H1 is Viterbi DP vs greedy, while this sweep compares
+`corrector=:none` against `corrector=:iterative` — and `report.md` says so in its
+first line. A figure captioned "pre-registered" while its own report calls the run
+exploratory is the same conflation, in the artifact least likely to be read
+alongside the correction.
+
+Every flag is read with a `false` default, so an older `results.json` written before
+the fields existed renders with no caveats, exactly as it did before.
 """
 function paired_figure_caption(payload)
     definition = join(
@@ -62,7 +76,11 @@ function paired_figure_caption(payload)
     if get(payload, "metric_definition_operator_asserted", false) === true
         push!(caveats, "definition OPERATOR-ASSERTED (backfilled), not observed")
     end
-    head = "RGV correction-validation sweep — pre-registered paired Wilcoxon\n" *
+    if get(payload, "metric_definition_provenance_undeterminable", false) === true
+        push!(caveats,
+            "definition PROVENANCE UNDETERMINABLE — measured-vs-asserted is unknown")
+    end
+    head = "RGV correction-validation sweep — paired Wilcoxon (EXPLORATORY)\n" *
            "seeds $seeds · definition: $definition"
     return isempty(caveats) ? head : head * "\n⚠ " * join(caveats, "\n⚠ ")
 end
