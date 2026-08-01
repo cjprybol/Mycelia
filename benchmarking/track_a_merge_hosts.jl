@@ -458,27 +458,58 @@ const TRACK_A_ROW_KEYS = String[
 const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
     "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1)
 
+# Read a `const` definition out of the harness source, failing closed.
+#
+# Requires the pattern to match EXACTLY ONCE. `match` returns the FIRST hit, and a
+# first-hit read is shadowable: an old copy above a drifted live definition is read
+# in preference to the live one, and the guard reports agreement. Anchoring at `^`
+# only defeats `# `-prefixed and indented copies. It does NOT defeat a `#= … =#`
+# block comment — which is the idiomatic way to comment out a multi-line const, i.e.
+# the single most likely maintainer edit — nor a docstring copy, a copy inside a
+# string literal, or two live definitions left by a bad merge resolution. All four
+# were measured returning ok = true against a drifted live const.
+#
+# Zero matches and two-or-more matches are therefore both a refusal to answer, not a
+# pass. `read` is inside the try because `isfile` says nothing about readability: a
+# chmod-000 harness threw SystemError rather than returning a verdict.
+function _harness_const_capture(pattern::Regex)
+    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
+    isfile(harness) || return nothing
+    src = try
+        read(harness, String)
+    catch
+        return nothing
+    end
+    matches = collect(eachmatch(pattern, src))
+    length(matches) == 1 || return nothing
+    return matches[1].captures[1]
+end
+
 """
     track_a_row_keys_match_harness() -> (ok::Bool, harness_keys::Vector{String})
 
 Read `ROW_KEYS` out of the harness SOURCE and compare it to [`TRACK_A_ROW_KEYS`].
 
-The harness cannot be `include`d from here (it parses the global `ARGS` at load
-and imports Mycelia), so this parses the literal instead. A source parse is a weak
-guard in general, but it is the only one available across the two files and it
-fails closed: an unreadable or unparseable harness returns `ok = false` rather
-than silently reporting agreement.
+The harness cannot be `include`d from here (it parses the global `ARGS` at load and
+imports Mycelia), so this inspects the literal instead.
+
+Fails closed on an unreadable, unparseable, absent OR DUPLICATED definition — see
+`_harness_const_capture` for why "duplicated" belongs in that list.
+
+Limitation worth stating rather than papering over: `const` pins the BINDING, not the
+contents. A harness that builds the literal correctly and then mutates it
+(`ROW_KEYS` is a tuple so this does not apply here, but the sibling `Dict` is
+mutable) is invisible to any source-literal guard.
 """
 function track_a_row_keys_match_harness()
-    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
-    isfile(harness) || return (false, String[])
-    src = read(harness, String)
-    m = match(r"const\s+ROW_KEYS\s*=\s*\((.*?)\)\s*\n"s, src)
-    m === nothing && return (false, String[])
+    capture = _harness_const_capture(
+        r"(?m)^const\s+ROW_KEYS\s*=\s*\((.*?)\)\s*$"s)
+    capture === nothing && return (false, String[])
     keys = [String(strip(k))
-            for k in split(replace(m.captures[1], "\n" => " "), ",")
+            for k in split(replace(capture, "\n" => " "), ",")
             if !isempty(strip(k))]
     keys = [startswith(k, ":") ? k[2:end] : k for k in keys]
+    isempty(keys) && return (false, String[])
     return (keys == TRACK_A_ROW_KEYS, keys)
 end
 
@@ -488,41 +519,33 @@ end
 Read `OPTIONAL_KEY_DEFAULTS` out of the harness SOURCE and compare it to
 [`TRACK_A_ABSENT_DEFAULTS`].
 
-Every other constant mirrored from the harness in this file is pinned against the
-harness source; this one was not, and its first assertions compared the constant to
-the literals written into it in the same commit — a tautology.
+This guard has been wrong three times, each in a different way, and each time the
+error was in its FAILURE DIRECTION rather than its logic:
 
-The first attempt at this guard was a regex over the pairs, and it FALSE-PASSED on
-the very drift class the mirror exists to catch. Two ways, both measured:
+  * v1 compared the constant to the literals written into it in the same commit — a
+    tautology that could not fail.
+  * v2 pattern-matched the pairs. The numeric alternative had no right boundary, so
+    `-1.5` parsed as `-1`; and a pair whose value the pattern could not match was
+    silently DROPPED, so a harness gaining a third unmirrored column still compared
+    equal. 11/11 drifted harnesses read green.
+  * v3 parsed the AST (fixing both of those) but still took the FIRST source match,
+    so a `#= … =#`-commented old copy above a drifted live const reported agreement.
 
-  * the numeric alternative had no right boundary, so a sentinel of `-1.5` or
-    `-1_000_000` parsed as `-1` and compared equal.
-  * a pair whose value the regex could not match was silently DROPPED rather than
-    failing, so the harness could gain a THIRD optional column that this file does
-    not mirror — exactly the original defect — and the two-key comparison still
-    succeeded. 11/11 genuinely-drifted harnesses returned ok = true.
+Hence: parse the literal rather than pattern-match it, reject anything that is not a
+plain `:symbol => <String|Int>` pair, and demand exactly one definition in the file.
+Unrecognised syntax is a MISMATCH, never a pass.
 
-So parse the literal instead of pattern-matching it, and reject anything that is not
-a plain `:symbol => &lt;String|Int&gt; ` pair. Unrecognised syntax is a MISMATCH, never a
-pass: this guard is only worth having if the failure direction is right.
-
-The match is line-anchored (`^const`) so a commented-out or docstring copy cannot
-shadow a drifted live definition — `match` returns the first hit in the file, and an
-unanchored pattern read the stale copy instead.
-
-The harness cannot be `include`d from here (it parses global `ARGS` at load and
-imports Mycelia), so source inspection is the only cross-file guard available.
+Limitation: `const` pins the binding, not the `Dict` contents. A harness that assigns
+the correct literal and then mutates it at load (`OPTIONAL_KEY_DEFAULTS[:k] = v`, or
+a host-conditional branch) is invisible here. That is irreducible for a source-literal
+guard; it is stated so nobody reads the fail-closed claim as broader than it is.
 """
 function track_a_absent_defaults_match_harness()
-    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
-    isfile(harness) || return (false, Dict{String, Any}())
-    src = read(harness, String)
-    m = match(
-        r"(?m)^const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*(Dict\{Symbol,\s*Any\}\(.*?\))\s*$"s,
-        src)
-    m === nothing && return (false, Dict{String, Any}())
+    capture = _harness_const_capture(
+        r"(?m)^const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*(Dict\{Symbol,\s*Any\}\(.*?\))\s*$"s)
+    capture === nothing && return (false, Dict{String, Any}())
     expr = try
-        Meta.parse(m.captures[1])
+        Meta.parse(capture)
     catch
         return (false, Dict{String, Any}())
     end
@@ -533,9 +556,14 @@ function track_a_absent_defaults_match_harness()
          arg.args[1] === :(=>)) || return (false, Dict{String, Any}())
         key, value = arg.args[2], arg.args[3]
         key isa QuoteNode || return (false, Dict{String, Any}())
-        # Only plain String/Int literals are comparable to this file's mirror. A Float,
-        # a Symbol, `nothing`, `missing`, or any computed expression means the harness
-        # says something this guard cannot represent -> report a mismatch, not a pass.
+        # QuoteNode's payload is not necessarily a Symbol: `:1` parses to
+        # QuoteNode(1) and String(1) is a MethodError, i.e. a throw where the
+        # contract promises a verdict.
+        (key.value isa Symbol || key.value isa AbstractString) ||
+            return (false, Dict{String, Any}())
+        # Only plain String/Int literals are comparable to this file's mirror. A
+        # Float, a Symbol, `nothing`, `missing`, or any computed expression means the
+        # harness says something this guard cannot represent -> mismatch, not pass.
         (value isa String || value isa Integer) || return (false, Dict{String, Any}())
         parsed[String(key.value)] = value
     end
