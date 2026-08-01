@@ -106,8 +106,16 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         # the harness docstring prescribes — filter on peak_rss_method before
         # aggregating — threw ArgumentError on Missing. _tam_cell omits both keys, so
         # every other merge test runs this exact path and asserts nothing about it.
-        Test.@test TRACK_A_ABSENT_DEFAULTS["peak_rss_method"] == "unknown"
-        Test.@test TRACK_A_ABSENT_DEFAULTS["rss_baseline_bytes"] == -1
+        # Compare against the HARNESS SOURCE, not against the literals written into
+        # the constant in the same commit. The first version of these two assertions
+        # did the latter, which cannot fail: drifting the harness sentinel to
+        # "not-recorded"/-2 left this suite fully green while the two files disagreed
+        # about exactly the columns the mirror exists to keep in step.
+        defaults_ok, harness_defaults = track_a_absent_defaults_match_harness()
+        Test.@test defaults_ok
+        Test.@test harness_defaults == TRACK_A_ABSENT_DEFAULTS
+        # Fails closed: an unreadable/unparseable harness must not read as agreement.
+        Test.@test !isempty(harness_defaults)
 
         # The two columns whose absence was the defect.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS

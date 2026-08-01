@@ -81,8 +81,8 @@ end
 #   1. status != "ok" — the cell errored, or assembled nothing.
 #   2. status == "ok" but QUAST never scored it. On a QUAST exception the harness
 #      substitutes empty_metrics() — NGA50, genome_fraction and largest_contig all
-#      0.0 — and then derives status from n_contigs ALONE, so a QUAST failure on a
-#      NON-EMPTY assembly is written as "ok" with a full row of zeros. Filtering on
+#      0.0 — and then derives status from n_contigs ALONE, so a cell QUAST never
+#      scored is written as "ok" with a full row of zeros. Filtering on
 #      status alone misses it completely, i.e. through the same door the status
 #      filter was added to close. Not hypothetical: QUAST was failing on one host
 #      (conda ProcessExited(4)), and the merged matrix mixes metric sources by host.

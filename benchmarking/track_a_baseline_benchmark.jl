@@ -590,17 +590,23 @@ function write_power_analysis(root, df)
     # cell QUAST never scored is recorded as "ok" carrying a full row of zeros.
     # Those zeros would be pooled into the CV as if measured.
     #
-    # The predicate cannot say WHY, and neither should the prose: n_contigs is the
-    # UNFILTERED assembly count while QUAST runs with min_contig = 500, so
-    # `n_contigs > 0 && largest_contig == 0` covers both "QUAST threw" and "QUAST ran
-    # and nothing cleared 500 bp" — a real measurement of a fragmented assembly.
-    # track_a_merge_hosts.jl names this class "unknown:quast-unscored" for exactly
-    # that reason. Excluding it is still right (a zero that is not a measurement must
-    # not enter a variance estimate), but the exclusion is ONE-DIRECTIONAL: every
-    # dropped row carries NGA50 = 0, so dropping can only LOWER a group's CV and push
-    # the verdict toward "supported" — the favourable direction for the
-    # pre-registration this gates. n_excluded is therefore recorded in the summary
-    # artifact, not just in a @warn nobody reads in a 15-hour SLURM log.
+    # `n_contigs > 0 && largest_contig == 0` is reachable ONLY through
+    # empty_metrics(), so every row it matches is a non-measurement — never a real
+    # assembly that merely scored badly. n_contigs is the UNFILTERED assembly count
+    # (bench-side, before QUAST), while QUAST runs with min_contig = 500 and refuses
+    # to emit a report at all when nothing clears it. Verified against the 2026-07-25
+    # Lovelace run: both matching cells (phi29/ont/10x/seed456, 6331 contigs each)
+    # have NO quast/report.tsv, and their quast.log ends
+    #     WARNING: Skipping contigs because it doesn't contain contigs >= 500 bp.
+    #     ERROR! None of the assembly files contains correct contigs.
+    # i.e. QUAST exited non-zero, run_cell caught it, and empty_metrics() supplied the
+    # zeros. The min-contig threshold is the CAUSE of that error, not evidence that a
+    # measurement happened. track_a_merge_hosts.jl states the same implication.
+    #
+    # This is why the exclusion needs no judgement call about a borderline class, and
+    # why it cannot bias the verdict: a value that was never measured carries no
+    # information about variance either way. n_excluded is still recorded in the
+    # summary artifact so a reader can see how much of the matrix went unscored.
     #
     # Same implication track_a_merge_hosts.jl's `quast_evidence` uses, and the same
     # predicate as ok_cells() in track_a_harvest_figures.jl — the figures and this
@@ -645,10 +651,10 @@ function write_power_analysis(root, df)
             println(io, "- Evaluable cells (organism×tech×coverage×arm, ≥2 seeds, nonzero NGA50): $n_eval")
             println(io, "- Cells with CV ≤ $(CV_THRESHOLD): $n_pass / $n_eval")
             println(io, "- Max CV observed: $(round(max_cv; digits = 4))")
-            println(io, "- **Verdict: assumed CV ≈ $(CV_THRESHOLD) is $verdict.**\n")
             println(io,
                 "- Rows excluded as non-measurements (status != ok, or QUAST " *
-                "unscored): $n_excluded\n")
+                "unscored): $n_excluded")
+            println(io, "- **Verdict: assumed CV ≈ $(CV_THRESHOLD) is $verdict.**\n")
             fails = filter(r -> isfinite(r.cv_nga50) && !r.passes, cv_rows)
             if !isempty(fails)
                 println(io, "## Cells exceeding CV $(CV_THRESHOLD)\n")

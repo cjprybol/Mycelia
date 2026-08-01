@@ -446,11 +446,15 @@ const TRACK_A_ROW_KEYS = String[
 # ("Always filter on peak_rss_method before aggregating") threw
 # `ArgumentError: unable to check bounds for indices of type Missing`.
 #
-# The harness defaults these to "unknown" / -1 deliberately: an explicit sentinel no
-# real measurement can produce. Merging must produce the SAME sentinel, or a merged
-# table is not the drop-in the docstring claims. Keys absent from this table keep
-# `missing`, which is correct for genuinely-required columns — their absence is a
-# defect, not a default.
+# The harness defaults these to "unknown" / -1 deliberately. "unknown" is
+# absence-only. `-1` is NOT: the harness also emits it from the highwater-delta path
+# when the /proc baseline read fails, and from error_row, so it means "no usable
+# baseline" rather than "column absent" — do not read it as a provenance discriminator
+# on its own; pair it with peak_rss_method.
+#
+# Merging must produce the SAME sentinel as the harness, or a merged table is not the
+# drop-in the docstring claims. Keys absent from this table keep `missing`, which is
+# correct for genuinely-required columns — their absence is a defect, not a default.
 const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
     "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1)
 
@@ -476,6 +480,37 @@ function track_a_row_keys_match_harness()
             if !isempty(strip(k))]
     keys = [startswith(k, ":") ? k[2:end] : k for k in keys]
     return (keys == TRACK_A_ROW_KEYS, keys)
+end
+
+"""
+    track_a_absent_defaults_match_harness() -> (ok::Bool, harness_defaults::Dict{String, Any})
+
+Read `OPTIONAL_KEY_DEFAULTS` out of the harness SOURCE and compare it to
+[`TRACK_A_ABSENT_DEFAULTS`].
+
+Every other constant mirrored from the harness in this file is pinned against the
+harness source; this one was not, and its only assertions compared the constant to
+the literals written into it in the same commit — a tautology, and the same shape
+this file's round-4 note congratulates itself for eliminating for TRACK_A_ROW_KEYS.
+Demonstrated: drifting the harness sentinel to "not-recorded"/-2 left the merge
+suite fully green while the two files disagreed about exactly the columns the
+mirror exists to keep in step.
+
+Fails closed: an unreadable or unparseable harness returns `ok = false`.
+"""
+function track_a_absent_defaults_match_harness()
+    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
+    isfile(harness) || return (false, Dict{String, Any}())
+    src = read(harness, String)
+    m = match(r"const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*Dict\{Symbol,\s*Any\}\((.*?)\)\s*\n"s, src)
+    m === nothing && return (false, Dict{String, Any}())
+    parsed = Dict{String, Any}()
+    for pair in eachmatch(r":(\w+)\s*=>\s*(\"[^\"]*\"|-?\d+)", m.captures[1])
+        key, raw = pair.captures[1], pair.captures[2]
+        parsed[key] = startswith(raw, "\"") ? String(raw[2:(end - 1)]) : parse(Int, raw)
+    end
+    isempty(parsed) && return (false, parsed)
+    return (parsed == TRACK_A_ABSENT_DEFAULTS, parsed)
 end
 
 """
