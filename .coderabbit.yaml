@@ -1,0 +1,104 @@
+# .coderabbit.yaml — CodeRabbit config for cjprybol/Mycelia.
+#
+# Generated from todo/protocols/coderabbit-config.example.yaml — edit the
+# TEMPLATE and redeploy, never this file directly. Schema:
+# https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# Key design choices:
+#   - auto_review disabled — CodeRabbit's fair-usage policy pins this account
+#     at a low reviews/hour ceiling at our PR volume, so an automatic pass
+#     spends a scarce slot on whichever PR happens to be open. Request one with
+#     `@coderabbitai review` on PRs meeting an opt-in trigger (see the
+#     "Opt-in routing" table in protocols/third-party-bot-audit.md).
+#   - path_filters restrict review to code + executable-prose surfaces.
+#   - tone_instructions (ROOT level — see note below) keep output terse.
+#   - chat.auto_reply: false — CodeRabbit will not reply in chat threads
+#     without an explicit @-mention. This is an EFFECTIVE setting, not a
+#     default; it is what keeps an on-demand repo quiet between requests.
+#
+# Settings deliberately omitted because they equal the schema default and
+# would only be noise: request_changes_workflow, high_level_summary, poem,
+# auto_review.drafts.
+#
+# TWO SCHEMA/SEMANTICS NOTES, both learned the hard way (2026-08-01 review):
+#
+# 1. `tone_instructions` is a ROOT-level property (string, maxLength 250).
+#    It is NOT under `reviews:`. The `reviews` object does not set
+#    additionalProperties:false, so a misplaced `tone_instructions` is
+#    SILENTLY ACCEPTED AND DISCARDED — no error, no warning. It sat nested
+#    (and therefore inert) in this template from 2026-05-21 to 2026-08-01.
+#
+# 2. path_filters ordering IS documented, in the schema's own description field:
+#    "These patterns also apply to 'git sparse-checkout', including specified
+#    patterns and ignoring excluded ones (starting with '!')". Sparse-checkout
+#    is gitignore-style LAST-MATCH-WINS. So a blanket `!**/*.md` placed AFTER a
+#    specific `foo/**/*.md` include SILENTLY KILLS that include.
+#
+#    Two consequences, both learned by shipping the bug:
+#      - path_filters behaves as an ALLOWLIST: a file matching no include is
+#        not reviewed. A blanket `!**/*.md` is therefore REDUNDANT in a repo
+#        that includes no markdown, and ACTIVELY HARMFUL in one that includes
+#        some. Prose-primary repos below omit it entirely rather than fight it.
+#      - `@coderabbitai configuration` echoes the config as WRITTEN, not as
+#        RESOLVED against these semantics. It confirms the file was parsed; it
+#        does NOT confirm a pattern takes effect. To verify coverage, request a
+#        review on a PR touching only the surface in question and check that
+#        findings reference that file.
+
+reviews:
+  auto_review:
+    enabled: false
+  review_status: false
+  path_filters:
+    # ---- INCLUDES (must come first; see note 2 above) ----
+    # Code surfaces
+    - "**/*.jl"
+    - "**/*.py"
+    - "**/*.sh"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "src/**"
+    - "scripts/**"
+    - "lib/**"
+    # Executable non-code surfaces. These carry real defects and were invisible
+    # to the pre-2026-08-01 filter: a flock self-deadlock shipped in a .sbatch
+    # file, and 4 of 18 Critical findings were invalid-JSON verdict artifacts.
+    - "bin/**"
+    - "**/*.sbatch"
+    - "**/*.toml"
+    - "**/Dockerfile*"
+    - ".github/workflows/**"
+    # ---- PROSE-PRIMARY REPOS ONLY ----
+    # Uncomment in repos where markdown IS the executable artifact (dotfiles,
+    # todo, context-iorgan): agent skills, protocols, and memory files are
+    # instructions an agent follows literally, not documentation about code.
+    # Evidence: dotfiles#190 was a markdown-only PR and CodeRabbit returned a
+    # Major Security & Privacy finding (prompt injection) plus a Major
+    # correctness finding. Excluding these makes such findings unreachable.
+    # ---- EXCLUDES (must come last; see note 2 above) ----
+    # Prose + generated artifacts
+    - "!**/*.md"
+    - "!**/*.rst"
+    - "!**/CHANGELOG*"
+    - "!**/LICENSE*"
+    # Tracker / telemetry / worktree state
+    - "!**/.beads/**"
+    - "!**/notebooks/**/output/**"
+    - "!**/telemetry/**"
+    - "!**/.worktrees/**"
+    # Lockfiles + vendored deps (must follow **/*.toml to beat it)
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/Cargo.lock"
+    - "!**/poetry.lock"
+    - "!**/Manifest.toml"
+    - "!**/vendor/**"
+
+# ROOT level — see note 1. Nesting this under `reviews:` silently disables it.
+tone_instructions: |
+  Be terse. Only flag correctness, security, or data-loss bugs. Skip
+  style/preference feedback unless a project linter rule is violated. Do not
+  repeat findings from prior review comments on the same PR.
+
+chat:
+  auto_reply: false
