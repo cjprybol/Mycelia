@@ -28,12 +28,22 @@
 #    SILENTLY ACCEPTED AND DISCARDED — no error, no warning. It sat nested
 #    (and therefore inert) in this template from 2026-05-21 to 2026-08-01.
 #
-# 2. path_filters ordering is NOT documented by the vendor: it is unresolved
-#    whether a later include re-admits an earlier `!` exclusion (gitignore
-#    last-match-wins) or whether exclusions always win. We therefore put ALL
-#    INCLUDES FIRST AND ALL EXCLUSIONS LAST, so the exclusions hold under
-#    EITHER semantics. Do not reorder without re-verifying. Confirm the
-#    resolved config on a live PR with `@coderabbitai configuration`.
+# 2. path_filters ordering IS documented, in the schema's own description field:
+#    "These patterns also apply to 'git sparse-checkout', including specified
+#    patterns and ignoring excluded ones (starting with '!')". Sparse-checkout
+#    is gitignore-style LAST-MATCH-WINS. So a blanket `!**/*.md` placed AFTER a
+#    specific `foo/**/*.md` include SILENTLY KILLS that include.
+#
+#    Two consequences, both learned by shipping the bug:
+#      - path_filters behaves as an ALLOWLIST: a file matching no include is
+#        not reviewed. A blanket `!**/*.md` is therefore REDUNDANT in a repo
+#        that includes no markdown, and ACTIVELY HARMFUL in one that includes
+#        some. Prose-primary repos below omit it entirely rather than fight it.
+#      - `@coderabbitai configuration` echoes the config as WRITTEN, not as
+#        RESOLVED against these semantics. It confirms the file was parsed; it
+#        does NOT confirm a pattern takes effect. To verify coverage, request a
+#        review on a PR touching only the surface in question and check that
+#        findings reference that file.
 
 reviews:
   auto_review:
@@ -65,11 +75,6 @@ reviews:
     # Evidence: dotfiles#190 was a markdown-only PR and CodeRabbit returned a
     # Major Security & Privacy finding (prompt injection) plus a Major
     # correctness finding. Excluding these makes such findings unreachable.
-    # - ".claude/skills/**/*.md"
-    # - "protocols/**/*.md"
-    # - "**/memory/*.md"
-    # - "docs/superpowers/specs/**/*.md"
-    # - "docs/superpowers/plans/**/*.md"
     # ---- EXCLUDES (must come last; see note 2 above) ----
     # Prose + generated artifacts
     - "!**/*.md"
