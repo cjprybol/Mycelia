@@ -1251,10 +1251,17 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             # real but SKEWED minority allele (a 10x branch in a 20x/10x bubble)
             # cannot decay toward zero; only near-zero-support error edges are free
             # to decay below their raw coverage in the transition score. The soft
-            # weight travels ONLY through `compute_edge_weight`; it never reaches
-            # `clean_corrector_graph!`, whose tip and bubble predicates gate on RAW
-            # vertex/branch evidence. Cleaning is a separate configured heuristic,
-            # not a downstream consumer of this decay.
+            # weight travels ONLY through `compute_edge_weight`; it is never
+            # CONSUMED by `clean_corrector_graph!`. The soft-weight scope is in
+            # fact still live while cleaning runs — the task-local scope is opened
+            # around a `clean_graph!` call — so the accurate statement is about
+            # consumption, not reach. Two independent facts make the decay
+            # invisible there: the tip and bubble predicates gate on RAW
+            # `_vertex_support` and never read edge weights at all, and cleaning
+            # operates on a `deepcopy` of the graph, whose fresh edge-data objects
+            # cannot match the identity-keyed `IdDict` the soft weights live in.
+            # Cleaning is a separate configured heuristic, not a downstream
+            # consumer of this decay.
             soft_em = true,
             # Stage 0 cheap correction (td-bjnt): a LINEAR k-mer-spectrum pass
             # (BFC/Lighter/Bloocoo-style) run BEFORE the expensive per-read graph

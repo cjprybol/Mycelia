@@ -2087,8 +2087,14 @@ function _probe_indel_frontier(
     # reject windows the decoder would have handled cheaply. The four flags below
     # are exactly that restatement, and over THAT SCOPE — the config's own gap
     # masses — they are complete: the constructor pins `error_rate ∈ (0, 0.5)` and
-    # rejects NaN, so `δ_I = error_rate·f_ins` and `δ_D = error_rate·f_del` can only
-    # vanish through the fractions these flags already test, and it pins
+    # rejects NaN, so `δ_I = error_rate·f_ins` and `δ_D = error_rate·f_del` vanish
+    # only through the fractions these flags already test — with one caveat the
+    # constructor's interval does NOT exclude: floating-point underflow. A
+    # denormal `error_rate` times a small fraction rounds to exactly zero with
+    # both operands strictly positive and `insertion_open` still `true`
+    # (`1e-320 * 1e-10 === 0.0`). Real error profiles bottom out around `1e-6`,
+    # so this is unreachable in practice rather than ruled out by construction.
+    # The constructor also pins
     # `γ_I`/`γ_D ∈ [0, 1)`, so the return legs `T_IM = log1p(-γ_I)` /
     # `T_DM = log1p(-γ_D)` cannot reach `-Inf` either. `*_open` additionally folds
     # in the run caps (`max_insertion_run >= 1` / `deletion_max_run > 0`), matching
@@ -2097,15 +2103,34 @@ function _probe_indel_frontier(
     # gap hop, matching the kernel's `-Inf` extend transitions.
     #
     # NOT covered — this is not a total parity claim. Per the successor comment
-    # above, the probe is deliberately WEIGHT- and EMISSION-blind, but
-    # `isfinite(cand)` is not: it also sees the per-edge weight `logE` (the M→D and
-    # D→D relaxations) and, on the insertion arm, `emission_ins` from the PUBLIC
-    # `config.insertion_emission_logp` callback. Either can be `-Inf` — a
-    # zero-weight edge, or a custom `insertion_emission_logp` returning `-Inf`,
-    # which disables the kernel's entire insertion block at its
+    # above, the probe is deliberately WEIGHT- and EMISSION-blind, but the
+    # kernel's `isfinite` guards are not. They see three factors the probe has no
+    # access to:
+    #
+    #   * the per-edge weight `logE`, on EVERY arm that expands successors — the
+    #     M transition's `cand = base + logE + emission` as much as the M→D and
+    #     D→D relaxations;
+    #   * `emission_ins`, from the PUBLIC `config.insertion_emission_logp`
+    #     callback, on the insertion arm;
+    #   * `emission`, from the PUBLIC and REQUIRED `config.emission_logp` callback
+    #     (reached via `_call_viterbi_state_emission_logp`), on the M arm.
+    #
+    # Any of the three at `-Inf` drops a candidate the probe still expands: a
+    # zero-weight edge; a custom `insertion_emission_logp` returning `-Inf`, which
+    # disables the kernel's entire insertion block at its
     # `max_insertion_run >= 1 && isfinite(emission_ins)` gate while `insertion_open`
-    # below stays `true`. In those cases the probe counts frontier work the kernel
-    # skips and can reject a window the decoder would have handled cheaply.
+    # below stays `true`; or a custom `emission_logp` returning `-Inf`, which drops
+    # the M candidate at `isfinite(cand)` while the probe expands M successors
+    # unconditionally — its own comment says the topology probe does not inspect
+    # the observed emission. The M arm's prior-column guard `isfinite(base)` is a
+    # fourth gate the probe does not model. In all of these the probe counts
+    # frontier work the kernel skips and can reject a window the decoder would have
+    # handled cheaply.
+    #
+    # Both emission escapes are custom-callback-only: the DEFAULT emission cannot
+    # return `-Inf`, because `_viterbi_position_error_rate` clamps the per-position
+    # rate into `[eps, 1 - eps]`. That bounds the default profile, not the public
+    # API, which is why both are listed here rather than dismissed.
     #
     # Maintenance: (1) any new gap MOVE added to the kernel must add its zero-mass
     # flag here in the same commit; (2) any new `isfinite(...)` gate on an EMISSION
