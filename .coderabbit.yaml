@@ -1,0 +1,68 @@
+# .coderabbit.yaml — CodeRabbit config for cjprybol/Mycelia.
+#
+# Deployed from the canonical fleet template
+# (todo/protocols/coderabbit-config.example.yaml) per the third-party bot audit
+# (todo/protocols/third-party-bot-audit.md) and the 2026-08-01 value audit
+# (todo/stakeholders/system/planning/2026-08-01-coderabbit-value-audit.md).
+#
+# Why on-demand: CodeRabbit's fair-usage policy pins this account at 1 review/
+# hour on a trailing 7-day window at our PR volume, on every plan tier. In July
+# 2026, 55% of review attempts were rate-limited and 529 PRs were never reviewed
+# at all. Auto-review spends that scarce slot on whatever PR happens to be open;
+# opt-in spends it on the PR that needs it.
+#
+# Request a pass by commenting `@coderabbitai review` on PRs meeting an opt-in
+# trigger (money/credentials, concurrency or shell composition, safety gates,
+# figures/reported numbers, data-integrity surfaces, or a non-trivial pre-merge
+# second opinion). See the "Opt-in routing" table in third-party-bot-audit.md.
+# Routine PRs are covered by /comprehensive-pr-review + the Codex connector.
+#
+# Key design choices (unchanged from the fleet template):
+#   - auto_review disabled (dominant spam + rate-limit source)
+#   - path_filters restrict review to actual code/scripts
+#   - tone_instructions enforce terse output focused on real bugs
+#   - poem disabled (no decorative output)
+
+reviews:
+  auto_review:
+    enabled: false
+    drafts: false
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: false
+  path_filters:
+    # Skip docs + generated artifacts
+    - "!**/*.md"
+    - "!**/*.rst"
+    - "!**/CHANGELOG*"
+    - "!**/LICENSE*"
+    # Skip notebook + beads + telemetry state
+    - "!**/.beads/**"
+    - "!**/notebooks/**/output/**"
+    - "!**/telemetry/**"
+    - "!**/.worktrees/**"
+    # Skip lockfiles + vendored deps
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/Cargo.lock"
+    - "!**/poetry.lock"
+    - "!**/Manifest.toml"
+    - "!**/vendor/**"
+    # Include actual code surfaces
+    - "src/**"
+    - "scripts/**"
+    - "lib/**"
+    - "**/*.jl"
+    - "**/*.py"
+    - "**/*.sh"
+    - "**/*.ts"
+    - "**/*.tsx"
+  tone_instructions: |
+    Be terse. Only flag correctness, security, or data-loss bugs.
+    Skip style/preference feedback unless there is a project linter rule
+    being violated. Do not repeat findings from prior review comments on
+    the same PR.
+
+chat:
+  auto_reply: false
