@@ -360,7 +360,14 @@ function backfill_seed(csv_path::AbstractString;
                 "bead" => "td-59o7"
             ), 2)
     end
-    return out, sidecar, DataFrames.nrow(df)
+    # `provenance_columns` is returned, not just written to the sidecar, so the CLI
+    # can report what it ACTUALLY wrote. It previously announced "rows labelled
+    # <asserted> in metric_source_provenance" unconditionally — including on the one
+    # shape where `_mark_definition_provenance!` writes nothing at all (a definition
+    # column that already carries the requested value, so no row is asserted and no
+    # provenance column exists to update). Trailing positional, so existing
+    # three-way destructuring keeps working.
+    return out, sidecar, DataFrames.nrow(df), provenance_columns
 end
 
 # === CLI ====================================================================
@@ -421,7 +428,8 @@ function main()
     ms = _bf_arg("--metric-source")
     qmc = _bf_arg("--quast-min-contig")
     out, sidecar,
-    n = backfill_seed(csv_path;
+    n,
+    prov_cols = backfill_seed(csv_path;
         seed = seed, provenance = provenance,
         metric_source = ms,
         quast_min_contig = qmc === nothing ? nothing : parse(Int, qmc),
@@ -430,13 +438,25 @@ function main()
     println("Source     : $csv_path")
     println("Seed       : $seed")
     println("Provenance : $provenance")
-    ms === nothing ||
-        println("metric_source    : $ms (operator-supplied; rows labelled " *
-                "\"$DEFINITION_PROVENANCE_ASSERTED\" in metric_source_provenance)")
-    qmc === nothing ||
-        println("quast_min_contig : $qmc (operator-supplied; rows labelled " *
-                "\"$DEFINITION_PROVENANCE_ASSERTED\" in quast_min_contig_provenance)")
-    if ms !== nothing || qmc !== nothing
+    # Report what was WRITTEN, not what was requested. Naming a definition the CSV
+    # already carries asserts nothing, so no provenance column is created — and
+    # announcing one anyway is an assurance the sidecar contradicts in the same run.
+    _bf_wrote(col) = String(definition_provenance_column(col)) in prov_cols
+    ms === nothing || println("metric_source    : $ms (operator-supplied)" *
+            (_bf_wrote(:metric_source) ?
+             "; rows supplied are labelled " *
+             "\"$DEFINITION_PROVENANCE_ASSERTED\" in " *
+             "metric_source_provenance" :
+             "; already present with this value — nothing asserted, " *
+             "so NO metric_source_provenance column was written"))
+    qmc === nothing || println("quast_min_contig : $qmc (operator-supplied)" *
+            (_bf_wrote(:quast_min_contig) ?
+             "; rows supplied are labelled " *
+             "\"$DEFINITION_PROVENANCE_ASSERTED\" in " *
+             "quast_min_contig_provenance" :
+             "; already present with this value — nothing asserted, " *
+             "so NO quast_min_contig_provenance column was written"))
+    if !isempty(prov_cols)
         println("             NOTE: an operator-asserted definition is a CLAIM, not an " *
                 "observation. rgv_paired_wilcoxon.jl reads the provenance column and " *
                 "will refuse to report the guard as enforced over these rows.")

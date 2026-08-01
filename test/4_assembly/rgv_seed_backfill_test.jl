@@ -426,4 +426,40 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
             Test.@test occursin("MYCELIA_RGV_SEED:-42,123,456", text)
         end
     end
+
+    Test.@testset "the tool reports the provenance columns it ACTUALLY wrote" begin
+        # Naming a definition the CSV already carries asserts nothing, so
+        # `_mark_definition_provenance!` writes no column. The CLI nevertheless
+        # announced "rows labelled <asserted> in metric_source_provenance" — an
+        # assurance its own sidecar contradicted in the same invocation. The written
+        # columns are now returned so the caller cannot claim more than happened.
+        dir = mktempdir()
+
+        # Definition ALREADY present with the requested value -> nothing asserted.
+        present = joinpath(dir, "present.csv")
+        CSV.write(present,
+            DataFrames.DataFrame(reference = ["Lambda", "Lambda"], k = [21, 21],
+                seed = [42, 42], arm = ["naive", "iterative"],
+                metric_source = ["quast", "quast"]))
+        _, _,
+        _,
+        cols_noop = backfill_seed(present;
+            seed = 42, provenance = "explicit (test)", metric_source = "quast",
+            output_path = joinpath(dir, "present_out.csv"))
+        Test.@test isempty(cols_noop)
+
+        # Definition ABSENT -> supplied, so the column IS written and labelled.
+        absent = joinpath(dir, "absent.csv")
+        CSV.write(absent,
+            DataFrames.DataFrame(reference = ["Lambda", "Lambda"], k = [21, 21],
+                seed = [42, 42], arm = ["naive", "iterative"]))
+        out_a, _,
+        _,
+        cols_written = backfill_seed(absent;
+            seed = 42, provenance = "explicit (test)", metric_source = "quast",
+            output_path = joinpath(dir, "absent_out.csv"))
+        Test.@test "metric_source_provenance" in cols_written
+        back = CSV.read(out_a, DataFrames.DataFrame)
+        Test.@test all(back.metric_source_provenance .== DEFINITION_PROVENANCE_ASSERTED)
+    end
 end

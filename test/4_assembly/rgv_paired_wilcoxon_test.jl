@@ -944,6 +944,15 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
                 Test.@test occursin(
                     "does NOT establish that the aggregate spans a single MEASURED definition",
                     text)
+                # The block must not send the reader on an errand that cannot
+                # succeed. It used to say "Recover it with `rgv_seed_backfill.jl`",
+                # but that tool labels only the rows whose definition it SUPPLIES —
+                # so for the shape this block describes (definition present, no
+                # provenance sibling) it writes nothing, the analysis prints the
+                # identical warning, and the operator loops. Same class as the
+                # backfill/analyse ping-pong this PR opened by closing.
+                Test.@test occursin("NOT recoverable by re-running", text)
+                Test.@test !occursin("Recover it with", text)
                 p = paired_analysis_json(a; csv_paths = ["f.csv"])
                 Test.@test p["metric_definition_provenance_undeterminable"] == true
                 Test.@test p["undeterminable_definition_provenance_axes"] ==

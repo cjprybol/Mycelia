@@ -878,8 +878,14 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
                 "by an operator therefore **cannot be determined from this table**. " *
                 "That is not the same as their having been measured, and it is the " *
                 "state every sweep CSV written before the provenance column existed " *
-                "is in. Recover it with `rgv_seed_backfill.jl`, or read the numbers " *
-                "below as resting on an unverified definition.\n")
+                "is in.\n>\n" *
+                "> This is NOT recoverable by re-running `rgv_seed_backfill.jl`: it " *
+                "labels only the rows whose definition it SUPPLIES, so a CSV that " *
+                "already carries the definition gains no provenance column, and " *
+                "labelling those rows `$(RGV_OBSERVED_DEFINITION_LABEL)` after the " *
+                "fact would assert exactly the thing that cannot be determined. Re-run " *
+                "the sweep to get a table that records its own provenance, or read the " *
+                "numbers below as resting on an unverified definition.\n")
         end
         # The artifact must never assert the guard was enforced when it was
         # overridden. Previously this line printed unconditionally, so a run with
