@@ -1,0 +1,7 @@
+label,seed,n_raw,raw_mean_identity,n_corrected,corrected_mean_identity
+fix,42,100,0.98887,100,0.99099
+fix,43,100,0.98906,100,0.99272
+fix,44,100,0.98954,100,0.99387
+master,42,100,0.98887,100,0.99095
+master,43,100,0.98906,100,0.99306
+master,44,100,0.98954,100,0.99479

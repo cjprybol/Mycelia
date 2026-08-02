@@ -21,7 +21,21 @@ MYCELIA_PROJECT=/path/to/branch LD_LIBRARY_PATH='' \
     --seeds 42,43,44 --label fix --out evidence_fix.csv
 ```
 
-`master` rows were produced at `4e068933`; `fix` rows at `2e618d94`.
+Provenance, stated per artifact because the runs happened at different commits:
+
+| artifact | master rows | fix rows |
+| -------- | ----------- | -------- |
+| `evidence_master.csv` / `evidence_fix.csv` | `4e068933` | `d817276b` |
+| `undercorrection_identity.csv` | `4e068933` | `2e618d94` |
+
+The contiguity run was launched before the review-fix commit landed, so its `fix`
+rows reflect `d817276b`. The review fixes that followed (`2e618d94`) derive
+`_INDEL_ADMITTED_WINDOW_SOURCES` and switch the window-level kernel test from
+`!= :substitution` to ADMITTED membership — semantically identical while the two
+tuples are exact complements, which a committed test now pins, and the
+byte-identity oracle was re-measured after that change. So the contiguity numbers
+are expected to carry over, but they were not re-measured at `2e618d94` and this
+table should not be read as if they were.
 
 ## What was measured
 
@@ -80,7 +94,38 @@ and all three seeds improve. Divergences and anchor rejections fall alongside it
 - **Two of three 8x seeds are exact no-ops.** The change acts only where the
   scheduler emits demoted windows over spans exceeding `max_window`, which tracks
   coverage and genome size.
-- **Contiguity does not answer under-correction.** The truncated partition
-  decodes fewer bases, so it could leave genuinely correctable bases uncorrected
-  without contiguity showing it. That needs per-base identity against the
-  reference and is tracked separately.
+
+## Under-correction — the trade-off, measured
+
+Contiguity is a downstream proxy and cannot tell whether truncating the partition
+leaves genuinely correctable bases uncorrected. `undercorrection_probe.jl`
+measures it directly: per-read local identity (Smith-Waterman, `EDNAFULL`, both
+orientations, denominator `matches + mismatches + insertions + deletions`) of the
+**corrected** reads against the known reference, at 6000/1200/20x, 100 reads per
+seed, byte-identical input per seed.
+
+| seed | raw | master corrected | fix corrected | fix − master | master gain | fix gain |
+| ---- | --- | ---------------- | ------------- | ------------ | ----------- | -------- |
+| 42 | 0.98887 | 0.99095 | 0.99099 | +0.00004 | +0.00208 | +0.00212 |
+| 43 | 0.98906 | 0.99306 | 0.99272 | −0.00034 | +0.00400 | +0.00366 |
+| 44 | 0.98954 | 0.99479 | 0.99387 | −0.00092 | +0.00525 | +0.00433 |
+| **mean** | | 0.99293 | 0.99253 | **−0.00041** | +0.00378 | **+0.00337** |
+
+**The fix does under-correct.** Its corrected reads are lower-identity than
+master's on 2 of 3 seeds (the third, +0.00004, is noise), and it captures **89%**
+of master's per-read correction gain. It still improves on raw in 3 of 3, so it
+is not destroying correction — it captures slightly less of what is available,
+consistent with decoding fewer hard-span bases.
+
+**So the trade is: ~11% less per-read correction gain, for 0.303 → 0.734 assembly
+contiguity at 6 kb.** That direction is coherent rather than paradoxical —
+over-correction can manufacture wrong k-mers that fragment the graph even while
+nominally correcting more bases, so fewer better-targeted corrections can
+assemble far better while scoring slightly worse per read.
+
+Whether the trade is worth taking depends on what the corrector feeds. For an
+assembly-directed pipeline (which is what td-jt7r is) contiguity dominates and
+the trade is favourable. For a consumer of corrected reads directly, the
+0.041-percentage-point identity loss — about half a base per 1200 bp read —
+matters more. n=3, one cell; direction is consistent, magnitude is not
+characterized.
