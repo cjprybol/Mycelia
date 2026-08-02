@@ -17,7 +17,16 @@ import Random
 import SHA
 import Test
 
-include(joinpath(@__DIR__, "indel_benchmark_common.jl"))
+# indel_benchmark_common.jl is DELIBERATELY not included directly here: the
+# runtime include below already pulls it in (indel_frontier_runtime.jl:41), and
+# the shared file has no include guard, so a direct include would re-evaluate
+# every `const` in it in this same scope with a freshly allocated value. Bindings
+# like INDEL_BENCH_MISSING_VALUE, the `@__FILE__` path, and the run-status
+# filename are not `===` across two evaluations, so Julia emits a
+# const-redefinition warning for each — noise that can bury a genuine warning in
+# the test output. Every `indel_bench_*` symbol asserted below is defined
+# transitively; do not re-add the direct include.
+#
 # `_indel_frontier_label_offsets` is a pure, deterministic figure-layout helper
 # that lives in indel_frontier_runtime.jl and had no coverage. That script's
 # `main()` is guarded by the `PROGRAM_FILE` check, so including it defines
@@ -520,6 +529,43 @@ Test.@testset "indel benchmark common" begin
             Base.rm(output_dir; recursive = true, force = true)
         end
 
+        # A publish with BOTH descriptive keywords omitted is a supported call
+        # shape (the failure-durability testset above uses it). It must still
+        # advance the marker: the status field records whether the generation
+        # published, and leaving it at `running` would make a directory holding a
+        # complete generation indistinguishable from one whose run aborted --
+        # defeating the sidecar's only purpose. The descriptive fields fall back
+        # to "unknown" rather than gating the advance.
+        keywordless_dir = Base.Filesystem.mktempdir()
+        try
+            indel_bench_begin_run(
+                keywordless_dir, artifact_names; context = "unit-keywordless"
+            )
+            Test.@test indel_bench_read_run_status(
+                keywordless_dir
+            )["status"] == "running"
+            staging_dir = Base.Filesystem.mktempdir(
+                keywordless_dir; prefix = ".unit-staging-"
+            )
+            try
+                for name in artifact_names
+                    write(joinpath(staging_dir, name), "new $(name)\n")
+                end
+                indel_bench_publish_artifacts(
+                    staging_dir, keywordless_dir, artifact_names
+                )
+            finally
+                Base.rm(staging_dir; recursive = true, force = true)
+            end
+            published = indel_bench_read_run_status(keywordless_dir)
+            Test.@test published["status"] == "complete"
+            Test.@test published["context"] == "unknown"
+            Test.@test published["generation_id"] == "unknown"
+            Test.@test haskey(published, "completed_at")
+        finally
+            Base.rm(keywordless_dir; recursive = true, force = true)
+        end
+
         # A never-created output directory is publishable by definition.
         Test.@test isnothing(
             indel_bench_assert_publishable(
@@ -549,6 +595,10 @@ Test.@testset "indel benchmark common" begin
         Test.@test collided[1] == base
         Test.@test collided[2] > collided[1]
         Test.@test (collided[2] - base) % step == 0
+        # Exactly ONE level, not two. A level bump must move a label by at least
+        # its own collision height, or the first bump never clears the test and
+        # every collision silently costs two levels of vertical space.
+        Test.@test collided[2] == base + step
 
         # Well-separated anchors with short labels do not collide.
         separated = _indel_frontier_label_offsets(

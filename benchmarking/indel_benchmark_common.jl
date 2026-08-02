@@ -412,7 +412,8 @@ function indel_bench_remove_prior_artifacts(
 end
 
 """
-    indel_bench_publish_artifacts(staging_dir, output_dir, artifact_names)
+    indel_bench_publish_artifacts(staging_dir, output_dir, artifact_names;
+                                  context, generation_id)
 
 Atomically promote a fully staged generation from `staging_dir` into
 `output_dir`.
@@ -437,6 +438,15 @@ expensive generation than the one being published. `generation_id` is printed
 before the replace so the overwrite is at least visible in the run log; callers
 that must not clobber a different KIND of run (a full calibration, say) are
 responsible for not pointing two kinds of run at one directory.
+
+On success the `.last_run_status` marker is ALWAYS advanced to
+`status=complete`, whether or not `context` and `generation_id` were supplied;
+the descriptive fields fall back to `"unknown"` when they were not. Advancing
+conditionally would mean a keyword-less publish left the `status=running` marker
+written by [`indel_bench_begin_run`](@ref) in place, so a directory holding a
+complete generation would report a run that never published — which is exactly
+the aborted-run state the marker exists to distinguish. The keywords describe
+the generation; they do not decide whether it finished.
 """
 function indel_bench_publish_artifacts(
         staging_dir::String,
@@ -466,17 +476,15 @@ function indel_bench_publish_artifacts(
             joinpath(output_dir, artifact_name)
         )
     end
-    if context !== nothing || generation_id !== nothing
-        indel_bench_write_run_status(
-            output_dir,
-            [
-                "status" => "complete",
-                "context" => something(context, "unknown"),
-                "completed_at" => string(Dates.now()),
-                "generation_id" => something(generation_id, "unknown")
-            ]
-        )
-    end
+    indel_bench_write_run_status(
+        output_dir,
+        [
+            "status" => "complete",
+            "context" => something(context, "unknown"),
+            "completed_at" => string(Dates.now()),
+            "generation_id" => something(generation_id, "unknown")
+        ]
+    )
     return nothing
 end
 

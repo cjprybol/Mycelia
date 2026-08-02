@@ -69,9 +69,20 @@ const INDEL_FRONTIER_LABEL_FONT_SIZE = 9
 const INDEL_FRONTIER_LABEL_CHAR_WIDTH = 4.7
 const INDEL_FRONTIER_LABEL_HEIGHT_FRACTION = 0.024
 const INDEL_FRONTIER_LABEL_BASE_OFFSET = 6
-const INDEL_FRONTIER_LABEL_LEVEL_OFFSET = 14
 const INDEL_FRONTIER_LABEL_PANEL_WIDTH = 730.0
 const INDEL_FRONTIER_LABEL_PANEL_HEIGHT = 600.0
+# One level has to actually clear the collision test, which rejects a candidate
+# only while two label boxes sit closer than INDEL_FRONTIER_LABEL_HEIGHT_FRACTION
+# of the panel height. A flat 14 px was 14/600 = 0.0233 of the panel, just under
+# the 0.024 threshold, so a single-level bump never separated the boxes and every
+# collision cost two levels of vertical space. Deriving the offset from the
+# collision height instead (rounded up, so the strict `<` comparison passes)
+# makes one level sufficient by construction and keeps the two constants from
+# drifting apart when either is retuned.
+const INDEL_FRONTIER_LABEL_LEVEL_OFFSET = ceil(
+    Int,
+    INDEL_FRONTIER_LABEL_HEIGHT_FRACTION * INDEL_FRONTIER_LABEL_PANEL_HEIGHT
+)
 const INDEL_FRONTIER_LABEL_MAX_LEVELS = 12
 const INDEL_FRONTIER_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-frontier-runtime"

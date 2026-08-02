@@ -91,7 +91,7 @@ nanopore has 372 contigs, Illumina 526, on a 2 kb reference — so these figures
 are a contiguity comparison between two heavily fragmented assemblies and are
 not an accuracy claim about either.
 
-Two further columns in the same CSV are affected. Minimising global Levenshtein
+Four further columns in the same CSV are affected. Minimising global Levenshtein
 cost maximises matches plus paired columns, and a short contig on a long
 reference can always reach that maximum by scattering exactly-matching blocks
 across the reference. The global match count therefore saturates at the contig
