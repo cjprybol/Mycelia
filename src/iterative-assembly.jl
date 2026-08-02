@@ -4320,6 +4320,54 @@ window coordinates; substitution length divergence is dropped defensively.
 Exposed for the windowed-decode correctness test.
 """
 const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
+# Window sources that actually run the pair-HMM. `:substitution` is the demoted
+# source: the scheduler evaluated that window and REJECTED it, so it decodes
+# through the unchanged length-preserving kernel.
+const _INDEL_ADMITTED_WINDOW_SOURCES = (:raw, :cleaned)
+
+"""
+    _read_runs_indel_decode(indel_params, indel_window_sources) -> Bool
+
+Whether THIS read actually runs an indel decode, which selects both the
+complete-span window partition and the original-coordinate splice.
+
+td-4mbg: both call sites previously asked a PASS-level question
+(`indel_params !== nothing || indel_window_sources !== nothing`) in place of this
+READ-level one, so the mere presence of a frontier-scheduled source map put a
+read on the indel path even when every window in that map had been demoted to
+`:substitution`. Two costs follow, and neither buys anything for a read with no
+admitted window:
+
+  * complete-span partitioning decodes the WHOLE hard span in anchored windows
+    instead of truncating each merged range to one `max_window` prefix, so a
+    rejected-frontier read decodes strictly more bases than the substitution-only
+    arm decodes on the same read -- every extra window another chance for the
+    length-preserving kernel to dead-end and fail open to uncorrected bytes;
+  * each later window carries a k-base start anchor that must survive
+    `_trim_indel_window_overlap`, which is where `window_anchor_rejections` come
+    from.
+
+Measured on identical reads differing only in `sequencing_tech` (2 kb / 1200 bp /
+8x / err 0.01 / seed 42): the nanopore arm produced 6
+`substitution_length_divergences` and 5 `window_anchor_rejections` against 0 and
+0 for the substitution-only arm, with its best contig falling from 1659 bp to
+904 bp. At 20x the same cell gave 53 and 23 against 0 and 0.
+
+With no source map the legacy `indel_params` test stands, so the profile-disabled
+path and `:unrestricted` are unchanged and the byte-identity oracle holds.
+"""
+function _read_runs_indel_decode(
+        indel_params::Union{Nothing, IndelDecodeParams},
+        indel_window_sources::Union{
+            Nothing, AbstractDict{UnitRange{Int}, Symbol}},
+)::Bool
+    indel_window_sources === nothing && return indel_params !== nothing
+    indel_params === nothing && return false
+    for source in values(indel_window_sources)
+        source in _INDEL_ADMITTED_WINDOW_SOURCES && return true
+    end
+    return false
+end
 
 function _merge_soft_edge_weights!(
         destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -4447,12 +4495,18 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     # boundary k-mer is solid. Quality-aware decoding leaves the target endpoint free
     # so the last k-mer remains correctable.
     effective_pad = pad === nothing ? k : pad
+    # td-4mbg: complete-span partitioning and the original-coordinate splice below
+    # are both indel-decode machinery, so they follow whether THIS read actually
+    # runs one. A frontier-scheduled read whose every window was demoted to
+    # `:substitution` takes the same truncated windows, and the same in-place
+    # overwrite, as the substitution-only arm takes on that read.
+    runs_indel_decode = _read_runs_indel_decode(indel_params, indel_window_sources)
     windows = _hard_window_ranges(
         read, k, hard_vertices;
         pad = effective_pad,
         max_window = max_window,
         graph_mode = graph_mode,
-        complete_span = indel_params !== nothing || indel_window_sources !== nothing)
+        complete_span = runs_indel_decode)
     isempty(windows) && return read, false, 0, 0
 
     seq_chars = collect(FASTX.sequence(String, read))
@@ -4594,9 +4648,12 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     isempty(accepted) &&
         return read, false, decoded_windows, divergent_windows
 
-    if indel_params === nothing
+    if !runs_indel_decode
         # Substitution: length-preserving in-place overwrite (byte-identical to the
-        # pre-indel path — oracle preservation).
+        # pre-indel path — oracle preservation). td-4mbg widened this from
+        # `indel_params === nothing` to the read-level predicate: every accepted
+        # window here decoded through the length-preserving kernel, so the
+        # length-changing rebuild has nothing to reassemble.
         for (w, dseq, dqual) in accepted
             dseq_chars = collect(dseq)
             dqual_chars = collect(dqual)
