@@ -662,10 +662,27 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             result = merge_hosts(["h" => host]; expected_ids = [cid])
             path = write_merge_report(joinpath(dir, "r.md"), result; output_dir = dir)
             text = read(path, String)
-            # The class carries a suffix, so a bare-name lookup rendered 0 forever.
-            row = first(filter(l -> startswith(l, "| h |"), split(text, "\n")))
-            Test.@test occursin("1", row)
-            Test.@test !occursin("| h | 0 | 0 | 0 | 0 | 0 |", row)
+            lines = split(text, "\n")
+            # The report emits TWO tables keyed by host: the Sources table near the
+            # top and the quast_evidence x host evidence table under "## Metric
+            # provenance". `first(filter(...))` over the whole report selects the
+            # SOURCES row, so the evidence table — the thing this testset is named
+            # for — was never examined, and both assertions were satisfied trivially
+            # by the sources row (it contains "1" from the checkpoint count and from
+            # the tmp path, and its different arity makes the `!occursin` vacuous).
+            # Anchor on the section header instead, so the row is selected by
+            # position in the report rather than by a pattern both tables match.
+            prov_idx = findfirst(l -> startswith(l, "## Metric provenance"), lines)
+            Test.@test prov_idx !== nothing
+            row = first(filter(l -> startswith(l, "| h |"), lines[(prov_idx + 1):end]))
+            # Assert the FULL row, not `occursin("1", row)`. The class carries a
+            # suffix (`malformed:unreadable(largest_contig)`), so a bare-name lookup
+            # rendered the malformed column 0 forever; the count must land in the
+            # LAST column (`malformed` is last in EVIDENCE_CLASSES) and in no other.
+            # A substring check cannot tell those apart — inverting the bucketing so
+            # a malformed cell is counted as `quast:scored` left the old assertions
+            # green while the report told an operator the opposite.
+            Test.@test row == "| h | 0 | 0 | 0 | 0 | 1 |"
         end
     end
 

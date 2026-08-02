@@ -372,16 +372,26 @@ sampling is the production path under SLURM. Julia defaults to ONE thread, so a 
 with `julia -t N` or the column is meaningless. That revert is no longer silent — a
 one-time `@warn` fires from the fallback branch below whenever it happens.
 
+A second thread is necessary but not sufficient: the sampler's inter-poll wait must be
+event-loop-free AND must yield. It uses `Libc.systemsleep` followed by `yield()` —
+`sleep` parks on a libuv timer that a non-yielding CPU-bound `f` prevents from ever being
+serviced, while an unyielding wait can starve the thread-1-sticky root task instead. See
+the comment at the call site for the measured poll counts and hang rates.
+
 `method` records how the number was obtained, so a reader never has to infer it and rows
 measured different ways are never averaged together:
-  "sampled"          - process-RSS high-water, polled while the cell ran, with EVERY poll
-                       succeeding. A flat cell whose RSS never exceeds its baseline is
-                       still "sampled" — that is a real observation.
-  "sampled-partial"  - at least one poll succeeded and at least one THREW. Sampling
-                       continued, but the peak may have been missed while the probe was
-                       failing, so the number is a lower bound, not a measurement.
-  "sampled-degraded" - the sampler never completed a single read (starved, or every /proc
-                       read failed); the number is the entry baseline, NOT a measurement.
+  "sampled"          - process-RSS high-water, polled while the cell ran, with at least
+                       TWO polls and EVERY poll succeeding. A flat cell whose RSS never
+                       exceeds its baseline is still "sampled" — that is a real
+                       observation.
+  "sampled-partial"  - at least two polls succeeded and at least one FAILED (threw, or
+                       returned `nothing`). Sampling continued, but the peak may have been
+                       missed while the probe was failing, so the number is a lower bound,
+                       not a measurement.
+  "sampled-degraded" - the sampler completed at most ONE successful read (never scheduled,
+                       starved, or nearly every read failed). Below two samples there is
+                       no high-water mark to speak of: the number is the entry baseline or
+                       a single arbitrary instant, NOT a measurement.
   "highwater-delta"  - single-threaded or no /proc: the old, known-broken semantics
   "unknown"          - checkpoint predates this column (see OPTIONAL_KEY_DEFAULTS)
 Values under different methods are different quantities. Always filter on
@@ -450,17 +460,57 @@ function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05,
                 observed = try
                     probe()
                 catch
-                    Threads.atomic_add!(failed_reads, 1)
                     nothing
                 end
-                if observed !== nothing
+                if observed === nothing
+                    # A `nothing` is a FAILED read, not a quiet no-op. current_rss_bytes
+                    # never throws — it signals failure by RETURNING nothing on all four
+                    # of its paths (no /proc file, no VmRSS line, a short line, an
+                    # unparseable field) — so incrementing only inside the `catch` left a
+                    # sampler that had gone blind mid-cell reporting failed_reads == 0 and
+                    # being labelled "sampled". Counting here and NOT in the catch keeps a
+                    # thrown read and a nothing read worth exactly one failure each.
+                    Threads.atomic_add!(failed_reads, 1)
+                else
                     Threads.atomic_add!(reads, 1)
                     observed > peak[] && Threads.atomic_max!(peak, observed)
                 end
-                sleep(interval_seconds)
+                # Libc.systemsleep, NOT sleep. `sleep` parks the task on a libuv timer, and
+                # that timer only fires when the event loop is serviced — which does not
+                # happen while the main task is inside a non-yielding CPU-bound call, which
+                # is exactly what Rhizomorph.assemble_genome is. A second thread is
+                # necessary but NOT sufficient; the wait has to be event-loop-free too.
+                #
+                # Measured on Linux, julia 1.10.11, `-t 4`, over a 3.0 s non-yielding
+                # workload at interval 0.05: sleep completed 1 poll of the ~60 due,
+                # systemsleep 55-59. On a workload whose RSS ramps ~1.5 GiB and is then
+                # released, that is the difference between reporting peak - baseline =
+                # 0.3 MiB and 1465.1 MiB. The single poll lands at an arbitrary instant —
+                # near the baseline in practice, since the cell has barely started — so the
+                # column understates true usage by orders of magnitude while carrying the
+                # "sampled" label. That is the same class of defect as the Sys.maxrss()
+                # ratchet this sampler replaced, and just as hard to spot: a plausible
+                # byte count, not an obvious zero.
+                #
+                # The trailing `yield()` is NOT decoration — without it this hangs. Julia's
+                # ROOT task is sticky to thread 1, and the scheduler is cooperative, so a
+                # spawned task that occupies thread 1 and never yields can make the root
+                # task permanently unresumable. systemsleep alone does exactly that: it
+                # blocks the thread and the surrounding loop has no yield point, so once
+                # the sampler lands on thread 1 the root task starves. The old `sleep` hid
+                # this because yielding is essentially all it did. Measured over this
+                # harness's own test sequence, which parks the root task on `sleep()` while
+                # a sampler runs: systemsleep alone completed 0/4 runs and a GC-safepointed
+                # busy-wait 2/4, both hanging until killed, while systemsleep + yield
+                # completed 30/30 across -t 2, -t 4 and -t 16 and still polled 40/40.
+                # `yield()` re-queues the sampler; a CPU-bound root task holds thread 1, so
+                # an idle thread picks the sampler back up within microseconds and the
+                # interval is unaffected.
+                Libc.systemsleep(interval_seconds)
+                yield()
             end
         catch
-            # Last-resort net for a failure OUTSIDE the probe (an interrupted sleep, say).
+            # Last-resort net for a failure OUTSIDE the probe (an interrupted wait, say).
             # Deliberately swallowed; the two read counts report the degradation.
         end
     end
@@ -481,7 +531,14 @@ function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05,
     end
     # Read the counters only after the `finally` above has reaped the sampler, so the
     # label describes the whole cell rather than a racing snapshot of it.
-    method = if reads[] == 0
+    method = if reads[] <= 1
+        # ONE successful poll is not a peak. A high-water mark needs something to take a
+        # maximum OVER; with a single sample the returned value is one arbitrary instant
+        # of the cell (and with zero, the entry baseline), yet in the output column it is
+        # a large, stable, plausible byte count indistinguishable from a real measurement
+        # — which is exactly what the "sampled" label would promise. `== 0` alone let the
+        # under-polling failure through: a sampler that manages exactly one poll per cell
+        # returns ~the baseline for every cell and was labelled clean.
         "sampled-degraded"
     elseif failed_reads[] > 0
         "sampled-partial"

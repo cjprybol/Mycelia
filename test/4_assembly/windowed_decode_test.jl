@@ -4,8 +4,11 @@
 # and splices the corrected window(s) back. This test asserts:
 #   (a) BOUNDING — the windowed decode touches only a tiny fraction of a long
 #       read's bases (O(window) not O(read_length)), the #375 super-linear term;
-#   (b) SPEED — per-hard-read decode time drops vs whole-read decode on long
-#       (nanopore-regime ~3 kb) reads;
+#   (b) SPEED — the windowed decode does not make a long (nanopore-regime ~3 kb)
+#       read's decode dramatically SLOWER: the per-hard-read times of both paths
+#       are measured, logged, and gated against a loose regression bound (the
+#       tight "windowed is faster" ordering flapped on shared CI runners — see
+#       the "speed" testset for the observed numbers and the reasoning);
 #   (c) CORRECTNESS — the windowed correction matches the whole-read decode on the
 #       hard region (any divergence is surfaced and asserted to be zero);
 #   (d) LENGTH PRESERVATION — the spliced read has the same length as the input
@@ -140,52 +143,66 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
         @info "windowed-decode correctness" n_whole_improved n_win_improved
     end
 
-    Test.@testset "speed: windowed decode is faster per hard read (long reads)" begin
+    Test.@testset "speed: windowed decode stays within 3x of whole-read decode (long reads)" begin
         probe = fx.err_reads[1]
-        Logging.with_logger(Logging.NullLogger()) do
+        n = length(fx.err_reads)
+        # The NullLogger silences only the DECODER's own per-read chatter while it
+        # is being timed. The measurement is emitted OUTSIDE this block on purpose:
+        # a previous revision put both the @info and the @warn INSIDE it, where
+        # NullLogger discards every record — so the "a regression stays visible in
+        # the logs" mitigation printed nothing at all, and a deliberately
+        # 44x-slower windowed path produced one Pass and zero output.
+        t_whole,
+        t_win = Logging.with_logger(Logging.NullLogger()) do
             # Warm up both paths (exclude compilation from the timing).
             Mycelia.improve_read_likelihood(
                 probe, graph, k; graph_mode = mode, beam_width = typemax(Int))
             Mycelia.improve_read_likelihood_windowed(
                 probe, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
 
-            t_whole = @elapsed for r in fx.err_reads
+            tw = @elapsed for r in fx.err_reads
                 Mycelia.improve_read_likelihood(
                     r, graph, k; graph_mode = mode, beam_width = typemax(Int))
             end
-            t_win = @elapsed for r in fx.err_reads
+            twin = @elapsed for r in fx.err_reads
                 Mycelia.improve_read_likelihood_windowed(
                     r, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
             end
-            n = length(fx.err_reads)
-            @info "windowed-decode per-hard-read time" readlen=length(FASTX.sequence(probe)) whole_per_read_ms=round(
-                t_whole/n*1000, digits = 1) windowed_per_read_ms=round(
-                t_win/n*1000, digits = 1) speedup=round(t_whole/t_win, digits = 2)
-            # ADVISORY, not a gate. This asserted `t_win < t_whole` on the premise of
-            # "a large, robust margin (~4-5x here)". That premise does not hold on
-            # GitHub-hosted runners, where the two times land at or below parity:
-            #
-            #   2026-07-27 run 30206745757   2.298658 < 1.274481   (windowed 80% SLOWER)
-            #   2026-08-02 run 30723903721   failed, same assertion
-            #   2026-08-02 run 30733... (#438)  1.407549 < 1.304909   (windowed 8% slower)
-            #
-            # Each time 23,172 other assertions in this file passed and this one did
-            # not, so it was turning unrelated PRs red — three occurrences on three
-            # unrelated heads, and a re-run is a coin flip costing a ~70-minute cycle.
-            # The repo has already made this call twice: 250f7f26 ("gate env-fragile
-            # kmer + flaky timing tests", #436) and 5e5e49e4 ("advisory timing gate").
-            #
-            # The speedup is still MEASURED and logged by the @info above, so a genuine
-            # performance regression stays visible; it just no longer gates the build on
-            # shared-runner scheduling. Restoring a hard assertion needs a warmup, a
-            # best-of-N, and a tolerance — tracked separately.
-            if t_win >= t_whole
-                @warn "windowed decode was not faster on this runner (advisory)" t_win t_whole ratio=round(
-                    t_whole / t_win, digits = 3)
-            end
-            # Correctness is still asserted strictly, above and below this block.
-            Test.@test t_win > 0 && t_whole > 0
+            return (tw, twin)
         end
+        @info "windowed-decode per-hard-read time" readlen=length(FASTX.sequence(probe)) whole_per_read_ms=round(
+            t_whole/n*1000, digits = 1) windowed_per_read_ms=round(
+            t_win/n*1000, digits = 1) speedup=round(t_whole/t_win, digits = 2)
+        if t_win >= t_whole
+            @warn "windowed decode was not faster on this runner (within the gate, but worth noting)" t_win t_whole ratio=round(
+                t_win / t_whole, digits = 3)
+        end
+        # DIRECTIONAL but LOOSE. The original gate was `t_win < t_whole`, premised
+        # on "a large, robust margin (~4-5x here)". That premise does not hold on
+        # GitHub-hosted runners, where the two times land at or below parity:
+        #
+        #   2026-07-27 run 30206745757   t_win 2.298658 vs t_whole 1.274481  (1.80x SLOWER)
+        #   2026-08-02 run 30723903721   failed, same assertion
+        #   2026-08-02 run 30733… (#438) t_win 1.407549 vs t_whole 1.304909  (1.08x slower)
+        #
+        # Each time 23,172 other assertions in this file passed and this one did
+        # not, so it was turning unrelated PRs red — three occurrences on three
+        # unrelated heads, and a re-run is a coin flip costing a ~70-minute cycle.
+        #
+        # The fix follows the repo's own precedent, 250f7f26 ("gate env-fragile
+        # kmer + flaky timing tests", #436): keep the QUALITATIVE claim about the
+        # function under test and loosen only the margin. The surviving claim is
+        # that windowing does not make a long-read decode dramatically WORSE. 3x
+        # clears the worst observed flake (1.80x) with room to spare while still
+        # failing a genuine regression — an artificially 44x-slower windowed path
+        # trips it. Dropping the gate to `t_win > 0 && t_whole > 0` is NOT an
+        # option: two @elapsed results are always positive, so that assertion
+        # cannot fail and never references the function under test at all.
+        #
+        # TODO (deliberately untracked — no bead or issue exists for this):
+        # restore the tight `t_win < t_whole` ordering once the measurement is
+        # best-of-N with an explicit tolerance instead of a single sample.
+        Test.@test t_win < 3 * t_whole
     end
 
     Test.@testset "passthrough: a non-hard read is returned unchanged" begin

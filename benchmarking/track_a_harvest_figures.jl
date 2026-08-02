@@ -102,15 +102,163 @@ end
 # missing field would abort the figure rather than drop a row. coalesce() makes
 # missing mean "not a measurement". Shared by the CV table and the envelope figure
 # so the two cannot drift apart.
+#
+# The mask is built by `measurement_mask` and reported by `exclusion_counts`, both of
+# which read the SAME predicates, so what the figures drop and what the run reports
+# dropping cannot drift apart. Reporting is mandatory rather than nice-to-have: the
+# filter is one-directional on this file's headline verdict, and not through the CV
+# magnitude — through the DENOMINATOR. Dropping a seed shrinks its group's n, and at
+# n == 1 the group leaves `computable` entirely, so a group that would have FAILED the
+# threshold is removed from "E of T exceed" instead of counted against it. The sibling
+# power analysis (benchmarking/track_a_baseline_benchmark.jl) already prints this
+# accounting into power_analysis_summary.md next to the counts; the two consumers of
+# the same predicate must not disagree about how much of the matrix went unscored.
+function measurement_mask(df::DataFrames.DataFrame)
+    n_rows = DataFrames.nrow(df)
+    # No status column: nothing is classifiable as a non-measurement, so keep the frame
+    # whole rather than emptying it.
+    hasproperty(df, :status) ||
+        return (keep = trues(n_rows), non_ok = falses(n_rows), unscored = falses(n_rows))
+    ok = coalesce.(df.status .== "ok", false)
+    unscored = (hasproperty(df, :n_contigs) && hasproperty(df, :largest_contig)) ?
+               coalesce.(df.n_contigs .> 0, false) .&
+               coalesce.(df.largest_contig .== 0, false) :
+               falses(n_rows)
+    # Attribute each dropped row to exactly ONE reason, so the two counts sum to the
+    # drop total and a reader can add them up: a non-ok row that is ALSO unscored is
+    # reported under non-ok, because `status` is the coarser and earlier failure.
+    return (keep = ok .& .!unscored, non_ok = .!ok, unscored = ok .& unscored)
+end
+
 function ok_cells(df::DataFrames.DataFrame)::DataFrames.DataFrame
-    hasproperty(df, :status) || return df
-    keep = coalesce.(df.status .== "ok", false)
-    if hasproperty(df, :n_contigs) && hasproperty(df, :largest_contig)
-        unscored = coalesce.(df.n_contigs .> 0, false) .&
-                   coalesce.(df.largest_contig .== 0, false)
-        keep = keep .& .!unscored
-    end
-    return df[keep, :]
+    return df[measurement_mask(df).keep, :]
+end
+
+"""
+    exclusion_counts(df) -> (n_total, n_kept, n_non_ok, n_unscored)
+
+How many rows `ok_cells` drops, split by reason. The two reasons are different
+failures and are counted separately: `non_ok` is a cell that errored or assembled
+nothing, `unscored` is a cell the harness recorded as "ok" but QUAST never scored.
+Conflating them would report a QUAST outage as an assembly failure.
+
+Pure and separately callable so the count can be pinned by a test and printed by
+`main` — the drop count previously appeared nowhere at all, so stdout said
+"Track A cells: 288" while the figures were computed over however many survived.
+"""
+function exclusion_counts(df::DataFrames.DataFrame)
+    mask = measurement_mask(df)
+    return (n_total = DataFrames.nrow(df), n_kept = count(mask.keep),
+        n_non_ok = count(mask.non_ok), n_unscored = count(mask.unscored))
+end
+
+"""
+    exclusion_clause(counts) -> String
+
+The caption sentence disclosing the excluded rows. Emitted on EVERY render, including
+the no-exclusions case — a clause that appears only on a shortfall leaves the reader
+unable to tell "nothing was excluded" from "exclusions were not accounted for", and
+this file already carries a fix for the opposite defect (a clause that always warns).
+"""
+function exclusion_clause(counts)
+    dropped = counts.n_non_ok + counts.n_unscored
+    dropped == 0 &&
+        return "All $(counts.n_total) cells are measurements; none excluded."
+    reasons = String[]
+    counts.n_non_ok > 0 && push!(reasons, "$(counts.n_non_ok) status != ok")
+    counts.n_unscored > 0 &&
+        push!(reasons,
+            "$(counts.n_unscored) QUAST-unscored (n_contigs > 0, largest_contig = 0)")
+    return "$(dropped) of $(counts.n_total) cells excluded as non-measurements " *
+           "($(join(reasons, "; "))); every count above is over the " *
+           "$(counts.n_kept) surviving cells."
+end
+
+"""
+    cv_undefined_reason(n_seeds, mean_nga50) -> String
+
+Why a configuration group has no computable CV — "too_few_seeds", "all_zero", or
+"computable". Kept as one function so the CV table's column and figure 1's caption
+classify identically.
+
+`n_seeds < 2` is checked FIRST, and the precedence is load-bearing. With a single
+surviving seed there is no between-seed spread to estimate, so the CV is undefined
+whatever the value is; and that group may have reached n == 1 precisely BECAUSE
+`ok_cells` dropped a seed, whose NGA50 is then unknown to this table. Classifying it
+as "all_zero" would assert something the surviving data cannot support — the defect
+this split exists to remove, where the caption stated "NGA50 = 0 for every seed" over
+groups whose surviving seed was a fully assembled genome.
+"""
+function cv_undefined_reason(n_seeds::Integer, mean_nga50::Real)
+    n_seeds < 2 ? "too_few_seeds" : mean_nga50 <= 0 ? "all_zero" : "computable"
+end
+
+# "(ont at 10x and 30x)" — name a bucket's configurations from its rows. Empty for an
+# empty bucket, so a caption never carries a dangling pair of parentheses.
+function configuration_label(rows::DataFrames.DataFrame)::String
+    DataFrames.nrow(rows) == 0 && return ""
+    techs = sort(unique(String.(rows.technology)))
+    covs = sort(unique(Int.(rows.coverage)))
+    return "($(join(techs, ", ")) at $(join(string.(covs), "x and "))x)"
+end
+
+"""
+    split_undefined_groups(undefined_groups) -> (all_zero, too_few_seeds)
+
+Partition the non-computable CV groups by WHY they are non-computable, instead of
+asserting one reason for all of them.
+
+The figure-1 caption stated "had NGA50 = 0 for every seed" over every non-computable
+group. That is false for any group that reached `n_seeds < 2` because `ok_cells`
+dropped a seed. Reproduced against the 2026-07-25 Lovelace table with QUAST made to
+fail on a third of its cells: of the 20 groups the old caption covered, 12 had a
+SURVIVING seed with NGA50 > 0 — including Lambda/pacbio/100x at NGA50 = 48502, a
+fully assembled genome — so the figure asserted the opposite of its own data.
+Classified through `cv_undefined_reason`, so this split and the CV table's
+`undefined_reason` column cannot disagree.
+"""
+function split_undefined_groups(undefined_groups::DataFrames.DataFrame)
+    reasons = String[cv_undefined_reason(row.n_seeds, row.mean_nga50)
+                     for row in eachrow(undefined_groups)]
+    return (undefined_groups[reasons .== "all_zero", :],
+        undefined_groups[reasons .== "too_few_seeds", :])
+end
+
+"""
+    undefined_groups_clause(all_zero, too_few_seeds) -> String
+
+The figure-1 caption sentence about configurations with no computable CV. One clause
+per reason, each naming only the configurations it actually covers, and each count
+derived from its own bucket.
+
+Pure and separately callable for the same reason `quast_coverage_clause` is: the
+sentence it replaces was an inline literal asserting a cause, and no assertion could
+reach it. "NGA50 = 0 for every SURVIVING seed" is the honest form of that claim — the
+CV table only ever saw the seeds `ok_cells` kept, and `exclusion_clause` states how
+many it did not see.
+"""
+function undefined_groups_clause(all_zero::DataFrames.DataFrame,
+        too_few_seeds::DataFrames.DataFrame)
+    n_zero = DataFrames.nrow(all_zero)
+    n_few = DataFrames.nrow(too_few_seeds)
+    n_zero + n_few == 0 && return "No configuration is left without a computable CV."
+    zero_why = "had NGA50 = 0 for every surviving seed"
+    few_why = "have fewer than 2 surviving seeds, so no CV exists whatever their NGA50"
+    # With one reason in play the total and the bucket count are the same number, so
+    # state it once. Only the mixed case needs a total to add up to.
+    n_few == 0 && return "$(n_zero) further configurations " *
+           "$(configuration_label(all_zero)) $(zero_why), so no CV is defined — " *
+           "see Figure 2."
+    n_zero == 0 && return "$(n_few) further configurations " *
+           "$(configuration_label(too_few_seeds)) $(few_why) — see Figure 2."
+    # One reason per LINE in the mixed case. CairoMakie sizes a Label block by its
+    # longest line and centres the block, so a single over-long line pushes the whole
+    # caption past the figure edge and clips the other lines with it — verified by
+    # rendering the two-reason case, where the unwrapped form ran ~295 characters and
+    # truncated all three lines including the headline verdict.
+    return "$(n_zero + n_few) further configurations have no defined CV — see Figure 2:" *
+           "\n  $(n_zero) $(zero_why) $(configuration_label(all_zero))" *
+           "\n  $(n_few) $(few_why) $(configuration_label(too_few_seeds))"
 end
 
 """
@@ -153,6 +301,12 @@ across seeds. Groups whose mean NGA50 is zero are retained with `computable =
 false` so a downstream figure can show them explicitly rather than dropping them
 silently — an all-zero group means every seed produced an assembly with no
 aligned contig, which is a result, not missing data.
+
+`computable` is false for two different reasons, and the group carries which one in
+`undefined_reason` rather than leaving a consumer to guess: fewer than 2 SURVIVING
+seeds ("too_few_seeds"), or >= 2 surviving seeds that are all zero ("all_zero").
+Seeds counted here are those `ok_cells` kept, so a group can reach n == 1 because a
+seed was excluded — see `exclusion_counts` for that accounting.
 """
 function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.DataFrame
     # Group by :k too. A result tree can now hold several k (--k), and pooling them
@@ -181,7 +335,14 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
                 mean_nga50 = mean_value,
                 sd_nga50 = sd_value,
                 cv = computable ? sd_value / mean_value : NaN,
-                computable = computable))
+                computable = computable,
+                # Carry the REASON, not just the fact, so no consumer has to assert
+                # one. "no computable CV" has two disjoint causes with opposite
+                # readings — an all-zero group is a result about the assembler, a
+                # single-seed group is a result about the harvest (possibly about
+                # what ok_cells removed) — and the caption used to state the first
+                # over both.
+                undefined_reason = cv_undefined_reason(n, mean_value)))
     end
     # An empty `rows` yields a 0x0 DataFrame with no :decoder_arm, so the caller throws a
     # bare ArgumentError from inside plotting instead of saying what is wrong. This is
@@ -205,7 +366,13 @@ end
 
 # === Figure 1: CV vs the assumed threshold ===
 
-function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::AbstractString)
+# `exclusions` is the `exclusion_counts` of the table the CV table was built FROM; the
+# CV table itself retains no trace of the rows ok_cells removed, so it cannot be
+# recovered here. `main` always supplies it. Defaulting to `nothing` (caption omits the
+# clause) rather than to a zero-count tuple is deliberate: a fabricated "none excluded"
+# would be the same class of always-reassuring caption this file's other fixes remove.
+function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::AbstractString;
+        exclusions = nothing)
     # One arm only: the arms are analytically identical on every quality endpoint
     # (contig paths are chosen topologically; quality is applied afterwards), so
     # plotting both would double every point on top of itself.
@@ -231,13 +398,7 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
     seed_label = let n = sort(unique(single_arm.n_seeds))
         length(n) == 1 ? "$(only(n)) seeds" : "$(minimum(n))-$(maximum(n)) seeds"
     end
-    undefined_label = if DataFrames.nrow(undefined_groups) == 0
-        ""
-    else
-        techs = sort(unique(String.(undefined_groups.technology)))
-        covs = sort(unique(Int.(undefined_groups.coverage)))
-        "($(join(techs, ", ")) at $(join(string.(covs), "x and "))x)"
-    end
+    all_zero_groups, too_few_groups = split_undefined_groups(undefined_groups)
 
     figure = CairoMakie.Figure(size = (1450, 620), fontsize = 14)
 
@@ -287,18 +448,27 @@ function figure_cv_vs_threshold(cv_table::DataFrames.DataFrame, outdir::Abstract
     CairoMakie.hlines!(axis_b, [CV_THRESHOLD];
         color = :black, linestyle = :dash, linewidth = 2.5)
 
+    undefined_sentence = undefined_groups_clause(all_zero_groups, too_few_groups)
+    # Never silently omit the exclusion accounting when it is available; when it is not,
+    # say so rather than implying nothing was dropped.
+    exclusion_sentence = exclusions === nothing ?
+                         "Exclusion accounting not supplied to this figure." :
+                         exclusion_clause(exclusions)
+
     CairoMakie.Label(figure[0, 1:2],
         "Track A baseline: the assumed NGA50 CV of $(CV_THRESHOLD) is exceeded in " *
         "$(exceed) of $(total) computable configurations$(total == 0 ? "" : " (max " *
             Printf.@sprintf("%.3f", maximum(computable.cv)) * ")")." *
-        "\nBlack bars in B are per-coverage medians. " *
-        "$(DataFrames.nrow(undefined_groups)) further configurations " *
-        "$(undefined_label) had NGA50 = 0 for every seed, so no CV is defined — see Figure 2.";
+        "\nBlack bars in B are per-coverage medians. $(undefined_sentence)" *
+        "\n$(exclusion_sentence)";
         fontsize = 15, font = :bold, justification = :left, lineheight = 1.15,
         tellwidth = false)
 
     save_figure(figure, outdir, "track_a_nga50_cv_vs_threshold")
-    return (exceed = exceed, total = total, undefined = DataFrames.nrow(undefined_groups))
+    return (exceed = exceed, total = total,
+        undefined = DataFrames.nrow(undefined_groups),
+        undefined_all_zero = DataFrames.nrow(all_zero_groups),
+        undefined_too_few_seeds = DataFrames.nrow(too_few_groups))
 end
 
 # === Figure 2: per-technology assembly envelope ===
@@ -698,6 +868,25 @@ function main()
                 :n_contigs],
             cross_host_metrics) |> unique)
     println("Track A cells: $(DataFrames.nrow(track_a)) from $(track_a_path)")
+    # The row count above is NOT the denominator any figure uses — ok_cells removes
+    # non-measurements first — so print the accounting immediately beside it. Without
+    # this line the run reported "Track A cells: 288" and then computed on whatever
+    # survived, with the drop count appearing nowhere: not in stdout, not in a warning,
+    # not in a caption. Reproduced with QUAST failing on ~1/3 of cells: 105 rows
+    # vanished in silence and the headline verdict moved 9/40 -> 5/30.
+    exclusions = exclusion_counts(track_a)
+    println("  measurements: $(exclusions.n_kept); excluded: " *
+            "$(exclusions.n_non_ok) with status != ok, " *
+            "$(exclusions.n_unscored) QUAST-unscored " *
+            "(n_contigs > 0 and largest_contig == 0)")
+    # Warn as well as print, matching write_power_analysis in
+    # benchmarking/track_a_baseline_benchmark.jl — a stdout line scrolls past, and the
+    # exclusion is one-directional on the verdict via the group-size denominator.
+    exclusions.n_non_ok + exclusions.n_unscored > 0 &&
+        @warn("figures exclude non-ok and QUAST-unscored cells; group sizes are of "*
+            "SURVIVING seeds, so a dropped seed can make a group non-computable",
+            n_non_ok=exclusions.n_non_ok, n_unscored=exclusions.n_unscored,
+            n_kept=exclusions.n_kept, n_total=exclusions.n_total)
 
     replicate = nothing
     if replicate_path !== nothing
@@ -717,9 +906,13 @@ function main()
     end
 
     cv_table = coefficient_of_variation_table(track_a)
-    summary = figure_cv_vs_threshold(cv_table, outdir)
+    summary = figure_cv_vs_threshold(cv_table, outdir; exclusions = exclusions)
+    # State WHICH kind of undefined, for the same reason the caption does: "(NGA50 = 0)"
+    # was an assertion about groups that may simply have too few surviving seeds.
     println("CV verdict: $(summary.exceed)/$(summary.total) computable groups exceed " *
-            "$(CV_THRESHOLD); $(summary.undefined) groups undefined (NGA50 = 0).")
+            "$(CV_THRESHOLD); $(summary.undefined) groups undefined " *
+            "($(summary.undefined_all_zero) all-zero NGA50, " *
+            "$(summary.undefined_too_few_seeds) with < 2 surviving seeds).")
 
     figure_technology_envelope(track_a, outdir)
 
