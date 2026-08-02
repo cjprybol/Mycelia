@@ -1,0 +1,191 @@
+# td-4mbg: a frontier schedule whose windows were ALL demoted to `:substitution`
+# must decode with the SUBSTITUTION window partition, not the indel one.
+#
+# Under `indel_schedule = :frontier_budgeted` the scheduler evaluates candidate
+# indel windows and demotes the rejected ones to `:substitution`, but it still
+# hands the decoder a window-source map for those reads. Before this fix the mere
+# PRESENCE of that map put the read on the indel path, because both decisions
+# that select indel machinery asked a PASS-level question instead of a READ-level
+# one:
+#
+#   * `complete_span = indel_params !== nothing || indel_window_sources !== nothing`
+#     tiled the whole hard span in anchored windows rather than truncating each
+#     merged range to one `max_window` prefix; and
+#   * `if indel_params === nothing` chose the length-preserving in-place
+#     overwrite, so a demoted read took the length-CHANGING original-coordinate
+#     rebuild though all its windows decoded length-preserving.
+#
+# Neither buys anything for a read with no admitted window, and complete-span
+# decodes strictly more bases than the substitution-only arm decodes on the same
+# read — every extra window another chance for the length-preserving kernel to
+# dead-end and fail open, and another k-base start anchor that must survive
+# `_trim_indel_window_overlap`.
+#
+# WHY THIS ASSERTS THE WINDOW COUNT RATHER THAN THE DECODED BYTES. An earlier
+# version of this test compared output records and PASSED 23/23 against unfixed
+# master — i.e. it was vacuous. On synthetic fixtures the windowed decode makes
+# no changes at all, so both arms return the input and byte equality holds no
+# matter which partition ran. That was measured, not assumed: single-locus and
+# 25-locus fixtures, Q40 and Q10, with and without
+# `build_correction_weighted_graph`, all produced zero rewritten bases.
+# `decoded_windows` is the observable that follows DIRECTLY from `complete_span`,
+# so it detects the defect whether or not any decode succeeds. Against unfixed
+# master this testset fails on every read with `Evaluated: 3 == 1`.
+#
+# WHAT THIS DOES NOT CLAIM. The fix does not drive end-to-end
+# `substitution_length_divergences` to zero — reads that DO have an admitted
+# window still take complete-span, and their demoted windows decode inside it.
+# Measured end-to-end on identical reads differing only in `sequencing_tech`,
+# where the substitution-only arm reports 0 divergences and 0 anchor rejections:
+#
+#       cell     divergences   anchor rej   largest contig
+#       2k/8x      6 ->   6     5 ->  5      904 -> 1399   (illumina 1659)
+#       2k/20x    53 ->  34    23 -> 13     1360 -> 1928   (illumina 1809)
+#       6k/20x   164 -> 108   126 -> 22     2654 -> 2789   (illumina 5453)
+#
+# Those numbers are fixture-sensitive and are recorded as evidence rather than
+# asserted — a pinned count in a required gate is the flake mode td-n5fm tracks.
+#
+# Run directly:
+#   julia --project=. -e 'include("test/4_assembly/indel_substitution_reroute_test.jl")'
+
+import Test
+import Mycelia
+import FASTX
+import Random
+import Logging
+
+const _TD4MBG_BASES = ['A', 'C', 'G', 'T']
+
+"""
+Fixture whose merged hard span is DELIBERATELY wider than `max_window`.
+
+`complete_span` only changes the partition when a merged hard range exceeds
+`max_window`; below that, tiling and truncation agree and the comparison would
+pass vacuously on the pre-fix decoder. Each error read gets its OWN randomized
+error positions so no error is reinforced into consensus. The testset asserts the
+resulting partition difference rather than trusting it.
+"""
+function _td4mbg_wide_hard_span_fixture(; seed = 20260802, reflen = 5000,
+        readlen = 3000, n_clean = 60, n_err = 10, err_start = 1600,
+        n_loci = 25, stride = 50, jitter = 8)
+    rng = Random.MersenneTwister(seed)
+    reference = join(rand(rng, _TD4MBG_BASES, reflen))
+    reads = FASTX.FASTQ.Record[]
+    for index in 1:n_clean
+        start = rand(rng, 1:(reflen - readlen + 1))
+        push!(reads,
+            FASTX.FASTQ.Record(
+                "clean_$(index)", reference[start:(start + readlen - 1)],
+                String(fill('I', readlen))))
+    end
+    read_start = err_start - 400
+    error_reads = FASTX.FASTQ.Record[]
+    for index in 1:n_err
+        read_rng = Random.MersenneTwister(seed * 977 + index)
+        sequence = collect(reference[read_start:(read_start + readlen - 1)])
+        for locus_index in 0:(n_loci - 1)
+            offset = err_start - read_start + 1 + locus_index * stride +
+                     rand(read_rng, (-jitter):jitter)
+            sequence[offset] = rand(
+                read_rng, filter(!=(sequence[offset]), _TD4MBG_BASES))
+        end
+        push!(error_reads, FASTX.FASTQ.Record(
+            "err_$(index)", String(sequence), String(fill('I', readlen))))
+    end
+    return (reference = reference, reads = vcat(reads, error_reads),
+        error_reads = error_reads)
+end
+
+Test.@testset "td-4mbg: _read_runs_indel_decode truth table" begin
+    profile = Mycelia.indel_error_profile(:nanopore)
+    params = Mycelia.IndelDecodeParams(
+        profile.base_error_rate, profile.insertion_fraction,
+        profile.deletion_fraction, profile.insertion_extend_probability,
+        profile.deletion_extend_probability, 3, 3, 16)
+
+    demoted = Dict{UnitRange{Int}, Symbol}(
+        1:100 => :substitution, 90:200 => :substitution)
+    with_raw = Dict{UnitRange{Int}, Symbol}(
+        1:100 => :substitution, 90:200 => :raw)
+    with_cleaned = Dict{UnitRange{Int}, Symbol}(
+        1:100 => :cleaned, 90:200 => :substitution)
+
+    # No source map: the legacy pass-level test stands unchanged. This is the
+    # profile-disabled path the byte-identity oracle pins, plus `:unrestricted`.
+    Test.@test Mycelia._read_runs_indel_decode(nothing, nothing) == false
+    Test.@test Mycelia._read_runs_indel_decode(params, nothing) == true
+
+    # A map with no admitted window is the case this bead fixes.
+    Test.@test Mycelia._read_runs_indel_decode(params, demoted) == false
+    Test.@test Mycelia._read_runs_indel_decode(
+        params, Dict{UnitRange{Int}, Symbol}()) == false
+
+    # One admitted window of either flavour keeps the read on the indel path.
+    Test.@test Mycelia._read_runs_indel_decode(params, with_raw) == true
+    Test.@test Mycelia._read_runs_indel_decode(params, with_cleaned) == true
+
+    # Defensive: a source map cannot run a pair-HMM without params.
+    Test.@test Mycelia._read_runs_indel_decode(nothing, demoted) == false
+    Test.@test Mycelia._read_runs_indel_decode(nothing, with_raw) == false
+end
+
+Test.@testset "td-4mbg: demoted schedule uses the substitution window partition" begin
+    rhizomorph = Mycelia.Rhizomorph
+    k = 13
+    mode = :doublestrand   # the mode the :scalable tier actually runs (td-nt69)
+
+    fixture = _td4mbg_wide_hard_span_fixture()
+    graph = rhizomorph.build_qualmer_graph(fixture.reads, k; mode = mode)
+    hard_vertices = Mycelia._hard_vertex_set(graph, k)
+    Test.@test !isempty(hard_vertices)
+
+    profile = Mycelia.indel_error_profile(:nanopore)
+    params = Mycelia.IndelDecodeParams(
+        profile.base_error_rate, profile.insertion_fraction,
+        profile.deletion_fraction, profile.insertion_extend_probability,
+        profile.deletion_extend_probability, 3, 3, 16)
+
+    compared = 0
+    partition_differs = 0
+    Logging.with_logger(Logging.NullLogger()) do
+        for read in fixture.error_reads
+            indel_windows = Mycelia._hard_window_ranges(
+                read, k, hard_vertices; pad = k, max_window = 500,
+                graph_mode = mode, complete_span = true)
+            substitution_windows = Mycelia._hard_window_ranges(
+                read, k, hard_vertices; pad = k, max_window = 500,
+                graph_mode = mode, complete_span = false)
+            isempty(indel_windows) && continue
+            length(indel_windows) == length(substitution_windows) ||
+                (partition_differs += 1)
+
+            # Arm A: substitution-only — no schedule, no indel params. Exactly
+            # what the `:illumina` profile runs on this read.
+            _record_baseline, _improved_baseline,
+            decoded_baseline,
+            _divergent_baseline = Mycelia.improve_read_likelihood_windowed_detail(
+                read, graph, k, hard_vertices;
+                graph_mode = mode, beam_width = 64)
+
+            # Arm B: frontier-scheduled, every window DEMOTED to :substitution.
+            sources = Dict{UnitRange{Int}, Symbol}(
+                window => :substitution for window in indel_windows)
+            _record_demoted, _improved_demoted,
+            decoded_demoted,
+            _divergent_demoted = Mycelia.improve_read_likelihood_windowed_detail(
+                read, graph, k, hard_vertices;
+                graph_mode = mode, beam_width = 64,
+                indel_params = params, indel_window_sources = sources)
+
+            Test.@test decoded_demoted == decoded_baseline
+            compared += 1
+        end
+    end
+
+    Test.@test compared >= 1
+    # COVERAGE GUARD: if the two partitions ever stop differing on this fixture,
+    # the assertion above becomes vacuous and would pass on the pre-fix decoder.
+    # That is a silent loss of coverage, so fail loudly instead.
+    Test.@test partition_differs >= 1
+end
