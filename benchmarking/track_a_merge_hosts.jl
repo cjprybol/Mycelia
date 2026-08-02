@@ -95,10 +95,17 @@ include(joinpath(@__DIR__, "metric_source_guard.jl"))
 
 # === Expected matrix ========================================================
 #
-# MIRRORS `track_a_baseline_benchmark.jl` (which cannot be `include`d — it runs
-# the whole benchmark at include time). `test/4_assembly/track_a_merge_hosts_test.jl`
-# asserts these constants and the cell-id format still match the harness source,
-# so drift fails a test rather than silently mis-computing "missing".
+# MIRRORS `track_a_baseline_benchmark.jl`. The harness now guards its driver with
+# `if abspath(PROGRAM_FILE) == @__FILE__`, so including it no longer runs the
+# benchmark; the duplication survives for two other reasons. The harness imports
+# Mycelia (plus FASTX/Statistics), and this merge deliberately depends on none of
+# that — it must run from a bare checkout against JSON on disk. And the harness
+# defines top-level consts — ORGANISMS, TECHNOLOGIES, COVERAGES, SEEDS — that
+# collide inside runtests.jl's shared `Main`, which is why even its own contract
+# test includes it in a module. `test/4_assembly/track_a_merge_hosts_test.jl`
+# asserts these constants, the cell-id format, AND the row schema still match the
+# harness SOURCE, so drift fails a test rather than silently mis-computing
+# "missing" or dropping a column from the merged table.
 
 const TRACK_A_ORGANISMS = ("Lambda", "T4", "phi29", "SARS-CoV-2")
 const TRACK_A_TECHNOLOGIES = ("illumina", "pacbio", "ont")
@@ -107,14 +114,25 @@ const TRACK_A_SEEDS = (42, 123, 456)
 const TRACK_A_ARMS = ("qualmer", "kmer")
 
 """
-    track_a_cell_id(organism, technology, coverage, seed, arm) -> String
+    track_a_cell_id(organism, technology, coverage, seed, arm; k = 31) -> String
 
 The harness's per-cell directory name. Must stay byte-identical to
-`track_a_baseline_benchmark.jl`'s
-`cell_id = "\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)"`.
+`track_a_baseline_benchmark.jl`'s `cell_id_for`, which builds
+`cell_id = "\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)"` and appends
+`__k\$(k)` only for a NON-default k: the 288-cell baseline predates the `--k`
+flag, so keying k=31 to the historical suffix-less name is what keeps those
+completed trees resumable.
+
+A k-sweep tree therefore holds ids this merge does NOT enumerate by default —
+`expected_cell_ids()` sweeps the baseline matrix at k=31 — so its cells are
+reported as outside the expected matrix rather than silently merged in. That is
+deliberate: the cross-host merge reconciles the baseline, and pooling a sweep's k
+into it would corrupt exactly the per-k separation the sweep exists to measure.
+Pass `k` explicitly to address a sweep cell.
 """
-function track_a_cell_id(organism, technology, coverage, seed, arm)
-    return "$(organism)__$(technology)__$(coverage)x__seed$(seed)__$(arm)"
+function track_a_cell_id(organism, technology, coverage, seed, arm; k = 31)
+    base = "$(organism)__$(technology)__$(coverage)x__seed$(seed)__$(arm)"
+    return k == 31 ? base : "$(base)__k$(k)"
 end
 
 """
@@ -409,10 +427,27 @@ end
 
 # Harness row order, so `track_a_results.tsv` written here is drop-in compatible
 # with `track_a_baseline_benchmark.jl`'s own aggregate.
+#
+# This is a hand-maintained mirror of the harness's `const ROW_KEYS`, and
+# `merged_tables` projects every cell onto it — so a key the harness WRITES but this
+# list OMITS is silently dropped from the merged table even though the per-cell JSON
+# still carries it. `rss_baseline_bytes` / `peak_rss_method` are the pair that makes
+# that fatal rather than cosmetic: the hosts measure peak RSS by DIFFERENT methods by
+# construction (the sbatch wrappers export JULIA_NUM_THREADS, giving "sampled"; a bare
+# `julia` gives "highwater-delta"; pre-schema checkpoints reload as "unknown"), and the
+# harness docstring instructs readers to filter on `peak_rss_method` before aggregating.
+# Dropping the label leaves three incommensurable quantities pooled in one plausible-
+# looking column with nothing left to separate them.
+#
+# `test/4_assembly/track_a_merge_hosts_test.jl` parses `const ROW_KEYS` out of the
+# harness SOURCE and asserts this list equals it — asserting the constant against
+# `DataFrames.names(results_df)` only compares the mirror with itself, which is exactly
+# how the omission survived review.
 const TRACK_A_ROW_KEYS = String[
 "organism", "accession", "technology", "coverage", "seed", "decoder_arm", "k",
 "n_reads", "n_contigs", "NGA50", "misassemblies", "genome_fraction",
-"duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes", "status"
+"duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes",
+"rss_baseline_bytes", "peak_rss_method", "status"
 ]
 
 """
