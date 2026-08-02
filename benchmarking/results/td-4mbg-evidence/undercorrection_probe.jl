@@ -15,7 +15,7 @@
 # alignment and reports impossible identities.
 
 import Pkg
-const PROJECT = get(ENV, "MYCELIA_PROJECT", "")
+const PROJECT = get(ENV, "MYCELIA_PROJECT", dirname(dirname(dirname(@__DIR__))))
 Pkg.activate(PROJECT; io = devnull)
 
 import Mycelia
@@ -90,7 +90,7 @@ function local_identity(
     return best
 end
 
-function corrected_identity(reads, reference, seed::Int)
+function corrected_identity(reads, reference)
     outdir = mktempdir()
     Random.seed!(1_042)
     Mycelia.Rhizomorph.assemble_genome(
@@ -124,7 +124,7 @@ for seed in SEEDS
     raw = [
         local_identity(FASTX.sequence(BioSequences.LongDNA{4}, r), reference) for r in reads
     ]
-    corrected = corrected_identity(reads, reference, seed)
+    corrected = corrected_identity(reads, reference)
     println(
         LABEL,
         ",",

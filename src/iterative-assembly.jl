@@ -4335,8 +4335,9 @@ const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
 # omitted a newly-added source would route a length-CHANGING decode into that
 # splice: silent truncation if it lengthened the window, an out-of-bounds read
 # if it shortened it. Deriving makes the complement impossible to get wrong, and
-# `_indel_window_kernel_params` below reads the same tuple, so the read-level and
-# window-level views of "does this run the pair-HMM" cannot disagree.
+# the window-level kernel selection inside `improve_read_likelihood_windowed_detail`
+# reads the same tuple, so the read-level and window-level views of "does this run
+# the pair-HMM" cannot disagree.
 const _INDEL_ADMITTED_WINDOW_SOURCES = Tuple(
     filter(!=(:substitution), _VALID_INDEL_WINDOW_SOURCES))
 

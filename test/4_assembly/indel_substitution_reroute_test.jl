@@ -226,11 +226,13 @@ Test.@testset "td-4mbg: demoted schedule uses the substitution window partition"
 
             Test.@test decoded_demoted == decoded_baseline
             # ABSOLUTE anchor, not just arm-vs-arm. `decoded_windows` is
-            # incremented before the decode is attempted, so if a future refactor
-            # moved that increment below the `!improved` continue, BOTH arms
-            # would report 0, the equality above would pass as `0 == 0`, and
-            # `partition_differs` would still be nonzero — a silent return to
-            # vacuity. Pinning the count to the partition catches that.
+            # incremented before the decode is attempted, so a future refactor
+            # moving that increment below the `!improved` continue would make it
+            # count IMPROVED windows instead. Both arms would then track each
+            # other for a reason unrelated to the partition, and on a fixture
+            # where nothing improves both would read 0 and the equality above
+            # would pass as `0 == 0` with `partition_differs` still nonzero.
+            # Pinning the count to the partition catches that.
             Test.@test decoded_baseline ==
                        count(w -> length(w) >= k, substitution_windows)
             compared += 1

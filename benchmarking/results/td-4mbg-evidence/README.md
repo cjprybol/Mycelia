@@ -32,8 +32,10 @@ The contiguity run was launched before the review-fix commit landed, so its `fix
 rows reflect `d817276b`. The review fixes that followed (`2e618d94`) derive
 `_INDEL_ADMITTED_WINDOW_SOURCES` and switch the window-level kernel test from
 `!= :substitution` to ADMITTED membership — semantically identical while the two
-tuples are exact complements, which a committed test now pins, and the
-byte-identity oracle was re-measured after that change. So the contiguity numbers
+tuples are exact complements, which a committed test now pins. The
+byte-identity oracle WAS re-measured after that change and the run is committed
+here as `oracle_after_review_fixes.txt` (18/18 gates, sha256 `d36e3b6a…d311`) --
+not inferred from this sentence. So the contiguity numbers
 are expected to carry over, but they were not re-measured at `2e618d94` and this
 table should not be read as if they were.
 
