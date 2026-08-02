@@ -12,14 +12,24 @@
 #     tiled the whole hard span in anchored windows rather than truncating each
 #     merged range to one `max_window` prefix; and
 #   * `if indel_params === nothing` chose the length-preserving in-place
-#     overwrite, so a demoted read took the length-CHANGING original-coordinate
-#     rebuild though all its windows decoded length-preserving.
+#     overwrite.
 #
-# Neither buys anything for a read with no admitted window, and complete-span
-# decodes strictly more bases than the substitution-only arm decodes on the same
-# read — every extra window another chance for the length-preserving kernel to
-# dead-end and fail open, and another k-base start anchor that must survive
-# `_trim_indel_window_overlap`.
+# ONLY THE FIRST IS OBSERVABLE. When the predicate is false every window resolves
+# to `:substitution`, so every accepted window was length-preserving and
+# `_splice_indel_windows` reproduces the in-place overwrite byte for byte — the
+# splice change is consistency, not behaviour. This test therefore pins the
+# partition, which is the half that can change output.
+#
+# The partition costs nothing for a read with no admitted window. When a merged
+# hard range EXCEEDS `max_window`, complete-span decodes more bases than the
+# substitution-only arm decodes on the same read — every extra window another
+# chance for the length-preserving kernel to dead-end and fail open, and another
+# k-base start anchor whose TERMINAL overlap must match the next window's
+# original anchor (`_indel_window_terminal_anchor_matches`, the source of
+# `window_anchor_rejections`; `_trim_indel_window_overlap` failures increment
+# `trace_contract_errors` instead). Below `max_window` the two partitions
+# coincide and the defect is latent, which is why the fixture is built to exceed
+# it.
 #
 # WHY THIS ASSERTS THE WINDOW COUNT RATHER THAN THE DECODED BYTES. An earlier
 # version of this test compared output records and PASSED 23/23 against unfixed
@@ -43,8 +53,18 @@
 #       2k/20x    53 ->  34    23 -> 13     1360 -> 1928   (illumina 1809)
 #       6k/20x   164 -> 108   126 -> 22     2654 -> 2789   (illumina 5453)
 #
-# Those numbers are fixture-sensitive and are recorded as evidence rather than
-# asserted — a pinned count in a required gate is the flake mode td-n5fm tracks.
+# Those numbers are recorded as evidence rather than asserted here because they
+# are END-TO-END outcomes of a full assembly, and largest-contig in particular is
+# a discontinuous order statistic that one correction can move by joining or
+# splitting a contig. `benchmarking/indel_reroute_evidence.jl` regenerates them
+# across seeds so an effect can be separated from fixture noise.
+#
+# This is NOT the td-n5fm rationale. That bead is about WALL-CLOCK assertions,
+# and its recommended fix is the opposite of declining a counter: "gate it on a
+# contention-insensitive proxy (allocation counts, k-mer/window operation counts,
+# or a work-unit counter) rather than wall time." `decoded_windows`, asserted
+# below, IS such a work-unit counter — it is deterministic given the fixture and
+# immune to machine contention.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/indel_substitution_reroute_test.jl")'
@@ -125,9 +145,28 @@ Test.@testset "td-4mbg: _read_runs_indel_decode truth table" begin
     Test.@test Mycelia._read_runs_indel_decode(params, with_raw) == true
     Test.@test Mycelia._read_runs_indel_decode(params, with_cleaned) == true
 
-    # Defensive: a source map cannot run a pair-HMM without params.
+    # Reachable, not merely defensive: a wholly-rejected `:frontier_budgeted`
+    # pass nulls `effective_indel_params` while deliberately RETAINING the
+    # window-source map, so this IS the production state of a rejected pass.
     Test.@test Mycelia._read_runs_indel_decode(nothing, demoted) == false
     Test.@test Mycelia._read_runs_indel_decode(nothing, with_raw) == false
+end
+
+Test.@testset "td-4mbg: admitted sources are the exact complement of :substitution" begin
+    # The in-place splice `_read_runs_indel_decode` selects writes `@inbounds`
+    # with no length guard, and its safety depends on every window having taken
+    # the length-preserving kernel. That holds only while the admitted set is
+    # exactly the valid set minus `:substitution`. The constant is derived rather
+    # than hand-maintained, so this pins the derivation — if a future source
+    # symbol is added and the relationship stops holding, a length-CHANGING
+    # decode could reach the length-preserving splice.
+    Test.@test Tuple(sort(collect(Mycelia._INDEL_ADMITTED_WINDOW_SOURCES))) ==
+               Tuple(sort(collect(
+        filter(!=(:substitution), Mycelia._VALID_INDEL_WINDOW_SOURCES))))
+    Test.@test :substitution ∉ Mycelia._INDEL_ADMITTED_WINDOW_SOURCES
+    Test.@test all(
+        source -> source in Mycelia._VALID_INDEL_WINDOW_SOURCES,
+        Mycelia._INDEL_ADMITTED_WINDOW_SOURCES)
 end
 
 Test.@testset "td-4mbg: demoted schedule uses the substitution window partition" begin
@@ -179,6 +218,14 @@ Test.@testset "td-4mbg: demoted schedule uses the substitution window partition"
                 indel_params = params, indel_window_sources = sources)
 
             Test.@test decoded_demoted == decoded_baseline
+            # ABSOLUTE anchor, not just arm-vs-arm. `decoded_windows` is
+            # incremented before the decode is attempted, so if a future refactor
+            # moved that increment below the `!improved` continue, BOTH arms
+            # would report 0, the equality above would pass as `0 == 0`, and
+            # `partition_differs` would still be nonzero — a silent return to
+            # vacuity. Pinning the count to the partition catches that.
+            Test.@test decoded_baseline ==
+                       count(w -> length(w) >= k, substitution_windows)
             compared += 1
         end
     end

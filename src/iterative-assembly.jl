@@ -4313,17 +4313,32 @@ is the number dropped for a length mismatch.
 Without `indel_window_sources`, `indel_params === nothing` selects substitution
 and non-`nothing` selects the indel pair-HMM. A source map overrides that choice
 per window: `:raw` and `:cleaned` use the pair-HMM, while `:substitution` uses the
-unchanged length-preserving kernel even under a global indel profile. The global
-profile still requests complete-span partitioning and original-coordinate
-reassembly. Length-changing pair-HMM corrections cannot shift later original
+unchanged length-preserving kernel even under a global indel profile.
+Complete-span partitioning and original-coordinate reassembly follow
+`_read_runs_indel_decode` (td-4mbg): they apply when the read has at least one
+ADMITTED window, or when no source map was supplied at all and a global profile
+is active. A read whose every scheduled window was demoted therefore takes the
+same truncated partition as the substitution-only arm.
+Length-changing pair-HMM corrections cannot shift later original
 window coordinates; substitution length divergence is dropped defensively.
 Exposed for the windowed-decode correctness test.
 """
 const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
-# Window sources that actually run the pair-HMM. `:substitution` is the demoted
-# source: the scheduler evaluated that window and REJECTED it, so it decodes
-# through the unchanged length-preserving kernel.
-const _INDEL_ADMITTED_WINDOW_SOURCES = (:raw, :cleaned)
+# Window sources that actually run the pair-HMM: every valid source EXCEPT the
+# demoted one. `:substitution` means the scheduler evaluated that window and
+# REJECTED it, so it decodes through the unchanged length-preserving kernel.
+#
+# DERIVED, not a parallel literal. `_read_runs_indel_decode` selects the
+# in-place length-preserving splice when nothing here matches, and that splice
+# writes `@inbounds` without a length guard -- its safety depends on every
+# window having taken the length-preserving kernel. A hand-maintained copy that
+# omitted a newly-added source would route a length-CHANGING decode into that
+# splice: silent truncation if it lengthened the window, an out-of-bounds read
+# if it shortened it. Deriving makes the complement impossible to get wrong, and
+# `_indel_window_kernel_params` below reads the same tuple, so the read-level and
+# window-level views of "does this run the pair-HMM" cannot disagree.
+const _INDEL_ADMITTED_WINDOW_SOURCES = Tuple(
+    filter(!=(:substitution), _VALID_INDEL_WINDOW_SOURCES))
 
 """
     _read_runs_indel_decode(indel_params, indel_window_sources) -> Bool
@@ -4331,30 +4346,45 @@ const _INDEL_ADMITTED_WINDOW_SOURCES = (:raw, :cleaned)
 Whether THIS read actually runs an indel decode, which selects both the
 complete-span window partition and the original-coordinate splice.
 
-td-4mbg: both call sites previously asked a PASS-level question
-(`indel_params !== nothing || indel_window_sources !== nothing`) in place of this
-READ-level one, so the mere presence of a frontier-scheduled source map put a
-read on the indel path even when every window in that map had been demoted to
-`:substitution`. Two costs follow, and neither buys anything for a read with no
-admitted window:
+td-4mbg: the two decisions that select indel machinery each asked a PASS-level
+question in place of this READ-level one -- `complete_span = indel_params !==
+nothing || indel_window_sources !== nothing` at the partition, and `indel_params
+=== nothing` at the splice -- so the mere presence of a frontier-scheduled source
+map put a read on the indel path even when every window in that map had been
+demoted to `:substitution`.
 
-  * complete-span partitioning decodes the WHOLE hard span in anchored windows
-    instead of truncating each merged range to one `max_window` prefix, so a
-    rejected-frontier read decodes strictly more bases than the substitution-only
-    arm decodes on the same read -- every extra window another chance for the
-    length-preserving kernel to dead-end and fail open to uncorrected bytes;
-  * each later window carries a k-base start anchor that must survive
-    `_trim_indel_window_overlap`, which is where `window_anchor_rejections` come
-    from.
+THE PARTITION IS THE BEHAVIOURAL CHANGE. Complete-span partitioning covers the
+whole hard span in anchored windows instead of truncating each merged range to
+one `max_window` prefix. When a merged hard range EXCEEDS `max_window` the
+rejected-frontier read therefore decodes more bases than the substitution-only
+arm decodes on the same read, and each later window carries a k-base start
+anchor whose TERMINAL overlap must match the next window's original anchor --
+that check (`_indel_window_terminal_anchor_matches`) is where
+`window_anchor_rejections` come from, while `_trim_indel_window_overlap`
+failures increment `trace_contract_errors`. When no merged range exceeds
+`max_window` the two partitions coincide and the defect is latent on that read.
 
-Measured on identical reads differing only in `sequencing_tech` (2 kb / 1200 bp /
-8x / err 0.01 / seed 42): the nanopore arm produced 6
-`substitution_length_divergences` and 5 `window_anchor_rejections` against 0 and
-0 for the substitution-only arm, with its best contig falling from 1659 bp to
-904 bp. At 20x the same cell gave 53 and 23 against 0 and 0.
+THE SPLICE CHANGE IS OUTPUT-NEUTRAL, not a second fix. When this predicate is
+false every window resolves to `:substitution`, so every accepted window was
+length-preserving and `_splice_indel_windows` would reproduce the in-place
+overwrite byte for byte. It is changed for consistency and to keep the in-place
+arm's length assumption derivable from one predicate; it is not observable.
 
-With no source map the legacy `indel_params` test stands, so the profile-disabled
-path and `:unrestricted` are unchanged and the byte-identity oracle holds.
+SCOPE. A wholly-rejected `:frontier_budgeted` pass nulls `effective_indel_params`
+while deliberately RETAINING the window-source map, so those reads flip from
+complete-span to truncated here too. That is intended, and it is a change rather
+than a no-op.
+
+With no source map the legacy `indel_params` test stands (first line of the
+body), so the profile-disabled path and `:unrestricted` are unchanged BY
+CONSTRUCTION. The illumina byte-identity oracle is a separate EMPIRICAL check;
+re-measure it after any change here rather than inferring it from this sentence.
+
+Evidence for the defect and for this change is generated by
+`benchmarking/indel_reroute_evidence.jl` (multi-seed, both arms, committed so the
+numbers are reproducible). Do not quote single-seed contig lengths as an effect
+size: largest-contig is a discontinuous order statistic and one correction can
+join or split a contig.
 """
 function _read_runs_indel_decode(
         indel_params::Union{Nothing, IndelDecodeParams},
@@ -4544,7 +4574,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         window_graph = window_source == :cleaned ? cleaned_graph : graph
         window_weighted_graph = window_source == :cleaned ?
                                 cleaned_weighted_graph : weighted_graph
-        window_indel_params = window_source == :substitution ? nothing : indel_params
+        # Test ADMITTED membership rather than `!= :substitution` so this and
+        # `_read_runs_indel_decode` read the same tuple (td-4mbg).
+        window_indel_params = window_source in _INDEL_ADMITTED_WINDOW_SOURCES ?
+                              indel_params : nothing
         if window_graph === nothing
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
