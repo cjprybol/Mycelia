@@ -296,9 +296,17 @@ end
 
 # --- Residual-error estimation + survival-based re-assembly k selection ---------
 #
-# `select_dynamic_kmer_plan` (above) picks a START k for the corrector's k-ladder
-# from raw observations; it is NOT the right tool for the *re-assembly* of already
-# CORRECTED reads (empirically it returns a flat floor k regardless of error,
+# `select_dynamic_kmer_plan` (above) is a SCAFFOLD with NO production call site, as
+# its own docstrings at the top of this file already say ("Scaffold output for
+# dynamic k-mer selection", "The scaffold starts at a prime `k`", "The scaffold
+# searches feasible prime `k` values"). `grep -rn select_dynamic_kmer_plan src/`
+# returns only its docstring, its definition, and this comment — every caller is a
+# test. It was DESIGNED to pick a START k for a corrector k-ladder from raw
+# observations, but nothing in production consumes that: the iterative corrector's
+# ladder comes from `mycelia_iterative_assemble`'s `k_ladder` / `n_k_rungs` kwargs.
+# (Earlier wording here asserted the wiring as fact, which made a scaffold read as
+# load-bearing.) It is in any case NOT the right tool for the *re-assembly* of
+# already CORRECTED reads (empirically it returns a flat floor k regardless of error,
 # because its singleton-separation heuristic rarely fires on real read sets). The
 # re-assembly of corrected reads needs a k that keeps the contig graph connected:
 # high k for clean (Illumina) corrected reads, but a LOWER k for high-error long
@@ -440,6 +448,35 @@ function _kmer_count_spectrum(reads, k::Int; canonical::Bool = true)::Dict{UInt6
     return counts
 end
 
+# CAVEAT (td-jt7r, PR #444) — the docstring below contains a REFUTED empirical
+# claim. Attributed per claim, because the paragraph bundles several:
+#
+#   * "solid k-mers ... i.e. the genomic backbone; singleton error k-mers are
+#     dropped" and "a robust estimate of the backbone coverage `C·(1-e)^k`":
+#     REFUTED. At non-trivial coverage an ERROR k-mer is also observed
+#     `>= solid_min` times, so error k-mers ENTER the solid set; being far more
+#     numerous than backbone k-mers, they DOMINATE the median. The returned value
+#     is then an error-population statistic, not a backbone-coverage estimate.
+#     Measured by `benchmarking/indel_toy_overcorrection_diagnostic.jl`'s
+#     `solid_composition` audit (`solid_composition.csv`, columns `median_genomic`
+#     vs `median_error` vs `median_all`). At 30x the genomic-solid median is 27
+#     while this function returns 4.0.
+#   * "its absolute scale tracks read coverage": REFUTED as stated — the statistic
+#     is NON-MONOTONE in coverage. Raising coverage recruits error k-mers into the
+#     solid set faster than it lifts the backbone median, so the returned value can
+#     FALL as coverage RISES.
+#   * "Canonical (both-strand) counting is REQUIRED ...": NOT affected. That is a
+#     separate, still-valid claim about the equivalence class, unrelated to the
+#     solid-set composition above.
+#   * The two "empirical, 30x corrected reads" bullets (~12–15 clean vs ~2–4
+#     shattered): these are the numbers `connectivity_floor = 6.0` was fitted to,
+#     and they are two SEPARATE measurements on two different read sets, not one
+#     coverage-controlled sweep. They stand as the observations they were, but they
+#     do NOT establish that the statistic tracks backbone coverage in general.
+#
+# The code fix is deferred to its own bead; the docstring is marked here rather than
+# left silently asserting a property this PR's own evidence refutes. Read the return
+# value as "median of the solid set", nothing stronger.
 """
     median_solid_kmer_multiplicity(reads, k; solid_min = 2) -> Float64
 
@@ -523,6 +560,33 @@ function _genome_size_floor_k(reads, floor_k::Int, ceiling_k::Int;
     return clamp(k_unique, floor_k, ceiling_k)
 end
 
+# CAVEATS on the docstring below (td-jt7r, PR #444), attributed per claim:
+#
+#   * The CALIBRATION paragraph derives `connectivity_floor = 6.0` from
+#     `median_solid_kmer_multiplicity`'s "~12 well-covered vs ~3–4 shattered"
+#     separation. That separation rests on the backbone-coverage interpretation this
+#     PR REFUTES (see the caveat above `median_solid_kmer_multiplicity`): the
+#     statistic is an error-population statistic at higher coverage and is
+#     non-monotone in coverage, so 6.0 is calibrated against a signal that does not
+#     mean what the docstring says it means. The measurement lives in
+#     `benchmarking/indel_toy_overcorrection_diagnostic.jl` (`solid_composition.csv`,
+#     `k_ladder.csv`). Re-calibration is deferred to its own bead; the constant is
+#     UNCHANGED here.
+#   * Within that same paragraph, the sub-claims are of different kinds and should
+#     not be read under one stamp: (i) "a floor of 2.0 fails to trip on the
+#     shattered regime (3 > 2)" is arithmetic on the measured value and holds
+#     whatever the value MEANS; (ii) "a floor near ~12 would clip the well-covered
+#     regime" likewise; (iii) "6.0 sits between the two clusters with margin" is the
+#     inference that inherits the refuted interpretation; (iv) "the measure MUST be
+#     canonical" is an independent, unaffected claim.
+#   * SIGNATURE: the `select_reassembly_k(...)` line below omits two real keyword
+#     arguments — `genome_size_floor::Bool = true` and `size_ref_k::Int = 17`. Both
+#     are ON by default and both materially change the result, because the
+#     genome-size uniqueness floor (`_genome_size_floor_k`) can RAISE the effective
+#     floor far above `floor_k = 7`.
+#   * "If none qualifies, fall back to the smallest prime `>= floor_k`" is wrong in
+#     three ways; see the corrected comment at the `return first(candidates)` site
+#     at the bottom of this function.
 """
     select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
 
@@ -590,7 +654,19 @@ function select_reassembly_k(
             return k
         end
     end
-    # Nothing qualifies (very low coverage / very high error): the smallest prime
-    # >= floor stays maximally connected.
+    # Nothing qualifies (very low coverage / very high error): fall back to the
+    # SMALLEST candidate, i.e. the most-connected k still in range. Three
+    # corrections to the docstring's "smallest prime >= floor_k" wording (td-jt7r):
+    #   1. The floor here is `effective_floor`, which the genome-size uniqueness
+    #      floor above may have RAISED well past `floor_k`; the fallback is relative
+    #      to that raised floor, not to `floor_k`.
+    #   2. `candidates` is `lower_primes ++ [ceiling_k]`, so when no prime lies
+    #      strictly below `ceiling_k` at or above `effective_floor`, `lower_primes`
+    #      is empty and this returns `ceiling_k` — not a prime below it, and
+    #      possibly not prime at all (the ceiling is the caller's explicit k).
+    #   3. `_dynamic_k_search_space` has its own degenerate fallbacks: given an
+    #      empty prime range it returns the LARGEST prime `<= max_k` (ignoring
+    #      `min_k`), and `[1]` when no prime exists at all — so `first(candidates)`
+    #      is not guaranteed to be `>= effective_floor` in those corners either.
     return first(candidates)
 end
