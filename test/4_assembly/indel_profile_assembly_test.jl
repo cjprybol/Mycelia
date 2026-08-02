@@ -103,14 +103,25 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test hifi.base_error_rate ≈ 0.001
         Test.@test hifi.insertion_fraction == 0.0
         Test.@test hifi.deletion_fraction == 0.0
+        # Those zeros are a ROUTING SENTINEL (see `indel_error_profile`), not an
+        # empirical claim about HiFi error composition. The only thing asserted
+        # here is the routing consequence: the absolute indel rate the gate sees is
+        # exactly 0, so HiFi can never cross any positive threshold.
+        Test.@test hifi.base_error_rate *
+                   (hifi.insertion_fraction + hifi.deletion_fraction) == 0.0
 
         ul = Mycelia.indel_error_profile(:ultima)
         # Ultima carries its TRUE conditional fractions (observe(): base 1e-6,
         # split 0.025 / 0.025); the absolute indel rate is what is negligible.
+        Test.@test ul.base_error_rate ≈ 1e-6
         Test.@test ul.insertion_fraction ≈ 0.025
         Test.@test ul.deletion_fraction ≈ 0.025
         Test.@test ul.base_error_rate * (ul.insertion_fraction + ul.deletion_fraction) <
                    0.02
+        # Pin the absolute rate itself (1e-6 × 0.05 = 5e-8), not just "< 0.02", so a
+        # future retune of either factor cannot drift the gate margin silently.
+        Test.@test ul.base_error_rate *
+                   (ul.insertion_fraction + ul.deletion_fraction) ≈ 5e-8
 
         test_throws_message(ErrorException, "unknown sequencing technology") do
             Mycelia.indel_error_profile(:bogus)
@@ -182,6 +193,15 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         test_throws_message(ArgumentError, "error_rate must be in (0, 0.5)") do
             Mycelia._iterative_viterbi_correction_config(
                 ; config_options..., substitution_error_rate = 0.0)
+        end
+        # NaN satisfies NEITHER `<= 0.0` nor `>= 0.5`, so a bounds-only check would
+        # have admitted it. A NaN error_rate makes every gap mass NaN, which the
+        # indel kernel silently drops on `isfinite(cand)` while the score-free
+        # frontier probe keeps counting those moves — a probe/decoder divergence
+        # with no error raised. Pin the explicit rejection.
+        test_throws_message(ArgumentError, "error_rate must be in (0, 0.5)") do
+            Mycelia._iterative_viterbi_correction_config(
+                ; config_options..., substitution_error_rate = NaN)
         end
 
         # Exercise the real non-windowed and windowed forwarding chains. The hard
@@ -303,7 +323,7 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test ex.indel_schedule == :unrestricted
     end
 
-    Test.@testset "illumina + ultima preserve substitution oracle bytes" begin
+    Test.@testset "illumina + ultima + hifi preserve substitution oracle bytes" begin
         reads, _ = _profile_reads(tech = :illumina, err = 0.01, seed = 7)
         base = R.assemble_genome(reads; k = 13, corrector = :iterative)
         il = R.assemble_genome(reads; k = 13, corrector = :iterative,
@@ -343,6 +363,35 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
                    il.assembly_stats["indel_completed"]
         Test.@test il.assembly_stats["truncated_decodes"] ==
                    il.assembly_stats["indel_truncated"]
+
+        # The same zero-indel telemetry contract holds for EVERY profile that
+        # gates off, not just the default. Ultima gates off on a negligible
+        # absolute indel rate (≈ 5e-8) and HiFi on the zero-fraction routing
+        # sentinel, so neither may request, attempt, complete, truncate, or engage
+        # a single indel decode, and each must reproduce the substitution oracle's
+        # contigs byte-for-byte on the SAME reads. Asserting only illumina left the
+        # other two gated-off profiles free to regress into the pair-HMM path
+        # unnoticed. Note HiFi additionally threads a technology-specific
+        # substitution fallback rate (0.001, asserted above) yet still lands on the
+        # same bytes here — the reads carry qualities, so the quality-free fallback
+        # is not consulted.
+        for (tech, result) in (
+            (:ultima, ul),
+            (:pacbio_hifi, hifi),
+        )
+            Test.@test Mycelia.profile_enables_indels(tech) == false
+            Test.@test result.contigs == il.contigs
+            telemetry = result.assembly_stats["indel_rung_telemetry"]
+            Test.@test telemetry isa AbstractVector
+            Test.@test !isempty(telemetry)
+            Test.@test all(row -> !get(row, :profile_requested, false), telemetry)
+            for field in (:requested, :attempted, :completed, :truncated, :engaged)
+                Test.@test all(row -> get(row, field, 0) == 0, telemetry)
+                Test.@test result.assembly_stats["indel_$(field)"] == 0
+            end
+            Test.@test result.assembly_stats["indel_decodes"] == 0
+            Test.@test result.assembly_stats["truncated_decodes"] == 0
+        end
     end
 
     Test.@testset "nanopore enables indel-aware correction" begin
