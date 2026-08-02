@@ -65,8 +65,15 @@ Every flag is read with a `false` default, so an older `results.json` written be
 the fields existed renders with no caveats, exactly as it did before.
 """
 function paired_figure_caption(payload)
+    # Sorted by axis name: `metric_definition` is a `Dict`, whose iteration order is
+    # unspecified, so an unsorted comprehension can name the axes in a different
+    # order for two renders of the SAME results.json. That makes the SVG/PNG
+    # non-reproducible and every figure diff noisy — which matters here more than
+    # usual, because under `1 notebook = 1 figure = 1 slide` these files are
+    # committed artifacts that get diffed and re-rendered.
+    md = payload["metric_definition"]
     definition = join(
-        [string(k, "=", join(v, "/")) for (k, v) in payload["metric_definition"]], "  ")
+        [string(k, "=", join(md[k], "/")) for k in sort(collect(keys(md)))], "  ")
     seeds = join(string.(payload["seeds"]), ", ")
     caveats = String[]
     if get(payload, "metric_definition_override_bound", false) === true

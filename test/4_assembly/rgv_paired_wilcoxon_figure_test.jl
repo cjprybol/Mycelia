@@ -99,6 +99,29 @@ Test.@testset "RGV paired-Wilcoxon figure caption" begin
         Test.@test count("⚠", all_three) == 3
     end
 
+    Test.@testset "the definition axes are named in a deterministic order" begin
+        # `metric_definition` is a Dict, so iteration order is unspecified: an
+        # unsorted comprehension could name the axes differently across two renders
+        # of the SAME results.json, making the committed SVG/PNG non-reproducible.
+        # Asserting the sorted order pins the contract; building the same payload
+        # from two different insertion orders pins that it does not depend on how
+        # the Dict happened to be constructed.
+        a = Dict{String, Any}(
+            "metric_definition" => Dict("metric_source" => ["quast"],
+                "quast_min_contig" => [500]),
+            "seeds" => [42])
+        b = Dict{String, Any}(
+            "metric_definition" => Dict("quast_min_contig" => [500],
+                "metric_source" => ["quast"]),
+            "seeds" => [42])
+        Test.@test _RGVFigure.paired_figure_caption(a) ==
+                   _RGVFigure.paired_figure_caption(b)
+        # Sorted: `metric_source` precedes `quast_min_contig`.
+        cap = _RGVFigure.paired_figure_caption(a)
+        Test.@test findfirst("metric_source=", cap).start <
+                   findfirst("quast_min_contig=", cap).start
+    end
+
     Test.@testset "the caption does not call an exploratory run pre-registered" begin
         # `report.md` opens by stating the run is exploratory: the pre-registration's
         # H1 is Viterbi DP vs greedy, while this sweep compares corrector arms. A
