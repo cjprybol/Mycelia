@@ -28,6 +28,71 @@ import JSON
 import Statistics
 
 """
+    paired_figure_caption(payload) -> String
+
+Caption for the paired figure, including any INTEGRITY CAVEAT the payload carries.
+
+Pure (no CairoMakie, no IO) so the caveats can be unit-tested without rendering.
+
+# Why the caveats belong here and not only in `report.md`
+
+The metric definition already belongs on the figure: a paired plot of QUAST NGA50
+and a paired plot of an internal size-ratio proxy look identical, so the caption is
+what keeps the reader from conflating them (bead td-9p91).
+
+The same argument applies with more force to every fact that says the definition is
+not trustworthy. Under this repo's `1 notebook = 1 figure = 1 slide` model the
+SVG/PNG is what reaches a deck or a manuscript, detached from `report.md`. A run
+whose guard was overridden, whose definition was asserted by an operator rather than
+observed, or whose provenance cannot be determined at all, previously rendered a
+caption bit-for-bit identical to a measured run — so the artifact that travels
+furthest carried the least disclosure.
+
+ALL THREE states `report.md` can report are rendered here. Carrying two of the three
+would recreate the partial-propagation defect this series has spent several rounds
+closing: a fact computed in one file, routed to two of its three consumers, and
+dropped by the third.
+
+The title says EXPLORATORY for the same reason. This analysis applies the
+pre-registration's statistical RULE to a comparison the pre-registration does not
+describe — its H1 is Viterbi DP vs greedy, while this sweep compares
+`corrector=:none` against `corrector=:iterative` — and `report.md` says so in its
+first line. A figure captioned "pre-registered" while its own report calls the run
+exploratory is the same conflation, in the artifact least likely to be read
+alongside the correction.
+
+Every flag is read with a `false` default, so an older `results.json` written before
+the fields existed renders with no caveats, exactly as it did before.
+"""
+function paired_figure_caption(payload)
+    # Sorted by axis name: `metric_definition` is a `Dict`, whose iteration order is
+    # unspecified, so an unsorted comprehension can name the axes in a different
+    # order for two renders of the SAME results.json. That makes the SVG/PNG
+    # non-reproducible and every figure diff noisy — which matters here more than
+    # usual, because under `1 notebook = 1 figure = 1 slide` these files are
+    # committed artifacts that get diffed and re-rendered.
+    md = payload["metric_definition"]
+    definition = join(
+        [string(k, "=", join(md[k], "/")) for k in sort(collect(keys(md)))], "  ")
+    seeds = join(string.(payload["seeds"]), ", ")
+    caveats = String[]
+    if get(payload, "metric_definition_override_bound", false) === true
+        push!(caveats,
+            "GUARD OVERRIDDEN — rows span more than one definition — NOT validation-grade")
+    end
+    if get(payload, "metric_definition_operator_asserted", false) === true
+        push!(caveats, "definition OPERATOR-ASSERTED (backfilled), not observed")
+    end
+    if get(payload, "metric_definition_provenance_undeterminable", false) === true
+        push!(caveats,
+            "definition PROVENANCE UNDETERMINABLE — measured-vs-asserted is unknown")
+    end
+    head = "RGV correction-validation sweep — paired Wilcoxon (EXPLORATORY)\n" *
+           "seeds $seeds · definition: $definition"
+    return isempty(caveats) ? head : head * "\n⚠ " * join(caveats, "\n⚠ ")
+end
+
+"""
     draw_paired_figure(payload; output_dir, basename) -> (svg_path, png_path)
 
 Render the paired slope plot and paired-difference panel for every metric in
@@ -102,15 +167,7 @@ function draw_paired_figure(payload; output_dir::AbstractString,
         end
     end
 
-    # The metric definition belongs ON the figure: a paired plot of QUAST NGA50 and
-    # a paired plot of an internal size-ratio proxy look identical, so the caption
-    # is what keeps the reader from conflating them (bead td-9p91).
-    definition = join(
-        [string(k, "=", join(v, "/")) for (k, v) in payload["metric_definition"]], "  ")
-    seeds = join(string.(payload["seeds"]), ", ")
-    CairoMakie.Label(fig[0, 1:2],
-        "RGV correction-validation sweep — pre-registered paired Wilcoxon\n" *
-        "seeds $seeds · definition: $definition";
+    CairoMakie.Label(fig[0, 1:2], paired_figure_caption(payload);
         fontsize = 15, padding = (0, 0, 8, 0))
 
     mkpath(output_dir)

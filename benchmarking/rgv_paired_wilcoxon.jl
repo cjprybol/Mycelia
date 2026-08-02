@@ -42,6 +42,15 @@
 #    size-ratio proxy. Selecting a definition is explicit (`--metric-source quast`)
 #    or the run fails.
 #
+#    A definition column can also be SUPPLIED after the fact by
+#    `rgv_seed_backfill.jl --metric-source`, on operator say-so, with nothing to
+#    verify it against. The guard cannot see the difference — a backfilled label
+#    agrees with itself by construction — so a genuinely mixed legacy table becomes
+#    one the guard certifies as uniform. This script therefore reads the
+#    `<column>_provenance` column the backfill writes and refuses to print the
+#    "guard enforced it" assurance over operator-asserted rows; `results.json`
+#    carries the same fact in `metric_definition_operator_asserted`.
+#
 # HOW PAIRS ARE FORMED
 # --------------------
 # One pair per (reference, error_rate, readlen, target_coverage, k, seed) cell:
@@ -514,6 +523,114 @@ function decide(result, adjusted_p)
 end
 
 """
+Substring identifying a metric definition that was ASSERTED BY AN OPERATOR rather
+than observed by the run that produced the metrics.
+
+`rgv_seed_backfill.jl` writes `"operator-asserted (backfill)"` into
+`<definition-column>_provenance` for every row it supplies a definition for. The
+match is on the substring so the writer can extend the label (with a tool name, a
+date) without breaking the reader; the coupling is pinned by a BEHAVIOURAL
+round-trip test (backfill writes a frame, this reader classifies it), because a
+grep of the writer's source passes unchanged while its call site drifts to a label
+this reader does not understand.
+"""
+const RGV_ASSERTED_DEFINITION_MARKER = "operator-asserted"
+
+"""
+Label identifying a metric definition the run itself OBSERVED, written by
+`rgv_seed_backfill.jl` as `DEFINITION_PROVENANCE_OBSERVED` for rows it did not
+supply a value for.
+
+Matched EXACTLY, not as a substring: this is the only value that earns the
+unqualified assurance, so anything else — including a label a future writer
+invents — must fall through to `undeterminable` rather than be read as evidence.
+The coupling to the writer is pinned by a behavioural round-trip test, not by a
+grep of the writer's source (a grep passes while the writer's call site drifts).
+"""
+const RGV_OBSERVED_DEFINITION_LABEL = "observed"
+
+"""
+    definition_provenance_axes(df) -> (asserted, undeterminable, n_asserted_rows)
+
+Classify the provenance of every metric-definition axis PRESENT in `df` as
+asserted, observed, or undeterminable, and count the rows carrying an assertion.
+
+This is the fact `assert_single_metric_definition` structurally CANNOT establish.
+The guard checks that the definition labels agree with each other; when those
+labels were written by `rgv_seed_backfill.jl --metric-source`, agreement is
+guaranteed by construction and says nothing about how the runs were scored. A
+legacy table that genuinely mixed QUAST-scored and degraded rows, backfilled with
+a single `--metric-source`, passes the guard perfectly. Only the provenance column
+distinguishes that case, so the report and `results.json` must surface it.
+
+# Why three states and not two
+
+The two-state reader FAILED OPEN in exactly the situation it exists for. Absence
+of the `"operator-asserted"` marker was read as evidence of measurement, so an
+axis whose sibling `<axis>_provenance` column is missing — which is EVERY CSV the
+documented backfill/analyse workflow produced before this axis existed — was
+reported as `metric_definition_operator_asserted: false`, an affirmative claim the
+definition was measured, and the report went on to print the unqualified
+"the guard enforced it — no override was used".
+
+An unrecognised label failed the same way and is worse: a column present but
+holding, say, `"backfilled-by-tool"` is STRONGER evidence that something wrote
+provenance metadata than no column at all, yet a blacklist reader treats it more
+permissively. Both are the same epistemic state — the table carries no usable
+provenance — and neither is "observed". This mirrors the doctrine applied twelve
+lines away to `ok`, and the one `metric_source_guard.jl` applies when one
+definition axis is present and another absent: unverifiable is not verified.
+
+An axis can appear in BOTH returned lists (some rows asserted, others carrying an
+unreadable label); each list answers its own question.
+"""
+function definition_provenance_axes(df)
+    cols = Set(String.(DataFrames.names(df)))
+    asserted = String[]
+    undeterminable = String[]
+    asserted_rows = falses(DataFrames.nrow(df))
+    for col in METRIC_DEFINITION_COLUMNS
+        # Only axes the table actually carries are classified: an axis that is not
+        # in the table is not part of the definition being reported on.
+        String(col) in cols || continue
+        prov = String(col) * "_provenance"
+        if !(prov in cols)
+            push!(undeterminable, String(col))
+            continue
+        end
+        values = getproperty(df, Symbol(prov))
+        flags = Bool[!ismissing(v) &&
+                     occursin(RGV_ASSERTED_DEFINITION_MARKER, string(v))
+                     for v in values]
+        unreadable = Bool[!flags[i] &&
+                          (ismissing(values[i]) ||
+                           string(values[i]) != RGV_OBSERVED_DEFINITION_LABEL)
+                          for i in eachindex(values)]
+        if any(flags)
+            push!(asserted, String(col))
+            asserted_rows .|= flags
+        end
+        any(unreadable) && push!(undeterminable, String(col))
+    end
+    return asserted, undeterminable, count(asserted_rows)
+end
+
+"""
+    operator_asserted_definitions(df) -> (axes, n_rows)
+
+Definition axes whose value was operator-asserted for at least one row of `df`,
+and the number of rows carrying an assertion on any axis.
+
+Thin view over [`definition_provenance_axes`](@ref) that answers only the
+asserted question. Callers that need to distinguish "observed" from "cannot be
+determined" must use the three-state function.
+"""
+function operator_asserted_definitions(df)
+    asserted, _, n_rows = definition_provenance_axes(df)
+    return asserted, n_rows
+end
+
+"""
     run_paired_analysis(df; treatment, control, metrics, metric_source=nothing,
                         allow_mixed_src=false, keep_not_ok=false) -> NamedTuple
 
@@ -536,11 +653,46 @@ function run_paired_analysis(df;
 
     work = df
     n_input = DataFrames.nrow(work)
+    # "The ok check ran and every row passed" and "the ok check COULD NOT RUN"
+    # are different facts about the data, and they used to render identically:
+    # `0 dropped for ok=false` was emitted verbatim whether the column was present
+    # and all-true or absent entirely, and `results.json` carried neither count nor
+    # a presence flag, so no consumer could recover the distinction from either
+    # artifact. `metric_source_guard.jl` already applies the opposite doctrine to
+    # the definition columns — a table with no provenance column is not a table
+    # shown to be consistent, it is a table that cannot be checked — and `ok` is
+    # the same kind of claim.
+    ok_column_present = :ok in Symbol.(DataFrames.names(work))
+    # A PRESENT `ok` column whose element type cannot express success is not a
+    # check that ran. `coalesce.(okcol, false) .== true` is vacuously FALSE for a
+    # `String` element, so every row was dropped and the counter split then
+    # attributed the drops to `ok=false` — the report asserted the harness had
+    # OBSERVED N failed runs whose cells literally read `"TRUE"`. The trigger is
+    # ordinary: `CSV.read` infers `String7` for an `ok` column containing
+    # `true,false,NA`, one sentinel poisons the column, and merging that shard with
+    # a Bool-typed shard under `cols = :union` propagates it. `n` then shrinks and
+    # the p-value moves, with the added "(status unknown, not an observed failure)"
+    # phrasing actively ruling out the correct explanation.
+    #
+    # `Bool <: Integer`, so the `Bool` arm below is redundant to the compiler and
+    # kept only to name the intended case; a 0/1 `Integer` column filters correctly
+    # (`1 == true`) and stays runnable.
+    ok_column_eltype = ok_column_present ? string(eltype(work.ok)) : nothing
+    ok_column_runnable = ok_column_present &&
+                         eltype(work.ok) <: Union{Missing, Bool, Integer}
+    ok_filter_applied = !keep_not_ok && ok_column_runnable
     n_dropped_not_ok = 0
-    if !keep_not_ok && (:ok in Symbol.(DataFrames.names(work)))
-        before = DataFrames.nrow(work)
-        work = work[coalesce.(work.ok, false) .== true, :]
-        n_dropped_not_ok = before - DataFrames.nrow(work)
+    n_dropped_ok_missing = 0
+    if ok_filter_applied
+        okcol = work.ok
+        keep = coalesce.(okcol, false) .== true
+        # `coalesce(missing, false)` drops an unknown-status row, which is the right
+        # default, but counting it as ok=false conflates "the harness SAID this run
+        # failed" with "we do not know whether it succeeded". Only the first is an
+        # observed failure, so the two are counted separately.
+        n_dropped_ok_missing = count(ismissing, okcol)
+        n_dropped_not_ok = count(!, keep) - n_dropped_ok_missing
+        work = work[keep, :]
     end
     n_dropped_source = 0
     if metric_source !== nothing
@@ -565,6 +717,16 @@ function run_paired_analysis(df;
     mixed_axes = [String(col) for (col, vals) in definition if length(vals) > 1]
     override_bound = allow_mixed_src && !isempty(mixed_axes)
 
+    # A definition the guard CHECKED is not the same as a definition anyone
+    # OBSERVED. `rgv_seed_backfill.jl --metric-source` can write a uniform label
+    # onto a table that really did mix definitions, which the guard then certifies
+    # as consistent. That fact has to reach the deliverable, for the same reason
+    # `override_bound` does.
+    asserted_axes, undeterminable_axes,
+    n_asserted_rows = definition_provenance_axes(work)
+    definition_asserted = !isempty(asserted_axes)
+    definition_undeterminable = !isempty(undeterminable_axes)
+
     results = [analyze_metric(work, m; treatment = treatment, control = control)
                for m in metrics]
     adjusted = benjamini_hochberg(Float64[r.test.pvalue for r in results])
@@ -582,9 +744,21 @@ function run_paired_analysis(df;
         definition = definition, seeds = seeds,
         axes = axes, allow_mixed_src = allow_mixed_src, mixed_axes = mixed_axes,
         override_bound = override_bound,
+        operator_asserted_axes = asserted_axes,
+        n_rows_operator_asserted = n_asserted_rows,
+        definition_operator_asserted = definition_asserted,
+        undeterminable_definition_axes = undeterminable_axes,
+        definition_provenance_undeterminable = definition_undeterminable,
         treatment = String(treatment), control = String(control),
         n_input_rows = n_input, n_rows_analyzed = DataFrames.nrow(work),
-        n_dropped_not_ok = n_dropped_not_ok, n_dropped_metric_source = n_dropped_source,
+        ok_column_present = ok_column_present,
+        ok_column_runnable = ok_column_runnable,
+        ok_column_eltype = ok_column_eltype,
+        ok_filter_applied = ok_filter_applied,
+        keep_not_ok = keep_not_ok,
+        n_dropped_not_ok = n_dropped_not_ok,
+        n_dropped_ok_missing = n_dropped_ok_missing,
+        n_dropped_metric_source = n_dropped_source,
         pair_keys = RGV_PAIR_KEYS)
 end
 
@@ -635,14 +809,83 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
             "rather than error rate, and designates k=31 primary (k=21/51 " *
             "sensitivity). Compare the axes above against that before reading the " *
             "decision column — the thresholds were calibrated for that design._")
+        # An absent `ok` column must never render as a check that ran and passed.
+        ok_clause = if !analysis.ok_column_present
+            "**`ok` column ABSENT — no row was verified; the ok=false check could " *
+            "NOT run**"
+        elseif !analysis.ok_column_runnable
+            # Present but uninterpretable. Stated as its own outcome so it can never
+            # be read as a count of observed failures, and so the reader learns the
+            # actual defect (a non-boolean column, usually a sentinel like `NA`
+            # forcing `CSV.read` to infer a string type for the whole shard).
+            "**`ok` column is `$(analysis.ok_column_eltype)`, NOT a boolean — it " *
+            "cannot express success, so the ok=false check could NOT run; NO row " *
+            "was dropped by it (fix the column type or re-export the sweep)**"
+        elseif !analysis.ok_filter_applied
+            "`ok` filter DISABLED via --keep-not-ok — failed rows were KEPT"
+        else
+            "$(analysis.n_dropped_not_ok) dropped for ok=false, " *
+            "$(analysis.n_dropped_ok_missing) dropped for ok=missing (status " *
+            "unknown, not an observed failure)"
+        end
         println(io,
             "- Rows: $(analysis.n_input_rows) read, " *
             "$(analysis.n_rows_analyzed) analyzed " *
-            "($(analysis.n_dropped_not_ok) dropped for ok=false, " *
+            "($ok_clause; " *
             "$(analysis.n_dropped_metric_source) dropped by metric_source filter)")
         println(io, "\n### Metric definition analyzed under\n")
         for (col, vals) in analysis.definition
             println(io, "- `$col`: " * join(("`$v`" for v in vals), ", "))
+        end
+        # Same doctrine as the override block below, applied to the other way the
+        # assurance can be false. A definition SUPPLIED by `rgv_seed_backfill.jl`
+        # is uniform by construction, so the guard passing over it is not evidence
+        # about how the runs were scored — a legacy table that genuinely mixed
+        # QUAST-scored and degraded rows, backfilled with one `--metric-source`,
+        # produces exactly this artifact. The reader must be told before reading
+        # the numbers, and the unqualified assurance below is suppressed.
+        if analysis.definition_operator_asserted
+            println(io,
+                "\n> ## :warning: METRIC DEFINITION OPERATOR-ASSERTED, NOT OBSERVED\n>\n" *
+                "> $(analysis.n_rows_operator_asserted) of " *
+                "$(analysis.n_rows_analyzed) analyzed rows carry a definition that " *
+                "was **supplied by `rgv_seed_backfill.jl`** on operator say-so, on " *
+                join(("`$a`" for a in analysis.operator_asserted_axes), ", ") *
+                " (see the `*_provenance` column(s) in the input CSV).\n>\n" *
+                "> Nothing verified that claim: unlike `seed`, which can be " *
+                "recovered from a run log, there is no record of which definition " *
+                "produced a historical metric. `metric_source_guard.jl` can only " *
+                "confirm that the asserted labels agree with EACH OTHER, and a " *
+                "backfilled label agrees with itself by construction — a table that " *
+                "genuinely mixed an alignment-validated QUAST metric with an " *
+                "internal size-ratio proxy passes this check once it is backfilled " *
+                "with a single value. **Treat the definition below as an operator " *
+                "assertion, not as measured provenance.**\n")
+        end
+        # The third state. "No contrary signal" is not evidence of measurement, and
+        # reading it as such is how the two-state reader certified every pre-existing
+        # sweep CSV — none of which has a `*_provenance` column — as measured.
+        if analysis.definition_provenance_undeterminable
+            println(io,
+                "\n> ## :warning: METRIC DEFINITION PROVENANCE UNDETERMINABLE\n>\n" *
+                "> This table carries no usable provenance for " *
+                join(("`$a`" for a in analysis.undeterminable_definition_axes), ", ") *
+                ": the sibling `<axis>_provenance` column is missing, empty, or " *
+                "holds a label this reader does not recognise (only " *
+                "`$(RGV_OBSERVED_DEFINITION_LABEL)` and labels containing " *
+                "`$(RGV_ASSERTED_DEFINITION_MARKER)` are understood).\n>\n" *
+                "> Whether those definitions were MEASURED by the runs or ASSERTED " *
+                "by an operator therefore **cannot be determined from this table**. " *
+                "That is not the same as their having been measured, and it is the " *
+                "state every sweep CSV written before the provenance column existed " *
+                "is in.\n>\n" *
+                "> This is NOT recoverable by re-running `rgv_seed_backfill.jl`: it " *
+                "labels only the rows whose definition it SUPPLIES, so a CSV that " *
+                "already carries the definition gains no provenance column, and " *
+                "labelling those rows `$(RGV_OBSERVED_DEFINITION_LABEL)` after the " *
+                "fact would assert exactly the thing that cannot be determined. Re-run " *
+                "the sweep to get a table that records its own provenance, or read the " *
+                "numbers below as resting on an unverified definition.\n")
         end
         # The artifact must never assert the guard was enforced when it was
         # overridden. Previously this line printed unconditionally, so a run with
@@ -662,15 +905,44 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
                 "misassembly. **These results are not validation-grade and must not " *
                 "be reported as a measured effect.**\n")
         elseif analysis.allow_mixed_src
+            # Deliberately does NOT say "so the aggregate is well-defined": that is
+            # a claim about the VALUES, and it is settled by the provenance block
+            # below, not by whether a flag bound. This branch reports only what it
+            # actually knows — that the override did not fire.
             println(io,
                 "\n_`--allow-mixed-src` was passed but did NOT bind: the rows are " *
-                "single-definition on every checked axis, so the aggregate is " *
-                "well-defined._\n")
-        else
+                "single-definition on every checked axis._\n")
+        elseif !analysis.definition_operator_asserted &&
+               !analysis.definition_provenance_undeterminable
+            # The unqualified assurance requires AFFIRMATIVELY-OBSERVED provenance on
+            # every present axis, not merely the absence of a contrary signal. Gating
+            # it on `!definition_operator_asserted` alone handed it to every table
+            # with no provenance column at all.
             println(io,
                 "\n_A single value per definition column is what makes the aggregate " *
                 "meaningful; `metric_source_guard.jl` (bead td-9p91) enforced it — " *
                 "no override was used._\n")
+        end
+
+        # INDEPENDENT of the override state above. Whether the guard was overridden
+        # and whether the values it compared were observed are two orthogonal facts,
+        # and chaining them through one `if/elseif` let the weaker one shadow the
+        # stronger: a harmless NON-BINDING `--allow-mixed-src` suppressed this
+        # qualifier and restored an unqualified "the aggregate is well-defined" over
+        # a table whose definition was never observed — the exact assurance this
+        # machinery exists to withhold. Emitted last so it is the final word.
+        if analysis.definition_operator_asserted
+            println(io,
+                "\n_`metric_source_guard.jl` (bead td-9p91) checked what it was given, " *
+                "but the values it compared were operator-asserted for some rows " *
+                "(see the warning above), so this run does NOT establish that the " *
+                "aggregate spans a single MEASURED definition._\n")
+        elseif analysis.definition_provenance_undeterminable
+            println(io,
+                "\n_`metric_source_guard.jl` (bead td-9p91) checked what it was given, " *
+                "but the table carries no usable provenance for the axes named above " *
+                "(see the warning above), so this run does NOT establish that the " *
+                "aggregate spans a single MEASURED definition._\n")
         end
 
         println(io, "## Results\n")
@@ -768,6 +1040,19 @@ function paired_analysis_json(analysis; csv_paths)
         "seeds" => collect(analysis.seeds),
         "n_input_rows" => analysis.n_input_rows,
         "n_rows_analyzed" => analysis.n_rows_analyzed,
+        # Whether the ok=false check RAN, not only what it dropped. Without the
+        # flag, "0 dropped" is indistinguishable from "could not be checked".
+        "ok_column_present" => analysis.ok_column_present,
+        # Present is not the same as usable: a `String` `ok` column cannot express
+        # success, so the filter could not run over it. Without this field a
+        # consumer reading `ok_column_present: true, n_dropped_not_ok: 0` would
+        # conclude the check ran and found nothing.
+        "ok_column_runnable" => analysis.ok_column_runnable,
+        "ok_column_eltype" => analysis.ok_column_eltype,
+        "ok_filter_applied" => analysis.ok_filter_applied,
+        "n_dropped_not_ok" => analysis.n_dropped_not_ok,
+        "n_dropped_ok_missing" => analysis.n_dropped_ok_missing,
+        "n_dropped_metric_source" => analysis.n_dropped_metric_source,
         "metric_definition" => Dict(string(col) => vals
         for (col, vals) in analysis.definition),
         "exploratory" => true,
@@ -778,6 +1063,17 @@ function paired_analysis_json(analysis; csv_paths)
         "allow_mixed_src" => analysis.allow_mixed_src,
         "mixed_definition_axes" => analysis.mixed_axes,
         "metric_definition_override_bound" => analysis.override_bound,
+        # Whether the definition the guard checked was MEASURED or merely ASSERTED.
+        # A consumer that reads only `metric_definition` cannot tell the two apart,
+        # and they are very different provenance claims.
+        "metric_definition_operator_asserted" => analysis.definition_operator_asserted,
+        "operator_asserted_definition_axes" => analysis.operator_asserted_axes,
+        "n_rows_operator_asserted_definition" => analysis.n_rows_operator_asserted,
+        # The THIRD state, kept separate from the boolean above rather than folded
+        # into it: `metric_definition_operator_asserted` still means "at least one
+        # row was asserted", and `false` on it no longer implies "observed".
+        "metric_definition_provenance_undeterminable" => analysis.definition_provenance_undeterminable,
+        "undeterminable_definition_provenance_axes" => analysis.undeterminable_definition_axes,
         "alpha" => RGV_ALPHA,
         "improvement_threshold" => RGV_IMPROVEMENT_THRESHOLD,
         "metrics" => [Dict(

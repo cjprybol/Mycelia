@@ -55,8 +55,27 @@
 # WHY THE DEFINITION COLUMNS ARE HERE TOO. A `seed`-only backfill DEAD-ENDS: the
 # analysis accepts the seed and then refuses the same file for carrying no
 # metric-definition column, and nothing else could supply one. Both are opt-in and
-# operator-supplied — never inferred — and both are recorded in the sidecar, so a
-# reader can always tell a backfilled definition from an observed one.
+# operator-supplied — never inferred.
+#
+# THE ASSERTION TRAVELS IN THE TABLE, NOT ONLY IN THE SIDECAR. `--metric-source`
+# states, on operator say-so, WHICH DEFINITION PRODUCED EVERY METRIC IN THE FILE.
+# That is a much stronger claim than a seed label, and unlike `--seed` there is no
+# `--run-log` that could recover it: nothing verifies it. Recording it only in
+# `<out>.seed_backfill.json` is not enough, because NO consumer reads that sidecar
+# — `rgv_paired_wilcoxon.jl` calls `load_sweep_csvs(csv_paths)` and nothing else.
+# A genuinely mixed legacy table (QUAST-scored rows plus `internal:quast-failed`
+# rows, no `metric_source` column) backfilled with `--metric-source quast` would
+# therefore produce a file the guard certifies as uniform, and the analysis report
+# would print "`metric_source_guard.jl` enforced it — no override was used" over
+# numbers mixing an alignment-validated NGA50 with a size-ratio proxy. That is
+# strictly worse than the dead end it replaced, because the dead end failed closed.
+#
+# So every row this tool SUPPLIES a definition for is labelled in a sibling
+# `<column>_provenance` column carrying `DEFINITION_PROVENANCE_ASSERTED`. Rows that
+# already carried the value keep `"observed"`. The column travels with the CSV into
+# every downstream consumer, and `rgv_paired_wilcoxon.jl` reads it: an analysis over
+# operator-asserted rows cannot print the unqualified guard assurance, and
+# `results.json` carries the fact in machine-readable form.
 
 import CSV
 import DataFrames
@@ -145,6 +164,16 @@ function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
             return df
         end
         if length(existing) == 1 && first(existing) == seed
+            # PARTIALLY populated is the case between "all missing" and "conflicting":
+            # some rows carry `seed`, others are `missing`. `skipmissing` above hides
+            # those holes, so returning early here reported success while leaving the
+            # table unpairable — and `require_pairing_schema` then rejects it with a
+            # hint pointing back at THIS tool, so the operator ping-pongs forever.
+            # The populated values already agree with `seed`, so filling the holes
+            # asserts nothing new.
+            if any(ismissing, df.seed)
+                df[!, :seed] = fill(Int(seed), DataFrames.nrow(df))
+            end
             return df
         end
         error("CSV already has a `seed` column with value(s) " *
@@ -158,15 +187,81 @@ function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
 end
 
 """
+Value written into `<definition-column>_provenance` for every row whose metric
+definition was SUPPLIED BY THIS TOOL rather than observed by the run that produced
+the metrics.
+
+`rgv_paired_wilcoxon.jl` matches on the `"operator-asserted"` substring, so the
+prefix is part of the cross-file contract and is pinned by a test in
+`test/4_assembly/rgv_paired_wilcoxon_test.jl`.
+"""
+const DEFINITION_PROVENANCE_ASSERTED = "operator-asserted (backfill)"
+
+"""
+Value kept for rows that already carried the definition value before the backfill
+ran. Those rows are evidence; the asserted ones are a claim.
+"""
+const DEFINITION_PROVENANCE_OBSERVED = "observed"
+
+"""
+    definition_provenance_column(name) -> Symbol
+
+Sibling provenance column for a metric-definition column, e.g.
+`:metric_source` -> `:metric_source_provenance`.
+"""
+definition_provenance_column(name::Symbol) = Symbol(String(name) * "_provenance")
+
+"""
+    _mark_definition_provenance!(df, name, asserted) -> DataFrames.DataFrame
+
+Record, per row, whether this tool SUPPLIED the value in definition column `name`.
+
+`asserted[i]` is true for rows written by the backfill. Rows it did not write keep
+whatever provenance they already carried (or `"observed"` if the column is new), so
+re-running the tool can only ever ADD assertions — it can never launder a
+previously asserted row back into an observed one.
+
+No column is created when nothing was asserted and none exists: a table this tool
+did not change should not gain a column claiming it did.
+"""
+function _mark_definition_provenance!(df::DataFrames.DataFrame, name::Symbol,
+        asserted::AbstractVector{Bool})
+    prov = definition_provenance_column(name)
+    n = DataFrames.nrow(df)
+    present = String(prov) in DataFrames.names(df)
+    (!any(asserted) && !present) && return df
+    prior = present ?
+            String[ismissing(v) ? DEFINITION_PROVENANCE_OBSERVED : string(v)
+                   for v in getproperty(df, prov)] :
+            fill(DEFINITION_PROVENANCE_OBSERVED, n)
+    labels = String[asserted[i] ? DEFINITION_PROVENANCE_ASSERTED : prior[i]
+                    for i in 1:n]
+    if present
+        df[!, prov] = labels
+    else
+        DataFrames.insertcols!(df, DataFrames.ncol(df) + 1, prov => labels)
+    end
+    return df
+end
+
+"""
     insert_definition_column!(df, name, value) -> DataFrames.DataFrame
 
 Append a metric-definition column (`:metric_source` / `:quast_min_contig`) with a
-single operator-supplied `value`.
+single operator-supplied `value`, and label every row it supplies in the sibling
+`<name>_provenance` column.
 
 Refuses to overwrite an existing column holding a different value, for the same
 reason `insert_seed_column!` does: asserting a definition a run did not have makes
 an unusable table look usable, and the metric-definition guard would then pass on
 a claim nobody verified.
+
+The provenance column exists because refusing to overwrite is not sufficient. When
+the column is ABSENT there is nothing to conflict with, so the value is accepted
+unconditionally — and a legacy table that really did mix definitions has exactly
+that shape. The guard downstream can then only confirm that the asserted labels
+agree with each other, which is not evidence about how the runs were scored. The
+provenance column is what carries that distinction to the consumer.
 """
 function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value)
     col = String(name)
@@ -174,10 +269,24 @@ function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value
         existing = unique(skipmissing(getproperty(df, name)))
         if isempty(existing)          # present but unpopulated — fill, do not refuse
             df[!, name] = fill(value, DataFrames.nrow(df))
-            return df
+            return _mark_definition_provenance!(df, name,
+                trues(DataFrames.nrow(df)))
         end
         if length(existing) == 1 && first(existing) == value
-            return df
+            # PARTIALLY populated, exactly as in `insert_seed_column!`: `skipmissing`
+            # above hides the holes, so returning early reported success while
+            # leaving rows whose definition is still `missing`. The metric-definition
+            # guard renders `missing` as the literal `"missing"` and counts it as a
+            # DISTINCT value, so those holes make the guard raise later with a
+            # message that points nowhere. The populated values already agree with
+            # `value`, so filling the holes asserts nothing new about them.
+            holes = BitVector(ismissing(v) for v in getproperty(df, name))
+            if any(holes)
+                df[!, name] = fill(value, DataFrames.nrow(df))
+            end
+            # Only the FILLED rows are asserted; the rows that already carried the
+            # value are evidence and stay labelled as observed.
+            return _mark_definition_provenance!(df, name, holes)
         end
         error("CSV already has a `$col` column with value(s) " *
               "$(join(string.(existing), ", ")); refusing to overwrite it with " *
@@ -185,7 +294,7 @@ function insert_definition_column!(df::DataFrames.DataFrame, name::Symbol, value
     end
     DataFrames.insertcols!(df, DataFrames.ncol(df) + 1,
         name => fill(value, DataFrames.nrow(df)))
-    return df
+    return _mark_definition_provenance!(df, name, trues(DataFrames.nrow(df)))
 end
 
 """
@@ -216,7 +325,8 @@ function backfill_seed(csv_path::AbstractString;
     # having no metric-definition column, and nothing else could supply one. The
     # documented backfill -> analyse workflow has to be completable, so the same
     # provenance discipline is extended to the definition columns — each is opt-in,
-    # explicit, and recorded in the sidecar, never inferred.
+    # explicit, labelled per row IN THE CSV, and recorded in the sidecar, never
+    # inferred.
     if metric_source !== nothing
         insert_definition_column!(df, :metric_source, String(metric_source))
     end
@@ -224,6 +334,12 @@ function backfill_seed(csv_path::AbstractString;
         insert_definition_column!(df, :quast_min_contig, Int(quast_min_contig))
     end
     CSV.write(out, df)
+    # The sidecar is an audit record, NOT the disclosure mechanism: no consumer
+    # reads it. The disclosure that has to reach the analysis rides in the CSV's
+    # `<column>_provenance` columns, named here so the two cannot drift apart.
+    provenance_columns = String[String(definition_provenance_column(c))
+                                for c in (:metric_source, :quast_min_contig)
+                                if String(definition_provenance_column(c)) in DataFrames.names(df)]
     sidecar = out * ".seed_backfill.json"
     open(sidecar, "w") do io
         JSON.print(io,
@@ -232,17 +348,26 @@ function backfill_seed(csv_path::AbstractString;
                 "output_csv" => abspath(out),
                 "seed" => Int(seed),
                 "seed_provenance" => String(provenance),
-                "metric_source_backfilled" =>
-                    metric_source === nothing ? nothing : String(metric_source),
-                "quast_min_contig_backfilled" =>
-                    quast_min_contig === nothing ? nothing : Int(quast_min_contig),
+                "metric_source_backfilled" => metric_source === nothing ? nothing :
+                                              String(metric_source),
+                "quast_min_contig_backfilled" => quast_min_contig === nothing ? nothing :
+                                                 Int(quast_min_contig),
+                "definition_provenance_columns" => provenance_columns,
+                "definition_provenance_asserted_label" => DEFINITION_PROVENANCE_ASSERTED,
                 "rows" => DataFrames.nrow(df),
                 "backfilled_at" => string(Dates.now()),
                 "tool" => "benchmarking/rgv_seed_backfill.jl",
                 "bead" => "td-59o7"
             ), 2)
     end
-    return out, sidecar, DataFrames.nrow(df)
+    # `provenance_columns` is returned, not just written to the sidecar, so the CLI
+    # can report what it ACTUALLY wrote. It previously announced "rows labelled
+    # <asserted> in metric_source_provenance" unconditionally — including on the one
+    # shape where `_mark_definition_provenance!` writes nothing at all (a definition
+    # column that already carries the requested value, so no row is asserted and no
+    # provenance column exists to update). Trailing positional, so existing
+    # three-way destructuring keeps working.
+    return out, sidecar, DataFrames.nrow(df), provenance_columns
 end
 
 # === CLI ====================================================================
@@ -303,7 +428,8 @@ function main()
     ms = _bf_arg("--metric-source")
     qmc = _bf_arg("--quast-min-contig")
     out, sidecar,
-    n = backfill_seed(csv_path;
+    n,
+    prov_cols = backfill_seed(csv_path;
         seed = seed, provenance = provenance,
         metric_source = ms,
         quast_min_contig = qmc === nothing ? nothing : parse(Int, qmc),
@@ -312,8 +438,29 @@ function main()
     println("Source     : $csv_path")
     println("Seed       : $seed")
     println("Provenance : $provenance")
-    ms === nothing || println("metric_source    : $ms (operator-supplied)")
-    qmc === nothing || println("quast_min_contig : $qmc (operator-supplied)")
+    # Report what was WRITTEN, not what was requested. Naming a definition the CSV
+    # already carries asserts nothing, so no provenance column is created — and
+    # announcing one anyway is an assurance the sidecar contradicts in the same run.
+    _bf_wrote(col) = String(definition_provenance_column(col)) in prov_cols
+    ms === nothing || println("metric_source    : $ms (operator-supplied)" *
+            (_bf_wrote(:metric_source) ?
+             "; rows supplied are labelled " *
+             "\"$DEFINITION_PROVENANCE_ASSERTED\" in " *
+             "metric_source_provenance" :
+             "; already present with this value — nothing asserted, " *
+             "so NO metric_source_provenance column was written"))
+    qmc === nothing || println("quast_min_contig : $qmc (operator-supplied)" *
+            (_bf_wrote(:quast_min_contig) ?
+             "; rows supplied are labelled " *
+             "\"$DEFINITION_PROVENANCE_ASSERTED\" in " *
+             "quast_min_contig_provenance" :
+             "; already present with this value — nothing asserted, " *
+             "so NO quast_min_contig_provenance column was written"))
+    if !isempty(prov_cols)
+        println("             NOTE: an operator-asserted definition is a CLAIM, not an " *
+                "observation. rgv_paired_wilcoxon.jl reads the provenance column and " *
+                "will refuse to report the guard as enforced over these rows.")
+    end
     println("Rows       : $n")
     println("Wrote      : $out")
     println("Sidecar    : $sidecar")
