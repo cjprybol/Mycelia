@@ -38,6 +38,40 @@ function _tam_throws_with(f, needles::Vector{String})
     return ""
 end
 
+# Extract ROW_KEYS from the harness source by PAREN-DEPTH counting (from #448), with
+# the exactly-one-occurrence requirement this file's other guards use. Depth counting
+# is the better extractor — it cannot truncate on a `)` inside the literal the way a
+# lazy regex can. Requiring a single occurrence is the better anchor — `match` returns
+# the FIRST hit, so a `#= =#`-commented old copy above a drifted live const otherwise
+# reports agreement. Combining them is strictly stronger than either alone.
+function _tam_harness_row_keys(harness::AbstractString)
+    opens = collect(eachmatch(r"const\s+ROW_KEYS\s*=\s*\(", harness))
+    length(opens) == 1 ||
+        error("expected exactly 1 `const ROW_KEYS = (` in the harness source, found " *
+              "$(length(opens)) — a shadowing copy makes the comparison below vacuous")
+    m = opens[1]
+    start = m.offset + ncodeunits(m.match)
+    depth = 1
+    stop = 0
+    i = start
+    while i <= lastindex(harness)
+        c = harness[i]
+        if c == '('
+            depth += 1
+        elseif c == ')'
+            depth -= 1
+            if depth == 0
+                stop = prevind(harness, i)
+                break
+            end
+        end
+        i = nextind(harness, i)
+    end
+    stop == 0 && error("unterminated `const ROW_KEYS = (` in the harness source")
+    return [String(mm.captures[1])
+            for mm in eachmatch(r":([A-Za-z_][A-Za-z0-9_]*)", harness[start:stop])]
+end
+
 # A checkpoint shaped exactly like track_a_baseline_benchmark.jl's `cell_row`.
 function _tam_cell(; organism = "Lambda", technology = "illumina", coverage = 30,
         seed = 42, arm = "qualmer", accession = "NC_001416", k = 31,
@@ -154,6 +188,25 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
                    "T4__pacbio__50x__seed123__kmer"
         # The real shard boundary the merge exists to reconcile.
         Test.@test length(expected_cell_ids(organisms = ("phi29", "SARS-CoV-2"))) == 144
+    end
+
+    Test.@testset "row schema mirrors the harness ROW_KEYS (drift guard)" begin
+        harness = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking",
+                "track_a_baseline_benchmark.jl"), String)
+        harness_keys = _tam_harness_row_keys(harness)
+        # Sanity-check the PARSE before trusting the comparison: an empty or truncated
+        # parse would make the equality below vacuous rather than protective.
+        Test.@test length(harness_keys) >= 17
+        Test.@test harness_keys[1] == "organism"
+        Test.@test harness_keys[end] == "status"
+        # The assertion that would have caught the dropped provenance columns.
+        Test.@test harness_keys == TRACK_A_ROW_KEYS
+        # Named because their loss is unrecoverable rather than cosmetic: the hosts
+        # measure peak RSS by different methods by construction, and peak_rss_method
+        # is the only thing separating them.
+        Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
+        Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
     end
 
     Test.@testset "canonicalization: representation drift is not a collision" begin

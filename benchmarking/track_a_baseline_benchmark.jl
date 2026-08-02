@@ -356,47 +356,68 @@ end
 """
 Run `f`, returning `(; value, wall_seconds, peak_rss_bytes, rss_baseline_bytes, method)`.
 
-`peak_rss_bytes` is the highest WHOLE-PROCESS resident set observed while `f` ran.
-It is deliberately NOT called a per-cell figure: it includes the Julia runtime, the
-loaded package images, every other thread, and memory retained (not returned to the
-OS) by earlier cells. `rss_baseline_bytes` is the process RSS immediately before `f`,
-so a caller wanting a cell-attributable increment can take the difference — but the
-absolute level is what an HPC memory request actually needs, so that is what the
-primary column holds.
+`peak_rss_bytes` is the highest WHOLE-PROCESS resident set observed while `f` ran. It is
+deliberately not called a per-cell figure: it includes the Julia runtime, the loaded
+package images, every other thread, and memory retained (not returned to the OS) by
+earlier cells. `rss_baseline_bytes` is the process RSS immediately before `f`, so a caller
+wanting a cell-attributable increment can take the difference — but the absolute level is
+what an HPC memory request actually needs, so that is what the primary column holds.
 
-The sampler runs via `Threads.@spawn`, which requires a second thread: the assembly
-is CPU-bound Julia that never yields, so a same-thread `@async` sampler would never
-be scheduled. The two committed sbatch wrappers export
-JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK — run_track_a_baseline_lrc.sbatch (16) and
-run_track_a_baseline_nersc.sbatch (4) — so sampling is the production path under
-SLURM. There is NO committed Lovelace wrapper, and Julia 1.10 defaults to ONE
-thread, so a bare `julia track_a_baseline_benchmark.jl` silently reverts to the
-broken high-water semantics. Launch with `julia -t N` or the column is meaningless.
+The sampler runs via `Threads.@spawn`, which requires a second thread: the assembly is
+CPU-bound Julia that never yields, so a same-thread `@async` sampler would never be
+scheduled. Both committed sbatch wrappers export JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK —
+run_track_a_baseline_lrc.sbatch (16) and run_track_a_baseline_nersc.sbatch (4) — so
+sampling is the production path under SLURM. Julia defaults to ONE thread, so a bare
+`julia track_a_baseline_benchmark.jl` reverts to the broken high-water semantics; launch
+with `julia -t N` or the column is meaningless. That revert is no longer silent — a
+one-time `@warn` fires from the fallback branch below whenever it happens.
 
-`method` records how the number was obtained, so a reader never has to infer it, and
-so rows measured different ways are never averaged together:
-  "sampled"          - process-RSS high-water, polled during the cell
-  "sampled-degraded" - the sampler never completed a single read (starved, or every
-                       /proc read failed); the number is the entry baseline, NOT a
-                       measurement. Note a flat cell whose RSS never exceeds the
-                       baseline is still "sampled" — that is a real observation.
+`method` records how the number was obtained, so a reader never has to infer it and rows
+measured different ways are never averaged together:
+  "sampled"          - process-RSS high-water, polled while the cell ran, with EVERY poll
+                       succeeding. A flat cell whose RSS never exceeds its baseline is
+                       still "sampled" — that is a real observation.
+  "sampled-partial"  - at least one poll succeeded and at least one THREW. Sampling
+                       continued, but the peak may have been missed while the probe was
+                       failing, so the number is a lower bound, not a measurement.
+  "sampled-degraded" - the sampler never completed a single read (starved, or every /proc
+                       read failed); the number is the entry baseline, NOT a measurement.
   "highwater-delta"  - single-threaded or no /proc: the old, known-broken semantics
-  "unknown"          - checkpoint predates this column
+  "unknown"          - checkpoint predates this column (see OPTIONAL_KEY_DEFAULTS)
 Values under different methods are different quantities. Always filter on
 `peak_rss_method` before aggregating.
+
+`probe` is the RSS reader, injectable ONLY so the failure labelling above can be tested:
+`current_rss_bytes` returns `nothing` on macOS and there is no portable way to make a
+real /proc read fail on the third poll.
 """
-function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
-    # Guard the baseline read too. Everything else here is careful never to let
-    # telemetry fail science, but this one call sat outside any try — a /proc read
-    # error would have aborted the cell before f() was even invoked.
+function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05,
+        probe = current_rss_bytes)
+    # Guard the baseline read too: everything here is careful never to let telemetry fail
+    # science, and an unguarded /proc read error would abort the cell before f() even ran.
     baseline = try
-        current_rss_bytes()
+        probe()
     catch e
         @warn "baseline RSS read failed; falling back to high-water semantics" exception = e
         nothing
     end
+
     can_sample = baseline !== nothing && Threads.nthreads() > 1
     if !can_sample
+        # The docstring says a bare `julia` invocation "silently reverts to the broken
+        # high-water semantics". `can_sample == false` knows that at runtime, so say it
+        # instead of leaving the operator to infer it from a column of near-zeros after a
+        # multi-day run. `maxlog` keeps it to one line, not one per cell.
+        if Threads.nthreads() == 1
+            @warn "peak_rss_bytes is falling back to the known-broken high-water " *
+                  "semantics: Julia has ONE thread, so the RSS sampler cannot be " *
+                  "scheduled against a CPU-bound assembly. Relaunch with `julia -t N` " *
+                  "(both sbatch wrappers export JULIA_NUM_THREADS) or treat the column " *
+                  "as unusable." maxlog = 1
+        elseif baseline === nothing
+            @warn "peak_rss_bytes is falling back to the known-broken high-water " *
+                  "semantics: /proc/self/status is unreadable on this host." maxlog = 1
+        end
         rss0 = Sys.maxrss()
         timed = @timed f()
         return (value = timed.value, wall_seconds = timed.time,
@@ -407,24 +428,31 @@ function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
 
     peak = Threads.Atomic{Int}(baseline)
     keep_sampling = Threads.Atomic{Bool}(true)
-    # Count SUCCESSFUL READS, not increases over the baseline. The failure worth
-    # flagging is a sampler that never observed anything — starved, or every /proc read
-    # failed — because it then returns the baseline as though it were a measurement: a
-    # large, stable, plausible byte count, strictly harder to spot than the exactly-0
-    # signature of the bug being replaced.
-    #
-    # A cell whose RSS never rises above the baseline is NOT degraded: the peak process
-    # RSS during that cell genuinely IS the baseline, which happens whenever the
-    # allocation fits inside already-resident heap. Counting improvements instead of
-    # reads mislabels those as failures and would tag most small cells degraded.
+    # Count SUCCESSFUL READS, not increases over the baseline. The failure worth flagging
+    # is a sampler that never observed anything — starved, or every /proc read failed —
+    # because it then returns the baseline as though it were a measurement: a large,
+    # stable, plausible byte count, strictly harder to spot than the exactly-0 signature
+    # of the bug being replaced. A cell whose RSS never rises above its baseline is NOT
+    # degraded; that happens whenever the allocation fits inside already-resident heap.
     reads = Threads.Atomic{Int}(0)
+    # Count FAILED reads separately, because "never observed anything" and "stopped
+    # observing partway" are different lies. With the try OUTSIDE the loop, the first
+    # throwing poll ended sampling for the rest of the cell, yet `reads > 0` still
+    # labelled the frozen partial maximum "sampled" — a plausible number presented as a
+    # measurement, which is the exact failure mode the read count was added to catch.
+    failed_reads = Threads.Atomic{Int}(0)
     sampler = Threads.@spawn begin
-        # The sampler must never be able to fail a good cell: a transient /proc read
-        # error is telemetry, not science. Swallow it here and let the improved-count
-        # downgrade the method instead.
+        # The sampler must never be able to fail a good cell: a transient /proc read error
+        # is telemetry, not science. The try is INSIDE the loop, so one bad poll costs one
+        # sample rather than the rest of the cell, and the counts below report it.
         try
             while keep_sampling[]
-                observed = current_rss_bytes()
+                observed = try
+                    probe()
+                catch
+                    Threads.atomic_add!(failed_reads, 1)
+                    nothing
+                end
                 if observed !== nothing
                     Threads.atomic_add!(reads, 1)
                     observed > peak[] && Threads.atomic_max!(peak, observed)
@@ -432,27 +460,36 @@ function timed_with_peak_rss(f; interval_seconds::Float64 = 0.05)
                 sleep(interval_seconds)
             end
         catch
-            # deliberately swallowed; `reads == 0` reports the degradation
+            # Last-resort net for a failure OUTSIDE the probe (an interrupted sleep, say).
+            # Deliberately swallowed; the two read counts report the degradation.
         end
     end
 
     timed = try
         @timed f()
     finally
-        # Stop AND reap the sampler here, not after the try. With `wait` outside the
-        # block, a sampler exception on the success path raised TaskFailedException
-        # and DISCARDED a completed assembly — telemetry destroying science — while on
-        # the throw path `wait` was never reached at all.
+        # Stop AND reap the sampler here, not after the block. With `wait` outside, a
+        # sampler exception on the success path would raise TaskFailedException and
+        # DISCARD a completed assembly — telemetry destroying science — while on the throw
+        # path `wait` would never be reached at all and the sampler would outlive the cell.
         keep_sampling[] = false
         try
             wait(sampler)
         catch
-            # sampler already reported via `reads`; never let it mask f()'s outcome
+            # sampler already reported via `reads`; never let it mask f()'s own outcome
         end
     end
+    # Read the counters only after the `finally` above has reaped the sampler, so the
+    # label describes the whole cell rather than a racing snapshot of it.
+    method = if reads[] == 0
+        "sampled-degraded"
+    elseif failed_reads[] > 0
+        "sampled-partial"
+    else
+        "sampled"
+    end
     return (value = timed.value, wall_seconds = timed.time,
-        peak_rss_bytes = peak[], rss_baseline_bytes = baseline,
-        method = reads[] > 0 ? "sampled" : "sampled-degraded")
+        peak_rss_bytes = peak[], rss_baseline_bytes = baseline, method = method)
 end
 
 # === Per-cell execution ===
