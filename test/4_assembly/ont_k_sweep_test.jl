@@ -48,27 +48,60 @@ Test.@testset "ONT k-sweep helpers" begin
     end
 
     Test.@testset "nga50_status_for separates the censoring causes" begin
-        measured = (; NGA50 = 1234.0)
-        censored = (; NGA50 = missing)
+        measured = (; NGA50 = 1234.0, genome_fraction = 99.9)
+        unaligned = (; NGA50 = missing, genome_fraction = missing)
+        aligned_low = (; NGA50 = missing, genome_fraction = 31.663)
 
         # Nothing assembled at all.
-        Test.@test nga50_status_for(censored, 0, 0, false) == "no_contigs"
+        Test.@test nga50_status_for(unaligned, 0, 0, false) == "no_contigs"
 
         # Contigs exist but none reaches min_contig. This is the signature of
         # the low-k regime and MUST NOT be reported as a tool failure — QUAST
         # declining to score an assembly with no scorable contig is a correct
         # refusal, and conflating it with `quast_failed` would make the most
         # informative stratum of the sweep look like broken infrastructure.
-        Test.@test nga50_status_for(censored, 149_115, 0, false) == "no_contigs_ge_min"
+        Test.@test nga50_status_for(unaligned, 149_115, 0, false) == "no_contigs_ge_min"
 
-        # Scorable contigs exist, QUAST ran, but nothing aligned.
-        Test.@test nga50_status_for(censored, 13_656, 42, true) == "censored_unaligned"
+        # Scorable contigs exist, QUAST ran, and NOTHING aligned.
+        Test.@test nga50_status_for(unaligned, 13_656, 42, true) == "censored_no_alignment"
+
+        # Scorable contigs exist, QUAST ran, contigs DID align — but under the
+        # 50% genome-fraction floor below which NGA50 has no definition. This
+        # is the real ONT/k=21/30x cell: 31.663% of the genome was recovered.
+        # Labelling it "nothing aligned" would assert the opposite of the
+        # measurement sitting in the same row.
+        Test.@test nga50_status_for(aligned_low, 13_656, 24, true) == "censored_gf_below_50"
 
         # Scorable contigs exist and QUAST genuinely failed.
-        Test.@test nga50_status_for(censored, 13_656, 42, false) == "quast_failed"
+        Test.@test nga50_status_for(unaligned, 13_656, 42, false) == "quast_failed"
 
         # The measured case.
         Test.@test nga50_status_for(measured, 5_357, 900, true) == "measured"
+    end
+
+    Test.@testset "reclassify corrects a stale label from recorded values" begin
+        # A checkpoint written by the FIRST version of the classifier, which
+        # called every absent NGA50 "censored_unaligned". The raw measurements
+        # in the row are correct; only the derived label is wrong.
+        stale = (; organism = "Lambda", accession = "NC_001416", technology = "ont",
+            k = 21, coverage = 30, seed = 42, decoder_arm = "kmer",
+            n_reads = 139, n_contigs = 44_000, asm_contigs_ge_min = 24,
+            asm_max_contig = 4682, asm_total_bp = 1_000_000,
+            quast_contigs = 24.0, total_length = 60_000.0, N50 = 900.0,
+            largest_contig = 4682.0, NGA50 = missing,
+            nga50_status = "censored_unaligned", NA50 = missing,
+            largest_alignment = 762.0, genome_fraction = 31.663,
+            duplication_ratio = 1.0, misassemblies = 0.0,
+            unaligned_contigs = 10.0, unaligned_length = 5000.0,
+            outcome = "degenerate", wall_seconds = 1.0, status = "ok")
+        fixed = reclassify(stale)
+        Test.@test fixed.nga50_status == "censored_gf_below_50"
+        # Relabelling must be LOSSLESS — no measurement may be altered.
+        Test.@test fixed.genome_fraction == 31.663
+        Test.@test ismissing(fixed.NGA50)
+        Test.@test fixed.asm_max_contig == 4682
+        # Idempotent: reclassifying an already-correct row is a no-op.
+        Test.@test reclassify(fixed).nga50_status == fixed.nga50_status
     end
 
     Test.@testset "classify_outcome never treats a censored floor as a measurement" begin
@@ -76,8 +109,8 @@ Test.@testset "ONT k-sweep helpers" begin
         # says. If QUAST could not compute NGA50 then nothing aligned, so a
         # nonzero genome fraction alongside it would be internally
         # inconsistent rather than evidence of partial success.
-        for status in ("no_contigs", "no_contigs_ge_min", "censored_unaligned",
-            "quast_failed")
+        for status in ("no_contigs", "no_contigs_ge_min", "censored_no_alignment",
+            "censored_gf_below_50", "quast_failed")
             Test.@test classify_outcome(0.0, 0.0, status) == "degenerate"
             Test.@test classify_outcome(48_000.0, 99.9, status) == "degenerate"
         end

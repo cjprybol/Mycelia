@@ -285,16 +285,33 @@ different implications:
                             signature of the low-k regime, where the graph is so
                             tangled that unitigs never grow past a few tens of
                             bases. The `asm_*` columns quantify it.
-  * `censored_unaligned`  — contigs long enough to score exist, but QUAST
-                            printed "-" for NGA50, meaning none aligned to the
-                            reference. Genome fraction and unaligned length
-                            quantify this; `# misassemblies` does NOT — QUAST
-                            reports 0 misassemblies on unaligned contigs, so a 0
-                            there means non-alignment, not correctness.
+  * `censored_no_alignment`  — contigs long enough to score exist, but QUAST
+                            reported NO genome fraction at all, meaning nothing
+                            aligned to the reference. `# misassemblies` does NOT
+                            qualify this — QUAST reports 0 misassemblies on
+                            unaligned contigs, so a 0 there means non-alignment,
+                            not correctness.
+  * `censored_gf_below_50`  — contigs ALIGNED (genome fraction is a real,
+                            nonzero measurement) but NGA50 is still absent,
+                            because NGA50 is UNDEFINED below 50% genome
+                            fraction. NGA50 is the aligned-block length at which
+                            blocks of that size or larger cover half the
+                            REFERENCE; if aligned blocks total under half the
+                            genome, no such length exists and QUAST prints "-".
+                            This is a definitional boundary, NOT an assembly
+                            that failed to align, and conflating the two
+                            understates how much of the genome was recovered.
   * `quast_failed`        — QUAST genuinely errored on an assembly it should
                             have been able to score. This is the ONLY value
                             here that indicates an infrastructure problem, which
                             is why `no_contigs_ge_min` was split out of it.
+
+Because NGA50 is a step function of genome fraction at the 50% boundary, it is
+an UNSTABLE endpoint wherever cells sit near that line: two replicate seeds of
+the same condition can land on opposite sides and report "measured" versus
+"absent" for what is nearly the same assembly. Genome fraction is continuous
+across that boundary and does not have the pathology, which is why every
+summary in this harness reports it beside NGA50.
 
 `contigs_ge_min` is computed in Julia from the contigs themselves, so this
 classification never depends on QUAST having succeeded.
@@ -304,7 +321,12 @@ function nga50_status_for(metrics, n_contigs::Int, contigs_ge_min::Int,
     n_contigs == 0 && return "no_contigs"
     contigs_ge_min == 0 && return "no_contigs_ge_min"
     quast_ran || return "quast_failed"
-    return ismissing(metrics.NGA50) ? "censored_unaligned" : "measured"
+    ismissing(metrics.NGA50) || return "measured"
+    # NGA50 absent: distinguish "nothing aligned" from "aligned, but under the
+    # 50% genome-fraction floor below which NGA50 has no definition".
+    ismissing(metrics.genome_fraction) && return "censored_no_alignment"
+    return metrics.genome_fraction > 0 ? "censored_gf_below_50" :
+           "censored_no_alignment"
 end
 
 """
@@ -452,8 +474,14 @@ function run_cell(ref, tech, k, cov, seed, cell_dir)
         nga50_status)
 
     status = asm.n == 0 ? "empty_assembly" : "ok"
-    return cell_row(tech, k, cov, seed; n_reads, asm, metrics,
-        nga50_status, outcome, wall_seconds, status)
+    # Route the fresh row through `reclassify` as well, so a cell computed in
+    # this run and the same cell reloaded from its checkpoint are classified by
+    # exactly one code path. Without this, the two paths derive `quast_ran`
+    # differently (here from whether report.tsv appeared, there from whether a
+    # contig count survived into the row) and could disagree on an edge case.
+    # `reclassify` is idempotent, so applying it twice is harmless.
+    return reclassify(cell_row(tech, k, cov, seed; n_reads, asm, metrics,
+        nga50_status, outcome, wall_seconds, status))
 end
 
 function error_row(tech, k, cov, seed)
@@ -496,7 +524,37 @@ function canonical(d::AbstractDict)
             Float64(v)
         end
     end
-    return (; (ROW_KEYS .=> values)...)
+    return reclassify((; (ROW_KEYS .=> values)...))
+end
+
+"""
+    reclassify(row) -> NamedTuple
+
+Recompute `nga50_status` and `outcome` from the row's own recorded measurements
+rather than trusting whatever the checkpoint stored.
+
+Both are DERIVED columns — pure functions of (NGA50, genome_fraction,
+n_contigs, asm_contigs_ge_min), all of which are stored. Deriving them on read
+means a classification bug can be fixed by editing this file and re-running the
+aggregation, instead of by recomputing 96 assemblies. That mattered in practice:
+the first version of `nga50_status_for` labelled every absent NGA50
+`censored_unaligned`, which was wrong for cells that aligned but fell under the
+50% genome-fraction floor where NGA50 is undefined — and those cells had
+genome fractions as high as 31.7%, so the label was asserting "nothing aligned"
+about assemblies that had recovered a third of the genome.
+
+The raw measurements are never touched, so this is lossless relabelling.
+"""
+function reclassify(row)
+    metrics = (NGA50 = row.NGA50, genome_fraction = row.genome_fraction)
+    quast_ran = !ismissing(row.quast_contigs)
+    status = nga50_status_for(metrics, row.n_contigs, row.asm_contigs_ge_min,
+        quast_ran)
+    outcome = classify_outcome(
+        ismissing(row.NGA50) ? 0.0 : row.NGA50,
+        ismissing(row.genome_fraction) ? 0.0 : row.genome_fraction,
+        status)
+    return merge(row, (; nga50_status = status, outcome = outcome))
 end
 
 # === Aggregation ===
