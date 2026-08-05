@@ -106,19 +106,32 @@ alongside, so clamp effects stay separable from model effects.
 """
 function observation_quality_vectors(vertex_data)
     dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
-    isempty(dataset_ids) && return Vector{Vector{Float64}}()
+    isempty(dataset_ids) && return (vectors = Vector{Vector{Float64}}(), n_entries = 0,
+        n_observation_ids = 0)
     evidence = Mycelia.Rhizomorph.get_dataset_evidence(vertex_data, first(dataset_ids))
-    evidence === nothing && return Vector{Vector{Float64}}()
+    evidence === nothing && return (vectors = Vector{Vector{Float64}}(), n_entries = 0,
+        n_observation_ids = 0)
 
+    # The evidence map is observation_id => [entries], and ONE observation id can carry
+    # SEVERAL quality entries. Both counts are returned because the independence model's
+    # `n` is only meaningful if it counts independent things: production
+    # `get_vertex_joint_quality` sums over ENTRIES, so if these two counts diverge the
+    # model is already compounding within a single observation, before any question of
+    # correlation between observations arises.
     vectors = Vector{Vector{Float64}}()
-    for observation in values(evidence)
+    n_observation_ids = 0
+    for (_, observation) in evidence
+        observation_had_quality = false
         for entry in observation
             if entry isa Mycelia.Rhizomorph.QualityEvidenceEntry
                 push!(vectors, Float64.(Int.(entry.quality_scores) .- 33))
+                observation_had_quality = true
             end
         end
+        observation_had_quality && (n_observation_ids += 1)
     end
-    return vectors
+    return (vectors = vectors, n_entries = length(vectors),
+        n_observation_ids = n_observation_ids)
 end
 
 phred_to_error(q) = 10.0^(-q / 10.0)
@@ -128,10 +141,48 @@ Independence (the production model): Phred sums across observations, per positio
 Returned UNCLAMPED, then reduced to the k-mer's weakest position — the same reduction
 the traversal gate uses.
 """
-function joint_independence(vectors)
+function joint_independence_positions(vectors)
     isempty(vectors) && return nothing
     k = length(first(vectors))
-    return minimum(sum(v[pos] for v in vectors) for pos in 1:k)
+    return [sum(v[pos] for v in vectors) for pos in 1:k]
+end
+
+"""
+WEAKEST-POSITION reduction: the k-mer scores as its worst position. This is what the
+traversal gate uses, and it is a defensible *heuristic* — one bad base invalidates a
+k-mer.
+
+It is NOT the probability that the k-mer is wrong, and must not be scored as though it
+were. See `union_error_probability`.
+"""
+weakest_position_quality(joint) = joint === nothing ? nothing : minimum(joint)
+
+"""
+UNION reduction: the probability that the k-mer is wrong is the probability that ANY of
+its k positions is wrong,
+
+    P(k-mer wrong) = 1 - prod_j (1 - p_j)
+
+NOT `max_j p_j`, which is only a lower bound. For k=31 the two can differ by up to a
+factor of k (~15 Phred points), so scoring the weakest-position value against
+whole-k-mer ground truth builds a systematic overconfidence into the measurement that
+has nothing to do with correlated observations. Reporting both separates the estimand
+error from the modelling error.
+"""
+function union_error_probability(joint)
+    joint === nothing && return nothing
+    # Computed as -expm1(sum(log1p(-p))) rather than the literal 1 - prod(1 - p).
+    # The literal form catastrophically cancels: once p < ~1e-16, (1 - p) rounds to
+    # exactly 1.0 in Float64, the product is exactly 1.0, and the union probability
+    # collapses to a hard 0.0 — which then looks like INFINITE overconfidence rather
+    # than the very small number it actually is. log1p/expm1 stay accurate all the way
+    # down, which matters here precisely because the interesting bins are the ones with
+    # astronomically small predicted error.
+    log_all_correct = 0.0
+    for q in joint
+        log_all_correct += log1p(-phred_to_error(q))
+    end
+    return -expm1(log_all_correct)
 end
 
 """
@@ -188,14 +239,15 @@ function calibration_main()
 
         for label in collect(MetaGraphsNext.labels(graph))
             vertex_data = graph[label]
-            vectors = observation_quality_vectors(vertex_data)
+            observations = observation_quality_vectors(vertex_data)
+            vectors = observations.vectors
             isempty(vectors) && continue
 
             sequence = String(label)
             rc = String(BioSequences.reverse_complement(BioSequences.LongDNA{4}(sequence)))
             is_true_kmer = (sequence in truth) || (rc in truth)
 
-            independence = joint_independence(vectors)
+            joint = joint_independence_positions(vectors)
             conservative = joint_conservative(vectors)
             clamped = let
                 ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
@@ -206,8 +258,14 @@ function calibration_main()
 
             push!(vertex_rows,
                 (chemistry = profile.name, coverage = coverage, regime = regime,
-                    n_observations = length(vectors), is_true_kmer = is_true_kmer,
-                    joint_independence_unclamped = round(independence; digits = 2),
+                    n_observations = observations.n_entries,
+                    n_observation_ids = observations.n_observation_ids,
+                    is_true_kmer = is_true_kmer,
+                    joint_independence_unclamped = round(
+                        weakest_position_quality(joint); digits = 2),
+                    # The estimand-correct prediction for "is this k-mer wrong".
+                    p_union = union_error_probability(joint),
+                    p_weakest = phred_to_error(weakest_position_quality(joint)),
                     joint_conservative = round(conservative; digits = 2),
                     joint_clamped_api = clamped === nothing ? -1.0 : clamped))
         end
@@ -236,22 +294,41 @@ function calibration_main()
             members = filter(r -> bin[1] <= r.n_observations <= bin[2], cell)
             isempty(members) && continue
             observed = count(r -> !r.is_true_kmer, members) / length(members)
-            predicted_ind = Statistics.mean(
-                phred_to_error(r.joint_independence_unclamped) for r in members)
+            # `p_union` is the estimand-correct prediction (P(any position wrong));
+            # `p_weakest` is what the traversal gate actually uses. Both are scored, so
+            # the estimand mismatch is measured rather than silently inflating the
+            # apparent overconfidence.
+            predicted_union = Statistics.mean(r.p_union for r in members)
+            predicted_weakest = Statistics.mean(r.p_weakest for r in members)
             predicted_con = Statistics.mean(
                 phred_to_error(r.joint_conservative) for r in members)
+            # NO silent fallback to 1.0 here. A zero id count means the count is BROKEN,
+            # and defaulting it to the "everything is fine" value reports a bug as a clean
+            # result -- which is exactly what happened once already. Emit -1.0 so a broken
+            # count is loud.
+            entry_to_id_ratio = any(r -> r.n_observation_ids == 0, members) ? -1.0 :
+                                Statistics.mean(
+                r.n_observations / r.n_observation_ids for r in members)
+            over(p) = observed <= 0 ? -Inf :
+                      round(log10(observed / max(p, 1e-300));
+                digits = 2)
             push!(bin_rows,
                 (chemistry = profile.name, coverage = coverage, regime = regime,
                     obs_bin = "$(bin[1])-$(bin[2] > 1000 ? "inf" : bin[2])",
                     n_kmers = length(members),
+                    # >1 means evidence entries outnumber observation ids, i.e. the
+                    # independence model is compounding within one observation.
+                    mean_entries_per_observation_id = round(
+                        entry_to_id_ratio; digits = 3),
                     observed_error_rate = round(observed; sigdigits = 4),
-                    predicted_independence = round(predicted_ind; sigdigits = 4),
+                    predicted_union = round(predicted_union; sigdigits = 4),
+                    predicted_weakest = round(predicted_weakest; sigdigits = 4),
                     predicted_conservative = round(predicted_con; sigdigits = 4),
                     # How many orders of magnitude the model is wrong by. Positive =
                     # OVERCONFIDENT (observed errors exceed what the model allows).
-                    log10_overconfidence_independence = observed <= 0 ? -Inf :
-                                                        round(
-                        log10(observed / max(predicted_ind, 1e-300)); digits = 2)))
+                    log10_over_union = over(predicted_union),
+                    log10_over_weakest = over(predicted_weakest),
+                    log10_over_conservative = over(predicted_con)))
         end
 
         @info "cell done" chemistry=profile.name coverage regime n_vertices=length(cell)
@@ -283,18 +360,25 @@ function report_calibration(bin_rows, saturation_rows)
             for row in rows
                 println("    cov=$(lpad(row.coverage, 3))x obs=$(rpad(row.obs_bin, 8)) " *
                         "n=$(rpad(row.n_kmers, 6)) " *
+                        "entries/id=$(rpad(row.mean_entries_per_observation_id, 6)) " *
                         "observed=$(rpad(row.observed_error_rate, 10)) " *
-                        "pred_indep=$(rpad(row.predicted_independence, 11)) " *
-                        "log10_over=$(row.log10_overconfidence_independence)")
+                        "over_union=$(rpad(row.log10_over_union, 7)) " *
+                        "over_weakest=$(rpad(row.log10_over_weakest, 7)) " *
+                        "over_conservative=$(row.log10_over_conservative)")
             end
         end
     end
 
     println("\nINTERPRETATION")
-    println("  log10_over ~ 0        : independence is calibrated in that bin.")
-    println("  log10_over >> 0       : summing Phred overstates confidence there.")
-    println("  Compare `random` vs `artifact` at the SAME coverage: the gap between them")
-    println("  is the cost of assuming independence when errors are correlated.")
+    println("  log10_over ~ 0  : that model is calibrated in that bin.")
+    println("  log10_over >> 0 : that model overstates confidence there.")
+    println("  over_union is the ESTIMAND-CORRECT score for 'is this k-mer wrong'.")
+    println("  over_weakest is what the traversal gate actually uses; the gap between")
+    println("  union and weakest is measurement error, NOT evidence about correlation.")
+    println("  Compare `random` vs `artifact` at the SAME coverage: THAT gap is the cost")
+    println("  of assuming independence when errors are correlated.")
+    println("  entries/id > 1 means the model compounds within one observation, before")
+    println("  any question of correlation BETWEEN observations arises.")
     return nothing
 end
 

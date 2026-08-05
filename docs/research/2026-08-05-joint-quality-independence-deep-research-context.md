@@ -119,9 +119,20 @@ separated:
 
 ### 3.2 Result 1 — independence fails exactly where the framework's claim lives
 
-Under **random (independent) errors**, error k-mers essentially never recur.
-Bins with ≥3 observations contain none, so there is no measurable miscalibration
-— the assumption is untestable there because the failure mode does not arise.
+Under **random (independent) errors**, recurrence of error k-mers is rare **on
+Illumina** — its ≥3-observation bins contain no errors, so the assumption is
+largely untestable there because the failure mode does not arise.
+
+> **Correction (2026-08-05, after external review).** An earlier version of this
+> section claimed that bins with ≥3 observations contain no errors, full stop.
+> That is false, and it is false in exactly the way this project keeps warning
+> about: it generalised an Illumina-only pattern across all three chemistries.
+> Six random-regime bins have nonzero observed error at ≥3 observations — pacbio
+> 10x/20x/40x and ont 10x/20x/40x in the 3-4 bin, reaching **0.465** for pacbio
+> at 40x and 0.186 for ont at 40x. Long-read random error recurs often enough to
+> be measurable, so the random regime is not a clean independent-error control
+> for those chemistries. This does not rescue independence; it means the random
+> regime itself contains repeated error structure worth investigating.
 
 Under a **correlated artifact**, the model becomes overconfident by margins that
 **grow with observation count** — the signature of the independence assumption
