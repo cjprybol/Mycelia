@@ -73,8 +73,8 @@ CIGAR + NM, rather than inherited from a model name. Lambda, 30x, seed 42.
 | Badread-declared (header)  | 0.9461     | 0.9496 | 0.9007 | 0.9796 | 139 |
 
 3 of 139 reads (2.2%) did not align. `e` is the **unweighted** mean of per-read
-BLAST identities; the length-weighted alternative is 0.9453, which moves the
-ladder below by 1.5–4.2% and changes no conclusion.
+BLAST identities; weighting each read by its aligned length gives 0.9456, which
+moves the ladder below by 1.9% (k=11) to 5.4% (k=31) and changes no conclusion.
 
 So **e = 0.056**, and P(error-free k-mer) = (1-e)^k:
 
@@ -144,12 +144,16 @@ judgment call):
 | `substantial`   | genome fraction >= 90% **and** NGA50 >= 10% of the genome   |
 | `near_complete` | genome fraction >= 95% **and** NGA50 >= 50% of the genome   |
 
-Two of these choices materially shape the headline. Treating **any** censored
-NGA50 as `degenerate` classifies ONT/k=15/30x/seed123 that way despite 36.6%
-genome fraction and a 1,303 bp largest alignment. And the 25% floor is what puts
-the ONT 30x cells at k>=21 in the degenerate bucket. A reader who prefers a
-different rule can re-derive the whole table: `nga50_status` and `outcome` are
-derived columns, recomputed from stored measurements on every read.
+**Only one of these choices is doing any work.** `classify_outcome`
+short-circuits on censoring before it ever evaluates genome fraction, and
+`verdict_stats.tsv` records the consequence: **0 of 240 cells** are degenerate
+because of the 25% floor. Every degenerate cell in this grid is degenerate
+because NGA50 was censored. So the verdict rests entirely on the choice to treat
+**any** censored NGA50 as degenerate — which classifies ONT/k=15/30x/seed123
+that way despite 36.6% genome fraction and a 1,303 bp largest alignment. A
+reader who prefers a different rule can re-derive the whole table:
+`nga50_status` and `outcome` are derived columns, recomputed from stored
+measurements on every read.
 
 ## Outcome by (k, coverage) — stratified by chemistry and organism
 
@@ -168,7 +172,7 @@ over 3 seeds. NGA50 shown only where defined.
 | 21     | degenerate                     | 31.7% / —          | 77.5% / N1014     | 98.8% / N4541      |
 | 31     | degenerate                     | 9.8% / —           | 52.0% / N552      | 96.8% / N2451      |
 
-### Lambda — Illumina control (same k ladder)
+### Lambda — Illumina control (k=13 and k=19 omitted for width; both in the TSV)
 
 | k   | 10x                            | 30x              | 50x              | 100x             |
 | --- | ------------------------------ | ---------------- | ---------------- | ---------------- |
@@ -195,10 +199,12 @@ ordering the question turns on is already unambiguous at 30x and 50x.
 **Yes at >=30x — but which k depends on the genome, and "not degenerate" is not
 "good".**
 
-- At **10x**, no k in either organism produces a scorable, aligned assembly. The
-  mechanism is not uniform across that row: k>=13 fails because too few
-  error-free k-mers survive (1.7–5.3x clean coverage), while **k=11 fails for a
-  different reason** — see below.
+- At **10x**, no k reaches even the degenerate/partial boundary. On **Lambda**
+  nothing aligns at all at QUAST's default identity (0 of 21 cells). On **T4**,
+  8 of 12 cells do align, but recover only 0.4–2.6% of the genome with largest
+  alignments of 508–910 bp. The mechanism is not uniform across that row:
+  k>=13 fails because too few error-free k-mers survive (1.67–4.73x clean
+  coverage at those k), while **k=11 fails for a different reason** — see below.
 - On **Lambda**, k=15 is a genuine interior optimum at 30x and 50x: k=13 (35.9%)
   and k=17 (39.3%) are both worse at 30x. At 100x the ordering by genome
   fraction shifts to k=19 (100.0%) while NGA50 still favours k=15 — the two
@@ -242,7 +248,7 @@ QUAST's default minimum alignment identity is 95.0%; measured read identity is
 genome fraction several-fold and makes NGA50 computable (521 / 610 / 697 at
 85%). At k=15 and k=21 the same relaxation changes nothing — contigs either
 align well or not at all. Note the 10x rows qualify the "nothing survives at
-10x" statement above: at k=31/10x, 18–22% of the genome does align once the
+10x" statement above: at k=31/10x, 17.9–22.1% of the genome does align once the
 identity cut is relaxed; it simply does not at QUAST's default.
 
 Since these contigs align at 85–90% while the reads measure 94.4%, contigs are
@@ -256,11 +262,11 @@ seeds have a defined NGA50, stratified by chemistry (Lambda):
 
 | technology | NGA50-evaluable strata | median CV  | max CV     |
 | ---------- | ---------------------- | ---------- | ---------- |
-| Illumina   | 12 of 16               | **0.0047** | 0.1401     |
-| ONT        | **6 of 16**            | 0.1480     | **0.3298** |
+| Illumina   | 24 of 28               | **0.0047** | 0.1401     |
+| ONT        | **12 of 28**           | 0.1359     | **0.4443** |
 
-That table is the case for _not_ using NGA50 as the ONT endpoint: it is
-undefined in 10 of 16 ONT strata. But the obvious replacement does not survive
+That table is the case for _not_ using NGA50 as the ONT endpoint: at least one
+seed has an undefined NGA50 in 16 of 28 ONT strata. But the obvious replacement does not survive
 its own variance check. **ONT genome-fraction CV, by coverage:**
 
 | organism | 30x               | 50x           | 100x          |
@@ -269,9 +275,12 @@ its own variance check. **ONT genome-fraction CV, by coverage:**
 | T4       | 0.045 – 0.230     | 0.040 – 0.106 | not run       |
 
 At 50x and 100x genome fraction is very well behaved. **At 30x it is not** —
-Lambda/k=31 reaches CV 0.486, worse than the NGA50 max of 0.330 that motivated
-rejecting NGA50, and 3.2x the pre-registered 0.15 assumption. 30x is precisely
-the stratum that prompted this investigation.
+Lambda/k=31 reaches CV 0.486, which is 3.2x the pre-registered 0.15 assumption
+and slightly worse than NGA50's own worst stratum (0.444). The two endpoints are
+therefore comparably unstable at 30x, which is precisely the stratum that
+prompted this investigation. Genome fraction's advantage over NGA50 is that it
+is *defined* where NGA50 is not; that advantage does not extend to being
+low-variance at 30x.
 
 Genome fraction also cannot see fragmentation. Lambda/ONT/k=15/100x has genome
 fraction 97.9–98.9% — and 246,914–261,181 contigs, total scored length 2.2–5.0x
@@ -295,11 +304,14 @@ fraction alone is the right ONT endpoint.**
   hold: T4 prefers k=21, and optimal k rises with genome size on both
   chemistries.
 - **H-b — also supported, in the strong form.** No k rescues ONT to anything
-  resembling the Illumina result. Across all 96 Lambda ONT cells, `outcome`
-  reaches `substantial` in 2 and `near_complete` in **zero**, against 18
-  `near_complete` for Illumina. The best ONT cell measured gives NGA50 5,947
-  against Illumina's 48,488 — and at 10x no k produces a scorable assembly at
-  all.
+  resembling the Illumina result. Across the **84** Lambda ONT cells, `outcome`
+  reaches `substantial` in **4** and `near_complete` in **zero**; the 84 Lambda
+  Illumina cells reach `near_complete` **36** times. On T4 the gap is starker
+  still — ONT reaches `substantial` **0** times. The best single ONT cell
+  anywhere gives NGA50 **8,103** (Lambda, k=19, 100x) against **48,500** for the
+  best Lambda Illumina cell. At 10x no k in either organism recovers more than
+  2.6% of the genome. (All counts from `verdict_stats.tsv`, which is emitted by
+  the harness rather than transcribed.)
 - **H-c — unrefuted, not refuted.** The same assembler at the same k values on
   clean reads produces essentially complete assemblies, and ONT degrades
   monotonically in k as (1−e)^k predicts, so nothing here _requires_ a defect.
