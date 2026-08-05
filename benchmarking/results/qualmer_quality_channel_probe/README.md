@@ -239,25 +239,66 @@ assertions pass across eight existing suites — `reassembly_graph_reuse_test`
 untouched.
 
 **New opt-in:**
-`assemble_genome(reads; traversal_weighting = :quality, traversal_min_quality = 20.0)`.
+`assemble_genome(reads; traversal_weighting = :quality, traversal_min_quality = 60.0)`.
 Because `find_contigs_next` / `find_eulerian_paths_next` expose no scoring hook,
 the only way quality can influence them is by changing the vertex set they
-traverse, so the option prunes qualmer vertices whose **weakest position** falls
-below the Phred floor, and additionally makes the fallback walk's vertex and
-edge scores Phred-derived.
+traverse, so the option prunes low-confidence qualmer vertices before
+extraction, and additionally makes the fallback walk's vertex and edge scores
+Phred-derived.
 
-The weakest-position statistic is deliberate. A sequencing error corrupts one
-base, but the k-mer containing it spans `k` positions, so at k=11 a Q2 error
-base among ten Q40 neighbours _averages_ to ~Q36 — above any sane floor. A
-mean-based filter would silently pass every error k-mer in the graph; this was
-caught during implementation because the first version pruned nothing.
+### The confidence statistic follows the existing design, not a new one
 
-**Test:** `test/4_assembly/qualmer_quality_channel_test.jl` pins both halves.
-Its characterization block asserts the default IS quality-invariant (and that
-the k-mer arm reaches the same contigs); its opt-in block asserts identical
+Confidence is the **joint quality** of
+`planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`: Phred summed across
+independent observations (`Q_combined = Q₁ + … + Qₙ`, clamped to 255), already
+implemented as `get_vertex_joint_quality` / `combine_phred_scores` and — before
+this change — carrying no production callers at all.
+
+This matters because summing is the framework's actual claim, and mean quality
+is not a substitute for it. Phred adds in log space, so summing multiplies error
+probabilities: ten independent Q40 observations are astronomically more
+trustworthy than one, and the joint score says so (400 → clamped 255) while a
+mean cannot (40 either way).
+
+That difference is the entire reason the qualmer graph exists. Technical
+artifacts and repeat-collapsed k-mers **also** recur, so an evidence count
+cannot separate them from real sequence — but they recur at _low_ quality, so
+their joint score stays low however often they are seen.
+
+Two reductions are involved and they run in opposite directions on purpose:
+across **observations** quality compounds (sum), while across the k
+**positions** of a k-mer confidence is limited by the weakest position, because
+a k-mer is correct only if every one of its bases is. A mean over positions
+would break the second half — one bad base among ten strong ones still averages
+high, so every error k-mer would pass.
+
+The floor is on the joint 0-255 scale, not the 0-60 single-observation scale.
+The design's bands are 10-30 low, 30-60 moderate (one typical high-quality
+observation), 60-100 high (multiple), 100-255 extreme. The 60.0 default
+therefore means "require more than one high-quality observation", and should be
+lowered explicitly for low-coverage data.
+
+**Measured separation** on the test fixture (600 bp genome, k=11, 12x, a
+systematic artifact injected at a fixed locus in every read covering it):
+
+| k-mer class                      | evidence count              | joint confidence       |
+| -------------------------------- | --------------------------- | ---------------------- |
+| recurrent artifact (22 vertices) | comparable to real sequence | **24-26**              |
+| real sequence (1150 vertices)    | —                           | **median 255**, min 40 |
+
+An order of magnitude of separation on a quantity the evidence count cannot see.
+
+**Test:** `test/4_assembly/qualmer_quality_channel_test.jl` pins three things.
+The characterization block asserts the default IS quality-invariant (and that
+the k-mer arm reaches the same contigs). The opt-in block asserts identical
 reads with different quality produce **different** assemblies — an assertion
 that fails against the default path, as the characterization block in the same
-file demonstrates.
+file demonstrates. The joint-quality block asserts the recurrent artifact is
+**absent** when its low quality is believed, yet **present** both when quality
+is flattened to Q40 and under count-based `:evidence` weighting — which is the
+failure mode the quality channel exists to fix, and which the random-error
+fixtures used by the first two blocks cannot exhibit, because random errors do
+not recur.
 
 ## 6. What I could not determine
 
@@ -280,9 +321,16 @@ file demonstrates.
   _topology_ is idealised. The committed 66-pair Track-A table, which did use
   the real simulators, agrees.
 - **Magnitude of the opt-in's effect on assembly quality.** The option is proven
-  to make quality load-bearing; whether Q20 is a good floor, and whether it
-  improves NGA50 against a reference, is unmeasured. It is opt-in and
+  to make quality load-bearing, and proven to reject a recurrent low-quality
+  artifact that count-based weighting keeps. Whether the joint-quality floor of
+  60 is right in general, how it should scale with coverage, and whether it
+  improves NGA50 against a reference are all unmeasured. It is opt-in and
   unbenchmarked, and should be treated as such.
+- **Whether the independence assumption holds.** Summed Phred assumes
+  observations are independent. The design itself flags this and offers
+  `aggregate_quality_scores_conservative` for cases where observations may share
+  systematic errors — precisely the artifact case. This work uses the documented
+  default (independence) and did not evaluate the conservative alternative.
 - **Other graph families.** Only the fixed-length qualmer path was probed. The
   quality-aware OLC / FASTQ-graph builders in `src/rhizomorph/variable-length/`
   were not tested.

@@ -50,8 +50,8 @@ end
 
 """
 Vertex score under an explicit `weighting`. `:evidence` reproduces the count-based
-default exactly; `:quality` returns the vertex's MEAN joint Phred, so a low-quality
-k-mer scores below a high-quality one at equal coverage.
+default exactly; `:quality` returns the vertex's JOINT-quality confidence
+(`_qualmer_joint_confidence`), which compounds across independent observations.
 
 A vertex carrying no recoverable quality falls back to the evidence score rather than
 scoring 0.0: a missing measurement must not be read as a confident "bad", which would
@@ -59,9 +59,9 @@ silently delete real structure whenever quality is absent.
 """
 function _qualmer_vertex_score(vertex_data, weighting::Symbol)
     weighting == :evidence && return _qualmer_vertex_score(vertex_data)
-    quality = _qualmer_vertex_quality_scores(vertex_data)
-    isempty(quality) && return _qualmer_vertex_score(vertex_data)
-    return _qualmer_weakest_position_quality(quality)
+    confidence = _qualmer_joint_confidence(vertex_data)
+    confidence === nothing && return _qualmer_vertex_score(vertex_data)
+    return confidence
 end
 
 """
@@ -79,7 +79,39 @@ k-mer seen once with a bad base is dropped, while one seen ten times with nine c
 reads at that position survives. Coverage therefore still earns trust; it just cannot
 launder a consistently bad base.
 """
-_qualmer_weakest_position_quality(quality) = Float64(minimum(quality))
+function _qualmer_vertex_joint_quality_scores(vertex_data)
+    dataset_ids = Rhizomorph.get_all_dataset_ids(vertex_data)
+    isempty(dataset_ids) && return nothing
+    joint = Rhizomorph.get_vertex_joint_quality(vertex_data, first(dataset_ids))
+    (joint === nothing || isempty(joint)) && return nothing
+    return Float64.(joint)
+end
+
+"""
+Reduce a k-mer's per-position JOINT quality to one confidence number: its WEAKEST
+position.
+
+Two distinct reductions are at work here and both are deliberate.
+
+ACROSS OBSERVATIONS, quality COMPOUNDS (the sum above) — repeated high-quality
+observation of a position earns confidence, which is the design's core claim.
+
+ACROSS THE k POSITIONS of the k-mer, confidence is limited by the WEAKEST position,
+because a k-mer is a conjunction: it is correct only if every one of its bases is. A
+mean over positions would break this — a sequencing error corrupts a single base while
+the k-mer spans `k`, so at k=11 one bad position among ten strong ones still averages
+high and every error k-mer would pass the filter.
+
+Combining the two gives the intended behaviour: a k-mer observed once with a bad base
+scores low and is dropped, while a k-mer observed ten times with nine clean reads at
+that position accumulates enough joint quality to survive. Coverage still earns trust;
+it just has to earn it at high quality, and it cannot launder a consistently bad base.
+"""
+function _qualmer_joint_confidence(vertex_data)
+    joint = _qualmer_vertex_joint_quality_scores(vertex_data)
+    joint === nothing && return nothing
+    return minimum(joint)
+end
 
 """
 Edge score under an explicit `weighting`. `:quality` delegates to the existing
@@ -92,7 +124,7 @@ function _qualmer_edge_score(edge_data, weighting::Symbol)
 end
 
 """
-Drop qualmer vertices whose WEAKEST position (see `_qualmer_weakest_position_quality`)
+Drop qualmer vertices whose JOINT-quality confidence (see `_qualmer_joint_confidence`)
 falls below `min_quality`.
 
 This is what makes `traversal_weighting = :quality` reach the PRIMARY extraction path.
@@ -114,9 +146,9 @@ function _prune_qualmer_graph_by_quality(graph, min_quality::Float64)
     labels = collect(MetaGraphsNext.labels(pruned))
     doomed = eltype(labels)[]
     for label in labels
-        quality = _qualmer_vertex_quality_scores(pruned[label])
-        isempty(quality) && continue
-        _qualmer_weakest_position_quality(quality) < min_quality && push!(doomed, label)
+        confidence = _qualmer_joint_confidence(pruned[label])
+        confidence === nothing && continue
+        confidence < min_quality && push!(doomed, label)
     end
     for label in doomed
         haskey(pruned, label) && delete!(pruned, label)
@@ -323,9 +355,22 @@ struct AssemblyConfig
     # qualmer_prefilter_min_count).
     traversal_weighting::Symbol
 
-    # Phred floor consulted ONLY when traversal_weighting=:quality. Qualmer vertices
-    # whose mean joint quality falls below this are dropped before contig extraction,
-    # which is what makes the traversal quality-dependent. Inert under `:evidence`.
+    # JOINT-quality floor consulted ONLY when traversal_weighting=:quality. Qualmer
+    # vertices whose joint-quality confidence falls below this are dropped before contig
+    # extraction, which is what makes the traversal quality-dependent. Inert under
+    # `:evidence`.
+    #
+    # This is on the JOINT (summed-across-observations) Phred scale of
+    # `planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`, which runs 0-255, NOT
+    # the 0-60 single-observation scale. Its documented confidence bands:
+    #   10-30    low        (a few low-quality observations)
+    #   30-60    moderate   (a typical SINGLE high-quality observation)
+    #   60-100   high       (multiple high-quality observations)
+    #   100-255  extreme    (many high-quality observations; essentially certain)
+    # The 60.0 default is therefore "require more than one high-quality observation" —
+    # the threshold at which compounding evidence starts to mean something. Set it
+    # explicitly for low-coverage data, where demanding multiple observations of every
+    # k-mer will prune real sequence.
     traversal_min_quality::Float64
 
     # Constructor with validation
@@ -357,7 +402,7 @@ struct AssemblyConfig
             olc_tool::Symbol = :auto,
             olc_options::NamedTuple = (;),
             traversal_weighting::Symbol = :evidence,
-            traversal_min_quality::Float64 = 20.0
+            traversal_min_quality::Float64 = 60.0
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -485,17 +530,18 @@ struct AssemblyConfig
             error("traversal_weighting must be :evidence or :quality, got " *
                   "traversal_weighting=:$(traversal_weighting)")
         end
-        # Phred is bounded below by 0; an out-of-range floor would silently make the
-        # option either a no-op or a total wipe, both of which look like a working
-        # quality filter from the outside.
-        if !(0.0 <= traversal_min_quality <= 60.0)
-            error("traversal_min_quality must be between 0.0 and 60.0, got " *
+        # Bounded by the JOINT Phred scale [0, 255] (combine_phred_scores clamps there),
+        # not the 0-60 single-observation scale. An out-of-range floor would silently
+        # make the option either a no-op or a total wipe, both of which look like a
+        # working quality filter from the outside.
+        if !(0.0 <= traversal_min_quality <= 255.0)
+            error("traversal_min_quality must be between 0.0 and 255.0, got " *
                   "traversal_min_quality=$(traversal_min_quality)")
         end
         # Discoverability: mirrors the olc_tool / skip_solid / efficiency-mode
         # warnings — a caller who sets the floor but forgets the selector would
         # otherwise get evidence-weighted traversal and no indication why.
-        if traversal_weighting == :evidence && traversal_min_quality != 20.0
+        if traversal_weighting == :evidence && traversal_min_quality != 60.0
             @warn "traversal_min_quality is only used when traversal_weighting=:quality " *
                   "and is ignored for traversal_weighting=:$(traversal_weighting)."
         end
@@ -2389,7 +2435,7 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
             graph, config.traversal_min_quality)
         _log_info(config,
             "Quality-weighted traversal (td-4e19d.2): pruned $(quality_pruned_vertices) " *
-            "vertices below mean Q$(config.traversal_min_quality)")
+            "vertices below joint Q$(config.traversal_min_quality)")
     end
 
     cleanup_stats = nothing
