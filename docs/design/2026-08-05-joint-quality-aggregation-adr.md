@@ -2,11 +2,53 @@
 
 | Field          | Value                                                                                                                                                                       |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**     | **Accepted** 2026-08-05 by cjprybol, as written (including §4)                                                                                                              |
+| **Status**     | **Proposed** — acceptance WITHDRAWN 2026-08-05 pending re-derivation of §4 (see Errata)                                                                                     |
 | **Decision**   | Stop treating summed Phred as a calibrated probability. Keep it as a named traversal _heuristic_. Move production toward molecule-aware, dependence-discounted aggregation. |
-| **Interim**    | Where a calibrated-ish number is needed before that lands, the design's `aggregate_quality_scores_conservative` is empirically far better than independence — see §4.       |
+| **Interim**    | **WITHDRAWN pending re-derivation — see Errata.** The empirical basis for preferring the conservative model was a censored statistic.                                       |
 | **Scope**      | The opt-in `traversal_weighting = :quality` path, and every manuscript claim interpreting joint quality as a probability                                                    |
 | **Supersedes** | The `100-255 = essentially certain` confidence band in `planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`                                                           |
+
+## Errata — acceptance withdrawn 2026-08-05
+
+This ADR was accepted, then un-accepted the same day after a nine-reviewer pass
+on PR #453 falsified two of its supporting claims. **The central decision is
+unaffected** — it rests on the calibration experiment, whose arithmetic was
+independently audited against 512-bit reference values and confirmed correct to
+15 digits across 115 orders of magnitude. What failed is §4, the section that
+departs from the commissioned review.
+
+**E1 — §4.2's comparison is computed on a censored subset, and the censoring
+removes exactly the disconfirming evidence.** (3 independent reviewers.) The
+calibration script emits `-Inf` when a bin has zero observed errors, so **49 of
+125 bins were silently dropped** from every §4.2 statistic. The censoring is not
+symmetric in consequence: a zero-error bin cannot falsify independence, which
+predicts ~0 errors there, but it is precisely where the conservative model's
+substantial predicted error rate _can_ be falsified. Scored against this ADR's
+own rule of three (§6), six dropped bins exceed the stated ±1.8-order ceiling,
+up to **2.38 orders** — and five of the six are random-regime, high-support
+bins, which is verbatim the case the commissioned reviewer predicted
+conservative would overpredict. **§4.2's rebuttal of that prediction is
+therefore unsupported; the prediction is confirmed in the removed subset.** The
+claim "conservative is never off by more than ~1.8 orders in either direction"
+must be restated as holding only over bins with ≥1 observed error, or re-derived
+with a one-sided bound for zero-error bins.
+
+**E2 — the Stage-C "the decoder never ran" mechanism is false for Illumina.** (3
+independent reviewers.) The `decoder_ever_ran` flag regex-matched a
+_stringified_ vector with a `^`-anchor, so it only ever inspected pass 1 — which
+is `0.0` by construction in every row, making the flag structurally incapable of
+returning true. Illumina's actual `decode_fraction_per_pass` is
+`[0.0, 0.058, 0.017, 0.014]`. The corrected finding is **stronger** than the one
+it replaces: the decoder ran, ran on a _quality-dependent_ number of reads (3.6%
+under flat quality vs 1.7% under oracle), and the assemblies were still
+byte-identical. PacBio and ONT are genuinely all-zero.
+
+**What this episode is an instance of.** §2.3 of this document reports catching
+a fallback whose value coincided with the healthy answer, and generalises the
+lesson. Both errata above are further instances of the same class that §2.3
+claims to have learned: E2's flag failed to the "clean" value, and E1's `-Inf`
+sentinel reads as the _safe_ end of a scale documented as "positive =
+overconfident." Recognising a defect class is not the same as auditing for it.
 
 ## Context
 
