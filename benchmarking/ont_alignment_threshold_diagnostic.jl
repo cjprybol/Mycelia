@@ -150,8 +150,22 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("Start: $(Dates.now())")
     println("Identity ladder: $(join(IDENTITIES, ", "))%")
 
-    reference = joinpath(SWEEP_DIR, "refs", "NC_001416.fna")
-    isfile(reference) || error("reference not found: $(reference). Run the sweep first.")
+    # Reference PER ORGANISM. This was hardcoded to Lambda's NC_001416.fna, which
+    # silently rescored every T4 cell against the wrong genome and produced a
+    # full set of well-formed all-NA rows. Those NAs are not harmless: this
+    # script's own INTERPRETATION block reads "genome fraction stays near zero
+    # even at 80%" as evidence that the contigs are not approximate
+    # reconstructions at all — i.e. as support for an assembler defect, the most
+    # consequential hypothesis the sweep tests. A wrong-reference comparison
+    # would have supplied that evidence while looking entirely normal.
+    references = Dict{String, String}()
+    for (org, acc, _size) in ORGANISMS
+        path = joinpath(SWEEP_DIR, "refs", "$(acc).fna")
+        isfile(path) && (references[org] = path)
+    end
+    isempty(references) &&
+        error("no reference FASTA found under $(joinpath(SWEEP_DIR, "refs")). " *
+              "Run the sweep first.")
     mkpath(OUT_DIR)
 
     all_cells = candidate_cells(SWEEP_DIR)
@@ -170,12 +184,18 @@ if abspath(PROGRAM_FILE) == @__FILE__
             @warn "contigs missing; skipping" cell = cell["cell_id"]
             continue
         end
+        organism = cell["organism"]
+        if !haskey(references, organism)
+            @warn "no reference for organism; skipping cell" organism cell=cell["cell_id"]
+            continue
+        end
         for min_identity in IDENTITIES
             outdir = joinpath(OUT_DIR, cell["cell_id"], "idy$(min_identity)")
-            metrics = rescore(contigs, reference, outdir, min_identity)
+            metrics = rescore(contigs, references[organism], outdir, min_identity)
             push!(rows,
                 (
-                    cell_id = cell["cell_id"], technology = cell["technology"],
+                    cell_id = cell["cell_id"], organism = cell["organism"],
+                    technology = cell["technology"],
                     k = cell["k"], coverage = cell["coverage"], seed = cell["seed"],
                     min_identity = min_identity,
                     asm_contigs_ge_min = cell["asm_contigs_ge_min"],
