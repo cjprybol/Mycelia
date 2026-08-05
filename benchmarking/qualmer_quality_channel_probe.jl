@@ -125,28 +125,58 @@ in an external binary.
 Insertions emit a base with no reference support (marked corrupted); deletions skip a
 reference base (emitting nothing); substitutions emit a wrong base (marked corrupted).
 """
-function simulate_read(rng, reference, profile)
+function simulate_read(rng, reference, profile; artifact_loci = nothing)
     reflen = length(reference)
     span = min(profile.read_length, reflen)
     start = rand(rng, 1:(reflen - span + 1))
     # Reads come off both strands, matching a real library.
     forward = rand(rng, Bool)
 
-    template = reference[start:(start + span - 1)]
+    template = copy(reference[start:(start + span - 1)])
+
+    # Optional SYSTEMATIC artifact (td-2tg8): a fixed reference locus mis-called the same
+    # way in EVERY read covering it. Applied here — in reference coordinates, before
+    # strand selection and before random error injection — because that is what makes it
+    # correlated across reads rather than just more random error. Applying it at a
+    # read-relative position instead (e.g. each read's midpoint) would scatter it across
+    # different loci and produce independent errors, which is the opposite of the point.
+    #
+    # `artifact_loci === nothing` draws no random numbers and mutates nothing, so the
+    # default path is byte-identical to the pre-existing simulator.
+    artifact_mask = falses(span)
+    if artifact_loci !== nothing
+        for locus in artifact_loci
+            if start <= locus <= (start + span - 1)
+                offset = locus - start + 1
+                original = template[offset]
+                template[offset] = original == BioSequences.DNA_A ?
+                                   BioSequences.DNA_C : BioSequences.DNA_A
+                artifact_mask[offset] = true
+            end
+        end
+    end
+
     if !forward
         template = BioSequences.reverse_complement(template)
+        artifact_mask = reverse(artifact_mask)
     end
 
     bases = BioSequences.DNA[]
     corrupted = Bool[]
 
-    for base in template
+    for (index, base) in enumerate(template)
         # Deletion: emit nothing for this reference position.
         if rand(rng) < profile.del
             continue
         end
-        # Substitution: emit a different base.
-        if rand(rng) < profile.sub
+        # An artifact base is emitted as-is and flagged corrupted, so oracle quality
+        # reports it as low-confidence. It deliberately does NOT consume a substitution
+        # draw: the artifact is systematic, not a random error at that position.
+        if artifact_mask[index]
+            push!(bases, base)
+            push!(corrupted, true)
+        elseif rand(rng) < profile.sub
+            # Substitution: emit a different base.
             alternatives = filter(!=(base), collect(DNA_BASES))
             push!(bases, rand(rng, alternatives))
             push!(corrupted, true)
@@ -170,7 +200,8 @@ Returns a vector of (identifier, sequence, corrupted-mask) triples. Quality is N
 assigned here — each condition derives its own quality vector from the same masks, so
 every condition sees byte-identical read sequences.
 """
-function simulate_read_set(reference, profile, coverage::Int, seed::Int)
+function simulate_read_set(reference, profile, coverage::Int, seed::Int;
+        artifact_loci = nothing)
     rng = StableRNGs.StableRNG(seed)
     target_bases = length(reference) * coverage
     reads = NamedTuple{
@@ -180,7 +211,7 @@ function simulate_read_set(reference, profile, coverage::Int, seed::Int)
     i = 0
     while emitted < target_bases
         i += 1
-        read = simulate_read(rng, reference, profile)
+        read = simulate_read(rng, reference, profile; artifact_loci = artifact_loci)
         isempty(read.sequence) && continue
         push!(reads,
             (identifier = "$(profile.name)_read_$(i)",
