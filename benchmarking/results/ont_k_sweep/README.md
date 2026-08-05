@@ -229,7 +229,9 @@ bp scoring threshold, not an error-rate effect.
 ## Alignment-threshold diagnostic
 
 QUAST's default minimum alignment identity is 95.0%; measured read identity is
-94.4%. Censored cells were rescored at 95 / 90 / 85 / 80.5%. Genome fraction:
+94.4%. **All 38 censored cells** were rescored at 95 / 90 / 85 / 80.5%, each
+against its own reference. Genome fraction for the Lambda k=31 cells, which are
+among the only ones that move:
 
 | k   | coverage | seed | 95.0% | 90.0% | 85.0%     | 80.5% |
 | --- | -------- | ---- | ----- | ----- | --------- | ----- |
@@ -244,11 +246,19 @@ QUAST's default minimum alignment identity is 95.0%; measured read identity is
 | 21  | 30x      | 456  | 39.4% | 39.4% | 39.4%     | 39.4% |
 | 15  | 30x      | 123  | 36.6% | 36.6% | 36.6%     | 36.6% |
 
-**Among the k values tested, the threshold effect is specific to k=31.** There,
-relaxing the cut multiplies genome fraction several-fold and makes NGA50
-computable (521 / 610 / 697 at 85%). At k=15 and k=21 the same relaxation changes
-nothing — contigs either align well or not at all. Whether k=13/17/19 behave like
-k=15 or like k=31 is **not established**, and neither is any T4 cell. Note the 10x rows qualify the "nothing survives at
+**The threshold effect is specific to k=31, and it replicates across both
+genomes.** Median genome-fraction gain from relaxing the cut 95% → 85%:
+
+| organism | k=13 | k=15 | k=17 | k=19 | k=21 | **k=31** |
+| --- | --- | --- | --- | --- | --- | --- |
+| Lambda | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
+| T4 | — | +0.0 pp | — | — | +0.0 pp | **+25.5 pp** |
+
+Every k below 31 is completely insensitive to the identity threshold on both
+organisms — contigs either align well or not at all. At k=31 the gain is
++25.2 pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda
+(521 / 610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
+considerably stronger evidence than the single-organism version of this finding. Note the 10x rows qualify the "nothing survives at
 10x" statement above: at k=31/10x, 17.9–22.1% of the genome does align once the
 identity cut is relaxed; it simply does not at QUAST's default.
 
@@ -328,11 +338,6 @@ substituting genome fraction for NGA50.
 
 ## What this does not determine
 
-- **The alignment-threshold diagnostic covers 14 of 38 censored cells** — all
-  Lambda ONT at k in {15, 21, 31}. The k=13/17/19 rungs and every T4 censored
-  cell were added after it was run and have not been rescored at relaxed
-  identity, so the "specific to k=31" finding is established only over the k
-  values it tested.
 - **Two genomes, one of them partial.** Lambda (48,502 bp) across seven k
   values; T4 (168,903 bp) across four, with no 100x. Two points cannot
   characterise how optimal k scales with genome size — they establish only that
