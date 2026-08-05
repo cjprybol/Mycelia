@@ -1,0 +1,4 @@
+stage	subject	high_quality_value	low_quality_value	consumes_quality
+A_unit	default_viterbi_emission_logp[match]	-0.001	-9.96843	true
+A_unit	default_viterbi_emission_logp[mismatch]	-10.309853	-10.530717	true
+A_unit	calculate_read_likelihood	-0.47425	-391.439466	true
