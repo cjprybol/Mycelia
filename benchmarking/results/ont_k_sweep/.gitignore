@@ -14,3 +14,4 @@
 # (ONT/30x/k=11 emits ~149k contigs), which is exactly why they are not tracked.
 cells/
 refs/
+shard-logs/
