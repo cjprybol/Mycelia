@@ -1,0 +1,209 @@
+{
+  "suite_name": "K-mer Analysis Performance",
+  "metadata": {
+    "cpu_info": {
+      "model": "AMD EPYC 7763 64-Core Processor",
+      "speed": 2450,
+      "cpu_times!user": 22832920,
+      "cpu_times!nice": 40,
+      "cpu_times!sys": 3575710,
+      "cpu_times!idle": 121903430,
+      "cpu_times!irq": 0
+    },
+    "julia_version": {
+      "major": 1,
+      "minor": 10,
+      "patch": 10,
+      "prerelease": [],
+      "build": []
+    },
+    "memory_total": 540164243456,
+    "timestamp": "2026-06-19T12:00:41.814"
+  },
+  "results": {
+    "kmer_counting_k15_size50000": {
+      "std_time": 2.647076113081031e8,
+      "median_time": 3.2128868e7,
+      "mean_time": 1.7296755133333334e8,
+      "memory": 12487520,
+      "min_time": 8.453991e6,
+      "max_time": 4.78319795e8,
+      "allocations": 89,
+      "memory_stats": {
+        "gc_time": 0.806416863,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "canonical_kmer_counting_k11_size50000": {
+      "std_time": 2.4992388241189335e7,
+      "median_time": 2.7778639e7,
+      "mean_time": 3.7025357e7,
+      "memory": 18094688,
+      "min_time": 1.797398e7,
+      "max_time": 6.5323452e7,
+      "allocations": 114,
+      "memory_stats": {
+        "gc_time": 0.942937075,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "kmer_counting_k11_size50000": {
+      "std_time": 2.974966415997156e8,
+      "median_time": 1.1245721e7,
+      "mean_time": 1.8294590866666666e8,
+      "memory": 12478048,
+      "min_time": 1.1126571e7,
+      "max_time": 5.26465434e8,
+      "allocations": 89,
+      "memory_stats": {
+        "gc_time": 0.80081602,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "canonical_kmer_counting_k15_size50000": {
+      "std_time": 2.4858250469608724e7,
+      "median_time": 3.2602552e7,
+      "mean_time": 3.9051685666666664e7,
+      "memory": 18133136,
+      "min_time": 1.8053554e7,
+      "max_time": 6.6498951e7,
+      "allocations": 114,
+      "memory_stats": {
+        "gc_time": 0.915307876,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "canonical_kmer_counting_k19_size50000": {
+      "std_time": 2.3597885841064416e7,
+      "median_time": 3.1980902e7,
+      "mean_time": 3.8294163666666664e7,
+      "memory": 18133168,
+      "min_time": 1.8495027e7,
+      "max_time": 6.4406562e7,
+      "allocations": 114,
+      "memory_stats": {
+        "gc_time": 0.893892253,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "kmer_counting_k21_size50000": {
+      "std_time": 2.753133388129012e8,
+      "median_time": 3.4290892e7,
+      "mean_time": 1.80115e8,
+      "memory": 12487520,
+      "min_time": 8.386641e6,
+      "max_time": 4.97667467e8,
+      "allocations": 89,
+      "memory_stats": {
+        "gc_time": 0.930534855,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "genome_size_estimation_k21": {
+      "std_time": 1.534074244807894e7,
+      "median_time": 1.135954e7,
+      "mean_time": 1.9974065e7,
+      "memory": 12488480,
+      "min_time": 1.0876819e7,
+      "max_time": 3.7685836e7,
+      "allocations": 106,
+      "memory_stats": {
+        "gc_time": 0.84837116,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "canonical_kmer_counting_k21_size50000": {
+      "std_time": 2.4920018025523517e7,
+      "median_time": 3.2791206e7,
+      "mean_time": 3.9373053e7,
+      "memory": 18133200,
+      "min_time": 1.8404612e7,
+      "max_time": 6.6923341e7,
+      "allocations": 114,
+      "memory_stats": {
+        "gc_time": 0.91570895,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "scaling_kmer_size10000": {
+      "median_time": 1.2169695e6,
+      "memory": 1849312,
+      "allocations": 70,
+      "memory_stats": {
+        "gc_time": 0.819783409,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "scaling_kmer_size50000": {
+      "median_time": 9.3524755e6,
+      "memory": 12487520,
+      "allocations": 89,
+      "memory_stats": {
+        "gc_time": 0.921631776,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "scaling_kmer_size100000": {
+      "median_time": 1.7172543e7,
+      "memory": 17340192,
+      "allocations": 92,
+      "memory_stats": {
+        "gc_time": 0.89390685,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "kmer_histogram_k21_size50000": {
+      "std_time": 9.677678073985325e6,
+      "median_time": 1.1820321e7,
+      "mean_time": 1.7255376333333332e7,
+      "memory": 12888736,
+      "min_time": 1.1516984e7,
+      "max_time": 2.8428824e7,
+      "allocations": 107,
+      "memory_stats": {
+        "gc_time": 0.841295048,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "kmer_counting_k19_size50000": {
+      "std_time": 2.6663126808486983e8,
+      "median_time": 3.4816506e7,
+      "mean_time": 1.75448658e8,
+      "memory": 12487520,
+      "min_time": 8.574554e6,
+      "max_time": 4.82954914e8,
+      "allocations": 89,
+      "memory_stats": {
+        "gc_time": 0.839704537,
+        "gc_count": 5,
+        "allocations": 0
+      }
+    },
+    "kmer_histogram_k15_size50000": {
+      "std_time": 4.745645114440188e7,
+      "median_time": 1.1806743e7,
+      "mean_time": 3.9142888333333336e7,
+      "memory": 12888736,
+      "min_time": 1.1681092e7,
+      "max_time": 9.394083e7,
+      "allocations": 107,
+      "memory_stats": {
+        "gc_time": 0.828813944,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    }
+  }
+}
