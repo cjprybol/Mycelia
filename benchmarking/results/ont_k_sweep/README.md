@@ -1,25 +1,34 @@
 # ONT k-selection sweep — is the pilot's ONT degeneracy a k artifact?
 
-Date: 2026-08-05 Scripts: `benchmarking/ont_k_sweep.jl`,
-`benchmarking/ont_read_identity.jl`,
-`benchmarking/ont_alignment_threshold_diagnostic.jl` Data:
-`ont_k_sweep_results.tsv` (one row per organism × technology × k × coverage ×
-seed), `ont_k_sweep_summary.tsv` (per-stratum medians), `../ont_read_identity/`,
-`../ont_alignment_threshold/`
+Date: 2026-08-05
+
+Scripts: `benchmarking/ont_k_sweep.jl`, `benchmarking/ont_read_identity.jl`,
+`benchmarking/ont_alignment_threshold_diagnostic.jl`
+
+Data: `ont_k_sweep_results.tsv` (one row per organism x technology x k x
+coverage x seed), `ont_k_sweep_summary.tsv` (per-stratum medians),
+`../ont_read_identity/`, `../ont_alignment_threshold/`
+
+Throughout, **GF** means QUAST genome fraction (percent of the reference covered
+by at least one aligned contig) and **NGA50** is QUAST's aligned-block NG50.
+Contigs are scored at `--min-contig 500`, matching the Track-A pilot; that
+threshold is load-bearing for the k=11 result below.
 
 ## Question
 
-The Track-A greedy-baseline pilot (2026-07-24) returned NGA50 = 0 in every
-replicate of four of its six complete ONT cells, at 10x and 30x. Two facts made
-the obvious reading — "ONT is too noisy for naked k-mer assembly" — insufficient
-to act on:
+The Track-A greedy-baseline pilot (2026-07-24,
+`rhizomorph-paper/benchmarking/track-a-pilot/track_a_pilot_results_20260724.tsv`)
+returned NGA50 = 0 in every replicate of four of its six complete ONT cells, at
+10x and 30x. Two facts made the obvious reading — "ONT is too noisy for naked
+k-mer assembly" — insufficient to act on:
 
 1. All 132 pilot rows used **k = 31**, the Illumina-tuned primary k, including
    all 36 ONT rows. k was a hardcoded constant in that harness.
-2. ONT reads came from `Mycelia.simulate_nanopore_reads`, which invokes Badread
-   with **no** `--error_model`, `--qscore_model`, or `--identity`
-   (`src/simulation.jl:1091`), inheriting whatever the installed binary defaults
-   to.
+2. ONT reads came from `Mycelia.simulate_nanopore_reads`, which at that time
+   passed Badread no `--error_model`, `--qscore_model`, or `--identity`, and so
+   inherited whatever the installed binary defaulted to. (Those settings are now
+   pinned explicitly, to the same values previously inherited, so the reads are
+   unchanged.)
 
 Three hypotheses were under test:
 
@@ -32,46 +41,30 @@ Three hypotheses were under test:
 
 Every number below was measured on **one host with one toolchain**. Earlier
 cells computed on a macOS laptop (Badread 0.4.1, QUAST forced to 1 thread by a
-known Python-3.8+ bug) were discarded rather than merged, because an
-unpinned-toolchain difference inside a single table is precisely the hazard this
-work documents.
+known Python-3.8+ bug) were discarded rather than merged.
 
-| component | version                                                                           |
-| --------- | --------------------------------------------------------------------------------- |
-| host      | Lovelace (`foundry-lovelace`), 112-core Linux x86_64, 2 TB RAM                    |
-| Badread   | **0.4.2**                                                                         |
-| QUAST     | **5.3.0**                                                                         |
-| Julia     | 1.10.11                                                                           |
-| assembler | `Mycelia.Rhizomorph.assemble_genome`, `corrector = :none` (single-k, uncorrected) |
+| component | version                                                        |
+| --------- | -------------------------------------------------------------- |
+| host      | Lovelace (`foundry-lovelace`), 112-core Linux x86_64, 2 TB RAM |
+| Badread   | **0.4.2**                                                      |
+| QUAST     | **5.3.0** (`--min-contig 500`, default `--min-identity 95.0`)  |
+| Julia     | 1.10.11                                                        |
+| assembler | `Mycelia.Rhizomorph.assemble_genome`, `corrector = :none`      |
 
-Badread's defaults, read from the installed binary rather than from the
-wrapper's docstring:
+Badread's defaults, read from the installed binary rather than from any
+docstring: `--identity 95,99,2.5`, `--error_model`/`--qscore_model`
+`nanopore2023`, `--length 15000,13000`, junk/random/chimera 1% each.
 
-| setting                                          | default                                       |
-| ------------------------------------------------ | --------------------------------------------- |
-| `--identity`                                     | `95,99,2.5` (beta: mean 95%, max 99%, sd 2.5) |
-| `--error_model` / `--qscore_model`               | `nanopore2023`                                |
-| `--length`                                       | `15000,13000`                                 |
-| `--junk_reads` / `--random_reads` / `--chimeras` | 1% each                                       |
-
-**The wrapper's docstring claim is accurate but unpinned.** It asserts "Oxford
-Nanopore R10.4.1, nanopore2023", and for the installed binary that is correct.
-But it is documentation _about_ Badread's defaults, not a parameter the wrapper
-enforces — the sibling `simulate_nanopore_r941_reads` (`src/simulation.jl:1212`)
-does pin
-`--error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5`. A
-future Badread release that changed a default would silently move every ONT
-benchmark in this repo without touching a line of Mycelia.
-
-Badread 0.4.1 and 0.4.2 were checked against each other and are
-**output-equivalent for this workload**: the per-read identity table and the
-k-mer survival ladder regenerated under 0.4.2 are byte-identical to the 0.4.1
-versions, and the two produce the same first read for the same seed.
+Badread 0.4.1 and 0.4.2 are **output-equivalent for this workload**, and that is
+checkable in this repo's history rather than asserted: `git diff` across the
+commit that switched hosts shows `per_read_identity.tsv` and
+`kmer_survival_ladder.tsv` completely unchanged, with only the recorded
+`badread_version` field differing.
 
 ## Measured read identity
 
-Reads were mapped back to the reference with `minimap2 -ax map-ont` and identity
-recomputed from CIGAR + NM, rather than inherited from a model name.
+Reads were mapped back with `minimap2 -ax map-ont` and identity recomputed from
+CIGAR + NM, rather than inherited from a model name. Lambda, 30x, seed 42.
 
 | estimate                   | mean       | median | q05    | q95    | n   |
 | -------------------------- | ---------- | ------ | ------ | ------ | --- |
@@ -79,212 +72,276 @@ recomputed from CIGAR + NM, rather than inherited from a model name.
 | gap-compressed (alignment) | 0.9502     | 0.9528 | 0.9104 | 0.9806 | 136 |
 | Badread-declared (header)  | 0.9461     | 0.9496 | 0.9007 | 0.9796 | 139 |
 
-3 of 139 reads (2.2%) did not align, consistent with Badread's 1% junk + 1%
-random defaults. The alignment-measured and Badread-declared values agree within
-~0.3 pp, so the identity distribution behaves as documented.
+3 of 139 reads (2.2%) did not align. `e` is the **unweighted** mean of per-read
+BLAST identities; the length-weighted alternative is 0.9453, which moves the
+ladder below by 1.5–4.2% and changes no conclusion.
 
-BLAST identity is the operative estimate because a k-mer is destroyed by every
-erroneous **base** it covers, not by every error event. So **e = 0.056**:
+So **e = 0.056**, and P(error-free k-mer) = (1-e)^k:
 
-| k   | P(error-free k-mer) | error-free k-mer coverage at 10x / 30x / 50x / 100x |
-| --- | ------------------- | --------------------------------------------------- |
-| 11  | 0.530               | 5.30 / 15.91 / 26.52 / 53.04                        |
-| 15  | 0.421               | 4.21 / 12.64 / 21.06 / 42.12                        |
-| 21  | 0.298               | 2.98 / 8.94 / 14.90 / 29.80                         |
-| 31  | 0.168               | 1.67 / **5.02** / 8.37 / 16.75                      |
+| k   | P(clean k-mer) | error-free k-mer coverage at 10x / 30x / 50x / 100x |
+| --- | -------------- | --------------------------------------------------- |
+| 11  | 0.530          | 5.30 / 15.91 / 26.52 / 53.04                        |
+| 15  | 0.421          | 4.21 / 12.64 / 21.06 / 42.12                        |
+| 21  | 0.298          | 2.98 / 8.94 / 14.90 / 29.80                         |
+| 31  | 0.167          | 1.67 / **5.02** / 8.37 / 16.75                      |
 
-This is what made the pilot's result worth resolving: at k=31 and 30x there is
-still ~5x error-free 31-mer coverage, so total degeneracy there is **not**
-arithmetically forced.
+At k=31 and 30x there is still ~5x error-free 31-mer coverage, so total
+degeneracy there is **not** arithmetically forced. That is what made the pilot's
+result worth resolving.
 
 ## Validation against the pilot
 
 All 24 cells this sweep shares with the pilot (Lambda, k=31, both technologies,
-all coverages and seeds) reproduce **exactly** — contig counts, genome
-fractions, and NGA50 all identical. Badread's `--seed` and this host's ART are
-both reproducible against the pilot's environment. The sweep is therefore a
-controlled extension of the pilot, not an independent re-measurement.
+all coverages and seeds) reproduce it: contig counts and largest contigs match
+in 24/24, and genome fraction and NGA50 match wherever the pilot's parser did
+not coerce a censored value to 0.0. In 6 ONT cells the pilot records `0.0` where
+this sweep records a censored marker — that difference is the coercion described
+next, not a disagreement in measurement.
 
-## NGA50 = 0 is a censored floor, in two distinct ways
+## What a censored NGA50 means
 
 The pilot's parser coerced QUAST's `-` to `0.0`
-(`something(tryparse(Float64, "-"), 0.0)`, `track_a_baseline_benchmark.jl:227`).
-This sweep keeps `NGA50` missing and records **why** in `nga50_status`. The
-pilot's zeros map onto two different facts:
+(`track_a_baseline_benchmark.jl:227-229`). This sweep keeps `NGA50` missing and
+records **why** in `nga50_status`:
 
-- `censored_no_alignment` — nothing aligned at all (pilot ONT 10x).
-- `censored_gf_below_50` — contigs **did** align, but **NGA50 is undefined below
-  50% genome fraction** by construction: it is the aligned-block length at which
-  blocks that size or larger cover half the reference, so under half coverage no
-  such length exists. Pilot ONT 30x sits here, with 5–14% of the genome
-  genuinely recovered.
+- `no_contigs_ge_min` — contigs exist but none reaches 500 bp, so QUAST declines
+  to score. This is a result, not a tool failure.
+- `censored_no_alignment` — scorable contigs exist, nothing aligned.
+- `censored_partial_alignment` — contigs **did** align (genome fraction is a
+  real, nonzero measurement) but NGA50 is still absent.
 
-Reporting those as "NGA50 = 0" understates recovery in the second case. It also
-makes NGA50 a **step function** of genome fraction at the 50% boundary, so
-replicate seeds of one condition can land on opposite sides: ONT/k=15/30x gave
-genome fraction 50.744% / 36.601% / 55.371% across seeds 42 / 123 / 456,
-reporting NGA50 as 545 / absent / 592 for what is nearly the same assembly.
+**On that last case, note what the threshold actually is.** NGA50 is an
+NG-family statistic: it exists only once aligned blocks of a given length or
+longer _total_ at least half the reference length. That total counts duplicated
+and overlapping alignments, so it is **not** genome fraction, which measures
+unique coverage. The two diverge whenever duplication ratio > 1.
 
-QUAST also reports `# misassemblies = 0` on unaligned contigs, so a 0 there on a
-censored cell means non-alignment, not correctness.
+An earlier version of this document claimed NGA50 was undefined below 50% genome
+fraction. That is false, and this PR's own diagnostic refutes it:
+Lambda/ONT/k=31/30x/seed123 rescored at 90% identity has genome fraction
+**23.762%** and a defined NGA50 of **508**. Six such rows exist. The status
+label was renamed accordingly, because the old name asserted a condition the
+code never tests.
 
-## Outcome by (k, coverage) — stratified by chemistry
+Two consequences follow. `misassemblies` is only interpretable where NGA50 was
+measured — where nothing aligned QUAST omits the metric and this sweep records
+`NA` (the pilot's `0`s there are its own coercion, not QUAST output). And
+replicate seeds of one ONT condition can still land on opposite sides of the
+censoring boundary: ONT/k=15/30x gave genome fraction 50.744% / 36.601% /
+55.371% across seeds 42/123/456, reporting NGA50 as 545 / absent / 592.
+
+## How "degenerate" is defined
+
+The verdict below turns on this word, so the rule is stated here rather than
+only in the source. A cell is classified by these author-chosen thresholds
+(`classify_outcome` in `ont_k_sweep.jl`, which flags them as the harness's one
+judgment call):
+
+| tier            | rule                                                        |
+| --------------- | ----------------------------------------------------------- |
+| `degenerate`    | NGA50 censored for any reason, **or** genome fraction < 25% |
+| `partial`       | recovered, but below the substantial bar                    |
+| `substantial`   | genome fraction >= 90% **and** NGA50 >= 10% of the genome   |
+| `near_complete` | genome fraction >= 95% **and** NGA50 >= 50% of the genome   |
+
+Two of these choices materially shape the headline. Treating **any** censored
+NGA50 as `degenerate` classifies ONT/k=15/30x/seed123 that way despite 36.6%
+genome fraction and a 1,303 bp largest alignment. And the 25% floor is what puts
+the ONT 30x cells at k>=21 in the degenerate bucket. A reader who prefers a
+different rule can re-derive the whole table: `nga50_status` and `outcome` are
+derived columns, recomputed from stored measurements on every read.
+
+## Outcome by (k, coverage) — stratified by chemistry and organism
 
 ONT and Illumina are different error processes and are never pooled. Medians
-over 3 seeds; NGA50 shown only where defined.
+over 3 seeds. NGA50 shown only where defined.
 
-### ONT
+### Lambda (48,502 bp) — ONT
 
-| k      | 10x                            | 30x                       | 50x                      | 100x                     |
-| ------ | ------------------------------ | ------------------------- | ------------------------ | ------------------------ |
-| 11     | degenerate — max contig 239 bp | degenerate — 241 bp       | degenerate — 244 bp      | degenerate — 321 bp      |
-| **15** | degenerate                     | **GF 50.7%, NGA50 568.5**   | **GF 86.0%, NGA50 1509** | **GF 98.8%, NGA50 5391** |
-| 21     | degenerate                     | GF 31.7%, NGA50 undefined | GF 77.5%, NGA50 1014     | GF 98.8%, NGA50 4541     |
-| 31     | degenerate                     | GF 9.8%, NGA50 undefined  | GF 52.0%, NGA50 552      | GF 96.8%, NGA50 2451     |
+| k      | 10x                            | 30x                | 50x               | 100x               |
+| ------ | ------------------------------ | ------------------ | ----------------- | ------------------ |
+| 11     | degenerate (max contig 239 bp) | degenerate (241)   | degenerate (244)  | degenerate (321)   |
+| 13     | degenerate                     | 35.9% / N517       | 66.2% / N779      | 81.0% / N1170      |
+| **15** | degenerate                     | **50.7% / N568.5** | **86.0% / N1509** | 98.8% / N5391      |
+| 17     | degenerate                     | 39.3% / N608       | 85.3% / N1307     | 99.8% / N4498      |
+| 19     | degenerate                     | 39.1% / N560       | 81.9% / N1174     | **100.0% / N4385** |
+| 21     | degenerate                     | 31.7% / —          | 77.5% / N1014     | 98.8% / N4541      |
+| 31     | degenerate                     | 9.8% / —           | 52.0% / N552      | 96.8% / N2451      |
 
-### Illumina (control, same k ladder and coverages)
+### Lambda — Illumina control (same k ladder)
 
-| k      | 10x                            | 30x                       | 50x                      | 100x                     |
-| ------ | ------------------------------ | ------------------------- | ------------------------ | ------------------------ |
-| 11     | degenerate — max contig 301 bp | degenerate — 268 bp       | degenerate — 268 bp      | degenerate — 268 bp      |
-| 15     | GF 97.0%, NGA50 2135           | GF 99.7%, NGA50 11024     | GF 99.7%, NGA50 11024    | GF 99.7%, NGA50 11024    |
-| **21** | GF 96.2%, NGA50 2161           | **GF 99.9%, NGA50 48125** | **GF 99.96%, NGA50 48482** | **GF 99.97%, NGA50 48488** |
-| 31     | GF 94.1%, NGA50 1468           | GF 99.9%, NGA50 48464     | GF 99.96%, NGA50 48479     | GF 99.97%, NGA50 48488     |
+| k   | 10x                            | 30x              | 50x              | 100x             |
+| --- | ------------------------------ | ---------------- | ---------------- | ---------------- |
+| 11  | degenerate (max contig 301 bp) | degenerate (268) | degenerate (268) | degenerate (268) |
+| 15  | 97.0% / N2135                  | 99.7% / N11024   | 99.7% / N11024   | 99.7% / N11024   |
+| 17  | 97.0% / N2259                  | 99.9% / N48464   | 99.96% / N48479  | 99.97% / N48488  |
+| 21  | 96.2% / N2161                  | 99.9% / N48125   | 99.96% / N48482  | 99.97% / N48488  |
+| 31  | 94.1% / N1468                  | 99.9% / N48464   | 99.96% / N48479  | 99.97% / N48488  |
 
-Lambda is 48,502 bp, so Illumina at k=21/31 and ≥30x is producing an essentially
-complete assembly.
+### T4 (168,903 bp) — the generality check
 
-### Is there a k at which ONT stops being degenerate?
+| k      | ONT 10x    | ONT 30x      | ONT 50x           | Illumina 30x   | Illumina 50x       |
+| ------ | ---------- | ------------ | ----------------- | -------------- | ------------------ |
+| 11     | degenerate | degenerate   | degenerate        | degenerate     | degenerate         |
+| 15     | 2.3% / —   | 48.0% / N552 | 75.0% / N1003     | 80.0% / N1304  | 78.4% / N1304      |
+| **21** | 0.7% / —   | 46.6% / N544 | **89.0% / N1601** | 99.1% / N18587 | 98.9% / N18587     |
+| **31** | 0.4% / —   | 21.8% / —    | 72.0% / N1017     | 99.8% / N48457 | **99.8% / N52429** |
 
-**Yes at ≥30x, and it is k=15 — but "not degenerate" is not "good".**
+T4 at 100x was not run: its ONT cells at that depth take hours each, and the k
+ordering the question turns on is already unambiguous at 30x and 50x.
 
-- At **10x**, no k works. Error-free k-mer coverage is 1.7–5.3x across the
-  ladder and nothing survives.
-- At **30x**, k=15 moves the cell from the pilot's censored state (k=31: GF
-  9.8%) to GF 50.7% with a defined NGA50 of 568. One of three seeds still falls
-  below the line, so this is the boundary rather than a clean escape.
-- At **50x and 100x**, k=15 is best at every coverage (GF 86.0% and 98.8%).
-- **k=15 is the best ONT k at every coverage tested**, and the ordering k=15 >
-  k=21 > k=31 is monotone in exactly the direction (1−e)^k predicts.
+## Is there a k at which ONT stops being degenerate?
 
-The mechanism is a two-sided squeeze, and the Illumina control is what separates
-its two sides:
+**Yes at >=30x — but which k depends on the genome, and "not degenerate" is not
+"good".**
 
-- **Long k fails on ONT because k-mers do not survive the error rate.** At
-  k=31/30x only 16.8% of 31-mers are error-free. The same k on clean Illumina
-  reads gives a complete assembly, so this is chemistry, not the assembler.
-- **Short k fails on both chemistries because unitigs cannot grow.** k=11 is
-  degenerate for ONT _and_ Illumina at every coverage. Across all 24 k=11 cells
-  the single longest contig anywhere is 350 bp, and the per-stratum median
-  longest contig stays inside 239–321 bp (ONT) and 268–301 bp (Illumina) while
-  coverage rises 10x → 100x — a tenfold increase in data moves it by tens of
-  bases, not past the 500 bp scoring threshold. That is a repeat-resolution
-  floor, independent of error rate.
+- At **10x**, no k in either organism produces a scorable, aligned assembly. The
+  mechanism is not uniform across that row: k>=13 fails because too few
+  error-free k-mers survive (1.7–5.3x clean coverage), while **k=11 fails for a
+  different reason** — see below.
+- On **Lambda**, k=15 is a genuine interior optimum at 30x and 50x: k=13 (35.9%)
+  and k=17 (39.3%) are both worse at 30x. At 100x the ordering by genome
+  fraction shifts to k=19 (100.0%) while NGA50 still favours k=15 — the two
+  endpoints disagree.
+- On **T4**, the optimum is **k=21**, not k=15: at 50x, k=21 reaches 89.0% /
+  N1601 against k=15's 75.0% / N1003.
 
-The optimum is therefore chemistry-dependent — **k=15 for ONT, k=21/31 for
-Illumina** — which is what H-a predicted. But the two technologies are limited
-by different things: Illumina at k=15 saturates hard at NGA50 11,024 from 30x
-onward (a repeat-resolution ceiling that coverage cannot lift), while ONT at
-k=15 keeps climbing 568 → 1509 → 5391 and never reaches that ceiling, because it
-is still error-limited well before it becomes repeat-limited.
+So **optimal k is not a single per-chemistry constant.** It rises with genome
+size, and the Illumina control shows the same shift and explains it: Lambda is
+fully resolved by k=17, while T4 needs k=31 (k=21 reaches only N18587 there).
+Larger genome, more repeat structure, longer k required — on both chemistries.
+Coverage pushes in the same direction, since error-free k-mer coverage is
+C·(1−e)^k and raising C buys back the exponential penalty of a longer k.
+
+The k=11 floor is separate and chemistry-independent: k=11 is degenerate for
+**both** technologies and **both** organisms at every coverage. Across all 24
+Lambda k=11 cells the single longest contig anywhere is 350 bp, and per-stratum
+median longest contig stays inside 239–321 bp (ONT) and 268–301 bp (Illumina)
+while coverage rises tenfold. That is a repeat-resolution floor meeting the 500
+bp scoring threshold, not an error-rate effect.
 
 ## Alignment-threshold diagnostic
 
 QUAST's default minimum alignment identity is 95.0%; measured read identity is
-94.4%. Censored cells were rescored at 95 / 90 / 85 / 80.5%.
+94.4%. Censored cells were rescored at 95 / 90 / 85 / 80.5%. Genome fraction:
 
-Genome fraction for ONT at 30x:
-
-| k   | seed | 95.0% | 90.0% | 85.0%     | 80.5% |
-| --- | ---- | ----- | ----- | --------- | ----- |
-| 31  | 42   | 9.8%  | 21.4% | **35.0%** | 35.0% |
-| 31  | 123  | 5.0%  | 23.8% | **44.9%** | 45.0% |
-| 31  | 456  | 14.5% | 35.9% | **53.7%** | 53.7% |
-| 21  | 42   | 31.7% | 31.7% | 31.7%     | 31.7% |
-| 21  | 123  | 24.3% | 24.3% | 24.3%     | 24.3% |
-| 15  | 123  | 36.6% | 36.6% | 36.6%     | 36.6% |
+| k   | coverage | seed | 95.0% | 90.0% | 85.0%     | 80.5% |
+| --- | -------- | ---- | ----- | ----- | --------- | ----- |
+| 31  | 30x      | 42   | 9.8%  | 21.4% | **35.0%** | 35.0% |
+| 31  | 30x      | 123  | 5.0%  | 23.8% | **44.9%** | 45.0% |
+| 31  | 30x      | 456  | 14.5% | 35.9% | **53.7%** | 53.7% |
+| 31  | 10x      | 42   | —     | 13.7% | 17.9%     | 17.9% |
+| 31  | 10x      | 123  | —     | 18.7% | 20.8%     | 20.8% |
+| 31  | 10x      | 456  | —     | 14.8% | 22.1%     | 22.1% |
+| 21  | 30x      | 42   | 31.7% | 31.7% | 31.7%     | 31.7% |
+| 21  | 30x      | 123  | 24.3% | 24.3% | 24.3%     | 24.3% |
+| 21  | 30x      | 456  | 39.4% | 39.4% | 39.4%     | 39.4% |
+| 15  | 30x      | 123  | 36.6% | 36.6% | 36.6%     | 36.6% |
 
 **The threshold effect is specific to k=31.** There, relaxing the cut multiplies
 genome fraction several-fold and makes NGA50 computable (521 / 610 / 697 at
-85%), so those contigs _are_ approximate reconstructions scoring just under the
-default. At k=15 and k=21 the same relaxation changes nothing — contigs either
-align well or not at all.
+85%). At k=15 and k=21 the same relaxation changes nothing — contigs either
+align well or not at all. Note the 10x rows qualify the "nothing survives at
+10x" statement above: at k=31/10x, 18–22% of the genome does align once the
+identity cut is relaxed; it simply does not at QUAST's default.
 
-Two things follow. The pilot's k=31 censoring is **partly a scoring artifact**,
-but that artifact is specific to the long k it happened to use. And since the
-contigs align at 85–90% while the reads measure 94.4%, contigs are **less
-accurate than the reads they are built from** — consistent with chimeric joins
-at graph branch points rather than simple inheritance of read error.
+Since these contigs align at 85–90% while the reads measure 94.4%, contigs are
+**less accurate than the reads they are built from** — consistent with chimeric
+joins at graph branch points rather than simple inheritance of read error.
 
-## Replicate variance — relevant to the pre-registration
+## Replicate variance, and why the endpoint question is not settled
 
-NGA50 coefficient of variation across the 3 seeds, computed only where all three
-seeds have a defined NGA50, stratified by chemistry:
+NGA50 coefficient of variation across 3 seeds, computed only where all three
+seeds have a defined NGA50, stratified by chemistry (Lambda):
 
-| technology | evaluable strata | median CV  | max CV     |
-| ---------- | ---------------- | ---------- | ---------- |
-| Illumina   | 12 of 16         | **0.0047** | 0.1401     |
-| ONT        | **6 of 16**      | **0.1480** | **0.3298** |
+| technology | NGA50-evaluable strata | median CV  | max CV     |
+| ---------- | ---------------------- | ---------- | ---------- |
+| Illumina   | 12 of 16               | **0.0047** | 0.1401     |
+| ONT        | **6 of 16**            | 0.1480     | **0.3298** |
 
-Illumina sits far inside the pre-registered CV ≈ 0.15 assumption, reproducing
-the pilot's conclusion. ONT does not: its median CV is at the assumption and its
-max is more than double it — and, more importantly, **10 of 16 ONT strata cannot
-be evaluated on NGA50 at all** because NGA50 is undefined in at least one seed.
+That table is the case for _not_ using NGA50 as the ONT endpoint: it is
+undefined in 10 of 16 ONT strata. But the obvious replacement does not survive
+its own variance check. **ONT genome-fraction CV, by coverage:**
 
-Genome fraction is far better behaved on ONT (CV 0.005–0.05 at 50x/100x) and is
-defined wherever anything aligns. **A pre-registration using NGA50 as the ONT
-endpoint would be measuring a discontinuous statistic on a stratum where it is
-frequently undefined; genome fraction does not have that pathology.**
+| organism | 30x               | 50x           | 100x          |
+| -------- | ----------------- | ------------- | ------------- |
+| Lambda   | 0.206 – **0.486** | 0.016 – 0.067 | 0.002 – 0.040 |
+| T4       | 0.045 – 0.230     | 0.040 – 0.106 | not run       |
+
+At 50x and 100x genome fraction is very well behaved. **At 30x it is not** —
+Lambda/k=31 reaches CV 0.486, worse than the NGA50 max of 0.330 that motivated
+rejecting NGA50, and 3.2x the pre-registered 0.15 assumption. 30x is precisely
+the stratum that prompted this investigation.
+
+Genome fraction also cannot see fragmentation. Lambda/ONT/k=15/100x has genome
+fraction 97.9–98.9% — and 246,914–261,181 contigs, total scored length 2.2–5.0x
+the genome, and duplication ratio 1.66–1.76. A genome-fraction-only endpoint
+reads that as near-complete success.
+
+This matters because the harness already records two censoring-immune contiguity
+statistics that were not considered: **`largest_alignment` is defined on every
+censored cell that aligned at all** (the k=21/30x cells report 1,094–1,576 bp
+with NGA50 absent), and `NA50` is defined on several. A paired endpoint — genome
+fraction plus `largest_alignment` or `NA50` — keeps the contiguity signal that
+genome fraction alone discards. **This document does not establish that genome
+fraction alone is the right ONT endpoint.**
 
 ## Verdict
 
-The data support a **compound answer**, not one hypothesis cleanly.
-
 - **H-a — supported, and it explains the pilot's headline result.** The pilot's
-  total degeneracy at 30x is substantially an artifact of k=31. Holding
-  everything else fixed and moving to k=15 takes ONT/30x from genome fraction
-  9.8% (NGA50 undefined) to 50.7% (NGA50 568.5). The optimal k is genuinely
-  chemistry-dependent, and the pilot applied the Illumina-tuned k to ONT.
+  degeneracy at 30x is substantially an artifact of k=31. Holding everything
+  else fixed and moving to k=15 takes Lambda/ONT/30x from genome fraction 9.8%
+  to 50.7%. But the corollary one would want — "use k=15 for ONT" — does **not**
+  hold: T4 prefers k=21, and optimal k rises with genome size on both
+  chemistries.
 - **H-b — also supported, in the strong form.** No k rescues ONT to anything
-  resembling the Illumina result. The best ONT cell measured (k=15, 100x) gives
-  NGA50 5,391 against Illumina's 48,125 at k=21/30x — a ~9x gap at 3.3x the
-  coverage — and at 10x no k in the ladder produces a scorable assembly at all.
-  Naked k-mer assembly on these reads is poor at every k tested.
-- **H-c — not supported.** The same assembler at the same k values on clean
-  reads produces essentially complete assemblies (NGA50 ≈ genome length from
-  30x). ONT behaviour is monotone in k in the direction (1−e)^k predicts, with
-  no anomaly that requires a defect to explain. Nothing here is evidence of a
-  bug.
+  resembling the Illumina result. Across all 96 Lambda ONT cells, `outcome`
+  reaches `substantial` in 2 and `near_complete` in **zero**, against 18
+  `near_complete` for Illumina. The best ONT cell measured gives NGA50 5,947
+  against Illumina's 48,488 — and at 10x no k produces a scorable assembly at
+  all.
+- **H-c — unrefuted, not refuted.** The same assembler at the same k values on
+  clean reads produces essentially complete assemblies, and ONT degrades
+  monotonically in k as (1−e)^k predicts, so nothing here _requires_ a defect.
+  But the Illumina control differs from ONT in read length (~150 bp vs a 15 kb
+  mean) as well as error rate, so a defect specific to long-read handling would
+  be invisible to it and would produce this same monotone pattern. This design
+  has low power to detect that class of bug.
 
-Practically: the pilot's ONT cells should be re-run at a per-chemistry k before
-they are used as a baseline, and the ONT endpoint should be genome fraction
-rather than NGA50.
+Practically: the pilot's ONT cells should be re-run at a per-**organism**,
+per-chemistry k before being used as a baseline, and the ONT endpoint question
+should be settled with the paired-metric analysis above rather than by
+substituting genome fraction for NGA50.
 
 ## What this does not determine
 
-- **One genome.** Only Lambda (48,502 bp). Repeat structure sets the short-k
-  floor and the k=15 saturation ceiling, so both are genome-specific. The pilot
-  saw ONT degeneracy on T4 (168,903 bp) as well; that was not re-tested here.
+- **Two genomes, one of them partial.** Lambda (48,502 bp) across seven k
+  values; T4 (168,903 bp) across four, with no 100x. Two points cannot
+  characterise how optimal k scales with genome size — they establish only that
+  it is not constant.
+- **n = 3 seeds.** Every CV above is a 3-point estimate with roughly 40%
+  sampling error, and the endpoint recommendation rests on those. No confidence
+  intervals or tests are reported anywhere in this document; differences of a
+  few tenths of a percent between adjacent k values (e.g. Lambda k=15 vs k=21 at
+  100x, 98.78% vs 98.76%) are not resolvable at this n.
+- **The outcome tiers are author-chosen.** The `degenerate` verdict depends on
+  the 25% genome-fraction floor and on treating any censored NGA50 as
+  degenerate. Both are disclosed above; neither is derived from anything.
 - **One error regime.** Only Badread's `nanopore2023` defaults (~94.4% measured
   identity). Nothing here speaks to R9-era (~90%) or duplex/HiFi-grade (~99%)
-  long reads, where the (1−e)^k arithmetic moves substantially.
-- **The optimum is bracketed, not located.** k=15 is the best of {11, 15, 21,
-  31}; k=11 fails, so the ONT optimum lies somewhere in (11, 21). The grid is
-  too coarse to place it, and k=13 was not tested.
-- **One decoder arm.** Only the `kmer` arm. This is justified by the pilot, in
-  which all 66 complete qualmer/kmer pairs produced identical metrics, but arm
-  equivalence was not re-verified in this sweep.
-- **One assembler configuration.** `corrector = :none` throughout, deliberately,
-  so k is never confounded with the iterative corrector's k-ladder. Whether the
-  corrector closes the ONT gap is a separate question this sweep cannot answer.
+  reads, where the (1−e)^k arithmetic moves substantially.
+- **One decoder arm** (`kmer`), justified by the pilot's 66 identical
+  qualmer/kmer pairs but not re-verified here.
+- **One assembler configuration** — `corrector = :none` throughout, so k is
+  never confounded with the corrector's k-ladder. Whether correction closes the
+  ONT gap is a separate question, and it may make the per-k choice moot.
 - **Contig accuracy was not measured directly.** The claim that contigs are less
   accurate than their reads is inferred from alignment behaviour at relaxed
-  identity thresholds, not from a per-contig alignment identity measurement.
-- **Wall times are indicative only.** Cells ran as up to 32 concurrent shards on
-  a shared host; `wall_seconds` covers assembly only (not QUAST) and is not
-  benchmark-grade. No scientific column is affected.
-- **One cell failed transiently and was recomputed.** ONT/k=31/100x/seed456
-  first failed with `ZlibError: the compressed stream may be truncated` — a
-  partially-written read file from an interrupted earlier run being reused,
-  since the simulator regenerates only when the output is absent or zero-length.
-  The cell was recomputed from clean inputs and the final grid is 96/96 `ok`.
+  identity thresholds, not from per-contig alignment identity.
+- **Both endpoints are single-aligner, reference-based.** There is no
+  assembly-free check (e.g. k-mer completeness against the reads).
+- **Wall times are indicative only** — up to 32 concurrent shards on a shared
+  host, and `wall_seconds` covers assembly only, not read simulation or QUAST.
+- **Not verifiable from this repo:** the host/QUAST/Julia versions above, and
+  the discarded macOS cells. The Badread 0.4.1↔0.4.2 equivalence _is_
+  verifiable, from git history.
