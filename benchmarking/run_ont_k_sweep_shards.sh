@@ -142,7 +142,30 @@ detect_cores() {
 # Fraction of AVAILABLE memory this sweep may claim. The rest is headroom for
 # the interactive session, the editor, and whatever else shares the host.
 MEM_FRACTION_PCT="${MEM_FRACTION_PCT:-60}"
-GB_PER_SHARD="${GB_PER_SHARD:-6}"
+
+# Per-shard memory budget, sized for the WORST cell the driver can schedule
+# rather than the average one. The driver cannot tell a 3 GB Illumina/10x shard
+# from an ONT/100x shard before launching it, so an average-sized budget is
+# numerically satisfied while the host still thrashes.
+#
+# Provenance, because the two available figures disagree and only one has a
+# surviving artifact:
+#
+#   ~3.6 GB/shard   ARTIFACT-BACKED. `ps -o rss` during the 2026-08-04 laptop
+#                   incident: ~40 GB summed over 11 surviving shards, with
+#                   shared pages double-counted, so true unique is lower. That
+#                   run was Lambda, and it never reached the expensive cells.
+#   17-25 GB/shard  RECOLLECTION ONLY. Reported for ONT high-coverage cells on
+#                   Lovelace. No artifact survives: ont_k_sweep.jl records
+#                   wall_seconds but no memory column, and the shard logs are
+#                   gitignored as regenerable.
+#
+# 20 GB takes the unverified figure at close to face value on purpose. The risk
+# is asymmetric: under-sizing reproduces the incident, while over-sizing costs
+# only parallelism on a grid that is checkpointed and resumable, so a slow run
+# is cheap and a thrashing one is not. Lower it once the footprint is measured
+# -- adding a memory column to ont_k_sweep.jl is the way to earn that.
+GB_PER_SHARD="${GB_PER_SHARD:-20}"
 _cores_for_threads="$(detect_cores)"
 if [ -z "${MAX_PARALLEL:-}" ]; then
     _budget_gb=$(( $(detect_avail_gb) * MEM_FRACTION_PCT / 100 ))

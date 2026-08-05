@@ -175,19 +175,63 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
         Test.@test parse(Int, m.captures[1]) == 2       # 8 GB / 4 GB, not 16 cores
     end
 
-    Test.@testset "--mem=0 means the whole node, not zero memory" begin
-        # SLURM reports an exclusive allocation as 0. Read literally that yields
-        # a 0 GB budget and a cap of 1 — serializing the grid on the exact
-        # command the LBNL recipe tells you to run.
+    Test.@testset "the default per-shard budget covers an ONT high-coverage cell" begin
+        # The default GB_PER_SHARD must be sized for the WORST cell the driver
+        # can schedule, not the average one. The driver cannot tell a 3 GB
+        # Illumina/10x shard from an ONT/100x shard before launching it, so a
+        # default sized on the average is numerically satisfied while the host
+        # still thrashes.
+        #
+        # A 64 GB allocation must therefore admit very few shards, not six.
         root, track = stage_sandbox()
         out,
         _ = run_driver(root, track; env = Dict(
-            "SLURM_MEM_PER_NODE" => "0",
+            "SLURM_MEM_PER_NODE" => "65536",   # 64 GB
             "SLURM_CPUS_ON_NODE" => "16"
         ))
         m = match(r"max parallel:\s*(\d+)"i, out)
         Test.@test m !== nothing
+        Test.@test parse(Int, m.captures[1]) <= 2
+    end
+
+    Test.@testset "--mem=0 means the whole node, not zero memory" begin
+        # SLURM reports an exclusive allocation as 0. Read literally that yields
+        # a 0 GB budget and a cap of 1 — serializing the grid on the exact
+        # command the LBNL recipe tells you to run.
+        #
+        # GB_PER_SHARD is pinned small here so the two paths stay
+        # distinguishable on any host: a literal-zero budget yields 0/1 -> 0,
+        # clamped to 1, while falling through to node availability yields a cap
+        # bounded only by cores. Asserting `> 1` against the DEFAULT budget
+        # would silently stop discriminating on a host whose free memory is
+        # under one shard's worth -- which is precisely the incident laptop.
+        root, track = stage_sandbox()
+        out,
+        _ = run_driver(root,
+            track;
+            env = Dict(
+                "SLURM_MEM_PER_NODE" => "0",
+                "SLURM_CPUS_ON_NODE" => "16",
+                "GB_PER_SHARD" => "1"
+            ))
+        m = match(r"max parallel:\s*(\d+)"i, out)
+        Test.@test m !== nothing
         Test.@test parse(Int, m.captures[1]) > 1
+
+        # The contrast case: a genuinely tiny allocation IS read literally, so
+        # the fall-through above is not just "any nonzero value passes".
+        root2, track2 = stage_sandbox()
+        out2,
+        _ = run_driver(root2,
+            track2;
+            env = Dict(
+                "SLURM_MEM_PER_NODE" => "1024",   # 1 GB really is one shard's worth
+                "SLURM_CPUS_ON_NODE" => "16",
+                "GB_PER_SHARD" => "1"
+            ))
+        m2 = match(r"max parallel:\s*(\d+)"i, out2)
+        Test.@test m2 !== nothing
+        Test.@test parse(Int, m2.captures[1]) == 1
     end
 
     Test.@testset "threads per shard stay within the core allocation" begin
