@@ -378,7 +378,16 @@ function main()
                 quality_conditions_identical = all(
                     summaries[c].digest == oracle_digest for c in CONDITIONS),
                 kmer_arm_identical = summaries["kmer_arm_fasta"].digest == oracle_digest,
-                sensitivity_control_detected_change = control_digest != oracle_digest,
+                # THREE states, not two. `control_digest == "NA"` means the control
+                # never RAN, and `"NA" != oracle_digest` is `true` — so the one failure
+                # mode of the control that validates every other verdict here used to
+                # report as PASS. A control that did not run is not a control that
+                # fired; it invalidates the cell.
+                sensitivity_control_state = control_digest == "NA" ? "not_run" :
+                                            (control_digest != oracle_digest ? "fired" :
+                                             "did_not_fire"),
+                sensitivity_control_detected_change = control_digest != "NA" &&
+                                                      control_digest != oracle_digest,
                 oracle_n_contigs = summaries["oracle"].n_contigs,
                 oracle_n50 = summaries["oracle"].n50))
     end

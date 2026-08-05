@@ -123,6 +123,32 @@ Test.@testset "Qualmer quality channel (td-4e19d.2)" begin
         # The mechanism is the quality gate, not incidental churn.
         Test.@test oracle_assembly.assembly_stats["traversal_quality_pruned_vertices"] >
                    flat_assembly.assembly_stats["traversal_quality_pruned_vertices"]
+
+        # QUALITY, not coverage. Under uniform Q40 the joint score is exactly
+        # 40 x n_observations, so a 60.0 floor IS "seen at least twice" — meaning the
+        # assertion above is satisfiable by a mechanism containing no quality
+        # information at all. Pin the distinction: the ORACLE condition (where quality
+        # varies per base) must NOT be reproducible by a pure coverage prefilter.
+        coverage_only = Mycelia.Rhizomorph.assemble_genome(
+            oracle_records; k = k, verbose = false, qualmer_prefilter_min_count = 2)
+        Test.@test sorted_contigs(oracle_assembly) != sorted_contigs(coverage_only)
+
+        # And the opt-in must not be achieving its difference by collapsing the
+        # assembly: `!=` alone would pass if `:quality` pruned the graph to nothing.
+        Test.@test !isempty(oracle_assembly.contigs)
+        Test.@test maximum(length.(oracle_assembly.contigs)) > k
+    end
+
+    Test.@testset "opt-in survives the corrector route" begin
+        # The corrector rebuilds its re-assembly config from a hand-listed kwarg
+        # subset, which silently dropped both new options: requesting `:quality`
+        # yielded `evidence` with no error and a stats dict that confirmed the wrong
+        # thing. This assertion fails against that behaviour.
+        corrected = Mycelia.Rhizomorph.assemble_genome(
+            oracle_records; k = k, verbose = false, corrector = :iterative,
+            traversal_weighting = :quality)
+        Test.@test corrected.assembly_stats["traversal_weighting"] == "quality"
+        Test.@test corrected.assembly_stats["quality_influences_traversal"] == true
     end
 
     Test.@testset "joint quality: recurrent low-quality artifact is rejected" begin

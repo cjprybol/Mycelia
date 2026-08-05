@@ -309,9 +309,35 @@ function calibration_main()
             entry_to_id_ratio = any(r -> r.n_observation_ids == 0, members) ? -1.0 :
                                 Statistics.mean(
                 r.n_observations / r.n_observation_ids for r in members)
-            over(p) = observed <= 0 ? -Inf :
-                      round(log10(observed / max(p, 1e-300));
-                digits = 2)
+            # A zero-error bin is NOT "no information" and must not be dropped.
+            #
+            # Emitting `-Inf` for `observed == 0` censored 49 of 125 bins out of every
+            # summary statistic, and the censoring is ASYMMETRIC in consequence: a bin
+            # with no observed errors cannot falsify a model predicting ~0 errors
+            # (independence), but it is precisely where a model predicting a SUBSTANTIAL
+            # error rate (conservative) can be falsified. Summarising only the surviving
+            # bins therefore removed the evidence against the model the ADR preferred —
+            # and `-Inf` reads as the SAFE end of a scale documented as
+            # "positive = overconfident", so the censoring was invisible.
+            #
+            # Instead: with 0 errors in N trials the one-sided 95% upper bound on the
+            # true rate is ~3/N (rule of three), so the model is overconfident by AT
+            # LEAST log10(bound / predicted) when predicted exceeds the bound. That is a
+            # real, reportable lower bound rather than a hole in the table.
+            rule_of_three = 3.0 / length(members)
+            over(p) =
+                if observed > 0
+                    round(log10(observed / max(p, 1e-300)); digits = 2)
+                elseif p > rule_of_three
+                    # Overpredicts beyond what zero observed errors permits.
+                    round(log10(rule_of_three / max(p, 1e-300)); digits = 2)
+                else
+                    # Prediction is consistent with zero observed errors; no evidence
+                    # either way. Distinct from both a measurement and a censored hole.
+                    0.0
+                end
+            # Carried so a reader can tell a measured value from a bounded one.
+            bin_is_measured = observed > 0
             push!(bin_rows,
                 (chemistry = profile.name, coverage = coverage, regime = regime,
                     obs_bin = "$(bin[1])-$(bin[2] > 1000 ? "inf" : bin[2])",
@@ -321,11 +347,19 @@ function calibration_main()
                     mean_entries_per_observation_id = round(
                         entry_to_id_ratio; digits = 3),
                     observed_error_rate = round(observed; sigdigits = 4),
+                    # TRUE when observed > 0 (a measurement); FALSE when the bin had
+                    # zero observed errors and log10_over_* is a rule-of-three LOWER
+                    # BOUND instead. Any summary over these columns must say which
+                    # subset it used -- summarising only measured bins is what
+                    # invalidated ADR section 4.2.
+                    bin_is_measured = bin_is_measured,
+                    rule_of_three_upper_bound = round(rule_of_three; sigdigits = 4),
                     predicted_union = round(predicted_union; sigdigits = 4),
                     predicted_weakest = round(predicted_weakest; sigdigits = 4),
                     predicted_conservative = round(predicted_con; sigdigits = 4),
                     # How many orders of magnitude the model is wrong by. Positive =
-                    # OVERCONFIDENT (observed errors exceed what the model allows).
+                    # OVERCONFIDENT (observed errors exceed what the model allows, or
+                    # exceed the rule-of-three bound when nothing was observed).
                     log10_over_union = over(predicted_union),
                     log10_over_weakest = over(predicted_weakest),
                     log10_over_conservative = over(predicted_con)))

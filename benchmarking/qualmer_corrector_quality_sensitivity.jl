@@ -123,21 +123,34 @@ quality" (Stage A) from "quality changes an outcome".
 function stage_b_decision_probe(reads, profile)
     corrected = Dict{String, Vector{String}}()
     changed_counts = Dict{String, Int}()
+    failure_counts = Dict{String, Int}()
+    empty_counts = Dict{String, Int}()
 
     for condition in CORRECTOR_CONDITIONS
         records = fastq_records(reads, condition, profile)
         graph = Mycelia.Rhizomorph.build_qualmer_graph(records, K; mode = :canonical)
         outputs = String[]
         changed = 0
+        failures = 0
+        empty_results = 0
         for record in records
+            # COUNT failures; do not let them masquerade as "the decoder chose not to
+            # change this read". Passing a failed read through unchanged makes
+            # `changed` stay flat, so a decoder that failed on EVERY read produces
+            # `reads_differing_from_oracle = 0` in every condition — which is
+            # bit-for-bit the signature of the finding this stage exists to establish
+            # (that the decoder is quality-blind). Without a failure count in the
+            # emitted row, a reader of the TSV cannot tell the two apart.
             improved = try
-                first(Mycelia.find_optimal_sequence_path(
-                    record, graph, K; graph_mode = :canonical))
+                decoded = Mycelia.find_optimal_sequence_path(
+                    record, graph, K; graph_mode = :canonical)
+                # `first` is OUTSIDE the decode call on purpose: a BoundsError here
+                # means an EMPTY result, which is not a decoder failure and must not be
+                # laundered into one.
+                isempty(decoded) ? (empty_results += 1; record) : first(decoded)
             catch error
-                # A read the decoder cannot handle is passed through unchanged rather
-                # than dropped: dropping it would shorten the vector and misalign the
-                # per-read comparison against the oracle condition.
-                @warn "decoder failed on read; passing through" chemistry=profile.name condition exception=error
+                @warn "decoder failed on read; passing through and counting" chemistry=profile.name condition exception=error
+                failures += 1
                 record
             end
             output = String(FASTX.sequence(improved))
@@ -146,6 +159,8 @@ function stage_b_decision_probe(reads, profile)
         end
         corrected[condition] = outputs
         changed_counts[condition] = changed
+        failure_counts[condition] = failures
+        empty_counts[condition] = empty_results
     end
 
     baseline = corrected["oracle"]
@@ -157,7 +172,13 @@ function stage_b_decision_probe(reads, profile)
                 coverage = CORRECTOR_COVERAGE, seed = CORRECTOR_SEED,
                 condition = condition, n_reads = length(baseline),
                 reads_changed_by_decoder = changed_counts[condition],
-                reads_differing_from_oracle = differing))
+                reads_differing_from_oracle = differing,
+                # Without these two columns, "0 reads differed" is ambiguous between
+                # "the decoder ran and quality changed nothing" and "the decoder threw
+                # on every read". Only the first is a finding.
+                n_decode_failures = failure_counts[condition],
+                n_empty_decodes = empty_counts[condition],
+                stage_b_trustworthy = failure_counts[condition] == 0))
     end
     return rows
 end
@@ -247,11 +268,33 @@ function corrector_main()
 
         decoder_sensitive = any(
             r.condition != "oracle" && r.reads_differing_from_oracle > 0 for r in b_rows)
-        quality_reached_graph = length(unique(r.mean_joint_quality for r in c_rows)) > 1
+        # Sentinel rows are NOT data. A failed condition records "ERROR"/"NA", and those
+        # strings previously flowed into the set-cardinality tests below, flipping both
+        # verdicts — "ERROR" everywhere collapsed to unanimity and read as AGREEMENT,
+        # while a single "NA" manufactured a spurious quality difference. Exclude them
+        # and report the failure count, so a broken run can never read as a result.
+        ok_rows = filter(r -> r.digest != "ERROR", c_rows)
+        ok_digests = filter(!=("ERROR"), digests)
+        n_failed = length(digests) - length(ok_digests)
+
+        quality_reached_graph = length(unique(r.mean_joint_quality for r in ok_rows)) > 1
+
+        # Parse the per-pass numbers instead of pattern-matching a stringified vector.
+        # The previous regex was `^`-anchored, so it inspected only pass 1 — which is
+        # 0.0 by construction in every row — making the flag STRUCTURALLY incapable of
+        # returning true, and it failed OPEN (true) on a non-vector value. It reported
+        # "the decoder never ran" for illumina, which actually decodes on passes 2-4.
+        # This flag gates the study's interpretation, so it gets parsed, not matched.
+        decode_fractions(text) = text == "NA" ? Float64[] :
+                                 filter(!isnothing,
+            [tryparse(Float64, strip(token))
+             for token in split(strip(text, ['[', ']']), ',')
+             if !isempty(strip(token))])
         decoder_ever_ran = any(
-            !occursin(r"^\[?0\.0[, \]]", r.decode_fraction_per_pass) &&
-            r.decode_fraction_per_pass != "NA"
-        for r in c_rows)
+            any(>(0.0), decode_fractions(r.decode_fraction_per_pass)) for r in ok_rows)
+        max_decode_fraction = maximum(
+            (maximum(decode_fractions(r.decode_fraction_per_pass); init = 0.0)
+            for r in ok_rows); init = 0.0)
 
         push!(verdicts,
             (chemistry = profile.name, coverage = CORRECTOR_COVERAGE,
@@ -259,11 +302,17 @@ function corrector_main()
                 decoder_decisions_depend_on_quality = decoder_sensitive,
                 max_reads_differing_from_oracle = maximum(
                     r.reads_differing_from_oracle for r in b_rows),
-                end_to_end_assemblies_identical = length(unique(digests)) == 1,
+                n_conditions_failed = n_failed,
+                # Any failure invalidates the identity verdict rather than contributing
+                # to it: with every condition failing, `unique(["ERROR", ...])` is a
+                # single element and the run would otherwise report perfect agreement.
+                end_to_end_assemblies_identical = n_failed == 0 &&
+                                                  length(unique(ok_digests)) == 1,
                 end_to_end_quality_reached_graph = quality_reached_graph,
                 end_to_end_decoder_ever_ran = decoder_ever_ran,
-                end_to_end_skip_fraction = first(
-                    r.skip_fraction_per_pass for r in c_rows)))
+                end_to_end_max_decode_fraction = round(max_decode_fraction; digits = 4),
+                end_to_end_skip_fraction = isempty(ok_rows) ? "NA" :
+                                           first(ok_rows).skip_fraction_per_pass))
     end
 
     write_tsv(joinpath(CORRECTOR_OUTPUT_DIR, "qualmer_corrector_stageB_decisions.tsv"),

@@ -65,19 +65,21 @@ function _qualmer_vertex_score(vertex_data, weighting::Symbol)
 end
 
 """
-Reduce a k-mer's per-position quality vector to ONE number: its WEAKEST position.
+Per-position JOINT quality for a qualmer vertex: Phred SUMMED across every independent
+observation of that k-mer, per `planning-docs/rhizomorph-graph-ecosystem-plan.md`
+(`aggregate_quality_scores_independence`). Returns a VECTOR of length k, or `nothing`
+when the vertex carries no recoverable quality.
 
-Using the mean here instead would defeat the purpose. A sequencing error corrupts a
-single base, but the k-mer containing it spans `k` positions, so at k=11 a Q2 error base
-among ten Q40 neighbours averages to ~Q36 — comfortably above any sane Phred floor. The
-erroneous k-mer would then be indistinguishable from a clean one, and a "quality filter"
-built on the mean would silently pass every error k-mer in the graph.
+Summing, not averaging. Phred adds in log space, so summing multiplies error
+probabilities: ten independent Q40 observations are far more trustworthy than one and
+the joint score says so, where a mean returns 40 either way. Reading this as a mean is
+the specific error `be677b0f` existed to fix, and this docstring previously described
+the deleted mean-based helper — corrected in PR #453 review.
 
-`_qualmer_vertex_quality_scores` has already averaged ACROSS observations at each
-position, so this is "the weakest position, averaged over the reads covering it" — a
-k-mer seen once with a bad base is dropped, while one seen ten times with nine clean
-reads at that position survives. Coverage therefore still earns trust; it just cannot
-launder a consistently bad base.
+Reads only `first(get_all_dataset_ids(...))`. Single-dataset is an ASSUMPTION here, not
+a property: `get_all_dataset_ids` collects `Dict` keys, so on a multi-dataset vertex the
+choice is arbitrary and unstable across builds. See `_qualmer_joint_confidence` for the
+reduction to a scalar.
 """
 function _qualmer_vertex_joint_quality_scores(vertex_data)
     dataset_ids = Rhizomorph.get_all_dataset_ids(vertex_data)
@@ -115,8 +117,19 @@ end
 
 """
 Edge score under an explicit `weighting`. `:quality` delegates to the existing
-`Rhizomorph.edge_quality_weight`, which averages the decoded Phred of each edge's
-quality evidence and itself falls back to `count_evidence` for edges carrying none.
+`Rhizomorph.edge_quality_weight`, which averages the decoded Phred WITHIN each quality
+evidence entry and then SUMS those per-entry means across entries — so it grows with
+edge coverage and is unbounded. It returns `0.0` for an edge with no evidence entries,
+and falls back to `count_evidence` for entries carrying no quality.
+
+!!! warning "Scales are not commensurable under `:quality`"
+    `_quality_weighted_walk` multiplies this by the vertex score, which is on the joint
+    0-255 scale (or an evidence count when quality is absent). The product therefore
+    mixes units and its variance is dominated by the unbounded edge term, which makes
+    the walk MORE coverage-driven under `:quality`, not less. This is tolerable only
+    because the fallback walk runs solely when the primary extraction yields nothing;
+    it is not a calibrated score and must not be reported as one. Tracked for the
+    dependence-aware rework (td-2tg8).
 """
 function _qualmer_edge_score(edge_data, weighting::Symbol)
     weighting == :evidence && return _qualmer_edge_score(edge_data)
@@ -1867,10 +1880,19 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # clean_corrector_graph! runs first on the graph, find_contigs_next then
         # extracts, and the RC-dedup collapses strands last.
         corrector_cleanup = config.graph_cleanup === nothing ? true : config.graph_cleanup
+        # This rebuilds the config from a HAND-LISTED kwarg subset, so any option not
+        # named here is silently dropped on the corrector route — no error, no warning,
+        # and `assembly_stats` then reports the un-requested value as though it were
+        # what the caller asked for. `traversal_weighting` / `traversal_min_quality`
+        # were dropped exactly that way (found by execution in PR #453 review, not by
+        # inspection). Anything added to AssemblyConfig that affects re-assembly must
+        # be forwarded here too.
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
             dedup_revcomp = config.dedup_revcomp,
-            graph_cleanup = corrector_cleanup)
+            graph_cleanup = corrector_cleanup,
+            traversal_weighting = config.traversal_weighting,
+            traversal_min_quality = config.traversal_min_quality)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -4158,15 +4180,32 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
     # Track visited vertices to avoid duplicates
     visited = Set()
 
-    # Start evidence-weighted walks from high-confidence vertices
-    # Under `:evidence` this is the historical count >= 1 filter. Under `:quality` the
-    # score is a mean Phred, so the floor becomes the configured quality floor —
-    # comparing a Phred against the count-derived 1.0 would admit essentially every
-    # vertex and leave the fallback walk count-driven even when quality was requested.
+    # Start walks from high-confidence vertices.
+    #
+    # Under `:evidence` this is the historical count >= 1 filter.
+    #
+    # Under `:quality` the floor is on the JOINT Phred scale (0-255), so the score must
+    # be read the same way `_prune_qualmer_graph_by_quality` reads it — via
+    # `_qualmer_joint_confidence`, NOT via `_qualmer_vertex_score(_, :quality)`. That
+    # helper falls back to an evidence COUNT when quality is missing, and comparing a
+    # count against a joint-Phred floor is the category error the prune helper documents
+    # itself as avoiding: a quality-less vertex with count 5 would be dropped for
+    # "scoring below 60", and one with count 100 admitted as though it were joint Q100.
+    # This call site committed that error until PR #453 review caught it.
+    #
+    # Absent quality means NO OPINION, so such vertices are KEPT — the same policy the
+    # prune step applies. The two steps must agree: the prune deliberately preserves
+    # quality-less vertices, so a start filter that excluded them would do nothing but
+    # discard exactly what the prune chose to keep.
     weighting = config.traversal_weighting
-    min_quality = weighting == :quality ? config.traversal_min_quality : 1.0
-    start_vertices = filter(
-        v -> _qualmer_vertex_score(graph[v], weighting) >= min_quality, vertices)
+    start_vertices = if weighting == :quality
+        filter(vertices) do v
+            confidence = _qualmer_joint_confidence(graph[v])
+            confidence === nothing || confidence >= config.traversal_min_quality
+        end
+    else
+        filter(v -> _qualmer_vertex_score(graph[v]) >= 1.0, vertices)
+    end
 
     # If no high-confidence vertices, use all vertices
     if isempty(start_vertices)

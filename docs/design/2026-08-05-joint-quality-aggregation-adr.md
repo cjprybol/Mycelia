@@ -197,15 +197,32 @@ that is incoherent.
 **4.2 But it is dramatically better calibrated than independence, in both
 regimes:**
 
-| regime   | independence (median / max) | conservative (median / max / min) |
-| -------- | --------------------------- | --------------------------------- |
-| random   | 1.14 / **3.80**             | 0.49 / 1.20 / -1.83               |
-| artifact | 1.92 / **39.25**            | 0.41 / 1.20 / -1.35               |
+**Re-derived over ALL 125 bins** (E1 fix). Zero-error bins are no longer
+censored: they now carry a rule-of-three one-sided bound, so a model that
+overpredicts where nothing was observed is scored rather than dropped.
 
-Conservative is never off by more than ~1.8 orders in either direction;
-independence reaches 39. The ADR predicted conservative would "substantially
-overpredict error in many random high-support bins" — measured, its worst
-overprediction is 1.83 orders, against independence's 39-order underprediction.
+| regime   | independence (max) | conservative (max / min) |
+| -------- | ------------------ | ------------------------ |
+| random   | **+3.80**          | +1.20 / **-2.38**        |
+| artifact | **+39.25**         | +1.20 / **-2.12**        |
+
+Positive = overconfident (real errors exceed what the model allows). Negative =
+overpredicts error.
+
+**The previous "never off by more than ~1.8 orders in either direction" was
+wrong, and wrong in the direction that flattered the conclusion.** With the
+censored bins restored, conservative overpredicts by up to **2.38** orders — and
+those bins are concentrated in the random, high-support regime, which is exactly
+where the commissioned reviewer predicted it would. **That prediction is
+confirmed, not refuted.** The earlier sentence claiming to have refuted it is
+withdrawn.
+
+What survives: conservative's worst error in either direction is ~2.4 orders,
+against independence's **39.25**. The ranking is unchanged and the margin is
+still more than an order of magnitude in log-space, so §4.4's practical
+conclusion holds — but it now rests on the full comparison rather than on a
+filtered one, and the concession in §4.1 that conservative "degrades with
+coverage" is now visible in the data rather than argued around.
 
 **4.3 Why it probably tracks so well here, stated as a hypothesis not a
 finding.** When errors are _systematic_, "at least one observation is wrong" and
