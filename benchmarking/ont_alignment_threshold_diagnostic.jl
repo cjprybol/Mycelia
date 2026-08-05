@@ -64,7 +64,15 @@ const CELL_FILTER = arg_list("--cells")
     candidate_cells(sweep_dir) -> Vector{Dict}
 
 Sweep cells worth rescoring: those that produced contigs long enough to score
-but where QUAST could not compute NGA50 (`censored_unaligned`).
+but where QUAST could not compute NGA50. That is BOTH censoring causes:
+
+  * `censored_no_alignment`  — nothing aligned at the default 95% identity.
+    Relaxing the threshold asks whether the contigs are approximate
+    reconstructions that merely fell under the cut.
+  * `censored_gf_below_50`   — contigs aligned, but under the 50% genome
+    fraction floor where NGA50 is undefined. Relaxing the threshold asks
+    whether more of the genome comes into alignment range, which is the
+    quantity that determines whether NGA50 becomes defined at all.
 
 Cells with `no_contigs_ge_min` are deliberately EXCLUDED — they have nothing at
 or above --min-contig for QUAST to align at any identity threshold, so relaxing
@@ -72,6 +80,8 @@ the threshold cannot tell us anything about them. Their failure is contig
 LENGTH, which is a different mechanism and is already quantified by the sweep's
 `asm_max_contig` column.
 """
+const CENSORED_STATUSES = ("censored_no_alignment", "censored_gf_below_50")
+
 function candidate_cells(sweep_dir)
     cells = Dict{String, Any}[]
     cells_dir = joinpath(sweep_dir, "cells")
@@ -127,7 +137,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     all_cells = candidate_cells(SWEEP_DIR)
     selected = filter(all_cells) do cell
         CELL_FILTER !== nothing && return cell["cell_id"] in CELL_FILTER
-        cell["nga50_status"] == "censored_unaligned"
+        cell["nga50_status"] in CENSORED_STATUSES
     end
     println("Cells available: $(length(all_cells)); selected for rescoring: $(length(selected))")
     isempty(selected) && println("  (nothing to do — no censored_unaligned cells yet)")
