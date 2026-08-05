@@ -1,33 +1,81 @@
-technology	k	coverage	n_seeds	n_measured_nga50	n_degenerate	median_nga50	median_genome_fraction	median_contigs	median_contigs_ge_min	median_max_contig	nga50_status_mix	outcome	median_wall_seconds
-illumina	11	10	3	0	3	NA	NA	4483.0	0.0	301.0	no_contigs_ge_min	degenerate	8.831
-illumina	11	30	3	0	3	NA	NA	9207.0	0.0	268.0	no_contigs_ge_min	degenerate	27.963
-illumina	11	50	3	0	3	NA	NA	13681.0	0.0	268.0	no_contigs_ge_min	degenerate	78.832
-illumina	11	100	3	0	3	NA	NA	25902.0	0.0	268.0	no_contigs_ge_min	degenerate	124.679
-illumina	15	10	3	3	0	2135.0	96.977	2015.0	66.0	4386.0	measured	partial	8.949
-illumina	15	30	3	3	0	11024.0	99.687	5530.0	18.0	11296.0	measured	substantial	28.806
-illumina	15	50	3	3	0	11024.0	99.678	8978.0	18.0	11296.0	measured	substantial	83.689
-illumina	15	100	3	3	0	11024.0	99.68	17768.0	18.0	11296.0	measured	substantial	193.005
-illumina	21	10	3	3	0	2161.0	96.165	2004.0	68.0	3615.0	measured	partial	6.696
-illumina	21	30	3	3	0	48125.0	99.922	5444.0	2.0	48125.0	measured	near_complete	23.612
-illumina	21	50	3	3	0	48482.0	99.959	8843.0	2.0	48482.0	measured	near_complete	73.466
-illumina	21	100	3	3	0	48488.0	99.971	17500.0	2.0	48488.0	measured	near_complete	197.697
-illumina	31	10	3	3	0	1468.0	94.105	2015.0	73.0	2762.0	measured	partial	11.536
-illumina	31	30	3	3	0	48464.0	99.922	5357.0	3.0	48464.0	measured	near_complete	20.408
-illumina	31	50	3	3	0	48479.0	99.959	8717.0	2.0	48479.0	measured	near_complete	73.849
-illumina	31	100	3	3	0	48488.0	99.971	17215.0	2.0	48488.0	measured	near_complete	128.317
-ont	11	10	3	0	3	NA	NA	48452.0	0.0	239.0	no_contigs_ge_min	degenerate	17.599
-ont	11	30	3	0	3	NA	NA	149115.0	0.0	241.0	no_contigs_ge_min	degenerate	81.525
-ont	11	50	3	0	3	NA	NA	252216.0	0.0	244.0	no_contigs_ge_min	degenerate	127.453
-ont	11	100	3	0	3	NA	NA	423747.0	0.0	321.0	no_contigs_ge_min	degenerate	369.583
-ont	15	10	3	0	3	NA	NA	25429.0	2.0	4481.0	censored_no_alignment|no_contigs_ge_min	degenerate	16.548
-ont	15	30	3	2	1	568.5	50.744	69036.0	45.0	4090.0	censored_gf_below_50|measured	degenerate|partial	119.047
-ont	15	50	3	3	0	1509.0	85.978	122270.0	76.0	3653.0	measured	partial	175.057
-ont	15	100	3	3	0	5391.0	98.781	252396.0	144.0	9198.0	measured	partial|substantial	583.325
-ont	21	10	3	0	3	NA	NA	20224.0	2.0	4682.0	censored_no_alignment|no_contigs_ge_min	degenerate	27.34
-ont	21	30	3	0	3	NA	31.663	53271.0	25.0	4682.0	censored_gf_below_50	degenerate	128.509
-ont	21	50	3	3	0	1014.0	77.498	93377.0	54.0	15775.0	measured	partial	231.366
-ont	21	100	3	3	0	4541.0	98.757	199579.0	49.0	35647.0	measured	partial	547.894
-ont	31	10	3	0	3	NA	NA	13656.0	31.0	4682.0	censored_no_alignment	degenerate	23.333
-ont	31	30	3	0	3	NA	9.773	35736.0	85.0	4682.0	censored_gf_below_50	degenerate	177.778
-ont	31	50	3	3	0	552.0	51.963	61292.0	162.0	15775.0	measured	partial	243.102
-ont	31	100	3	3	0	2451.0	96.775	135311.0	180.0	35647.0	measured	partial	1436.969
+organism	technology	k	coverage	n_seeds	n_measured_nga50	n_degenerate	median_nga50	median_genome_fraction	median_contigs	median_contigs_ge_min	median_max_contig	nga50_status_mix	outcome	median_wall_seconds
+Lambda	illumina	11	10	3	0	3	NA	NA	4483.0	0.0	301.0	no_contigs_ge_min	degenerate	8.831
+Lambda	illumina	11	30	3	0	3	NA	NA	9207.0	0.0	268.0	no_contigs_ge_min	degenerate	27.963
+Lambda	illumina	11	50	3	0	3	NA	NA	13681.0	0.0	268.0	no_contigs_ge_min	degenerate	78.832
+Lambda	illumina	11	100	3	0	3	NA	NA	25902.0	0.0	268.0	no_contigs_ge_min	degenerate	124.679
+Lambda	illumina	13	10	3	3	0	1041.0	79.021	2169.0	71.0	2718.0	measured	partial	8.56
+Lambda	illumina	13	30	3	3	0	1553.0	85.722	5806.0	71.0	2942.0	measured	partial	26.904
+Lambda	illumina	13	50	3	3	0	1486.0	83.757	9446.0	71.0	2942.0	measured	partial	38.374
+Lambda	illumina	13	100	3	3	0	1484.0	83.761	18665.0	71.0	2942.0	measured	partial	197.733
+Lambda	illumina	15	10	3	3	0	2135.0	96.977	2015.0	66.0	4386.0	measured	partial	8.949
+Lambda	illumina	15	30	3	3	0	11024.0	99.687	5530.0	18.0	11296.0	measured	substantial	28.806
+Lambda	illumina	15	50	3	3	0	11024.0	99.678	8978.0	18.0	11296.0	measured	substantial	83.689
+Lambda	illumina	15	100	3	3	0	11024.0	99.68	17768.0	18.0	11296.0	measured	substantial	193.005
+Lambda	illumina	17	10	3	3	0	2259.0	96.992	2009.0	66.0	4743.0	measured	partial	8.954
+Lambda	illumina	17	30	3	3	0	48464.0	99.922	5481.0	2.0	48464.0	measured	near_complete	25.579
+Lambda	illumina	17	50	3	3	0	48479.0	99.959	8912.0	2.0	48479.0	measured	near_complete	78.312
+Lambda	illumina	17	100	3	3	0	48488.0	99.971	17612.0	2.0	48488.0	measured	near_complete	128.102
+Lambda	illumina	19	10	3	3	0	2344.0	97.398	2010.0	66.0	3631.0	measured	partial	8.28
+Lambda	illumina	19	30	3	3	0	48464.0	99.922	5465.0	2.0	48464.0	measured	near_complete	26.712
+Lambda	illumina	19	50	3	3	0	48479.0	99.959	8864.0	2.0	48479.0	measured	near_complete	74.285
+Lambda	illumina	19	100	3	3	0	48488.0	99.971	17538.0	2.0	48488.0	measured	near_complete	120.926
+Lambda	illumina	21	10	3	3	0	2161.0	96.165	2004.0	68.0	3615.0	measured	partial	6.696
+Lambda	illumina	21	30	3	3	0	48125.0	99.922	5444.0	2.0	48125.0	measured	near_complete	23.612
+Lambda	illumina	21	50	3	3	0	48482.0	99.959	8843.0	2.0	48482.0	measured	near_complete	73.466
+Lambda	illumina	21	100	3	3	0	48488.0	99.971	17500.0	2.0	48488.0	measured	near_complete	197.697
+Lambda	illumina	31	10	3	3	0	1468.0	94.105	2015.0	73.0	2762.0	measured	partial	11.536
+Lambda	illumina	31	30	3	3	0	48464.0	99.922	5357.0	3.0	48464.0	measured	near_complete	20.408
+Lambda	illumina	31	50	3	3	0	48479.0	99.959	8717.0	2.0	48479.0	measured	near_complete	73.849
+Lambda	illumina	31	100	3	3	0	48488.0	99.971	17215.0	2.0	48488.0	measured	near_complete	128.317
+Lambda	ont	11	10	3	0	3	NA	NA	48452.0	0.0	239.0	no_contigs_ge_min	degenerate	17.599
+Lambda	ont	11	30	3	0	3	NA	NA	149115.0	0.0	241.0	no_contigs_ge_min	degenerate	81.525
+Lambda	ont	11	50	3	0	3	NA	NA	252216.0	0.0	244.0	no_contigs_ge_min	degenerate	127.453
+Lambda	ont	11	100	3	0	3	NA	NA	423747.0	0.0	321.0	no_contigs_ge_min	degenerate	369.583
+Lambda	ont	13	10	3	0	3	NA	NA	29685.0	4.0	662.0	censored_no_alignment|no_contigs_ge_min	degenerate	17.907
+Lambda	ont	13	30	3	1	2	517.0	35.85	86474.0	25.0	1471.0	censored_partial_alignment|measured	degenerate|partial	110.649
+Lambda	ont	13	50	3	3	0	779.0	66.183	157918.0	52.0	1737.0	measured	partial	180.079
+Lambda	ont	13	100	3	3	0	1170.0	80.999	336924.0	58.0	2835.0	measured	partial	486.372
+Lambda	ont	15	10	3	0	3	NA	NA	25429.0	2.0	4481.0	censored_no_alignment|no_contigs_ge_min	degenerate	16.548
+Lambda	ont	15	30	3	2	1	568.5	50.744	69036.0	45.0	4090.0	censored_partial_alignment|measured	degenerate|partial	119.047
+Lambda	ont	15	50	3	3	0	1509.0	85.978	122270.0	76.0	3653.0	measured	partial	175.057
+Lambda	ont	15	100	3	3	0	5391.0	98.781	252396.0	144.0	9198.0	measured	partial|substantial	583.325
+Lambda	ont	17	10	3	0	3	NA	NA	23471.0	2.0	4681.0	censored_no_alignment|no_contigs_ge_min	degenerate	15.5
+Lambda	ont	17	30	3	1	2	608.0	39.25	62806.0	40.0	4681.0	censored_partial_alignment|measured	degenerate|partial	76.175
+Lambda	ont	17	50	3	3	0	1307.0	85.252	110404.0	66.0	4681.0	measured	partial	217.849
+Lambda	ont	17	100	3	3	0	4498.0	99.767	229807.0	67.0	11173.0	measured	partial|substantial	864.083
+Lambda	ont	19	10	3	0	3	NA	NA	21903.0	2.0	4682.0	censored_no_alignment|no_contigs_ge_min	degenerate	21.61
+Lambda	ont	19	30	3	1	2	560.0	39.116	57866.0	29.0	4682.0	censored_partial_alignment|measured	degenerate|partial	166.405
+Lambda	ont	19	50	3	3	0	1174.0	81.92	101502.0	59.0	9033.0	measured	partial	279.676
+Lambda	ont	19	100	3	3	0	4385.0	99.998	214152.0	54.0	27249.0	measured	partial|substantial	540.183
+Lambda	ont	21	10	3	0	3	NA	NA	20224.0	2.0	4682.0	censored_no_alignment|no_contigs_ge_min	degenerate	27.34
+Lambda	ont	21	30	3	0	3	NA	31.663	53271.0	25.0	4682.0	censored_partial_alignment	degenerate	128.509
+Lambda	ont	21	50	3	3	0	1014.0	77.498	93377.0	54.0	15775.0	measured	partial	231.366
+Lambda	ont	21	100	3	3	0	4541.0	98.757	199579.0	49.0	35647.0	measured	partial	547.894
+Lambda	ont	31	10	3	0	3	NA	NA	13656.0	31.0	4682.0	censored_no_alignment	degenerate	23.333
+Lambda	ont	31	30	3	0	3	NA	9.773	35736.0	85.0	4682.0	censored_partial_alignment	degenerate	177.778
+Lambda	ont	31	50	3	3	0	552.0	51.963	61292.0	162.0	15775.0	measured	partial	243.102
+Lambda	ont	31	100	3	3	0	2451.0	96.775	135311.0	180.0	35647.0	measured	partial	1436.969
+T4	illumina	11	10	3	0	3	NA	NA	36907.0	0.0	129.0	no_contigs_ge_min	degenerate	30.707
+T4	illumina	11	30	3	0	3	NA	NA	57130.0	0.0	121.0	no_contigs_ge_min	degenerate	370.131
+T4	illumina	11	50	3	0	3	NA	NA	76463.0	0.0	106.0	no_contigs_ge_min	degenerate	378.063
+T4	illumina	15	10	3	3	0	971.0	78.021	7486.0	241.0	2232.0	measured	partial	43.844
+T4	illumina	15	30	3	3	0	1304.0	80.0	19676.0	255.0	3942.0	measured	partial	151.692
+T4	illumina	15	50	3	3	0	1304.0	78.441	32521.0	254.0	3809.0	measured	partial	329.979
+T4	illumina	21	10	3	3	0	1731.0	95.384	6860.0	252.0	4296.0	measured	partial	34.453
+T4	illumina	21	30	3	3	0	18587.0	99.09	18536.0	63.0	25340.0	measured	substantial	142.049
+T4	illumina	21	50	3	3	0	18587.0	98.928	30890.0	63.0	25340.0	measured	substantial	322.057
+T4	illumina	31	10	3	3	0	1407.0	93.018	6760.0	273.0	2755.0	measured	partial	37.208
+T4	illumina	31	30	3	3	0	48457.0	99.786	18157.0	31.0	52429.0	measured	substantial	194.899
+T4	illumina	31	50	3	3	0	52429.0	99.791	30267.0	26.0	52429.0	measured	substantial	308.337
+T4	ont	11	10	3	0	3	NA	NA	180036.0	0.0	117.0	no_contigs_ge_min	degenerate	100.538
+T4	ont	11	30	3	0	3	NA	NA	379069.0	0.0	124.0	no_contigs_ge_min	degenerate	480.0
+T4	ont	11	50	3	0	3	NA	NA	505006.0	0.0	110.0	no_contigs_ge_min	degenerate	853.014
+T4	ont	15	10	3	0	3	NA	2.324	88034.0	15.0	2022.0	censored_no_alignment|censored_partial_alignment	degenerate	225.329
+T4	ont	15	30	3	3	0	552.0	48.041	271091.0	186.0	2173.0	measured	partial	572.739
+T4	ont	15	50	3	3	0	1003.0	74.978	478258.0	273.0	3792.0	measured	partial	2221.221
+T4	ont	21	10	3	0	3	NA	0.737	65914.0	6.0	4776.0	censored_partial_alignment	degenerate	200.832
+T4	ont	21	30	3	3	0	544.0	46.619	186714.0	121.0	17876.0	measured	partial	767.381
+T4	ont	21	50	3	3	0	1601.0	88.995	324825.0	222.0	17876.0	measured	partial	2773.683
+T4	ont	31	10	3	0	3	NA	0.363	46759.0	113.0	4776.0	censored_partial_alignment	degenerate	241.746
+T4	ont	31	30	3	0	3	NA	21.757	127269.0	290.0	17876.0	censored_partial_alignment	degenerate	928.641
+T4	ont	31	50	3	3	0	1017.0	72.012	217724.0	591.0	17876.0	measured	partial	2399.071
