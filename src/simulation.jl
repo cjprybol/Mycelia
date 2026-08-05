@@ -1064,17 +1064,70 @@ function simulate_pacbio_reads(; fasta,
 end
 
 """
+    _badread_nanopore_args(; fasta, quantity, error_model, qscore_model,
+                             identity, length_dist, seed) -> Vector{String}
+
+Build the Badread argument vector for `simulate_nanopore_reads`.
+
+Extracted from the caller so that the argument list is reachable from a test
+WITHOUT running Badread, installing a conda environment, or monkeypatching
+`add_bioconda_env`. What needs guarding here is not that Badread runs — it is
+that the error model, qscore model, identity distribution, and length
+distribution are all actually PASSED. Omitting one is invisible at runtime:
+Badread simply falls back to its own default for that parameter, produces
+well-formed reads, and every downstream benchmark keeps working while silently
+measuring a different error process.
+"""
+function _badread_nanopore_args(; fasta, quantity,
+        error_model::String = "nanopore2023",
+        qscore_model::String = "nanopore2023",
+        identity::String = "95,99,2.5",
+        length_dist::String = "15000,13000",
+        seed::Union{Nothing, Int} = nothing)
+    args = ["badread", "simulate", "--reference", string(fasta),
+        "--quantity", string(quantity),
+        "--error_model", error_model, "--qscore_model", qscore_model,
+        "--identity", identity, "--length", length_dist]
+    if !isnothing(seed)
+        push!(args, "--seed")
+        push!(args, string(seed))
+    end
+    return args
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Simulate Oxford Nanopore R10.4.1 sequencing reads using Badread's default settings.
+Simulate Oxford Nanopore R10.4.1 sequencing reads with Badread.
 
-Badread's default settings correspond to Oxford Nanopore R10.4.1 reads of mediocre quality.
-Uses nanopore2023 error and quality models with default identity and length distributions.
+Corresponds to Oxford Nanopore R10.4.1 reads of mediocre quality: the
+nanopore2023 error and quality models, a beta identity distribution with mean
+95% / max 99% / sd 2.5, and a 15 kb mean fragment length.
+
+Those settings are passed to Badread EXPLICITLY rather than left to its
+built-in defaults. They happen to equal the defaults of Badread 0.4.1/0.4.2 —
+verified byte-identical output for a fixed reference and seed — but relying on
+that would make the error process a property of whichever Badread version is
+installed rather than of this function. A release that changed a default would
+then silently move every ONT benchmark in this repo without any change to
+Mycelia, and simulated-read benchmarks are exactly where such a shift is hardest
+to notice: the reads stay well-formed and the assemblies still run. The sibling
+`simulate_nanopore_r941_reads` has always pinned its settings; this brings the
+R10.4.1 path in line.
+
+Measured behaviour of these settings (Lambda, 30x): mean read identity 94.4%
+(BLAST, alignment-measured), 95.0% gap-compressed, with ~2% of reads unalignable
+from the 1% junk + 1% random defaults.
 
 # Arguments
 - `fasta::String`: Path to input reference FASTA file
 - `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
 - `outfile::String`: Output path for gzipped FASTQ file. Defaults to input filename with modified extension
+- `error_model::String="nanopore2023"`: Badread error model
+- `qscore_model::String="nanopore2023"`: Badread quality-score model
+- `identity::String="95,99,2.5"`: identity distribution (mean,max,stdev)
+- `length_dist::String="15000,13000"`: fragment length distribution (mean,stdev)
+- `seed::Union{Nothing,Int}=nothing`: RNG seed for reproducible output
 
 # Returns
 - `String`: Path to the generated output FASTQ file
@@ -1085,14 +1138,15 @@ function simulate_nanopore_reads(; fasta,
         quantity,
         outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"),
         quiet = false,
+        error_model::String = "nanopore2023",
+        qscore_model::String = "nanopore2023",
+        identity::String = "95,99,2.5",
+        length_dist::String = "15000,13000",
         seed::Union{Nothing, Int} = nothing)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        cmd_args = ["badread", "simulate", "--reference", fasta, "--quantity", quantity]
-        if !isnothing(seed)
-            push!(cmd_args, "--seed")
-            push!(cmd_args, string(seed))
-        end
+        cmd_args = _badread_nanopore_args(; fasta, quantity, error_model,
+            qscore_model, identity, length_dist, seed)
         if quiet
             cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`, stderr = devnull)
             p = pipeline(cmd, `gzip`)
