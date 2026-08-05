@@ -25,6 +25,9 @@ import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_k_sweep.jl"))
 
+const LAMBDA = genome_size_for("Lambda")
+const T4 = genome_size_for("T4")
+
 Test.@testset "ONT k-sweep helpers" begin
     Test.@testset "contig_stats is independent of QUAST" begin
         # The low-k regime: many contigs, none long enough for QUAST to score.
@@ -111,24 +114,62 @@ Test.@testset "ONT k-sweep helpers" begin
         # inconsistent rather than evidence of partial success.
         for status in ("no_contigs", "no_contigs_ge_min", "censored_no_alignment",
             "censored_gf_below_50", "quast_failed")
-            Test.@test classify_outcome(0.0, 0.0, status) == "degenerate"
-            Test.@test classify_outcome(48_000.0, 99.9, status) == "degenerate"
+            Test.@test classify_outcome(0.0, 0.0, status, LAMBDA) == "degenerate"
+            Test.@test classify_outcome(48_000.0, 99.9, status, LAMBDA) == "degenerate"
         end
 
         # Measured cells fall through the tier ladder.
-        Test.@test classify_outcome(0.0, 9.7, "measured") == "degenerate"     # pilot ONT 30x
-        Test.@test classify_outcome(552.0, 51.9, "measured") == "partial"     # pilot ONT 50x
-        Test.@test classify_outcome(2356.0, 96.8, "measured") == "partial"    # pilot ONT 100x
-        Test.@test classify_outcome(48_058.0, 99.9, "measured") == "near_complete"  # Illumina 30x
+        Test.@test classify_outcome(0.0, 9.7, "measured", LAMBDA) == "degenerate"     # pilot ONT 30x
+        Test.@test classify_outcome(552.0, 51.9, "measured", LAMBDA) == "partial"     # pilot ONT 50x
+        Test.@test classify_outcome(2356.0, 96.8, "measured", LAMBDA) == "partial"    # pilot ONT 100x
+        Test.@test classify_outcome(48_058.0, 99.9, "measured", LAMBDA) == "near_complete"  # Illumina 30x
 
         # Boundary behaviour of the two thresholds that define "substantial":
         # genome fraction >= 90 AND NGA50 >= 10% of the genome.
-        Test.@test classify_outcome(0.10 * GENOME_SIZE, 90.0, "measured") == "substantial"
-        Test.@test classify_outcome(0.10 * GENOME_SIZE - 1, 90.0, "measured") == "partial"
-        Test.@test classify_outcome(0.10 * GENOME_SIZE, 89.9, "measured") == "partial"
+        Test.@test classify_outcome(0.10 * LAMBDA, 90.0, "measured", LAMBDA) ==
+                   "substantial"
+        Test.@test classify_outcome(0.10 * LAMBDA - 1, 90.0, "measured", LAMBDA) ==
+                   "partial"
+        Test.@test classify_outcome(0.10 * LAMBDA, 89.9, "measured", LAMBDA) == "partial"
         # High genome fraction with fragmented contigs is NOT substantial — the
         # genome being present is not the same as it being assembled.
-        Test.@test classify_outcome(500.0, 99.0, "measured") == "partial"
+        Test.@test classify_outcome(500.0, 99.0, "measured", LAMBDA) == "partial"
+    end
+
+    Test.@testset "outcome tiers scale with the genome, not a constant" begin
+        # The tiers are FRACTIONS of the genome, so the same NGA50 must classify
+        # differently on a 48.5 kb and a 168.9 kb reference. Getting this wrong
+        # does not throw — it silently rescales every T4 row against Lambda's
+        # size and produces a well-formed table of misclassified cells, which is
+        # exactly the failure a second organism was added to avoid.
+        Test.@test T4 > 3 * LAMBDA   # sanity: the two scales really do differ
+
+        # NGA50 = 24,251 is 50% of Lambda but only ~14% of T4.
+        half_lambda = 0.50 * LAMBDA
+        Test.@test classify_outcome(half_lambda, 99.0, "measured", LAMBDA) ==
+                   "near_complete"
+        Test.@test classify_outcome(half_lambda, 99.0, "measured", T4) ==
+                   "substantial"
+
+        # NGA50 = 4,850 is 10% of Lambda but under 3% of T4.
+        tenth_lambda = 0.10 * LAMBDA
+        Test.@test classify_outcome(tenth_lambda, 92.0, "measured", LAMBDA) ==
+                   "substantial"
+        Test.@test classify_outcome(tenth_lambda, 92.0, "measured", T4) == "partial"
+    end
+
+    Test.@testset "genome_size_for refuses an unknown organism" begin
+        Test.@test genome_size_for("Lambda") == 48_502
+        Test.@test genome_size_for("T4") == 168_903
+        # Defaulting here would rescale the tiers silently, so it must throw.
+        threw = false
+        try
+            genome_size_for("NotAGenome")
+        catch err
+            threw = true
+            Test.@test occursin("NotAGenome", sprint(showerror, err))
+        end
+        Test.@test threw
     end
 
     Test.@testset "parse_quast_metrics maps QUAST's \"-\" to missing, never 0.0" begin
@@ -164,7 +205,11 @@ Test.@testset "ONT k-sweep helpers" begin
     end
 
     Test.@testset "canonical refuses to default a missing measurement" begin
+        # `organism` must be a real one: canonical() reclassifies on read, and
+        # reclassification looks the genome size up by name rather than
+        # defaulting, so a placeholder organism is (correctly) rejected.
         complete = Dict(String(key) => (key in STR_KEYS ? "x" : 1) for key in ROW_KEYS)
+        complete["organism"] = "Lambda"
         Test.@test canonical(complete) isa NamedTuple
 
         # Every column here is a measurement or a grouping key. Silently

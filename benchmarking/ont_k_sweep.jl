@@ -86,12 +86,20 @@ import Statistics
 
 # === Configuration ===
 
-# Lambda only. The pilot's ONT degeneracy is present in both Lambda and T4, and
-# Lambda is the smaller, faster genome with the one ONT cell that DID score
-# (50x/100x), so it spans both the degenerate and non-degenerate regimes.
-const ORGANISM = "Lambda"
-const ACCESSION = "NC_001416"
-const GENOME_SIZE = 48_502  # bp; used only for the NGA50-relative outcome tiers
+# (display name, NCBI accession, expected size in bp). Accessions match the
+# Track-A pilot so cells are directly comparable to it.
+#
+# Lambda is the default: it is the smaller, faster genome and spans both the
+# degenerate and non-degenerate regimes. T4 is the generality check — it is 3.5x
+# larger with different repeat structure, and repeat structure is what sets BOTH
+# ends of the usable k range (the short-k floor where unitigs cannot grow, and
+# the saturation ceiling where a short k can no longer resolve repeats). A k
+# recommendation derived from one genome does not automatically transfer, so the
+# organism has to be a variable rather than a constant.
+const ORGANISMS = [
+    ("Lambda", "NC_001416", 48_502),
+    ("T4", "NC_000866", 168_903)
+]
 
 const TECHNOLOGIES = ["illumina", "ont"]
 const KS = [11, 15, 21, 31]
@@ -130,9 +138,17 @@ const NGA50_SUBSTANTIAL_FRAC = 0.10   # NGA50 >= 10% of genome
 const NGA50_NEAR_COMPLETE_FRAC = 0.50 # NGA50 >= 50% of genome
 
 """
-    classify_outcome(nga50, genome_fraction, nga50_status) -> String
+    classify_outcome(nga50, genome_fraction, nga50_status, genome_size) -> String
 
-Map a scored cell onto one of four ordered outcome tiers:
+Map a scored cell onto one of four ordered outcome tiers.
+
+`genome_size` is an explicit argument rather than a constant because the NGA50
+tiers are defined as a FRACTION of the genome: "NGA50 >= 10% of the genome" is
+4,850 bp on Lambda and 16,890 bp on T4. Reusing one genome's size to classify
+another would silently rescale the tiers and make cross-organism rows
+incomparable — which is the whole point of running a second organism.
+
+The ordered tiers are:
 
   * `degenerate`    — nothing aligned (censored NGA50) or genome fraction below
                       `GF_DEGENERATE_MAX`. This is the pilot's ONT signature.
@@ -145,18 +161,36 @@ A censored NGA50 always classifies as `degenerate` regardless of genome
 fraction: if QUAST could not compute NGA50, no contig aligned, so any nonzero
 genome fraction would be internally inconsistent rather than informative.
 """
-function classify_outcome(nga50, genome_fraction, nga50_status::AbstractString)
+function classify_outcome(nga50, genome_fraction, nga50_status::AbstractString,
+        genome_size::Real)
     nga50_status == "measured" || return "degenerate"
     gf = Float64(genome_fraction)
     n = Float64(nga50)
     gf < GF_DEGENERATE_MAX && return "degenerate"
-    if gf >= GF_NEAR_COMPLETE_MIN && n >= NGA50_NEAR_COMPLETE_FRAC * GENOME_SIZE
+    if gf >= GF_NEAR_COMPLETE_MIN && n >= NGA50_NEAR_COMPLETE_FRAC * genome_size
         return "near_complete"
-    elseif gf >= GF_SUBSTANTIAL_MIN && n >= NGA50_SUBSTANTIAL_FRAC * GENOME_SIZE
+    elseif gf >= GF_SUBSTANTIAL_MIN && n >= NGA50_SUBSTANTIAL_FRAC * genome_size
         return "substantial"
     else
         return "partial"
     end
+end
+
+"""
+    genome_size_for(organism) -> Int
+
+Expected reference length for `organism`, from the ORGANISMS table.
+
+Errors on an unknown organism rather than defaulting: a wrong genome size does
+not fail loudly, it silently rescales the NGA50 outcome tiers and produces a
+well-formed table of misclassified cells.
+"""
+function genome_size_for(organism::AbstractString)
+    for (name, _accession, size) in ORGANISMS
+        name == organism && return size
+    end
+    error("unknown organism $(organism); known: " *
+          join((o[1] for o in ORGANISMS), ", "))
 end
 
 # Canonical row schema. Fixed order so in-memory rows and JSON-reloaded
@@ -198,6 +232,10 @@ arg_list(flag) =
 
 const SMOKE = "--smoke" in ARGS
 
+# Default to Lambda only. T4 is opt-in via --organisms because it is 3.5x larger
+# and its ONT high-coverage cells are the most expensive in the grid; a bare
+# invocation should not silently commit to them.
+organisms = ORGANISMS[1:1]
 technologies = TECHNOLOGIES
 ks = KS
 coverages = COVERAGES
@@ -212,6 +250,15 @@ else
     # Assign directly, not inside a `let`: a `let` body introduces a new scope,
     # so these assignments would create locals and silently leave the globals at
     # their defaults — i.e. the shard flags would be accepted and then ignored.
+    _f = arg_list("--organisms")
+    if _f !== nothing
+        organisms = filter(o -> o[1] in _f, ORGANISMS)
+        # An unrecognised name would otherwise silently yield an empty grid that
+        # completes instantly and reports success over zero cells.
+        isempty(organisms) && error(
+            "no known organism matched --organisms $(join(_f, ",")); known: " *
+            join((o[1] for o in ORGANISMS), ", "))
+    end
     _f = arg_list("--technologies")
     _f !== nothing && (technologies = _f)
     _f = arg_list("--ks")
@@ -226,7 +273,8 @@ const OUTPUT_DIR = let v = arg_value("--output-dir")
     v === nothing ? joinpath(@__DIR__, "results", "ont_k_sweep") : v
 end
 
-const N_CELLS = length(technologies) * length(ks) * length(coverages) * length(seeds)
+const N_CELLS = length(organisms) * length(technologies) * length(ks) *
+                length(coverages) * length(seeds)
 
 # === QUAST report parsing ===
 #
@@ -401,10 +449,10 @@ end
 
 # === Per-cell execution ===
 
-function cell_row(tech, k, cov, seed; n_reads, asm, metrics, nga50_status,
-        outcome, wall_seconds, status)
+function cell_row(org, acc, tech, k, cov, seed; n_reads, asm, metrics,
+        nga50_status, outcome, wall_seconds, status)
     return (
-        organism = ORGANISM, accession = ACCESSION, technology = String(tech),
+        organism = String(org), accession = String(acc), technology = String(tech),
         k = Int(k), coverage = Int(cov), seed = Int(seed),
         decoder_arm = DECODER_ARM,
         n_reads = Int(n_reads), n_contigs = Int(asm.n),
@@ -430,7 +478,7 @@ function cell_row(tech, k, cov, seed; n_reads, asm, metrics, nga50_status,
     )
 end
 
-function run_cell(ref, tech, k, cov, seed, cell_dir)
+function run_cell(org, acc, ref, tech, k, cov, seed, cell_dir)
     records = simulate_reads(tech, ref, cov, seed, joinpath(cell_dir, "reads"))
     n_reads = length(records)
     asm_input = strip_quality(records)
@@ -478,7 +526,7 @@ function run_cell(ref, tech, k, cov, seed, cell_dir)
     outcome = classify_outcome(
         ismissing(metrics.NGA50) ? 0.0 : metrics.NGA50,
         ismissing(metrics.genome_fraction) ? 0.0 : metrics.genome_fraction,
-        nga50_status)
+        nga50_status, genome_size_for(org))
 
     status = asm.n == 0 ? "empty_assembly" : "ok"
     # Route the fresh row through `reclassify` as well, so a cell computed in
@@ -487,12 +535,12 @@ function run_cell(ref, tech, k, cov, seed, cell_dir)
     # differently (here from whether report.tsv appeared, there from whether a
     # contig count survived into the row) and could disagree on an edge case.
     # `reclassify` is idempotent, so applying it twice is harmless.
-    return reclassify(cell_row(tech, k, cov, seed; n_reads, asm, metrics,
-        nga50_status, outcome, wall_seconds, status))
+    return reclassify(cell_row(org, acc, tech, k, cov, seed; n_reads, asm,
+        metrics, nga50_status, outcome, wall_seconds, status))
 end
 
-function error_row(tech, k, cov, seed)
-    cell_row(tech, k, cov, seed; n_reads = 0,
+function error_row(org, acc, tech, k, cov, seed)
+    cell_row(org, acc, tech, k, cov, seed; n_reads = 0,
         asm = (n = 0, n_ge_min = 0, max_length = 0, total_bp = 0),
         metrics = empty_metrics(), nga50_status = "quast_failed",
         outcome = "degenerate", wall_seconds = 0.0, status = "error")
@@ -500,7 +548,7 @@ end
 
 # === Checkpointing ===
 
-cell_id_for(tech, k, cov, seed) = "$(ORGANISM)__$(tech)__k$(k)__$(cov)x__seed$(seed)"
+cell_id_for(org, tech, k, cov, seed) = "$(org)__$(tech)__k$(k)__$(cov)x__seed$(seed)"
 
 function save_cell_json(path, row)
     open(path, "w") do io
@@ -557,10 +605,13 @@ function reclassify(row)
     quast_ran = !ismissing(row.quast_contigs)
     status = nga50_status_for(metrics, row.n_contigs, row.asm_contigs_ge_min,
         quast_ran)
+    # Genome size comes from the ROW's own organism, not from a constant, so a
+    # multi-organism table is reclassified against the right tier scale for each
+    # row rather than against whichever organism happened to be first.
     outcome = classify_outcome(
         ismissing(row.NGA50) ? 0.0 : row.NGA50,
         ismissing(row.genome_fraction) ? 0.0 : row.genome_fraction,
-        status)
+        status, genome_size_for(row.organism))
     return merge(row, (; nga50_status = status, outcome = outcome))
 end
 
@@ -568,7 +619,7 @@ end
 
 function write_aggregate(root, rows)
     df = DataFrames.DataFrame(rows)
-    sort!(df, [:technology, :k, :coverage, :seed])
+    sort!(df, [:organism, :technology, :k, :coverage, :seed])
     CSV.write(joinpath(root, "ont_k_sweep_results.tsv"), df; delim = '\t', missingstring = "NA")
     return df
 end
@@ -597,12 +648,13 @@ function write_summary(root, df)
     # so a stratum thinned by a failure is visible rather than silently averaged.
     df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
-    for g in DataFrames.groupby(df, [:technology, :k, :coverage])
+    for g in DataFrames.groupby(df, [:organism, :technology, :k, :coverage])
         measured = g[g.nga50_status .== "measured", :]
         gf = collect(skipmissing(g.genome_fraction))
         push!(summary_rows,
             (
-                technology = g.technology[1], k = g.k[1], coverage = g.coverage[1],
+                organism = g.organism[1], technology = g.technology[1],
+                k = g.k[1], coverage = g.coverage[1],
                 n_seeds = DataFrames.nrow(g),
                 n_measured_nga50 = DataFrames.nrow(measured),
                 n_degenerate = count(==("degenerate"), g.outcome),
@@ -618,7 +670,7 @@ function write_summary(root, df)
             ))
     end
     summary_df = DataFrames.DataFrame(summary_rows)
-    sort!(summary_df, [:technology, :k, :coverage])
+    sort!(summary_df, [:organism, :technology, :k, :coverage])
     CSV.write(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df;
         delim = '\t', missingstring = "NA")
     return summary_df
@@ -634,7 +686,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("=== ONT k-selection sweep (td-4e19d.28) ===")
     println("Start: $(Dates.now())")
     println("Smoke mode: $(SMOKE)")
-    println("Organism: $(ORGANISM) ($(ACCESSION), $(GENOME_SIZE) bp)")
+    println("Organisms: $(join((o[1] for o in organisms), ", "))")
     println("Technologies: $(join(technologies, ", "))")
     println("k values: $(join(ks, ", "))")
     println("Coverages: $(join(coverages, ", "))x")
@@ -649,13 +701,25 @@ if abspath(PROGRAM_FILE) == @__FILE__
     mkpath(refs_dir)
     mkpath(cells_dir)
 
-    println("\n--- Phase 1: reference genome ---")
-    ref_path = Mycelia.download_genome_by_accession(
-        accession = ACCESSION, outdir = refs_dir, compressed = false)
-    if !isfile(ref_path) || filesize(ref_path) == 0
-        error("reference download failed for $(ORGANISM) ($(ACCESSION)): $(ref_path)")
+    println("\n--- Phase 1: reference genomes ---")
+    ref_paths = Dict{String, String}()
+    for (org, acc, expected) in organisms
+        path = Mycelia.download_genome_by_accession(
+            accession = acc, outdir = refs_dir, compressed = false)
+        if !isfile(path) || filesize(path) == 0
+            error("reference download failed for $(org) ($(acc)): $(path)")
+        end
+        actual = Mycelia.total_fasta_size(path)
+        # A silently-wrong reference would rescale every NGA50 tier for this
+        # organism, so check the size against the table rather than trusting the
+        # accession to have resolved to what we meant.
+        if abs(actual - expected) > 0.2 * expected
+            error("reference size mismatch for $(org) ($(acc)): expected " *
+                  "~$(expected) bp, got $(actual) bp")
+        end
+        ref_paths[org] = path
+        println("  $(org) ($(acc)): $(actual) bp -> $(path)")
     end
-    println("  $(ORGANISM) ($(ACCESSION)): $(Mycelia.total_fasta_size(ref_path)) bp -> $(ref_path)")
 
     println("\n--- Phase 2: sweep ($(N_CELLS) cells) ---")
     # Loop order runs the cheap strata first (Illumina before ONT, low coverage
@@ -663,9 +727,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # still yields complete low-coverage strata rather than a ragged fringe.
     rows = NamedTuple[]
     cell_index = 0
-    for tech in technologies, k in ks, cov in coverages, seed in seeds
+    for (org, acc, _expected) in organisms,
+        tech in technologies,
+        k in ks,
+        cov in coverages,
+        seed in seeds
+
         global cell_index += 1
-        cell_id = cell_id_for(tech, k, cov, seed)
+        cell_id = cell_id_for(org, tech, k, cov, seed)
         cell_dir = joinpath(cells_dir, cell_id)
         ckpt = joinpath(cell_dir, "cell_result.json")
 
@@ -692,10 +761,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
         print("  [$(cell_index)/$(N_CELLS)] $(cell_id) ... ")
         flush(stdout)
         row = try
-            run_cell(ref_path, tech, k, cov, seed, cell_dir)
+            run_cell(org, acc, ref_paths[org], tech, k, cov, seed, cell_dir)
         catch e
             @warn "cell failed" cell_id exception = (e, catch_backtrace())
-            error_row(tech, k, cov, seed)
+            error_row(org, acc, tech, k, cov, seed)
         end
         save_cell_json(ckpt, row)
         push!(rows, row)

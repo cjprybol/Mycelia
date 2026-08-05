@@ -48,6 +48,10 @@ COVERAGES="${COVERAGES:-10 30 50 100}"
 # them from queueing behind their Illumina siblings. On a laptop, set
 # TECHNOLOGIES="illumina,ont" to get the coarser 16-shard layout back.
 TECHNOLOGIES="${TECHNOLOGIES:-illumina ont}"
+# Organisms default to Lambda, matching the sweep script's own default. T4 is
+# opt-in because it is 3.5x larger and its ONT high-coverage cells dominate the
+# grid's cost: ORGANISMS="Lambda T4" ./run_ont_k_sweep_shards.sh
+ORGANISMS="${ORGANISMS:-Lambda}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -61,21 +65,25 @@ echo "log dir:    ${LOG_DIR}"
 # processes reach the not-yet-downloaded state simultaneously on a cold tree.
 echo "--- pre-warming reference (serial) ---"
 julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
+    --organisms "$(echo ${ORGANISMS} | tr ' ' ',')" \
     --technologies illumina --ks 31 --coverages 10 --seeds 42 \
     --output-dir "${OUTPUT_DIR}" > "${LOG_DIR}/prewarm.log" 2>&1
-echo "reference ready"
+echo "references ready"
 
 echo "--- launching shards ---"
 pids=""
-for k in ${KS}; do
-    for coverage in ${COVERAGES}; do
-        for technology in ${TECHNOLOGIES}; do
-            log="${LOG_DIR}/shard_${technology}_k${k}_${coverage}x.log"
-            julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
-                --technologies "${technology}" --ks "${k}" --coverages "${coverage}" \
-                --output-dir "${OUTPUT_DIR}" > "${log}" 2>&1 &
-            pids="${pids} $!"
-            echo "  launched ${technology} k=${k} coverage=${coverage}x (pid $!) -> ${log}"
+for organism in ${ORGANISMS}; do
+    for k in ${KS}; do
+        for coverage in ${COVERAGES}; do
+            for technology in ${TECHNOLOGIES}; do
+                log="${LOG_DIR}/shard_${organism}_${technology}_k${k}_${coverage}x.log"
+                julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
+                    --organisms "${organism}" --technologies "${technology}" \
+                    --ks "${k}" --coverages "${coverage}" \
+                    --output-dir "${OUTPUT_DIR}" > "${log}" 2>&1 &
+                pids="${pids} $!"
+                echo "  launched ${organism} ${technology} k=${k} coverage=${coverage}x (pid $!) -> ${log}"
+            done
         done
     done
 done
@@ -95,6 +103,8 @@ echo "shards complete (${failed} non-zero exits)"
 # the authoritative results + summary TSVs.
 echo "--- final aggregation (serial, resume-only) ---"
 julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
-    --output-dir "${OUTPUT_DIR}" 2>&1 | tail -40
+    --organisms "$(echo ${ORGANISMS} | tr ' ' ',')" \
+    --ks "$(echo ${KS} | tr ' ' ',')" --coverages "$(echo ${COVERAGES} | tr ' ' ',')" \
+    --output-dir "${OUTPUT_DIR}" 2>&1 | tail -60
 
 echo "=== done ==="
