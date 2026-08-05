@@ -589,6 +589,13 @@ contiguity number that is defined in every regime, including the ones QUAST
 declines to score.
 """
 function write_summary(root, df)
+    # Cells that threw are EXCLUDED. An error row carries outcome="degenerate"
+    # and genome_fraction=missing, which is shaped exactly like a genuinely
+    # degenerate cell — so leaving it in would let a transient infrastructure
+    # failure count as evidence for degeneracy, the very thing the sweep is
+    # measuring. `n_seeds` then reports how many cells actually contributed,
+    # so a stratum thinned by a failure is visible rather than silently averaged.
+    df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
     for g in DataFrames.groupby(df, [:technology, :k, :coverage])
         measured = g[g.nga50_status .== "measured", :]
@@ -662,10 +669,23 @@ if abspath(PROGRAM_FILE) == @__FILE__
         cell_dir = joinpath(cells_dir, cell_id)
         ckpt = joinpath(cell_dir, "cell_result.json")
 
+        # A checkpoint is reused ONLY if it recorded a real attempt. An `error`
+        # row is a cell that threw — under 32 concurrent shards the observed
+        # cause was a transient collision in read simulation, with n_reads = 0
+        # and wall_seconds = 0 — and caching that would freeze a transient
+        # failure into a permanent hole in the grid that no amount of
+        # re-running could fill. Errors are retried; successes are never
+        # recomputed.
         if isfile(ckpt)
-            println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached, skipping")
-            push!(rows, canonical(JSON.parsefile(ckpt)))
-            continue
+            cached = canonical(JSON.parsefile(ckpt))
+            if cached.status == "error"
+                println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached row is an " *
+                        "error; retrying")
+            else
+                println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached, skipping")
+                push!(rows, cached)
+                continue
+            end
         end
 
         mkpath(cell_dir)
@@ -698,5 +718,23 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     n_ok = count(r -> r.status == "ok", rows)
     println("\nDone: $(length(rows)) cells, $(n_ok) ok. Results in $(OUTPUT_DIR)")
+
+    # Say plainly whether the grid is complete. An errored cell carries
+    # `degenerate` in its outcome column and is otherwise shaped exactly like a
+    # real degenerate result, so without this it would be counted as evidence
+    # for the very conclusion the sweep is testing. Name the cells so a reader
+    # of the log never has to reconstruct which ones are missing.
+    failed = filter(r -> r.status != "ok", rows)
+    if isempty(failed)
+        println("All $(length(rows)) cells completed. Grid is COMPLETE.")
+    else
+        println("\n*** WARNING: $(length(failed)) cell(s) did NOT complete. Their " *
+                "`outcome` is a placeholder, NOT a measurement, and must be " *
+                "excluded from any summary. Re-run to retry them. ***")
+        for r in failed
+            println("  - $(r.technology) k=$(r.k) $(r.coverage)x seed$(r.seed) " *
+                    "[$(r.status)]")
+        end
+    end
     println("End: $(Dates.now())")
 end  # PROGRAM_FILE guard
