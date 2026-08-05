@@ -42,6 +42,12 @@ LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/shard-logs}"
 
 KS="${KS:-11 15 21 31}"
 COVERAGES="${COVERAGES:-10 30 50 100}"
+# Sharding by technology as well as (k, coverage) gives 32 shards instead of 16.
+# On a large host that halves wall-clock, because the grid's long pole is the
+# three ONT cells at each high coverage and splitting the technologies stops
+# them from queueing behind their Illumina siblings. On a laptop, set
+# TECHNOLOGIES="illumina,ont" to get the coarser 16-shard layout back.
+TECHNOLOGIES="${TECHNOLOGIES:-illumina ont}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -63,12 +69,14 @@ echo "--- launching shards ---"
 pids=""
 for k in ${KS}; do
     for coverage in ${COVERAGES}; do
-        log="${LOG_DIR}/shard_k${k}_${coverage}x.log"
-        julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
-            --ks "${k}" --coverages "${coverage}" \
-            --output-dir "${OUTPUT_DIR}" > "${log}" 2>&1 &
-        pids="${pids} $!"
-        echo "  launched k=${k} coverage=${coverage}x (pid $!) -> ${log}"
+        for technology in ${TECHNOLOGIES}; do
+            log="${LOG_DIR}/shard_${technology}_k${k}_${coverage}x.log"
+            julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
+                --technologies "${technology}" --ks "${k}" --coverages "${coverage}" \
+                --output-dir "${OUTPUT_DIR}" > "${log}" 2>&1 &
+            pids="${pids} $!"
+            echo "  launched ${technology} k=${k} coverage=${coverage}x (pid $!) -> ${log}"
+        done
     done
 done
 

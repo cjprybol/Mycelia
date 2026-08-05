@@ -100,6 +100,13 @@ const SEEDS = [42, 123, 456]
 const DECODER_ARM = "kmer"
 # Matches the Track-A pilot's QUAST setting, so cells are directly comparable.
 const MIN_CONTIG = 500
+# QUAST threads PER CELL. Deliberately small and fixed rather than
+# `get_default_threads()`, because this harness is designed to be run as many
+# concurrent single-cell shards: on a 112-core host, 32 shards each taking
+# QUAST's default of 16 threads would ask for 512. Assembly is single-threaded
+# Julia and dominates the runtime, so QUAST's thread count is a scheduling
+# detail — it changes no metric, only how much the shards fight each other.
+const QUAST_THREADS = 2
 
 # --- Outcome classification -------------------------------------------------
 #
@@ -456,7 +463,7 @@ function run_cell(ref, tech, k, cov, seed, cell_dir)
         try
             quast_dir = joinpath(cell_dir, "quast")
             Mycelia.run_quast([contigs_path]; outdir = quast_dir, reference = ref,
-                min_contig = MIN_CONTIG)
+                min_contig = MIN_CONTIG, threads = QUAST_THREADS)
             report = joinpath(quast_dir, "report.tsv")
             if isfile(report)
                 metrics = parse_quast_metrics(report)
