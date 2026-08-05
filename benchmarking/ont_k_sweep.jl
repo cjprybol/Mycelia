@@ -749,6 +749,14 @@ a stale checkpoint within the same run.
 """
 function write_aggregate(root, rows)
     by_id = Dict{Tuple, Any}()
+    # Fail with a sentence rather than a DataFrames column-lookup error. An
+    # empty tree means a mistyped --output-dir far more often than it means a
+    # genuinely empty run, and the opaque form of this failure sends the reader
+    # to the wrong place.
+    if isempty(rows) && isempty(load_all_checkpoints(root))
+        error("no cells found under $(joinpath(root, "cells")) and no rows in " *
+              "memory — nothing to aggregate. Check --output-dir.")
+    end
     key(r) = (r.organism, r.technology, r.k, r.coverage, r.seed)
     for r in load_all_checkpoints(root)
         by_id[key(r)] = r
@@ -819,6 +827,83 @@ function write_summary(root, df)
     return summary_df
 end
 
+"""
+    write_verdict_stats(root, df) -> DataFrame
+
+Emit the aggregate quantities the write-up quotes, as a committed TSV.
+
+Every number in this harness's README that was SCRIPT-DERIVED has verified
+correctly under review; every number that was HAND-COMPUTED into prose is where
+the errors were — twice, and the second time the errors survived a rewrite whose
+whole purpose was to fix the first. The failure is structural, not careless: the
+grid grew from 96 to 240 cells, and a hand-carried count has no way to notice.
+
+So the counts, the NGA50-evaluable strata, the CVs, and the extreme cells are
+computed here and written to `verdict_stats.tsv`. Prose should quote this file.
+"""
+function write_verdict_stats(root, df)
+    ok = df[df.status .== "ok", :]
+    rows = NamedTuple[]
+    push_stat!(name, value, note) = push!(rows,
+        (statistic = name, value = string(value), note = note))
+
+    for org in sort(unique(ok.organism)), tech in sort(unique(ok.technology))
+        g = ok[(ok.organism .== org) .& (ok.technology .== tech), :]
+        DataFrames.nrow(g) == 0 && continue
+        push_stat!("$(org)/$(tech)/n_cells", DataFrames.nrow(g), "cells with status=ok")
+        for tier in ("degenerate", "partial", "substantial", "near_complete")
+            push_stat!("$(org)/$(tech)/outcome_$(tier)", count(==(tier), g.outcome), "")
+        end
+        measured = g[g.nga50_status .== "measured", :]
+        nga = collect(skipmissing(measured.NGA50))
+        isempty(nga) || push_stat!("$(org)/$(tech)/max_cell_NGA50", Int(round(maximum(nga))),
+            "single best CELL, not a stratum median")
+
+        # NGA50 CV across seeds, per (k, coverage) stratum, only where all
+        # three seeds are defined. The denominator is the number of strata that
+        # EXIST for this organism, which is why it must be counted rather than
+        # assumed — it changed from 16 to 28 when the k ladder was filled in.
+        strata = 0
+        cvs = Float64[]
+        undefined_strata = 0
+        for sub in DataFrames.groupby(g, [:k, :coverage])
+            strata += 1
+            vals = collect(skipmissing(sub.NGA50))
+            if length(vals) == DataFrames.nrow(sub) && length(vals) > 1 &&
+               Statistics.mean(vals) > 0
+                push!(cvs, Statistics.std(vals) / Statistics.mean(vals))
+            else
+                undefined_strata += 1
+            end
+        end
+        push_stat!("$(org)/$(tech)/nga50_strata_total", strata, "")
+        push_stat!("$(org)/$(tech)/nga50_strata_evaluable", length(cvs),
+            "all seeds have a defined NGA50")
+        push_stat!("$(org)/$(tech)/nga50_strata_with_undefined", undefined_strata, "")
+        if !isempty(cvs)
+            push_stat!("$(org)/$(tech)/nga50_cv_median",
+                round(Statistics.median(cvs); digits = 4), "")
+            push_stat!("$(org)/$(tech)/nga50_cv_max",
+                round(maximum(cvs); digits = 4), "")
+        end
+    end
+
+    # Is the genome-fraction floor doing any work? A cell reaches it only when
+    # nga50_status == "measured"; every censored cell short-circuits before it.
+    # Reported because the write-up previously claimed the floor drove the
+    # verdict when it classified nothing.
+    via_floor = count(eachrow(ok)) do r
+        r.nga50_status == "measured" && !ismissing(r.genome_fraction) &&
+            r.genome_fraction < GF_DEGENERATE_MAX
+    end
+    push_stat!("degenerate_via_gf_floor", via_floor,
+        "cells degenerate BECAUSE of GF_DEGENERATE_MAX rather than censoring")
+
+    stats = DataFrames.DataFrame(rows)
+    CSV.write(joinpath(root, "verdict_stats.tsv"), stats; delim = '\t')
+    return stats
+end
+
 # === Main ===
 #
 # Guarded so a test can `include()` this file for the pure helpers
@@ -850,6 +935,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
         println("  loaded $(length(rows)) checkpoints")
         results_df = write_aggregate(OUTPUT_DIR, rows)
         summary_df = write_summary(OUTPUT_DIR, results_df)
+        write_verdict_stats(OUTPUT_DIR, results_df)
         show(stdout, summary_df; allrows = true, allcols = true)
         println()
         failed = filter(r -> r.status != "ok", rows)
@@ -958,8 +1044,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("\n--- Phase 3: aggregate ---")
     results_df = write_aggregate(OUTPUT_DIR, rows)
     summary_df = write_summary(OUTPUT_DIR, results_df)
+    write_verdict_stats(OUTPUT_DIR, results_df)
 
-    println("\nPer-(technology, k, coverage) summary:")
+    println("\nPer-stratum summary:")
     show(stdout, summary_df; allrows = true, allcols = true)
     println()
 
