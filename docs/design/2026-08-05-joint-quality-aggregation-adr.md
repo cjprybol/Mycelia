@@ -2,7 +2,7 @@
 
 | Field          | Value                                                                                                                                                                       |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**     | Proposed — awaiting human acceptance                                                                                                                                        |
+| **Status**     | **Accepted** 2026-08-05 by cjprybol, as written (including §4)                                                                                                              |
 | **Decision**   | Stop treating summed Phred as a calibrated probability. Keep it as a named traversal _heuristic_. Move production toward molecule-aware, dependence-discounted aggregation. |
 | **Interim**    | Where a calibrated-ish number is needed before that lands, the design's `aggregate_quality_scores_conservative` is empirically far better than independence — see §4.       |
 | **Scope**      | The opt-in `traversal_weighting = :quality` path, and every manuscript claim interpreting joint quality as a probability                                                    |
