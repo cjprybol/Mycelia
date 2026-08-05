@@ -4,9 +4,10 @@
 # The 96-cell grid is embarrassingly parallel — every cell is independent and
 # writes its own checkpoint directory — but run serially it is dominated by the
 # ONT/100x cells, where a single assembly takes tens of minutes. This partitions
-# the grid by (k, coverage) into 16 shards of 6 cells each (2 technologies x 3
-# seeds) and runs them concurrently, so wall-clock is set by the slowest single
-# shard rather than by the sum of all of them.
+# the grid by (organism, k, coverage, technology) and runs the shards
+# concurrently, so wall-clock is set by the slowest single shard rather than by
+# the sum of all of them. With the defaults that is 32 shards of 3 cells each
+# (3 seeds); see the TECHNOLOGIES note below for the coarser 16-shard layout.
 #
 # SAFETY OF THE SHARED OUTPUT TREE
 # --------------------------------
@@ -15,17 +16,19 @@
 #
 #   * Shards partition the grid, so no two ever compute the same cell_id and no
 #     two ever write the same cells/<id>/ directory.
-#   * The reference download is guarded by `if !isfile(outfile)` in
-#     download_genome_by_accession, and this script pre-warms it serially below
-#     so no shard ever races on it.
+#   * The reference is fetched by the SERIAL PRE-WARM below before any shard
+#     starts. That pre-warm is load-bearing and must not be deleted:
+#     download_genome_by_accession guards on `if !isfile(outfile)`, which is
+#     check-then-act and NOT concurrency-safe on its own — N cold shards can all
+#     observe the file missing and race. The pre-warm also warms the conda
+#     environments the shards need, for the same reason (add_bioconda_env has no
+#     locking, so simultaneous `conda create` calls can collide).
 #
-# The ONE thing that is NOT safe under concurrency is the aggregate TSV: every
-# shard rewrites ont_k_sweep_results.tsv after each of its cells, so during the
-# run that file is whatever the last writer produced and is NOT a complete or
-# necessarily well-formed table. It is scratch. The final aggregation pass at
-# the end runs ONE process over the full grid, hits every checkpoint on the
-# resume path, and regenerates both the results and summary TSVs from the
-# per-cell JSONs. Only that regenerated pair is the deliverable.
+# The aggregate TSVs are rewritten by every shard after each of its cells, so
+# during the run they are mid-write and should not be read. They cannot SHRINK,
+# though: write_aggregate unions the in-memory rows with every checkpoint on
+# disk, so a shard covering 3 cells still emits the whole tree. The final pass
+# below re-emits them from the checkpoints alone.
 #
 # Usage:
 #   ./benchmarking/run_ont_k_sweep_shards.sh
@@ -64,11 +67,14 @@ echo "log dir:    ${LOG_DIR}"
 # download_genome_by_accession, which is idempotent but would otherwise have 16
 # processes reach the not-yet-downloaded state simultaneously on a cold tree.
 echo "--- pre-warming reference (serial) ---"
+# Pre-warm BOTH technologies: the illumina cell installs `art` + `quast`, and
+# the ont cell installs `badread`. Warming only illumina left every ONT shard to
+# race on `conda create -n badread`, which has no locking.
 julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
     --organisms "$(echo ${ORGANISMS} | tr ' ' ',')" \
-    --technologies illumina --ks 31 --coverages 10 --seeds 42 \
+    --technologies illumina,ont --ks 31 --coverages 10 --seeds 42 \
     --output-dir "${OUTPUT_DIR}" > "${LOG_DIR}/prewarm.log" 2>&1
-echo "references ready"
+echo "references and conda environments ready"
 
 echo "--- launching shards ---"
 pids=""
@@ -98,13 +104,24 @@ for pid in ${pids}; do
 done
 echo "shards complete (${failed} non-zero exits)"
 
-# Single-process aggregation over the full grid. Every cell is already
-# checkpointed, so this is a pure resume pass: it recomputes nothing and writes
-# the authoritative results + summary TSVs.
-echo "--- final aggregation (serial, resume-only) ---"
-julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
-    --organisms "$(echo ${ORGANISMS} | tr ' ' ',')" \
-    --ks "$(echo ${KS} | tr ' ' ',')" --coverages "$(echo ${COVERAGES} | tr ' ' ',')" \
-    --output-dir "${OUTPUT_DIR}" 2>&1 | tail -60
+# Single-process aggregation with --aggregate-only, which reads the cells
+# directory and computes NOTHING.
+#
+# Passing a grid here instead would be wrong, and was: the flags describe a
+# RECTANGLE, while the sub-grids launched above may deliberately cover only part
+# of it. A run scoped to "T4 at k in {11,15,21,31}, coverages 10/30/50" handed a
+# rectangle of Lambda,T4 x 7 k-values x 4 coverages had the "aggregation" begin
+# computing the 96-cell difference — silently re-expanding a scope that had been
+# narrowed on purpose because those cells run hours each.
+echo "--- final aggregation (serial, reads checkpoints, computes nothing) ---"
+if ! julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
+    --aggregate-only --output-dir "${OUTPUT_DIR}" 2>&1 | tee "${LOG_DIR}/final-aggregate.log" | tail -60; then
+    echo "final aggregation reported non-ok cells (see ${LOG_DIR}/final-aggregate.log)"
+    failed=$((failed + 1))
+fi
 
+if [ "${failed}" -gt 0 ]; then
+    echo "=== done WITH ${failed} FAILURE(S) — the TSVs may be incomplete ==="
+    exit 1
+fi
 echo "=== done ==="

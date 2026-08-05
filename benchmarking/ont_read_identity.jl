@@ -2,13 +2,18 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# `Mycelia.simulate_nanopore_reads` calls Badread with NO --error_model,
-# --qscore_model or --identity flags (src/simulation.jl:1091), so the error
-# process it produces is whatever the INSTALLED Badread compiles in as its
-# defaults. Its docstring asserts "Oxford Nanopore R10.4.1 / nanopore2023", but
-# that is documentation ABOUT Badread's defaults, not a parameter the wrapper
-# pins — a Badread upgrade that changed a default would silently change every
+# WHEN THIS MEASUREMENT WAS TAKEN, `Mycelia.simulate_nanopore_reads` called
+# Badread with NO --error_model, --qscore_model or --identity flags, so the
+# error process was whatever the INSTALLED binary compiled in as its defaults.
+# Its docstring asserted "Oxford Nanopore R10.4.1 / nanopore2023", but that was
+# documentation ABOUT Badread's defaults, not a parameter the wrapper pinned —
+# a Badread upgrade that changed a default would have silently changed every
 # ONT benchmark in this repo without touching a line of Mycelia.
+#
+# That gap is now closed: the four settings are pinned explicitly in
+# `_badread_nanopore_args`, to the same values previously inherited. This script
+# remains the check that the pinned values are the ones actually in force, and
+# re-running it after a Badread upgrade is how that stays true.
 #
 # The per-base error rate matters because it fixes the arithmetic that governs
 # whether k-mer assembly on these reads can work at all:

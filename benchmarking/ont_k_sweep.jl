@@ -9,16 +9,22 @@
 #
 #   1. All 132 pilot rows used k = 31 — the Illumina-tuned primary k — including
 #      all 36 ONT rows. k was a hardcoded `const` in that harness.
-#   2. ONT reads came from `Mycelia.simulate_nanopore_reads`, which invokes
-#      Badread with NO --error_model / --qscore_model / --identity flags
-#      (src/simulation.jl:1091). It therefore inherits the INSTALLED Badread's
-#      compiled-in defaults, which for v0.4.1 are nanopore2023 / identity
-#      95,99,2.5 — a modern, relatively low-error chemistry, not R9.
+#   2. AT THE TIME THESE CELLS WERE RUN, `Mycelia.simulate_nanopore_reads`
+#      invoked Badread with NO --error_model / --qscore_model / --identity
+#      flags, so it inherited the INSTALLED binary's compiled-in defaults
+#      (nanopore2023 / identity 95,99,2.5 — a modern, relatively low-error
+#      chemistry, not R9). Those settings are now PINNED explicitly in
+#      `Mycelia.simulate_nanopore_reads` / `_badread_nanopore_args`, to the same
+#      values that were previously inherited, so the reads are unchanged and
+#      these results remain comparable. Do not read the past tense as a caveat
+#      about the data; it is a statement about provenance.
 #
-# At a per-base error rate e = 0.05, P(error-free k-mer) = (1-e)^k = 0.204 for
-# k = 31, so 30x raw coverage still carries ~6.1x error-free 31-mer coverage.
-# Degeneracy is therefore NOT arithmetically forced at 30x, which is what makes
-# the pilot's result worth resolving rather than explaining away.
+# Using the MEASURED per-base error rate e = 0.056 (see
+# benchmarking/ont_read_identity.jl — measured, not assumed), P(error-free
+# k-mer) = (1-e)^k = 0.168 for k = 31, so 30x raw coverage still carries ~5.0x
+# error-free 31-mer coverage. Degeneracy is therefore NOT arithmetically forced
+# at 30x, which is what makes the pilot's result worth resolving rather than
+# explaining away.
 #
 # HYPOTHESES UNDER TEST
 #   H-a  k-selection artifact — k = 31 is simply too long for this error rate,
@@ -30,14 +36,15 @@
 #
 # DESIGN
 # ------
-# Lambda (NC_001416) x {ont, illumina} x k in {11,15,21,31} x coverage
-# {10,30,50,100} x seeds {42,123,456} = 96 cells.
+# {Lambda (NC_001416), T4 (NC_000866)} x {ont, illumina} x k x coverage x
+# seeds {42,123,456}. Organism, k and coverage are all selectable; Lambda with
+# k in {11,15,21,31} over {10,30,50,100} is the default 96-cell grid.
 #
 #   * SINGLE k PER CELL. The pilot's raw baseline used a single k while the
 #     iterative corrector walks a k-ladder; running a ladder here would confound
 #     k with correction. `corrector` is left at its default `:none`, which
 #     `assemble_genome` documents as the byte-identical single-k pipeline
-#     (src/rhizomorph/assembly.jl:1083).
+#     (see the `corrector` docstring in src/rhizomorph/assembly.jl).
 #   * ILLUMINA CONTROL over the SAME k ladder and coverages, so a k effect can
 #     be separated from a chemistry effect. Illumina and ONT are different error
 #     processes and are NEVER pooled into an aggregate — every summary in this
@@ -57,15 +64,22 @@
 # not compute it, and `nga50_status` records WHY. Every consumer of this table
 # must read genome_fraction and contig counts beside NGA50.
 #
-# Relatedly, QUAST reports "# misassemblies" = 0 on UNALIGNED contigs. A 0 in
-# that column on a degenerate cell means non-alignment, not correctness, so
-# `misassemblies` is only interpretable where `nga50_status == "measured"`.
+# Relatedly, `misassemblies` is only interpretable where NGA50 was measured.
+# Where nothing aligned, QUAST OMITS the metric entirely and this harness
+# records `NA` — verified: every `censored_no_alignment` row in the committed
+# TSV has misassemblies = NA, not 0. The pilot's ONT rows read
+# "misassemblies = 0" because ITS parser mapped an absent metric to 0.0, the
+# same coercion described above. So a 0 in the pilot's table means "not
+# reported"; a 0 here means QUAST genuinely found no misassembly among the
+# blocks that did align.
 #
 # Usage:
 #   julia --project=. benchmarking/ont_k_sweep.jl                     # full 96-cell grid
 #   julia --project=. benchmarking/ont_k_sweep.jl --smoke             # 1 cheap cell
 #   julia --project=. benchmarking/ont_k_sweep.jl --technologies illumina
 #   julia --project=. benchmarking/ont_k_sweep.jl --ks 11,21 --coverages 10,30
+#   julia --project=. benchmarking/ont_k_sweep.jl --organisms Lambda,T4 --seeds 42
+#   julia --project=. benchmarking/ont_k_sweep.jl --aggregate-only   # no compute
 #   julia --project=. benchmarking/ont_k_sweep.jl --output-dir /scratch/ont_k_sweep
 #
 # Per-cell JSON checkpoints make the run crash-safe and resumable: re-invoking
@@ -164,6 +178,15 @@ genome fraction would be internally inconsistent rather than informative.
 function classify_outcome(nga50, genome_fraction, nga50_status::AbstractString,
         genome_size::Real)
     nga50_status == "measured" || return "degenerate"
+    # Both call sites used to pass `ismissing(x) ? 0.0 : x`, reintroducing the
+    # exact censored-value-becomes-zero collapse this harness exists to prevent.
+    # It was live for genome_fraction: `nga50_status_for` returns "measured"
+    # without inspecting genome_fraction at all, so a row with a measured NGA50
+    # and an absent genome fraction reached gf = 0.0 and was confidently
+    # classified "degenerate". Reject rather than coerce.
+    (ismissing(nga50) || ismissing(genome_fraction)) && error(
+        "nga50_status == \"measured\" but NGA50 or genome_fraction is missing; " *
+        "a censored metric must never be classified as a measurement")
     gf = Float64(genome_fraction)
     n = Float64(nga50)
     gf < GF_DEGENERATE_MAX && return "degenerate"
@@ -231,6 +254,33 @@ arg_list(flag) =
     end
 
 const SMOKE = "--smoke" in ARGS
+
+# Aggregate every checkpoint that EXISTS, instead of walking a declared grid.
+#
+# The distinction matters and cost real compute. The shard driver's final pass
+# was invoked with the union of the sub-grids it launched — `--organisms
+# Lambda,T4 --ks 11,13,15,17,19,21,31 --coverages 10,30,50,100` — and described
+# in its own comment as "resume-only: it recomputes nothing". That was FALSE.
+# Those flags describe a 336-cell RECTANGLE, while the sub-grids deliberately
+# covered only 240 of its cells (T4 was scoped to a subset of k and skipped 100x
+# because its ONT cells there run hours each). The "aggregation" therefore began
+# computing the 96-cell difference, silently re-expanding a scope that had been
+# deliberately narrowed, and was caught only because a T4/100x cell directory
+# appeared while it ran.
+#
+# A rectangle is the wrong model for the final pass: what should be aggregated
+# is what was measured. This flag skips Phase 1 and Phase 2 entirely and reads
+# the cells directory, so the aggregate can never contain a cell that was not
+# computed, and can never trigger computing one.
+const AGGREGATE_ONLY = "--aggregate-only" in ARGS
+
+# Cached rows with these statuses are RECOMPUTED rather than reused. Both are
+# infrastructure failures that produce a well-formed, degenerate-looking row;
+# caching either would freeze a transient fault into the grid permanently.
+# `empty_assembly` is deliberately NOT here — a zero-contig assembly is a real
+# measurement (the most degenerate one possible) and re-running would only
+# reproduce it.
+const RETRYABLE_STATUSES = ("error", "quast_failed")
 
 # Default to Lambda only. T4 is opt-in via --organisms because it is 3.5x larger
 # and its ONT high-coverage cells are the most expensive in the grid; a bare
@@ -346,16 +396,32 @@ different implications:
                             qualify this — QUAST reports 0 misassemblies on
                             unaligned contigs, so a 0 there means non-alignment,
                             not correctness.
-  * `censored_gf_below_50`  — contigs ALIGNED (genome fraction is a real,
-                            nonzero measurement) but NGA50 is still absent,
-                            because NGA50 is UNDEFINED below 50% genome
-                            fraction. NGA50 is the aligned-block length at which
-                            blocks of that size or larger cover half the
-                            REFERENCE; if aligned blocks total under half the
-                            genome, no such length exists and QUAST prints "-".
-                            This is a definitional boundary, NOT an assembly
-                            that failed to align, and conflating the two
-                            understates how much of the genome was recovered.
+  * `censored_partial_alignment` — contigs ALIGNED (genome fraction is a real,
+                            nonzero measurement) but NGA50 is still absent.
+                            NGA50 is an NG-family statistic: it exists only once
+                            aligned blocks of a given length or longer TOTAL at
+                            least half the REFERENCE length. Below that the
+                            statistic has no value and QUAST prints "-". This is
+                            a definitional boundary, NOT an assembly that failed
+                            to align, and conflating the two understates how
+                            much of the genome was recovered.
+
+                            NOTE the threshold is on the SUM OF ALIGNED BLOCK
+                            LENGTHS, which counts duplicated and overlapping
+                            alignments — it is NOT on genome fraction, which
+                            measures UNIQUE reference coverage. The two diverge
+                            whenever duplication ratio > 1, so a cell can carry
+                            a defined NGA50 at well under 50% genome fraction.
+                            An earlier version of this label was named
+                            `censored_partial_alignment` and its docstring asserted the
+                            boundary was on genome fraction; the alignment
+                            threshold diagnostic in this same directory refutes
+                            that directly — Lambda/ONT/k=31/30x/seed123 rescored
+                            at 90% identity has genome fraction 23.762% and a
+                            DEFINED NGA50 of 508. Six such rows exist. The label
+                            was renamed because it asserted a condition this
+                            function never tests: the check below is simply
+                            "NGA50 absent, genome fraction present".
   * `quast_failed`        — QUAST genuinely errored on an assembly it should
                             have been able to score. This is the ONLY value
                             here that indicates an infrastructure problem, which
@@ -380,7 +446,7 @@ function nga50_status_for(metrics, n_contigs::Int, contigs_ge_min::Int,
     # NGA50 absent: distinguish "nothing aligned" from "aligned, but under the
     # 50% genome-fraction floor below which NGA50 has no definition".
     ismissing(metrics.genome_fraction) && return "censored_no_alignment"
-    return metrics.genome_fraction > 0 ? "censored_gf_below_50" :
+    return metrics.genome_fraction > 0 ? "censored_partial_alignment" :
            "censored_no_alignment"
 end
 
@@ -427,8 +493,9 @@ function simulate_reads(tech, ref_fasta, cov, seed, reads_dir)
         end
         return records
     elseif tech == "ont"
-        # No --error_model / --identity: inherits the installed Badread's
-        # defaults, exactly as the pilot did. See the header note.
+        # Badread settings are pinned inside `simulate_nanopore_reads` to the
+        # values the pilot inherited from the binary's defaults, so this is the
+        # same error process the pilot sampled. See the header note.
         fq = Mycelia.simulate_nanopore_reads(
             fasta = ref_fasta, quantity = "$(cov)x",
             outfile = joinpath(reads_dir, "ont_$(cov)x.fq.gz"),
@@ -523,12 +590,23 @@ function run_cell(org, acc, ref, tech, k, cov, seed, cell_dir)
     end
 
     nga50_status = nga50_status_for(metrics, asm.n, asm.n_ge_min, quast_ran)
-    outcome = classify_outcome(
-        ismissing(metrics.NGA50) ? 0.0 : metrics.NGA50,
-        ismissing(metrics.genome_fraction) ? 0.0 : metrics.genome_fraction,
+    outcome = classify_outcome(metrics.NGA50, metrics.genome_fraction,
         nga50_status, genome_size_for(org))
 
-    status = asm.n == 0 ? "empty_assembly" : "ok"
+    # `status` must capture INFRASTRUCTURE failure, not just an empty assembly.
+    # A cell where QUAST threw gets nga50_status = "quast_failed" and
+    # outcome = "degenerate" — shaped exactly like a genuinely degenerate
+    # result. If `status` stayed "ok" it would pass write_summary's filter and
+    # be counted as evidence for the degeneracy this sweep is measuring, the
+    # run would print "Grid is COMPLETE", and the resume path would cache it
+    # forever. All three are the failure the error-retry logic exists to stop.
+    status = if asm.n == 0
+        "empty_assembly"
+    elseif nga50_status == "quast_failed"
+        "quast_failed"
+    else
+        "ok"
+    end
     # Route the fresh row through `reclassify` as well, so a cell computed in
     # this run and the same cell reloaded from its checkpoint are classified by
     # exactly one code path. Without this, the two paths derive `quast_ran`
@@ -540,10 +618,15 @@ function run_cell(org, acc, ref, tech, k, cov, seed, cell_dir)
 end
 
 function error_row(org, acc, tech, k, cov, seed)
-    cell_row(org, acc, tech, k, cov, seed; n_reads = 0,
-        asm = (n = 0, n_ge_min = 0, max_length = 0, total_bp = 0),
+    # Routed through `reclassify` like every other row, so the same cell does
+    # not carry one label when freshly computed and another when reloaded.
+    # `contig_stats(String[], ...)` rather than a hand-built tuple, so this can
+    # never drift from the real constructor — it is called from inside a catch
+    # handler, where a drift-induced throw would abort the whole sweep.
+    reclassify(cell_row(org, acc, tech, k, cov, seed; n_reads = 0,
+        asm = contig_stats(String[], MIN_CONTIG),
         metrics = empty_metrics(), nga50_status = "quast_failed",
-        outcome = "degenerate", wall_seconds = 0.0, status = "error")
+        outcome = "degenerate", wall_seconds = 0.0, status = "error"))
 end
 
 # === Checkpointing ===
@@ -608,17 +691,72 @@ function reclassify(row)
     # Genome size comes from the ROW's own organism, not from a constant, so a
     # multi-organism table is reclassified against the right tier scale for each
     # row rather than against whichever organism happened to be first.
-    outcome = classify_outcome(
-        ismissing(row.NGA50) ? 0.0 : row.NGA50,
-        ismissing(row.genome_fraction) ? 0.0 : row.genome_fraction,
-        status, genome_size_for(row.organism))
+    outcome = classify_outcome(row.NGA50, row.genome_fraction, status,
+        genome_size_for(row.organism))
     return merge(row, (; nga50_status = status, outcome = outcome))
 end
 
 # === Aggregation ===
 
+"""
+    load_all_checkpoints(root) -> Vector{NamedTuple}
+
+Every completed cell under `root/cells`, reclassified on read.
+
+This is the source of truth for the aggregate. The alternative — writing only
+the rows the current process happens to hold — silently truncates the committed
+deliverable whenever the invocation covers less than the whole tree, and the
+script's own first documented usage does exactly that: `--smoke` runs one cell,
+so it would replace a 240-row table with a single row. Every shard launched by
+run_ont_k_sweep_shards.sh has the same property.
+"""
+function load_all_checkpoints(root)
+    cells_dir = joinpath(root, "cells")
+    isdir(cells_dir) || return NamedTuple[]
+    rows = NamedTuple[]
+    for entry in sort(readdir(cells_dir))
+        ckpt = joinpath(cells_dir, entry, "cell_result.json")
+        isfile(ckpt) || continue
+        try
+            push!(rows, canonical(JSON.parsefile(ckpt)))
+        catch e
+            # A checkpoint truncated by a crash mid-write must not take the
+            # whole aggregation down with it — that would make one bad kilobyte
+            # destroy a multi-hour run's authoritative table. Warn and skip; the
+            # cell is then absent from the aggregate and will be recomputed on
+            # the next sweep pass, which is the correct recovery.
+            @warn "unreadable checkpoint; skipping (it will be recomputed)" cell=entry exception=e
+        end
+    end
+    return rows
+end
+
+"""
+    write_aggregate(root, rows) -> DataFrame
+
+Write the results table as the UNION of `rows` and every checkpoint on disk.
+
+The union is the whole point. `CSV.write` truncates, `OUTPUT_DIR` defaults to
+the git-tracked results directory, and `rows` holds only the current
+invocation's grid — so a plain write regresses the tracked deliverable to
+whatever subset this process computed, with no merge, no warning, and recovery
+only via `git checkout` (the per-cell checkpoints are gitignored). Unioning
+against the on-disk checkpoints makes a partial run structurally incapable of
+shrinking the table.
+
+In-memory rows win over their on-disk twin so a just-recomputed cell supersedes
+a stale checkpoint within the same run.
+"""
 function write_aggregate(root, rows)
-    df = DataFrames.DataFrame(rows)
+    by_id = Dict{Tuple, Any}()
+    key(r) = (r.organism, r.technology, r.k, r.coverage, r.seed)
+    for r in load_all_checkpoints(root)
+        by_id[key(r)] = r
+    end
+    for r in rows          # current run supersedes disk
+        by_id[key(r)] = r
+    end
+    df = DataFrames.DataFrame(collect(values(by_id)))
     sort!(df, [:organism, :technology, :k, :coverage, :seed])
     CSV.write(joinpath(root, "ont_k_sweep_results.tsv"), df; delim = '\t', missingstring = "NA")
     return df
@@ -646,6 +784,11 @@ function write_summary(root, df)
     # failure count as evidence for degeneracy, the very thing the sweep is
     # measuring. `n_seeds` then reports how many cells actually contributed,
     # so a stratum thinned by a failure is visible rather than silently averaged.
+    # Excludes BOTH infrastructure failures (error, quast_failed) and
+    # `empty_assembly`. The first two are not measurements; the third is, but
+    # it carries no scorable metric, and `nga50_status == "no_contigs"` records
+    # it losslessly in the results table. `n_seeds` below then reports how many
+    # cells actually contributed, so a thinned stratum is visible.
     df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
     for g in DataFrames.groupby(df, [:organism, :technology, :k, :coverage])
@@ -701,6 +844,25 @@ if abspath(PROGRAM_FILE) == @__FILE__
     mkpath(refs_dir)
     mkpath(cells_dir)
 
+    if AGGREGATE_ONLY
+        println("\n--- Aggregate-only: reading every checkpoint under cells/ ---")
+        rows = load_all_checkpoints(OUTPUT_DIR)
+        println("  loaded $(length(rows)) checkpoints")
+        results_df = write_aggregate(OUTPUT_DIR, rows)
+        summary_df = write_summary(OUTPUT_DIR, results_df)
+        show(stdout, summary_df; allrows = true, allcols = true)
+        println()
+        failed = filter(r -> r.status != "ok", rows)
+        println("\nAggregated $(length(rows)) cells, " *
+                "$(count(r -> r.status == "ok", rows)) ok, $(length(failed)) not ok.")
+        for r in failed
+            println("  - $(r.organism) $(r.technology) k=$(r.k) $(r.coverage)x " *
+                    "seed$(r.seed) [$(r.status)]")
+        end
+        println("End: $(Dates.now())")
+        exit(isempty(failed) ? 0 : 1)
+    end
+
     println("\n--- Phase 1: reference genomes ---")
     ref_paths = Dict{String, String}()
     for (org, acc, expected) in organisms
@@ -732,24 +894,40 @@ if abspath(PROGRAM_FILE) == @__FILE__
         k in ks,
         cov in coverages,
         seed in seeds
-
         global cell_index += 1
         cell_id = cell_id_for(org, tech, k, cov, seed)
         cell_dir = joinpath(cells_dir, cell_id)
         ckpt = joinpath(cell_dir, "cell_result.json")
 
-        # A checkpoint is reused ONLY if it recorded a real attempt. An `error`
-        # row is a cell that threw — under 32 concurrent shards the observed
-        # cause was a transient collision in read simulation, with n_reads = 0
-        # and wall_seconds = 0 — and caching that would freeze a transient
-        # failure into a permanent hole in the grid that no amount of
-        # re-running could fill. Errors are retried; successes are never
-        # recomputed.
+        # A checkpoint is reused ONLY if it recorded a real attempt; an `error`
+        # row is retried. Caching a failure would freeze it into a permanent
+        # hole in the grid that no amount of re-running could fill.
+        #
+        # The one failure actually observed was ONT/k=31/100x/seed456 throwing
+        # `ZlibError: the compressed stream may be truncated` while READING a
+        # partially-written .fq.gz left by an interrupted earlier run. Note what
+        # that means for this branch: retrying alone does NOT fix it, because
+        # `simulate_nanopore_reads` regenerates only when its output is absent
+        # or zero-length, so a truncated non-empty file is reused and the cell
+        # fails identically forever. That is why the retry below also DELETES
+        # the cell's reads directory. (An earlier version of this comment
+        # attributed the failure to "a transient collision in read simulation,
+        # with n_reads = 0 and wall_seconds = 0" — a fabricated account:
+        # `error_row` hardcodes both of those values on EVERY error path, so
+        # they carry no information about where the failure occurred.)
         if isfile(ckpt)
             cached = canonical(JSON.parsefile(ckpt))
-            if cached.status == "error"
-                println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached row is an " *
-                        "error; retrying")
+            if cached.status in RETRYABLE_STATUSES
+                println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached row is " *
+                        "$(cached.status); retrying")
+                # Delete the cell's simulated reads before retrying. The
+                # simulator regenerates only when its output is absent or
+                # zero-length, so a TRUNCATED non-empty .fq.gz would be reused
+                # and the retry would fail identically forever — which is
+                # exactly what happened to ONT/k=31/100x/seed456. Retrying
+                # without this is a guaranteed no-op against the one failure
+                # mode that has actually occurred.
+                rm(joinpath(cell_dir, "reads"); recursive = true, force = true)
             else
                 println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached, skipping")
                 push!(rows, cached)
@@ -806,4 +984,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
     end
     println("End: $(Dates.now())")
+    # Exit non-zero when any cell failed. The warning block above is invisible
+    # to a shell driver, and an error row carries outcome = "degenerate" —
+    # shaped exactly like the finding under test — so the exit code is the only
+    # signal automation can act on.
+    isempty(failed) || exit(1)
 end  # PROGRAM_FILE guard

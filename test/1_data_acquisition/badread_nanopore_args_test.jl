@@ -75,10 +75,14 @@ Test.@testset "Badread nanopore argument pinning" begin
         # point, otherwise callers would go back to relying on binary defaults.
         args = Mycelia._badread_nanopore_args(
             fasta = "r.fna", quantity = "5x",
-            error_model = "nanopore2020", qscore_model = "nanopore2020",
+            # DISTINCT values on purpose: setting both to the same string
+            # cannot detect the two being wired to each other's flag. A mutant
+            # that swaps them passed all 30 assertions when both were
+            # "nanopore2020".
+            error_model = "nanopore2020", qscore_model = "nanopore2018",
             identity = "90,98,5", length_dist = "8000,6000")
         Test.@test flag_value(args, "--error_model") == "nanopore2020"
-        Test.@test flag_value(args, "--qscore_model") == "nanopore2020"
+        Test.@test flag_value(args, "--qscore_model") == "nanopore2018"
         Test.@test flag_value(args, "--identity") == "90,98,5"
         Test.@test flag_value(args, "--length") == "8000,6000"
     end

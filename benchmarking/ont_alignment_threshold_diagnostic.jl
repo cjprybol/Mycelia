@@ -69,7 +69,7 @@ but where QUAST could not compute NGA50. That is BOTH censoring causes:
   * `censored_no_alignment`  — nothing aligned at the default 95% identity.
     Relaxing the threshold asks whether the contigs are approximate
     reconstructions that merely fell under the cut.
-  * `censored_gf_below_50`   — contigs aligned, but under the 50% genome
+  * `censored_partial_alignment`   — contigs aligned, but under the 50% genome
     fraction floor where NGA50 is undefined. Relaxing the threshold asks
     whether more of the genome comes into alignment range, which is the
     quantity that determines whether NGA50 becomes defined at all.
@@ -80,7 +80,7 @@ the threshold cannot tell us anything about them. Their failure is contig
 LENGTH, which is a different mechanism and is already quantified by the sweep's
 `asm_max_contig` column.
 """
-const CENSORED_STATUSES = ("censored_no_alignment", "censored_gf_below_50")
+const CENSORED_STATUSES = ("censored_no_alignment", "censored_partial_alignment")
 
 function candidate_cells(sweep_dir)
     cells = Dict{String, Any}[]
@@ -89,7 +89,19 @@ function candidate_cells(sweep_dir)
     for entry in sort(readdir(cells_dir))
         checkpoint = joinpath(cells_dir, entry, "cell_result.json")
         isfile(checkpoint) || continue
-        row = JSON.parsefile(checkpoint)
+        # Reclassify on read rather than trusting the stored label. The sweep's
+        # `reclassify` exists precisely because stored labels go stale — an
+        # earlier classifier wrote `censored_unaligned`, which matches neither
+        # entry of CENSORED_STATUSES, so such a checkpoint would be silently
+        # dropped and this script would report "nothing to do" over a tree full
+        # of censored cells.
+        parsed = JSON.parsefile(checkpoint)
+        row = Dict{String, Any}(parsed)
+        try
+            row["nga50_status"] = canonical(parsed).nga50_status
+        catch e
+            @warn "could not reclassify checkpoint; using stored label" cell=entry exception=e
+        end
         row["cell_id"] = entry
         row["cell_dir"] = joinpath(cells_dir, entry)
         push!(cells, row)
@@ -115,10 +127,18 @@ function rescore(contigs, reference, outdir, min_identity)
              --output-dir $(outdir) --threads 1 --min-contig 500
              --min-identity $(min_identity) --reference $(reference) $(contigs)`,
             stdout = devnull, stderr = devnull))
-    catch
-        # QUAST exits non-zero when nothing survives filtering. That is a
-        # result, not an error: it means no contig aligned even at this
-        # threshold, and the all-missing metrics below say exactly that.
+    catch e
+        # QUAST exits non-zero when nothing survives filtering, which IS a
+        # result. But a missing conda env, an OOM, an out-of-range
+        # --min-identity (QUAST rejects < 80.0), or an unreadable reference land
+        # in this same branch and produce the same all-missing row — and an
+        # all-missing row across the whole ladder is exactly the observation
+        # this script's INTERPRETATION block reads as evidence for an assembler
+        # defect. Warn so the two are distinguishable in the log rather than
+        # only in the operator's memory.
+        @warn "QUAST returned non-zero; recording as no-alignment at this " *
+              "threshold. If this fires at EVERY threshold for a cell, check " *
+              "it is not an environment or argument failure." min_identity exception=e
         return empty_metrics()
     end
     report = joinpath(outdir, "report.tsv")
@@ -140,7 +160,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         cell["nga50_status"] in CENSORED_STATUSES
     end
     println("Cells available: $(length(all_cells)); selected for rescoring: $(length(selected))")
-    isempty(selected) && println("  (nothing to do — no censored_unaligned cells yet)")
+    isempty(selected) &&
+        println("  (nothing to do — no censored cells in this sweep tree)")
 
     rows = NamedTuple[]
     for cell in selected

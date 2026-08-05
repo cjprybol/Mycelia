@@ -73,7 +73,8 @@ Test.@testset "ONT k-sweep helpers" begin
         # is the real ONT/k=21/30x cell: 31.663% of the genome was recovered.
         # Labelling it "nothing aligned" would assert the opposite of the
         # measurement sitting in the same row.
-        Test.@test nga50_status_for(aligned_low, 13_656, 24, true) == "censored_gf_below_50"
+        Test.@test nga50_status_for(aligned_low, 13_656, 24, true) ==
+                   "censored_partial_alignment"
 
         # Scorable contigs exist and QUAST genuinely failed.
         Test.@test nga50_status_for(unaligned, 13_656, 42, false) == "quast_failed"
@@ -98,7 +99,7 @@ Test.@testset "ONT k-sweep helpers" begin
             unaligned_contigs = 10.0, unaligned_length = 5000.0,
             outcome = "degenerate", wall_seconds = 1.0, status = "ok")
         fixed = reclassify(stale)
-        Test.@test fixed.nga50_status == "censored_gf_below_50"
+        Test.@test fixed.nga50_status == "censored_partial_alignment"
         # Relabelling must be LOSSLESS — no measurement may be altered.
         Test.@test fixed.genome_fraction == 31.663
         Test.@test ismissing(fixed.NGA50)
@@ -113,7 +114,7 @@ Test.@testset "ONT k-sweep helpers" begin
         # nonzero genome fraction alongside it would be internally
         # inconsistent rather than evidence of partial success.
         for status in ("no_contigs", "no_contigs_ge_min", "censored_no_alignment",
-            "censored_gf_below_50", "quast_failed")
+            "censored_partial_alignment", "quast_failed")
             Test.@test classify_outcome(0.0, 0.0, status, LAMBDA) == "degenerate"
             Test.@test classify_outcome(48_000.0, 99.9, status, LAMBDA) == "degenerate"
         end
@@ -156,6 +157,103 @@ Test.@testset "ONT k-sweep helpers" begin
         Test.@test classify_outcome(tenth_lambda, 92.0, "measured", LAMBDA) ==
                    "substantial"
         Test.@test classify_outcome(tenth_lambda, 92.0, "measured", T4) == "partial"
+    end
+
+    Test.@testset "write_aggregate cannot shrink the table (partial-run case)" begin
+        # THE bug this guards: write_aggregate used to emit only the rows the
+        # current process held, and OUTPUT_DIR defaults to the git-tracked
+        # results directory — so `--smoke` (one cell) replaced a 240-row
+        # deliverable with one row, silently, recoverable only via git.
+        #
+        # The happy path ("all cells in memory") and the honest-empty path
+        # ("no cells at all") both looked fine. The defect lived in PARTIAL:
+        # some on disk, some in memory. That is the case tested here.
+        mktempdir() do dir
+            cells = joinpath(dir, "cells")
+            mkpath(cells)
+            function put(org, tech, k, cov, seed; gf = 99.0, nga = 4000.0)
+                row = cell_row(org, "ACC", tech, k, cov, seed;
+                    n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                    metrics = merge(empty_metrics(),
+                        (; NGA50 = nga, genome_fraction = gf, quast_contigs = 1.0)),
+                    nga50_status = "measured", outcome = "partial",
+                    wall_seconds = 1.0, status = "ok")
+                id = cell_id_for(org, tech, k, cov, seed)
+                mkpath(joinpath(cells, id))
+                save_cell_json(joinpath(cells, id, "cell_result.json"), row)
+                return row
+            end
+            a = put("Lambda", "ont", 15, 30, 42)
+            put("Lambda", "ont", 15, 30, 123)
+            put("Lambda", "ont", 15, 30, 456)
+
+            # PARTIAL: one row in memory, three on disk. Must emit three.
+            df = write_aggregate(dir, [a])
+            Test.@test DataFrames.nrow(df) == 3
+
+            # ABSENT: zero rows in memory. Must still emit three, not zero.
+            Test.@test DataFrames.nrow(write_aggregate(dir, NamedTuple[])) == 3
+
+            # The in-memory row must WIN over its on-disk twin, so a
+            # just-recomputed cell supersedes a stale checkpoint.
+            superseding = merge(a, (; wall_seconds = 999.0))
+            df3 = write_aggregate(dir, [superseding])
+            hit = df3[(df3.seed .== 42) .& (df3.k .== 15), :]
+            Test.@test DataFrames.nrow(hit) == 1
+            Test.@test hit.wall_seconds[1] == 999.0
+
+            # An unreadable checkpoint must not take the whole aggregation down
+            # — one truncated kilobyte would otherwise destroy a long run's
+            # authoritative table.
+            write(
+                joinpath(cells, "Lambda__ont__k15__30x__seed42",
+                    "cell_result.json"), "{ truncated")
+            Test.@test DataFrames.nrow(write_aggregate(dir, NamedTuple[])) == 2
+        end
+    end
+
+    Test.@testset "classify_outcome rejects a censored value instead of zeroing it" begin
+        # Both call sites used to coerce `missing` to 0.0 before calling this,
+        # reintroducing the collapse the harness exists to prevent. It was live
+        # for genome_fraction, because nga50_status_for returns "measured"
+        # without ever inspecting genome_fraction.
+        threw = false
+        try
+            classify_outcome(4000.0, missing, "measured", LAMBDA)
+        catch err
+            threw = true
+            Test.@test occursin("censored", sprint(showerror, err))
+        end
+        Test.@test threw
+
+        threw2 = false
+        try
+            classify_outcome(missing, 99.0, "measured", LAMBDA)
+        catch
+            threw2 = true
+        end
+        Test.@test threw2
+
+        # A censored row that is correctly LABELLED censored still short-circuits
+        # to degenerate without reaching the guard.
+        Test.@test classify_outcome(missing, missing, "censored_no_alignment",
+            LAMBDA) == "degenerate"
+    end
+
+    Test.@testset "quast_failed is retryable and error_row matches the schema" begin
+        # A QUAST infrastructure failure used to be recorded as status="ok",
+        # which let it pass the summary filter as evidence for degeneracy, print
+        # "Grid is COMPLETE", and be cached forever.
+        Test.@test "quast_failed" in RETRYABLE_STATUSES
+        Test.@test "error" in RETRYABLE_STATUSES
+        # empty_assembly is a real measurement — re-running only reproduces it.
+        Test.@test !("empty_assembly" in RETRYABLE_STATUSES)
+
+        # error_row is built by hand and is called from inside a catch handler,
+        # so schema drift there would abort the sweep from its own recovery path.
+        er = error_row("Lambda", "NC_001416", "ont", 21, 30, 42)
+        Test.@test keys(er) === ROW_KEYS
+        Test.@test er.status == "error"
     end
 
     Test.@testset "genome_size_for refuses an unknown organism" begin
