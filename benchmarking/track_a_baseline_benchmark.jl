@@ -11,6 +11,30 @@
 #   - decoder arm "kmer":    quality stripped (FASTQ -> FASTA records) -> plain k-mer graph,
 #     matching the existing FASTA-based benchmark and the future DP arm's graph type.
 #
+# READ THIS BEFORE INTERPRETING THE TWO ARMS AS A COMPARISON (td-4e19d.2).
+# The two arms are NOT two decoders as far as assembly quality is concerned. They take
+# genuinely different code paths, but under the DEFAULT traversal_weighting=:evidence the
+# qualmer arm's per-base quality reaches contig EMISSION only and never a traversal
+# decision, while contig extraction itself (find_eulerian_paths_next / find_contigs_next)
+# is purely topological and shared with the k-mer arm. The arms therefore produce
+# IDENTICAL n_contigs / NGA50 / misassemblies / genome_fraction / duplication_ratio /
+# largest_contig by construction; they differ only in wall_seconds and peak_rss_bytes.
+#
+# This is not a conjecture about the code. In the committed 2026-07-24 pilot table
+# (track_a_pilot_results_20260724.tsv) all 66 paired runs agree byte-for-byte on every
+# assembly metric, and `benchmarking/qualmer_quality_channel_probe.jl` reproduces the
+# same invariance from first principles in 18/18 cells across all three chemistries by
+# re-assembling identical reads under four different quality vectors.
+#
+# Consequences for anyone using this harness:
+#   - Do NOT report a qualmer-vs-kmer difference in assembly quality; there is none to
+#     find, and an apparent one indicates a harness bug rather than a decoder effect.
+#   - The arms ARE a valid comparison of COST (runtime, memory) for carrying quality.
+#   - To benchmark a genuinely quality-dependent decoder, pass
+#     traversal_weighting=:quality (opt-in; it changes assembly output, so results are
+#     not comparable to any existing row here), or use the corrector/Viterbi route.
+# See benchmarking/results/qualmer_quality_channel_probe/README.md for the full scoping.
+#
 # Each cell: simulate reads -> assemble (k=31) -> QUAST vs reference -> parse NGA50 /
 # misassemblies / genome fraction / duplication ratio. Per-cell JSON checkpoint enables
 # crash-safe resume. A final step computes NGA50 CV per (organism x tech x coverage x arm)
