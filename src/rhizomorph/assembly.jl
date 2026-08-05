@@ -33,12 +33,95 @@ function _graph_mode_symbol(graph_mode::GraphMode)
     return :singlestrand
 end
 
+# NOTE ON NAMING (td-4e19d.2): despite "quality" appearing at every call site of these
+# two functions (`vertex_quality`, `edge_quality`, `min_quality`), the ONE-ARGUMENT
+# methods below contain no quality term whatsoever — `count_evidence` is a pure count of
+# evidence entries (src/rhizomorph/core/evidence-functions.jl:393-401). They are the
+# evidence-weighted scores, and they remain the default so existing results are
+# unchanged. The two-argument methods add the genuinely Phred-derived alternative,
+# selected by `AssemblyConfig.traversal_weighting`.
 function _qualmer_vertex_score(vertex_data)
     return Float64(Rhizomorph.count_evidence(vertex_data))
 end
 
 function _qualmer_edge_score(edge_data)
     return Float64(max(1, Rhizomorph.count_evidence(edge_data)))
+end
+
+"""
+Vertex score under an explicit `weighting`. `:evidence` reproduces the count-based
+default exactly; `:quality` returns the vertex's MEAN joint Phred, so a low-quality
+k-mer scores below a high-quality one at equal coverage.
+
+A vertex carrying no recoverable quality falls back to the evidence score rather than
+scoring 0.0: a missing measurement must not be read as a confident "bad", which would
+silently delete real structure whenever quality is absent.
+"""
+function _qualmer_vertex_score(vertex_data, weighting::Symbol)
+    weighting == :evidence && return _qualmer_vertex_score(vertex_data)
+    quality = _qualmer_vertex_quality_scores(vertex_data)
+    isempty(quality) && return _qualmer_vertex_score(vertex_data)
+    return _qualmer_weakest_position_quality(quality)
+end
+
+"""
+Reduce a k-mer's per-position quality vector to ONE number: its WEAKEST position.
+
+Using the mean here instead would defeat the purpose. A sequencing error corrupts a
+single base, but the k-mer containing it spans `k` positions, so at k=11 a Q2 error base
+among ten Q40 neighbours averages to ~Q36 — comfortably above any sane Phred floor. The
+erroneous k-mer would then be indistinguishable from a clean one, and a "quality filter"
+built on the mean would silently pass every error k-mer in the graph.
+
+`_qualmer_vertex_quality_scores` has already averaged ACROSS observations at each
+position, so this is "the weakest position, averaged over the reads covering it" — a
+k-mer seen once with a bad base is dropped, while one seen ten times with nine clean
+reads at that position survives. Coverage therefore still earns trust; it just cannot
+launder a consistently bad base.
+"""
+_qualmer_weakest_position_quality(quality) = Float64(minimum(quality))
+
+"""
+Edge score under an explicit `weighting`. `:quality` delegates to the existing
+`Rhizomorph.edge_quality_weight`, which averages the decoded Phred of each edge's
+quality evidence and itself falls back to `count_evidence` for edges carrying none.
+"""
+function _qualmer_edge_score(edge_data, weighting::Symbol)
+    weighting == :evidence && return _qualmer_edge_score(edge_data)
+    return max(1.0, Float64(Rhizomorph.edge_quality_weight(edge_data)))
+end
+
+"""
+Drop qualmer vertices whose WEAKEST position (see `_qualmer_weakest_position_quality`)
+falls below `min_quality`.
+
+This is what makes `traversal_weighting = :quality` reach the PRIMARY extraction path.
+`find_contigs_next` / `find_eulerian_paths_next` are purely topological — they expose no
+scoring hook — so the only way per-base quality can influence which contigs they produce
+is by changing the vertex set they traverse.
+
+Operates on a deepcopy: the caller's graph (which may be the corrector's reused
+final-pass graph) must not be mutated. Vertices with no recoverable quality are KEPT,
+for the same reason as `_qualmer_vertex_score`: absent evidence is not bad evidence.
+"""
+function _prune_qualmer_graph_by_quality(graph, min_quality::Float64)
+    pruned = deepcopy(graph)
+    # Read the quality vector DIRECTLY rather than going through
+    # `_qualmer_vertex_score(_, :quality)`. That helper falls back to the evidence
+    # COUNT when quality is missing, and comparing a count against a Phred threshold
+    # is a category error: a well-supported quality-less vertex with count 5 would be
+    # deleted for scoring "below Q20". Here, no quality means no opinion, so keep it.
+    labels = collect(MetaGraphsNext.labels(pruned))
+    doomed = eltype(labels)[]
+    for label in labels
+        quality = _qualmer_vertex_quality_scores(pruned[label])
+        isempty(quality) && continue
+        _qualmer_weakest_position_quality(quality) < min_quality && push!(doomed, label)
+    end
+    for label in doomed
+        haskey(pruned, label) && delete!(pruned, label)
+    end
+    return pruned, length(doomed)
 end
 
 function _qualmer_vertex_quality_scores(vertex_data)
@@ -223,6 +306,28 @@ struct AssemblyConfig
     # set by the route and cannot be overridden here.
     olc_options::NamedTuple
 
+    # Qualmer TRAVERSAL weighting (td-4e19d.2). `:evidence` (default) is an EXACT
+    # no-op on every path and preserves existing behavior byte-for-byte; `:quality`
+    # makes the greedy qualmer arm's traversal actually depend on per-base Phred.
+    #
+    # Why this option exists: with `:evidence`, per-base quality reaches contig
+    # EMISSION only (`_qualmer_path_to_consensus_fastq`) and never a traversal
+    # decision, so the qualmer arm returns byte-identical contigs to the k-mer arm
+    # on every assembly metric. That is a deliberate design choice (PR #335 moved
+    # the arm onto the k-mer arm's `find_contigs_next` to fix degenerate assemblies),
+    # NOT a bug — so it stays the default. `:quality` is the opt-in that makes the
+    # quality channel load-bearing, for callers who want it.
+    #
+    # It must never become a silent default: turning it on CHANGES assembly output,
+    # which would invalidate every existing benchmark result (same rule as
+    # qualmer_prefilter_min_count).
+    traversal_weighting::Symbol
+
+    # Phred floor consulted ONLY when traversal_weighting=:quality. Qualmer vertices
+    # whose mean joint quality falls below this are dropped before contig extraction,
+    # which is what makes the traversal quality-dependent. Inert under `:evidence`.
+    traversal_min_quality::Float64
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -250,7 +355,9 @@ struct AssemblyConfig
             sequencing_tech::Symbol = :illumina,
             layout::Symbol = :native,
             olc_tool::Symbol = :auto,
-            olc_options::NamedTuple = (;)
+            olc_options::NamedTuple = (;),
+            traversal_weighting::Symbol = :evidence,
+            traversal_min_quality::Float64 = 20.0
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -373,6 +480,24 @@ struct AssemblyConfig
         if effective_qualmer_prefilter_min_count < 1
             error("qualmer_prefilter_min_count must be positive, got " *
                   "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
+        end
+        if !(traversal_weighting in (:evidence, :quality))
+            error("traversal_weighting must be :evidence or :quality, got " *
+                  "traversal_weighting=:$(traversal_weighting)")
+        end
+        # Phred is bounded below by 0; an out-of-range floor would silently make the
+        # option either a no-op or a total wipe, both of which look like a working
+        # quality filter from the outside.
+        if !(0.0 <= traversal_min_quality <= 60.0)
+            error("traversal_min_quality must be between 0.0 and 60.0, got " *
+                  "traversal_min_quality=$(traversal_min_quality)")
+        end
+        # Discoverability: mirrors the olc_tool / skip_solid / efficiency-mode
+        # warnings — a caller who sets the floor but forgets the selector would
+        # otherwise get evidence-weighted traversal and no indication why.
+        if traversal_weighting == :evidence && traversal_min_quality != 20.0
+            @warn "traversal_min_quality is only used when traversal_weighting=:quality " *
+                  "and is ignored for traversal_weighting=:$(traversal_weighting)."
         end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
@@ -517,7 +642,9 @@ struct AssemblyConfig
             sequencing_tech,
             layout,
             olc_tool,
-            olc_options
+            olc_options,
+            traversal_weighting,
+            traversal_min_quality
         )
     end
 end
@@ -2250,6 +2377,21 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
     # their thresholds. Operate on a deepcopy so a REUSED corrector final-pass
     # graph (td-04tb) is not mutated for other consumers; the cleaned copy is what
     # we both extract contigs from AND return in the AssemblyResult.
+    # Opt-in quality-weighted traversal (td-4e19d.2). Under the `:evidence` default this
+    # block is an EXACT no-op, so every existing benchmark result is unchanged. Under
+    # `:quality` it prunes low-Phred vertices BEFORE extraction, which is the only way
+    # per-base quality can influence `find_contigs_next` / `find_eulerian_paths_next` —
+    # both are purely topological and expose no scoring hook.
+    quality_pruned_vertices = 0
+    if config.traversal_weighting == :quality
+        graph,
+        quality_pruned_vertices = _prune_qualmer_graph_by_quality(
+            graph, config.traversal_min_quality)
+        _log_info(config,
+            "Quality-weighted traversal (td-4e19d.2): pruned $(quality_pruned_vertices) " *
+            "vertices below mean Q$(config.traversal_min_quality)")
+    end
+
     cleanup_stats = nothing
     if graph_cleanup
         graph = deepcopy(graph)
@@ -2369,7 +2511,15 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         "k" => config.k,
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
-        "quality_preserved" => true,  # Mark that quality information is preserved
+        # `quality_preserved` means quality SURVIVES into the emitted contig's FASTQ
+        # quality string. It has never meant quality influenced which contigs were
+        # produced — under the `:evidence` default it does not. The two keys below make
+        # that distinction explicit rather than leaving it to be inferred from a name
+        # that reads as stronger than it is (td-4e19d.2).
+        "quality_preserved" => true,
+        "traversal_weighting" => string(config.traversal_weighting),
+        "quality_influences_traversal" => config.traversal_weighting == :quality,
+        "traversal_quality_pruned_vertices" => quality_pruned_vertices,
         # Always true: canonical (undirected) qualmer reconstruction is now
         # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,
@@ -3963,8 +4113,14 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
     visited = Set()
 
     # Start evidence-weighted walks from high-confidence vertices
-    min_quality = 1.0
-    start_vertices = filter(v -> _qualmer_vertex_score(graph[v]) >= min_quality, vertices)
+    # Under `:evidence` this is the historical count >= 1 filter. Under `:quality` the
+    # score is a mean Phred, so the floor becomes the configured quality floor —
+    # comparing a Phred against the count-derived 1.0 would admit essentially every
+    # vertex and leave the fallback walk count-driven even when quality was requested.
+    weighting = config.traversal_weighting
+    min_quality = weighting == :quality ? config.traversal_min_quality : 1.0
+    start_vertices = filter(
+        v -> _qualmer_vertex_score(graph[v], weighting) >= min_quality, vertices)
 
     # If no high-confidence vertices, use all vertices
     if isempty(start_vertices)
@@ -3977,8 +4133,11 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
             continue
         end
 
-        # Perform quality-weighted walk from this vertex
-        path = _quality_weighted_walk(graph, start_vertex, config.k * 10)  # Reasonable max length
+        # Perform the walk from this vertex. NOTE: the name has always said
+        # "quality-weighted", but under the `:evidence` default the walk scores purely on
+        # evidence counts; `weighting` is what actually makes it quality-driven.
+        path = _quality_weighted_walk(
+            graph, start_vertex, config.k * 10; weighting = weighting)  # Reasonable max length
 
         if length(path) > 1  # Need at least 2 vertices to form a meaningful contig
             # Mark all vertices in path as visited
@@ -4002,7 +4161,8 @@ end
 """
 Perform quality-weighted walk through qualmer graph.
 """
-function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000)
+function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000;
+        weighting::Symbol = :evidence)
     path = [start_vertex]
     current = start_vertex
     visited = Set([current])
@@ -4024,13 +4184,13 @@ function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000)
 
         for neighbor in unvisited
             # Calculate score based on vertex evidence and edge evidence
-            vertex_quality = _qualmer_vertex_score(graph[neighbor])
+            vertex_quality = _qualmer_vertex_score(graph[neighbor], weighting)
 
             # Check if edge exists and get its quality weight
             edge_quality = 1.0
             if haskey(graph, current, neighbor)
                 edge_data = graph[current, neighbor]
-                edge_quality = _qualmer_edge_score(edge_data)
+                edge_quality = _qualmer_edge_score(edge_data, weighting)
             end
 
             # Combined score (vertex quality * edge quality)
