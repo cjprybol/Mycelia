@@ -70,19 +70,33 @@ ORGANISMS="${ORGANISMS:-Lambda}"
 #
 # An uncapped `for ... &` therefore scales memory with GRID SIZE rather than host
 # capacity, and the grid keeps growing: 16 shards, then 32 when technology
-# sharding was added, and 64 with ORGANISMS="Lambda T4". On 2026-08-04 sixteen
-# shards on an 18-core laptop drove swap to 95% and completed zero cells in ten
-# hours -- slower than serial would have been.
+# sharding was added, and 64 with ORGANISMS="Lambda T4".
+#
+# On 2026-08-04 sixteen shards on an 18-core laptop drove swap to 95%, free
+# memory to ~15 MB, and load to 37.5. It ran about 13 hours before being killed
+# at 62 of 96 cells, and in the ten hours from 18:00 to 04:00 it completed
+# exactly ONE cell -- the throughput had collapsed, not stopped. All 62 cells
+# were later discarded anyway, because they had run against a different Badread
+# and QUAST than the final grid, so the run produced nothing that survived into
+# the deliverable. That, rather than any wall-clock comparison, is the argument:
+# no serial baseline was ever run, so "slower than serial" is an inference and
+# is not claimed here.
 #
 # The cap is derived from usable memory at a conservative GB-per-shard, then
 # bounded by core count. Override explicitly with MAX_PARALLEL=N.
 #
-# AVAILABLE memory, never total. Sizing from total RAM is what would make this
-# cap useless on the host that needs it: the incident laptop reports 128 GB and
-# 18 cores, so a total-derived cap yields 18 -- MORE than the 16 shards that
-# thrashed it. That machine is never idle; at incident time it was also running
-# dozens of agent processes, Docker, and an fseventsd pinned at 93% CPU by the
-# checkpoint writes. Plan from what is free and leave headroom.
+# AVAILABLE memory, never total. The incident laptop reports 128 GB total but
+# had ~49 GB actually free: it is never idle, and at incident time was also
+# running dozens of agent processes, Docker, and an fseventsd driven to high CPU
+# by the checkpoint writes. Planning from 128 GB would budget for memory that
+# was not there.
+#
+# (An earlier version of this block argued the point with "a total-derived cap
+# yields 18, MORE than the 16 that thrashed it". That was true at GB_PER_SHARD=6
+# and stopped being true when it was raised to 20 -- the same commit changed the
+# constant and left the worked example that depended on it. The principle is
+# unchanged; only the arithmetic illustrating it was wrong, which is exactly how
+# a comment outlives the code it describes.)
 #
 # The budget is resolved most-authoritative source first, and a SLURM allocation
 # outranks node memory. Inside a sub-node job (`--mem=64G`, which is this repo's
@@ -148,17 +162,26 @@ MEM_FRACTION_PCT="${MEM_FRACTION_PCT:-60}"
 # from an ONT/100x shard before launching it, so an average-sized budget is
 # numerically satisfied while the host still thrashes.
 #
-# Provenance, because the two available figures disagree and only one has a
-# surviving artifact:
+# Provenance. Two figures are available and they disagree by ~5x. NEITHER has a
+# surviving measurement artifact -- ont_k_sweep.jl records wall_seconds but no
+# memory column, and the shard logs are gitignored as regenerable. Both are
+# contemporaneous prose records of a `ps` reading whose output was not kept:
 #
-#   ~3.6 GB/shard   ARTIFACT-BACKED. `ps -o rss` during the 2026-08-04 laptop
-#                   incident: ~40 GB summed over 11 surviving shards, with
-#                   shared pages double-counted, so true unique is lower. That
-#                   run was Lambda, and it never reached the expensive cells.
-#   17-25 GB/shard  RECOLLECTION ONLY. Reported for ONT high-coverage cells on
-#                   Lovelace. No artifact survives: ont_k_sweep.jl records
-#                   wall_seconds but no memory column, and the shard logs are
-#                   gitignored as regenerable.
+#   ~3.6 GB/shard   ~40 GB summed over 11 shards during the 2026-08-04 laptop
+#                   incident. This is the WEAKER of the two despite looking
+#                   precise: `ps` sums double-count shared pages, the reading
+#                   was taken seconds into a launch rather than at steady state,
+#                   and RSS is deflated under 95% swap by construction -- the
+#                   pages had been evicted, which is why the machine was
+#                   thrashing in the first place.
+#   17-25 GB/shard  Reported for ONT high-coverage cells on Lovelace, where
+#                   there was memory to actually hold them.
+#
+# An earlier version of this block labelled the first "artifact-backed" and the
+# second "recollection only". That distinction does not hold: the same sentence
+# disqualifying the second disqualifies the first, and the first is additionally
+# a measurement of a memory-starved process taken before it reached its working
+# set. Sizing from it would be sizing from the symptom.
 #
 # 20 GB takes the unverified figure at close to face value on purpose. The risk
 # is asymmetric: under-sizing reproduces the incident, while over-sizing costs
@@ -166,8 +189,53 @@ MEM_FRACTION_PCT="${MEM_FRACTION_PCT:-60}"
 # is cheap and a thrashing one is not. Lower it once the footprint is measured
 # -- adding a memory column to ont_k_sweep.jl is the way to earn that.
 GB_PER_SHARD="${GB_PER_SHARD:-20}"
+
+# Reject a malformed knob BEFORE anything launches.
+#
+# This runs unconditionally, outside the derived-cap branch below, because the
+# clamps in that branch only ever guarded the value this script COMPUTES. A
+# value the operator exported was never checked, and the failure was silent:
+# `throttle` evaluates `[ N -ge "two" ]`, which exits 2 ("integer expression
+# expected"). A non-zero WHILE-condition simply ends the loop, and `set -e` does
+# not apply to conditions -- so the throttle never blocked, the entire grid
+# launched at once, and the driver exited 0 while printing a cap line that
+# looked correct. That is strictly worse than having no cap: the banner supplies
+# false assurance. It was reachable by a plain typo (`MAX_PARALLEL=2.5`)
+# whenever JULIA_NUM_THREADS was also set explicitly, which is routine.
+require_positive_int() {
+    case "$2" in
+        '' | *[!0-9]*)
+            echo "ERROR: ${1} must be a positive integer, got '${2}'" >&2
+            exit 2
+            ;;
+    esac
+    if [ "$2" -lt 1 ]; then
+        echo "ERROR: ${1} must be >= 1, got '${2}'" >&2
+        exit 2
+    fi
+}
+
+require_positive_int GB_PER_SHARD "${GB_PER_SHARD}"
+require_positive_int MEM_FRACTION_PCT "${MEM_FRACTION_PCT}"
+# Empty is "unset, use the default", consistent with every other knob here.
+if [ -n "${MAX_PARALLEL:-}" ]; then
+    require_positive_int MAX_PARALLEL "${MAX_PARALLEL}"
+fi
+if [ -n "${JULIA_NUM_THREADS:-}" ] && [ "${JULIA_NUM_THREADS}" != auto ]; then
+    require_positive_int JULIA_NUM_THREADS "${JULIA_NUM_THREADS}"
+fi
+
 _cores_for_threads="$(detect_cores)"
+# How the cap was arrived at, for the banner. Reporting "60% of available RAM"
+# after sizing from a SLURM allocation states something false about where the
+# number came from -- and the banner is the only place an operator sees it.
+_cap_source="operator (MAX_PARALLEL)"
 if [ -z "${MAX_PARALLEL:-}" ]; then
+    if [ -n "${SLURM_MEM_PER_NODE:-}" ] || [ -n "${SLURM_MEM_PER_CPU:-}" ]; then
+        _cap_source="SLURM allocation"
+    else
+        _cap_source="available RAM"
+    fi
     _budget_gb=$(( $(detect_avail_gb) * MEM_FRACTION_PCT / 100 ))
     MAX_PARALLEL=$(( _budget_gb / GB_PER_SHARD ))
     # Clamps are written as `if` rather than `[ ... ] && x=y` on purpose. Under
@@ -178,8 +246,17 @@ if [ -z "${MAX_PARALLEL:-}" ]; then
     if [ "${MAX_PARALLEL}" -gt "${_cores_for_threads}" ]; then
         MAX_PARALLEL="${_cores_for_threads}"
     fi
+    # A budget that cannot fit ONE shard is refused, not rounded up to one. The
+    # earlier floor clamped a computed 0 to 1, which launched a process the
+    # budget had just determined would not fit -- the thrashing this cap exists
+    # to prevent, arrived at by the cap's own arithmetic. Naming both overrides
+    # matters because the honest answer is often "this host is too small; run it
+    # on the cluster", and the operator needs to be able to say otherwise.
     if [ "${MAX_PARALLEL}" -lt 1 ]; then
-        MAX_PARALLEL=1
+        echo "ERROR: memory budget ${_budget_gb} GB (${MEM_FRACTION_PCT}% of available)" >&2
+        echo "       cannot fit one ${GB_PER_SHARD} GB shard." >&2
+        echo "       Lower GB_PER_SHARD, or set MAX_PARALLEL explicitly to override." >&2
+        exit 2
     fi
 fi
 
@@ -217,7 +294,11 @@ echo "=== ONT k-sweep parallel driver ==="
 echo "repo:       ${REPO_ROOT}"
 echo "output dir: ${OUTPUT_DIR}"
 echo "log dir:    ${LOG_DIR}"
-echo "max parallel: ${MAX_PARALLEL} shards x ${JULIA_NUM_THREADS} threads (${GB_PER_SHARD} GB/shard, ${MEM_FRACTION_PCT}% of available RAM)"
+if [ "${_cap_source}" = "operator (MAX_PARALLEL)" ]; then
+    echo "max parallel: ${MAX_PARALLEL} shards x ${JULIA_NUM_THREADS} threads (set by ${_cap_source})"
+else
+    echo "max parallel: ${MAX_PARALLEL} shards x ${JULIA_NUM_THREADS} threads (${GB_PER_SHARD} GB/shard, ${MEM_FRACTION_PCT}% of ${_cap_source})"
+fi
 
 # Pre-warm the reference serially. Every shard calls
 # download_genome_by_accession, which is idempotent but would otherwise have 16

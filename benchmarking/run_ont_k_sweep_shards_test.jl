@@ -86,7 +86,8 @@ Run the staged driver with the stub `julia` first on PATH. Returns combined
 stdout/stderr and the exit code; a non-zero exit is a result to assert on, not
 an error.
 """
-function run_driver(root, track; env::Dict{String, String} = Dict{String, String}())
+function run_driver(root, track; env::Dict{String, String} = Dict{String, String}(),
+        timeout_s::Real = 90)
     base = Dict(
         "PATH" => joinpath(root, "bin") * ":" * ENV["PATH"],
         "MYCELIA_TEST_TRACK_DIR" => track,
@@ -111,8 +112,20 @@ function run_driver(root, track; env::Dict{String, String} = Dict{String, String
     script = joinpath(root, "benchmarking", "run_ont_k_sweep_shards.sh")
     cmd = setenv(`bash $script`, base)
     out = IOBuffer()
-    proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out))
-    return (String(take!(out)), proc.exitcode)
+
+    # Watchdog. A cap regression that lets MAX_PARALLEL reach <= 0 makes
+    # `throttle` spin forever, and a bare synchronous `run` would turn that into
+    # a hung suite with no diagnostic instead of a failure. Kill and report.
+    proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out); wait = false)
+    timer = Timer(_ -> (process_running(proc) && kill(proc, Base.SIGKILL)), timeout_s)
+    wait(proc)
+    close(timer)
+
+    text = String(take!(out))
+    timed_out = proc.termsignal == Base.SIGKILL
+    return (
+        timed_out ? text * "\n[TEST HARNESS: driver killed after $(timeout_s)s]" : text,
+        timed_out ? -1 : proc.exitcode)
 end
 
 function peak_concurrency(track)
@@ -220,6 +233,11 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
 
         # The contrast case: a genuinely tiny allocation IS read literally, so
         # the fall-through above is not just "any nonzero value passes".
+        #
+        # MEM_FRACTION_PCT is pinned to 100 so this lands on exactly one shard
+        # rather than on the boundary where 60% of 1 GB rounds to a zero budget
+        # and the driver refuses outright. Refusing there is correct, but it is
+        # a different behaviour than the one under test here.
         root2, track2 = stage_sandbox()
         out2,
         _ = run_driver(root2,
@@ -227,7 +245,8 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
             env = Dict(
                 "SLURM_MEM_PER_NODE" => "1024",   # 1 GB really is one shard's worth
                 "SLURM_CPUS_ON_NODE" => "16",
-                "GB_PER_SHARD" => "1"
+                "GB_PER_SHARD" => "1",
+                "MEM_FRACTION_PCT" => "100"
             ))
         m2 = match(r"max parallel:\s*(\d+)"i, out2)
         Test.@test m2 !== nothing
@@ -262,6 +281,74 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
         calls = shard_calls(track)
         Test.@test !isempty(calls)
         Test.@test all(c -> occursin("threads=3", c), calls)
+    end
+
+    Test.@testset "a malformed MAX_PARALLEL aborts before launching anything" begin
+        # THE VALIDATION GAP. The clamps above live inside `if [ -z MAX_PARALLEL ]`,
+        # so an operator-supplied value was never checked. The only thing that
+        # incidentally caught a bad one was the thread division -- and that is
+        # skipped whenever JULIA_NUM_THREADS is set explicitly, which is routine.
+        #
+        # `throttle` then evaluates `[ N -ge "two" ]`, which exits 2 ("integer
+        # expression expected"). A non-zero WHILE-CONDITION simply ends the loop,
+        # and `set -e` does not apply to conditions -- so the throttle never
+        # blocks, the whole grid launches at once, and the driver exits 0 while
+        # printing a cap line that looks correct. That is strictly worse than
+        # having no cap at all, because the banner now supplies false assurance.
+        for bad in ("two", "2.5", "0", "-1")
+            root, track = stage_sandbox()
+            out,
+            code = run_driver(root, track; timeout_s = 30,
+                env = Dict(
+                    "MAX_PARALLEL" => bad,
+                    "JULIA_NUM_THREADS" => "3"
+                ))
+            Test.@test code == 2   # the deliberate validation abort, not a set -u crash (1)                          # not 0, and not a timeout (-1)
+            Test.@test isempty(shard_calls(track))       # aborted BEFORE the launch loop
+            Test.@test occursin("MAX_PARALLEL", out)     # and said which knob was wrong
+        end
+
+        # An EMPTY value is not malformed -- every other knob here reads empty as
+        # "unset, use the default", and the cap must stay consistent with that
+        # rather than turning `MAX_PARALLEL= ./run.sh` into an error.
+        root, track = stage_sandbox()
+        out, code = run_driver(root, track; env = Dict("MAX_PARALLEL" => ""))
+        Test.@test code == 0
+        Test.@test length(shard_calls(track)) == 8
+        Test.@test match(r"max parallel:\s*(\d+)"i, out) !== nothing
+    end
+
+    Test.@testset "a malformed memory knob aborts with a diagnostic" begin
+        # Same class, and these previously died naming an internal variable
+        # ("_budget_gb: unbound variable") rather than the operator's mistake.
+        for (knob, bad) in (("GB_PER_SHARD", "abc"), ("GB_PER_SHARD", "0"),
+            ("MEM_FRACTION_PCT", "abc"))
+            root, track = stage_sandbox()
+            out, code = run_driver(root, track; timeout_s = 30, env = Dict(knob => bad))
+            Test.@test code == 2   # the deliberate validation abort, not a set -u crash (1)
+            Test.@test isempty(shard_calls(track))
+            Test.@test occursin(knob, out)
+        end
+    end
+
+    Test.@testset "a budget too small for one shard aborts instead of launching one" begin
+        # The old floor clamped a computed 0 up to 1, i.e. launched a shard the
+        # budget had just determined would not fit. At GB_PER_SHARD=20 that
+        # fires on almost any laptop. Refuse, and name the two ways out.
+        root, track = stage_sandbox()
+        out,
+        code = run_driver(root,
+            track;
+            timeout_s = 30,
+            env = Dict(
+                "SLURM_MEM_PER_NODE" => "4096",   # 4 GB allocation
+                "SLURM_CPUS_ON_NODE" => "16",
+                "GB_PER_SHARD" => "20"
+            ))
+        Test.@test code == 2   # the deliberate validation abort, not a set -u crash (1)
+        Test.@test isempty(shard_calls(track))
+        Test.@test occursin("GB_PER_SHARD", out)
+        Test.@test occursin("MAX_PARALLEL", out)
     end
 
     Test.@testset "throttling does not break failure reporting" begin
