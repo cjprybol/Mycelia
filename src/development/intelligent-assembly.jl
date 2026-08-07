@@ -28,91 +28,31 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Generate sequence of prime k-mer sizes starting from min_k.
 
-**DEPRECATED**: Use `dynamic_k_prime_pattern()` for more efficient k-mer selection.
+**DEPRECATED**: Use `Mycelia.Rhizomorph.dynamic_k_prime_pattern` for more
+efficient k-mer selection.
 This function remains for backward compatibility.
 """
 function generate_prime_k_sequence(min_k::Int = 11, max_k::Int = 101)::Vector{Int}
     return Primes.primes(min_k, max_k)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generate optimal k-mer sizes using dynamic prime pattern algorithm.
-
-Based on the novel k-primes pattern from Mycelia-Dev research. This algorithm
-generates a sequence of prime numbers with progressively increasing gaps,
-providing computational efficiency through:
-- Twin prime avoidance (skips one member of twin prime pairs)
-- Progressive spacing reduces computational overlap
-- Built-in prime discovery without pre-computation
-
-# Arguments
-- `start_prime::Int`: Initial prime number (default: 11, optimal for strain-level resolution)
-- `max_k::Int`: Maximum k-mer size to consider (default: 101)
-- `initial_step::Int`: Initial step size (default: 2)
-
-# Returns
-- `Vector{Int}`: Sequence of prime k-mer sizes with progressive spacing
-
-# Algorithm
-1. Start with initial prime and step size
-2. Each iteration: current_prime += step, then step += 2
-3. Continue while result remains prime and ≤ max_k
-4. Natural stopping when non-prime encountered
-
-# Example
-```julia
-# Generates: [11, 13, 17, 23, 31, 41, 53, 67, 83, 101]
-ks = dynamic_k_prime_pattern(11, 101, 2)
-
-# For error-prone data, start smaller
-ks = dynamic_k_prime_pattern(7, 51, 2)  # [7, ...]
-```
-
-# References
-Based on k-primes-pattern.ipynb from Mycelia-Dev research demonstrating
-mathematical elegance of using prime number distribution for genomic
-analysis optimization.
-"""
-function dynamic_k_prime_pattern(start_prime::Int = 11, max_k::Int = 101, initial_step::Int = 2)::Vector{Int}
-    # Validate inputs
-    if !Primes.isprime(start_prime)
-        start_prime = Primes.nextprime(start_prime)
-    end
-
-    if start_prime > max_k
-        @warn "start_prime ($start_prime) > max_k ($max_k), returning empty sequence"
-        return Int[]
-    end
-
-    k_sequence = Int[start_prime]
-    current_k = start_prime
-    step = initial_step
-
-    # Dynamic stepping pattern with built-in prime discovery
-    while true
-        next_k = current_k + step
-
-        # Stop if we exceed max_k
-        if next_k > max_k
-            break
-        end
-
-        # Check if the next k is prime
-        if Primes.isprime(next_k)
-            push!(k_sequence, next_k)
-            current_k = next_k
-            step += 2  # Increase step for progressive spacing
-        else
-            # If not prime, we've reached the natural stopping point
-            # This exploits the mathematical properties of prime distribution
-            break
-        end
-    end
-
-    return k_sequence
-end
+# REMOVED: a second `dynamic_k_prime_pattern` used to be defined here, with a
+# POSITIONAL signature `(start_prime, max_k, initial_step)`. The canonical
+# definition is `Mycelia.Rhizomorph.dynamic_k_prime_pattern` in
+# `src/rhizomorph/algorithms/dynamic-k-selection.jl`, which takes KEYWORDS:
+# `(start_k; max_k, initial_step)`.
+#
+# The two never collided at runtime, because `Rhizomorph` is a submodule and
+# this file is not included by `Mycelia.jl` at all. The hazard was latent: the
+# natural way to wire `error_optimized_k_sequence` into production is to move it
+# into `Rhizomorph`, where k-selection already lives — and a positional call
+# would then hit a `MethodError`, since the keyword form defines no
+# three-positional-argument method.
+#
+# The implementations were equivalent in their core loop. The Rhizomorph one is
+# strictly better: it validates `initial_step >= 1` and handles `start_k < 2`.
+# The only behaviour lost here is a `@warn` when `start_k > max_k`; Rhizomorph
+# returns an empty vector silently in that case.
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -179,8 +119,13 @@ function error_optimized_k_sequence(error_rate::Float64, max_k::Int = 101,
     start_prime = Primes.isprime(lower_bound_k) ? lower_bound_k :
                   Primes.nextprime(lower_bound_k)
 
-    # Generate dynamic prime pattern
-    return dynamic_k_prime_pattern(start_prime, max_k, 2)
+    # Generate dynamic prime pattern.
+    # KEYWORD call, matching `Mycelia.Rhizomorph.dynamic_k_prime_pattern`. Do not
+    # revert this to the positional form: the canonical definition declares no
+    # three-positional-argument method, so a positional call is a `MethodError`
+    # the moment this function is moved into `Rhizomorph` — which is where it has
+    # to go to reach production.
+    return dynamic_k_prime_pattern(start_prime; max_k = max_k, initial_step = 2)
 end
 
 """

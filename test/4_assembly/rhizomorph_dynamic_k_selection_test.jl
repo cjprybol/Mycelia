@@ -72,7 +72,24 @@ Test.@testset "Rhizomorph Dynamic K Selection" begin
 
     Test.@testset "Prime progression stays deterministic" begin
         Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern(5; max_k = 11) == [5, 7, 11]
-        Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern(11; max_k = 31) == [11, 13, 17, 23, 31]
+        Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern(11; max_k = 31) ==
+                   [11, 13, 17, 23, 31]
+    end
+
+    Test.@testset "Keyword signature is the only one" begin
+        # A positional `(start_k, max_k, initial_step)` form used to exist in
+        # `src/development/intelligent-assembly.jl`. It was removed because the
+        # obvious way to wire that file's `error_optimized_k_sequence` into
+        # production is to move it into `Rhizomorph`, where a positional call
+        # would then silently pick up the wrong method — or, once the duplicate
+        # is gone, fail confusingly at the call site instead of here.
+        #
+        # This test pins the calling convention: if someone reintroduces a
+        # three-positional-argument method, this fails loudly and immediately.
+        Test.@test_throws MethodError Mycelia.Rhizomorph.dynamic_k_prime_pattern(11, 31, 2)
+
+        # The keyword defaults must also stay reachable with no arguments.
+        Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern() isa Vector{Int}
     end
 
     Test.@testset "BioSequence observations are accepted directly" begin
