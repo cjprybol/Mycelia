@@ -184,7 +184,13 @@ struct ViterbiCorrectionConfig{F <: Function}
             band_width::Union{Nothing, Int} = nothing,
             insertion_emission_logp::Union{Nothing, Function} = nothing
     ) where {F <: Function}
-        if error_rate <= 0.0 || error_rate >= 0.5
+        # `isnan` FIRST: NaN is neither `<= 0.0` nor `>= 0.5`, so a bounds-only
+        # check admits it. A NaN `error_rate` makes `delta_I`/`delta_D` NaN, which
+        # the indel kernel silently drops on its `isfinite(cand)` guard while the
+        # score-free frontier probe (which reads only the fractions) keeps counting
+        # those moves — a probe/decoder divergence with no error surfaced. Same
+        # shape as the `beam_score_margin` check below.
+        if isnan(error_rate) || error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
         end
         if insertion_fraction < 0.0 || deletion_fraction < 0.0 ||
@@ -1214,8 +1220,8 @@ function _top_b_transitions(transitions, b::Int)
     length(transitions) <= b && return transitions
     ordered = sort(
         transitions;
-        by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
-            string(t[:target_vertex])),
+        by = t -> (Rhizomorph._edge_transition_weight(t.edge_data),
+            string(t.target_vertex)),
         rev = true
     )
     return ordered[1:b]
@@ -1408,6 +1414,30 @@ function _viterbi_correct_observation(
     # Opt-in Tier-2 telemetry: per-depth Viterbi margin (best - 2nd-best surviving
     # log-prob). Empty + untouched unless config.record_position_gaps is set.
     position_gaps = Float64[]
+
+    # Perf (opt2, td-cppm/td-jbjd): hoist the loop-updated diagnostics counters
+    # (a mix — per-transition: generated_states/skipped_transitions; per-state:
+    # expanded_states/successor_bounded; per-depth: beam_pruned/margin_pruned/
+    # retained_states/cumulative_retained_states/max_retained_states/completed_steps)
+    # out of `diagnostics::Dict{Symbol,Any}` (every `Int` update there boxes a
+    # fresh `Any`) into unboxed `Int` locals, merged back into `diagnostics`
+    # once after the loop. Byte-identical: final dict values are unchanged, only
+    # the in-loop storage representation changes. `successor_bounded`,
+    # `beam_pruned`, and `margin_pruned` use lazy get-or-default in the original
+    # code (key absent from the dict until first triggered) — the post-loop
+    # write-back preserves that by only assigning when the local is nonzero
+    # (each is monotonically incremented and never decremented, so `> 0` means
+    # exactly "triggered at least once").
+    expanded_states = 0
+    generated_states = 0
+    skipped_transitions = 0
+    successor_bounded = 0
+    beam_pruned = 0
+    margin_pruned = 0
+    completed_steps = 0
+    retained_states::Int = diagnostics[:retained_states]
+    cumulative_retained_states::Int = diagnostics[:cumulative_retained_states]
+    max_retained_states::Int = diagnostics[:max_retained_states]
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1419,15 +1449,15 @@ function _viterbi_correct_observation(
 
         for (state, state_score) in active_scores
             current_vertex, current_strand = state
-            transitions = Rhizomorph._get_valid_transitions(graph, current_vertex, current_strand)
-            diagnostics[:expanded_states] += 1
+            transitions, total_out = Rhizomorph._valid_transitions_and_total(
+                graph, current_vertex, current_strand)
+            expanded_states += 1
             if isempty(transitions)
                 continue
             end
 
-            total_out = Rhizomorph._total_outgoing_weight(graph, current_vertex, current_strand)
             if !isfinite(total_out) || total_out <= 0.0
-                diagnostics[:skipped_transitions] += length(transitions)
+                skipped_transitions += length(transitions)
                 continue
             end
 
@@ -1437,17 +1467,16 @@ function _viterbi_correct_observation(
             # transition probabilities stay normalized against the FULL outgoing
             # mass, so a bounded expansion is a strict subset of the exact frontier.
             if length(transitions) > config.max_successors_per_state
-                diagnostics[:successor_bounded] = get(diagnostics, :successor_bounded, 0) +
-                                                  1
+                successor_bounded += 1
                 transitions = _top_b_transitions(transitions, config.max_successors_per_state)
             end
 
             for transition in transitions
-                next_vertex = convert(label_type, transition[:target_vertex])
-                next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
-                edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
+                next_vertex = convert(label_type, transition.target_vertex)
+                next_strand = Rhizomorph._normalize_strand(transition.target_strand)
+                edge_w = Rhizomorph._edge_transition_weight(transition.edge_data)
                 if edge_w <= 0.0
-                    diagnostics[:skipped_transitions] += 1
+                    skipped_transitions += 1
                     continue
                 end
                 transition_prob = edge_w / total_out
@@ -1461,12 +1490,12 @@ function _viterbi_correct_observation(
                 )
                 next_score = state_score + log(transition_prob) + emission_score
                 if !isfinite(next_score)
-                    diagnostics[:skipped_transitions] += 1
+                    skipped_transitions += 1
                     continue
                 end
 
                 next_state = (next_vertex, next_strand)
-                diagnostics[:generated_states] += 1
+                generated_states += 1
                 if !haskey(next_scores, next_state) || next_score > next_scores[next_state]
                     next_scores[next_state] = next_score
                     next_predecessors[next_state] = state
@@ -1496,7 +1525,7 @@ function _viterbi_correct_observation(
             # Keep the emission dict aligned to the width-beam survivors.
             next_emissions = Dict(
                 state => next_emissions[state] for state in keys(next_scores))
-            diagnostics[:beam_pruned] = get(diagnostics, :beam_pruned, 0) + 1
+            beam_pruned += 1
         end
 
         # Score-margin ("histogram") prune with emission exemption: keep a state
@@ -1515,7 +1544,7 @@ function _viterbi_correct_observation(
                 next_scores, next_predecessors, next_emissions,
                 depth_best, depth_best_emission, config.beam_score_margin)
             if length(next_scores) < pre_margin
-                diagnostics[:margin_pruned] = get(diagnostics, :margin_pruned, 0) + 1
+                margin_pruned += 1
             end
         end
 
@@ -1531,10 +1560,10 @@ function _viterbi_correct_observation(
         active_scores = next_scores
         active_emissions = next_emissions
         retained_count = length(active_scores)
-        diagnostics[:retained_states] = retained_count
-        diagnostics[:cumulative_retained_states] += retained_count
-        diagnostics[:max_retained_states] = max(diagnostics[:max_retained_states], retained_count)
-        diagnostics[:completed_steps] = depth
+        retained_states = retained_count
+        cumulative_retained_states += retained_count
+        max_retained_states = max(max_retained_states, retained_count)
+        completed_steps = depth
 
         if target_vertex === nothing
             best_state, best_score = _best_correction_state(active_scores)
@@ -1550,6 +1579,23 @@ function _viterbi_correct_observation(
             end
         end
     end
+
+    diagnostics[:expanded_states] = expanded_states
+    diagnostics[:generated_states] = generated_states
+    diagnostics[:skipped_transitions] = skipped_transitions
+    if successor_bounded > 0
+        diagnostics[:successor_bounded] = successor_bounded
+    end
+    if beam_pruned > 0
+        diagnostics[:beam_pruned] = beam_pruned
+    end
+    if margin_pruned > 0
+        diagnostics[:margin_pruned] = margin_pruned
+    end
+    diagnostics[:retained_states] = retained_states
+    diagnostics[:cumulative_retained_states] = cumulative_retained_states
+    diagnostics[:max_retained_states] = max_retained_states
+    diagnostics[:completed_steps] = completed_steps
 
     if target_vertex !== nothing && !isfinite(best_score)
         diagnostics[:reason] = :target_unreachable
@@ -1817,7 +1863,7 @@ function _indel_decode_successors!(
 )::_IndelDecodeSuccessorBatch{V} where {V}
     key = (vertex, strand)
     return get!(cache, key) do
-        transitions = Rhizomorph._get_valid_transitions(
+        transitions, total_out = Rhizomorph._valid_transitions_and_total(
             graph, vertex, strand)
         successors = Tuple{
             Tuple{V, Rhizomorph.StrandOrientation}, Float64
@@ -1827,18 +1873,16 @@ function _indel_decode_successors!(
                 successors, length(transitions))
         end
 
-        total_out = Rhizomorph._total_outgoing_weight(
-            graph, vertex, strand)
         if !isfinite(total_out) || total_out <= 0.0
             return _IndelDecodeSuccessorBatch{V}(
                 successors, length(transitions))
         end
         for transition in transitions
-            next_vertex = convert(V, transition[:target_vertex])
+            next_vertex = convert(V, transition.target_vertex)
             next_strand = Rhizomorph._normalize_strand(
-                transition[:target_strand])
+                transition.target_strand)
             edge_weight = Rhizomorph._edge_transition_weight(
-                transition[:edge_data])
+                transition.edge_data)
             edge_weight <= 0.0 && continue
             push!(
                 successors,
@@ -2033,6 +2077,66 @@ function _probe_indel_frontier(
             peak_frontier, completed_columns, :no_start_state)
     end
 
+    # Zero-probability parity with the scored kernel, SCOPED to the CONFIG-LEVEL
+    # gap-transition masses. `_viterbi_correct_observation_indel` never TRAVERSES a
+    # gap transition whose configured mass is zero: it drops the candidate on its
+    # `isfinite(cand)` guard because `T_MI = log(δ_I)`, `T_MD = log(δ_D)`,
+    # `T_II = log(γ_I)`, and `T_DD = log(γ_D)` are all `-Inf` at zero. The probe is
+    # score-free and cannot see those `-Inf`s, so it must reproduce the same
+    # reachability from the raw config or it would over-count frontier work and
+    # reject windows the decoder would have handled cheaply. The four flags below
+    # are exactly that restatement, and over THAT SCOPE — the config's own gap
+    # masses — they are complete: the constructor pins `error_rate ∈ (0, 0.5)` and
+    # rejects NaN, so `δ_I = error_rate·f_ins` and `δ_D = error_rate·f_del` vanish
+    # only through the fractions these flags already test — with one caveat the
+    # constructor's interval does NOT exclude: floating-point underflow. A
+    # denormal `error_rate` times a small fraction rounds to exactly zero with
+    # both operands strictly positive and `insertion_open` still `true`
+    # (`1e-320 * 1e-10 === 0.0`). Real error profiles bottom out around `1e-6`,
+    # so this is unreachable in practice rather than ruled out by construction.
+    # The constructor also pins
+    # `γ_I`/`γ_D ∈ [0, 1)`, so the return legs `T_IM = log1p(-γ_I)` /
+    # `T_DM = log1p(-γ_D)` cannot reach `-Inf` either. `*_open` additionally folds
+    # in the run caps (`max_insertion_run >= 1` / `deletion_max_run > 0`), matching
+    # the kernel's own `max_insertion_run >= 1` gate and `_relax_deletions!`'s
+    # `deletion_max_run <= 0` early return; `*_extend` caps the frontier at a single
+    # gap hop, matching the kernel's `-Inf` extend transitions.
+    #
+    # NOT covered — this is not a total parity claim. Per the successor comment
+    # above, the probe is deliberately WEIGHT- and EMISSION-blind, but the
+    # kernel's `isfinite` guards are not. They see three factors the probe has no
+    # access to:
+    #
+    #   * the per-edge weight `logE`, on EVERY arm that expands successors — the
+    #     M transition's `cand = base + logE + emission` as much as the M→D and
+    #     D→D relaxations;
+    #   * `emission_ins`, from the PUBLIC `config.insertion_emission_logp`
+    #     callback, on the insertion arm;
+    #   * `emission`, from the PUBLIC and REQUIRED `config.emission_logp` callback
+    #     (reached via `_call_viterbi_state_emission_logp`), on the M arm.
+    #
+    # Any of the three at `-Inf` drops a candidate the probe still expands: a
+    # zero-weight edge; a custom `insertion_emission_logp` returning `-Inf`, which
+    # disables the kernel's entire insertion block at its
+    # `max_insertion_run >= 1 && isfinite(emission_ins)` gate while `insertion_open`
+    # below stays `true`; or a custom `emission_logp` returning `-Inf`, which drops
+    # the M candidate at `isfinite(cand)` while the probe expands M successors
+    # unconditionally — its own comment says the topology probe does not inspect
+    # the observed emission. The M arm's prior-column guard `isfinite(base)` is a
+    # fourth gate the probe does not model. In all of these the probe counts
+    # frontier work the kernel skips and can reject a window the decoder would have
+    # handled cheaply.
+    #
+    # Both emission escapes are custom-callback-only: the DEFAULT emission cannot
+    # return `-Inf`, because `_viterbi_position_error_rate` clamps the per-position
+    # rate into `[eps, 1 - eps]`. That bounds the default profile, not the public
+    # API, which is why both are listed here rather than dismissed.
+    #
+    # Maintenance: (1) any new gap MOVE added to the kernel must add its zero-mass
+    # flag here in the same commit; (2) any new `isfinite(...)` gate on an EMISSION
+    # or WEIGHT factor (e.g. a future `isfinite(emission_del)` guarding the deletion
+    # arm) must either be mirrored here or be added to the NOT-covered list above —
+    # the flags below only track config-level masses and will not catch it.
     insertion_open = config.insertion_fraction > 0.0 &&
                      config.max_insertion_run > 0
     insertion_extend = config.insertion_extend_probability > 0.0

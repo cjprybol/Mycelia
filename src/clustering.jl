@@ -156,13 +156,15 @@ function mmseqs_easy_cluster(;
         cmd = Mycelia.command_string(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id $(min_seq_id) -c $(coverage) --cov-mode $(coverage_mode)`
         )
-        script = join([
-            "set -euo pipefail",
-            "if [ ! -f \"$(outfile)\" ]; then",
-            "  $(cmd)",
-            "fi",
-            "rm -rf \"$(tmp)\""
-        ], "\n")
+        script = join(
+            [
+                "set -euo pipefail",
+                "if [ ! -f \"$(outfile)\" ]; then",
+                "  $(cmd)",
+                "fi",
+                "rm -rf \"$(tmp)\""
+            ],
+            "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -595,10 +597,7 @@ function identify_optimal_number_of_clusters(
         error("Unknown plot_backend: $(plot_backend). Choose :cairomakie or :statsplots.")
     end
 
-    is_ci = get(ENV, "CI", "") == "true" || get(ENV, "GITHUB_ACTIONS", "") == "true"
-    if display_plot && !is_ci
-        display(fig)
-    end
+    present_figure(fig; name = "silhouette_scores", display_plot = display_plot)
 
     return (
         hcl = hcl,

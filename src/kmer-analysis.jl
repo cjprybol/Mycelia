@@ -442,9 +442,7 @@ function analyze_kmer_spectra(; out_directory, forward_reads = "", reverse_reads
     peak_index = Int(round(Statistics.median(peak_indices)))
 
     p = StatsPlots.vline!([X[peak_index]], label = "inferred sample coverage)")
-    if isinteractive()
-        display(p)
-    end
+    present_figure(p; name = "kmer_spectra_peak")
     StatsPlots.savefig(p, "$out_directory/peak-detected.png")
     StatsPlots.savefig(p, "$out_directory/peak-detected.svg")
 
@@ -868,7 +866,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
             if k != first(ks)
                 StatsPlots.plot!(p, legend = false)
             end
-            display(p)
+            present_figure(p; name = "dnamer_saturation_k$(k)")
             if !ismissing(outdir)
                 # StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
                 StatsPlots.savefig(p, joinpath(outdir, "$k.svg"))

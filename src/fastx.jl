@@ -1432,7 +1432,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Concatenate FASTQ/FASTA files (gz or plain) into a single output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
-Uses system `cat`/`zcat` (or `gzip -cd`) and optional `pigz`/`gzip` compression when
+Uses system `cat`/`gzip -cd` (with a `zcat` fallback) and optional `pigz`/`gzip` compression when
 the output path ends with `.gz`.
 """
 function concatenate_fastx(
@@ -1460,10 +1460,13 @@ function concatenate_fastx(
         open(tmp_out, "w") do out_io
             for f in inputs
                 cmd = if endswith(f, ".gz")
-                    if zcat_cmd !== nothing
-                        Cmd([zcat_cmd, f])
-                    else
+                    # Prefer portable `gzip -cd`: macOS ships BSD `zcat`, which
+                    # only decompresses `.Z` (it appends `.Z` and errors on a
+                    # `.gz` path), so `Sys.which("zcat")` finding it is a trap.
+                    if gzip_cmd !== nothing
                         Cmd([gzip_cmd, "-cd", f])
+                    else
+                        Cmd([zcat_cmd, f])
                     end
                 else
                     Cmd([cat_cmd, f])
@@ -2129,7 +2132,8 @@ function qc_filter_long_reads_chopper(;
 
         # Handle both compressed and uncompressed input files
         input_cmd = if endswith(in_fastq, ".gz")
-            `zcat $(in_fastq)`
+            # `gzip -cd` is portable; macOS BSD `zcat` errors on `.gz` input.
+            `gzip -cd $(in_fastq)`
         else
             `cat $(in_fastq)`
         end

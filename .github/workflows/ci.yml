@@ -99,3 +99,6 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run tests (4 threads)
+        run: julia --color=yes --project=. --threads=4 -e 'import Pkg; Pkg.test();'

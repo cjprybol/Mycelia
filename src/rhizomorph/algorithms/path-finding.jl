@@ -411,9 +411,12 @@ function probabilistic_walk_next(
         end
 
         transition_probs = _calculate_transition_probabilities(valid_transitions)
-        next_transition = _sample_transition(valid_transitions, transition_probs)
+        idx = _sample_transition_index(valid_transitions, transition_probs)
+        next_transition = valid_transitions[idx]
 
-        step_prob = next_transition[:probability]
+        # Record the NORMALIZED transition probability, not the raw edge weight, so
+        # cumulative_prob / GraphPath.total_probability stays a valid path probability.
+        step_prob = transition_probs[idx]
         cumulative_prob *= step_prob
 
         current_vertex = next_transition[:target_vertex]
@@ -582,13 +585,15 @@ function _calculate_transition_probabilities(transitions)
     return weights ./ total_weight
 end
 
-function _sample_transition(transitions, probabilities)
+# Draw the INDEX of a sampled transition so callers can recover the matching
+# normalized probability from their probability vector (see probabilistic_walk_next).
+function _sample_transition_index(transitions, probabilities)
     if isempty(transitions)
         return nothing
     end
 
     if length(transitions) == 1
-        return first(transitions)
+        return 1
     end
 
     r = Mycelia.Random.rand()
@@ -597,11 +602,16 @@ function _sample_transition(transitions, probabilities)
     for (i, prob) in enumerate(probabilities)
         cumulative += prob
         if r <= cumulative
-            return transitions[i]
+            return i
         end
     end
 
-    return last(transitions)
+    return length(transitions)
+end
+
+function _sample_transition(transitions, probabilities)
+    idx = _sample_transition_index(transitions, probabilities)
+    return idx === nothing ? nothing : transitions[idx]
 end
 
 """
@@ -796,6 +806,60 @@ function _total_outgoing_weight(
         end
     end
     return max(total, _KSP_MIN_WEIGHT)
+end
+
+struct _Transition{L, E}
+    target_vertex::L
+    target_strand::StrandOrientation
+    edge_data::E
+end
+
+# opt2: one outneighbors pass building the typed transition list AND summing the
+# outgoing weight - fuses _get_valid_transitions + _total_outgoing_weight. Sum is
+# over ALL strand-matched edges in outneighbors order (0.0-weight edges add 0.0,
+# so bit-identical to _total_outgoing_weight); a _Transition is pushed only for
+# weight > 0.0 (identical to the positive-weight skip in _maybe_push_transition!).
+# graph's Label/EdgeData type parameters (L, E) are pulled from the MetaGraph type
+# via dispatch so the returned vector is concretely typed Vector{_Transition{L,E}}
+# (fix round 1: `_Transition[]` was Vector{_Transition}, an abstract eltype that
+# would box every field access in the hot loop and defeat the typed struct).
+function _valid_transitions_and_total(
+        graph::MetaGraphsNext.MetaGraph{<:Any, <:Any, L, <:Any, E},
+        vertex_label,
+        strand
+) where {L, E}
+    total = 0.0
+    transitions = _Transition{L, E}[]
+    haskey(graph, vertex_label) || return transitions, max(total, _KSP_MIN_WEIGHT)
+    if Graphs.is_directed(graph.graph)
+        src_code = MetaGraphsNext.code_for(graph, vertex_label)
+        for dst_code in Graphs.outneighbors(graph.graph, src_code)
+            target_vertex = MetaGraphsNext.label_for(graph, dst_code)
+            edge_data = graph[vertex_label, target_vertex]
+            _normalize_strand(edge_data.src_strand) == strand || continue
+            w = _edge_transition_weight(edge_data)
+            total += w
+            w <= 0.0 && continue
+            push!(transitions,
+                _Transition(target_vertex, _normalize_strand(edge_data.dst_strand),
+                    edge_data))
+        end
+    else
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+                target_vertex = edge_labels[2]
+                edge_data = graph[vertex_label, target_vertex]
+                _normalize_strand(edge_data.src_strand) == strand || continue
+                w = _edge_transition_weight(edge_data)
+                total += w
+                w <= 0.0 && continue
+                push!(transitions,
+                    _Transition(target_vertex,
+                        _normalize_strand(edge_data.dst_strand), edge_data))
+            end
+        end
+    end
+    return transitions, max(total, _KSP_MIN_WEIGHT)
 end
 
 """

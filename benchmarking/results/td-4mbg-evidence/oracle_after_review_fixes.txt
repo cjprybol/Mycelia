@@ -1,0 +1,11 @@
+# Byte-identity oracle re-measurement after the review-fix commit (2e618d94)
+#
+# Run: LD_LIBRARY_PATH='' julia --project=. benchmarking/indel_frontier_fixed_toy_proof.jl
+# Why: the window-level kernel test changed from '== :substitution' to
+#      _INDEL_ADMITTED_WINDOW_SOURCES membership, which SELECTS behaviour.
+#      The oracle is an empirical check and must be re-measured, not inferred.
+
+  [gate] illumina_byte_identical_to_default_oracle: PASS — illumina_bytes=24062, oracle_bytes=24062
+  [gate] illumina_byte_identical_to_prewiring_oracle: PASS — sha256=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311, origin_master=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311
+  summary: 18/18 correctness gates PASS, 1/1 advisories within threshold (19 checks recorded)
+td-jt7r.2 fixed-toy/oracle proof: PASS (all correctness gates; the wall-clock check is advisory)

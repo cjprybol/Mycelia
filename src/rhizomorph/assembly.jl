@@ -1253,8 +1253,47 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             # whole-read, bounding a long read's decode to O(window) not
             # O(read_length) — the #375 long-read super-linear term.
             windowed_decode = true,
+            # Stage 2 soft-EM v2 (td-e70t) with the td-h6w9 support floor. E-step:
+            # each decoded read's COMPETING candidate paths (its own path plus a
+            # consensus alternative re-routed through the best-supported sibling
+            # branch) softmax-split one unit of responsibility by normalized-
+            # transition log-probability, and that responsibility is accumulated
+            # onto the edges each path traverses. M-step: the accumulated soft
+            # weights are registered onto the NEXT EM iteration's graph, so
+            # `compute_edge_weight` — and therefore the Viterbi transition score —
+            # sees the decayed weight and the next decode routes away from the
+            # error edge. The M-step also clamps any edge with at least
+            # `SOFT_EM_MIN_SUPPORT` backing observations to AT LEAST its raw
+            # coverage — the floor is `max(soft_weight, raw)`, a lower bound, so a
+            # soft weight ABOVE raw coverage is registered unchanged — meaning a
+            # real but SKEWED minority allele (a 10x branch in a 20x/10x bubble)
+            # cannot decay toward zero; only near-zero-support error edges are free
+            # to decay below their raw coverage in the transition score. The soft
+            # weight travels ONLY through `compute_edge_weight`; it is never
+            # CONSUMED by `clean_corrector_graph!`. The soft-weight scope is in
+            # fact still live while cleaning runs — the task-local scope is opened
+            # around a `clean_graph!` call — so the accurate statement is about
+            # consumption, not reach. Two independent facts make the decay
+            # invisible there: the tip and bubble predicates gate on RAW
+            # `_vertex_support` and never read edge weights at all, and cleaning
+            # operates on a `deepcopy` of the graph, whose fresh edge-data objects
+            # cannot match the identity-keyed `IdDict` the soft weights live in.
+            # Cleaning is a separate configured heuristic, not a downstream
+            # consumer of this decay.
             soft_em = true,
-            cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
+            # Stage 0 cheap correction (td-bjnt): a LINEAR k-mer-spectrum pass
+            # (BFC/Lighter/Bloocoo-style) run BEFORE the expensive per-read graph
+            # Viterbi. A run of WEAK k-mers flanked by SOLID k-mers on both sides
+            # AND no longer than `k` is the signature of a single-base
+            # substitution (a longer run has no base position shared by every
+            # k-mer in it, so one substitution cannot explain it); the fix is
+            # applied only when EXACTLY ONE (position, base) candidate makes the
+            # whole run solid. Zero-candidate (real low-coverage allele) and
+            # multi-candidate (balanced heterozygous site) runs are left untouched
+            # for the graph decode, so Stage 0 never collapses real variation. This
+            # is the main decode-VOLUME lever: clearing the easy errors cheaply
+            # reserves Viterbi for genuine bubble/repeat ambiguity.
+            cheap_correct = true,
             beam_width = nothing,  # size-aware auto-beam (bounded on huge reads)
             # graph_mode=:doublestrand (td-nt69): forcing :canonical was THE cause of
             # the :scalable quality gap. On a controlled 1kb fixture, flipping ONLY
@@ -1275,7 +1314,13 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             indel_schedule = :frontier_budgeted,
             band_width = 16,
             deletion_max_run = 3,
-            max_insertion_run = 3
+            max_insertion_run = 3,
+            # opt1 (td-vmiy / td-jbjd): :scalable defaults to the thread-safe
+            # parallel decode path whenever multiple threads are available — the
+            # per-window ordered capture + flat replay makes it byte-identical to
+            # serial (see the Task 1 soft-EM fix), so there is no quality cost to
+            # turning it on by default.
+            enable_parallel = Threads.nthreads() > 1
         )
     elseif strategy == :exhaustive
         return (
@@ -1284,8 +1329,14 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             skip_solid = false,
             hard_window = false,
             windowed_decode = false,
+            # Exact-ML tier: soft-EM is OFF, so edge weights stay raw observed
+            # counts and no accumulator is allocated or registered — the decode is
+            # a byte-identical passthrough of the pre-soft-EM behavior.
             soft_em = false,
-            cheap_correct = false,  # exact-ML tier: no cheap pre-correction
+            # No Stage 0 pre-correction: every read reaches the graph decode, so
+            # the tier's exact-ML claim covers the whole read set rather than only
+            # the residue the cheap pass left behind.
+            cheap_correct = false,
             beam_width = typemax(Int),  # exact ML decode
             # nothing ⇒ derive the corrector graph_mode from config.graph_mode below,
             # keeping :exhaustive a byte-identical passthrough of prior behavior.
@@ -1298,7 +1349,10 @@ function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
             indel_schedule = :unrestricted,
             band_width = nothing,
             deletion_max_run = 10,
-            max_insertion_run = 10
+            max_insertion_run = 10,
+            # :exhaustive stays serial/exact — it is the small-scale, maximum-
+            # sensitivity oracle tier and is never opted into the parallel decode.
+            enable_parallel = false
         )
     else
         error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
@@ -1524,6 +1578,7 @@ function _run_stage1_correction(
             indel_params = indel_params,
             indel_schedule = knobs.indel_schedule,
             substitution_error_rate = substitution_error_rate,
+            enable_parallel = knobs.enable_parallel,
             verbose = false,
             enable_checkpointing = false,
             output_dir = corrector_output_dir,
@@ -1786,6 +1841,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # stamped value is "v2-competing-paths-floor" (or false on
         # :exhaustive), never a bare `true`.
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        # opt1 actuation counter surfaced end-to-end: total parallel decode batches
+        # (>0 proves the parallel path ran; 0 on serial/exhaustive).
+        assembly.assembly_stats["parallel_decode_batches"] =
+            get(_corr_meta, :parallel_decode_batches, 0)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])
         # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode
