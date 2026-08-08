@@ -52,6 +52,31 @@ function combine_phred_scores(scores::Vector{UInt8})
     return UInt8(clamp(total, 0, 255))
 end
 
+# ASSUMPTION NOTICE (audit td-8zle; open question td-2tg8).
+#
+# Summing Phred is `aggregate_quality_scores_independence` from
+# `planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`. Summing in log space is
+# multiplying error probabilities, which is valid ONLY if the observations are
+# independent.
+#
+# That assumption is load-bearing and unvalidated here. Correlated error sources —
+# systematic/technical artifacts, strand, tile/flowcell, PCR duplicates, homopolymer
+# context — make repeated observations less informative than independent ones, so this
+# OVERSTATES confidence, and it does so fastest exactly where artifacts recur, which is
+# the case quality-aware assembly exists to catch. The 0-255 clamp hides how quickly
+# that saturates.
+#
+# The design anticipates this and specifies an alternative,
+# `aggregate_quality_scores_conservative` — P(all correct) = prod(P_i), then
+# Q = -10*log10(1 - P) — for when observations may share systematic errors. That
+# alternative has NO implementation anywhere in `src/`; it exists only in the design
+# document. Choosing between the two (or a middle model: capped independence,
+# effective-sample-size shrinkage, or a per-position beta-binomial posterior) is
+# td-2tg8, and it needs empirical calibration evidence, not a code change.
+#
+# Until then: this is the documented default, and anything reporting a joint quality
+# should say which model produced it.
+
 """
     decode_quality_scores(scores::AbstractVector{UInt8})
 
@@ -82,6 +107,18 @@ end
     mean_path_quality(graph, path, dataset_id::String)
 
 Compute the mean joint quality score across a path of vertex labels.
+
+!!! note "Unused by the core assembly paths (audit td-8zle, 2026-08)"
+    No callers in `src/` and no test coverage. Kept as API rather than deleted, but
+    it is NOT evidence that path quality informs any assembly decision — nothing
+    calls it.
+
+    Note also the double average: this means the joint quality across positions,
+    then across path vertices, so a single low-quality vertex is diluted by the
+    path's length. A path-level gate would want the WEAKEST vertex, mirroring
+    `find_high_quality_sequences` (variable-length/fastq-graphs.jl:405) and
+    `_qualmer_joint_confidence` (rhizomorph/assembly.jl), both of which require
+    every position to clear the floor.
 """
 function mean_path_quality(graph::MetaGraphsNext.MetaGraph, path, dataset_id::String)
     scores = Float64[]
@@ -208,6 +245,20 @@ Get the minimum quality score at each position from all observations.
 
 Useful for conservative quality thresholding.
 
+!!! note "Unused by the core assembly paths (audit td-8zle, 2026-08)"
+    The only caller in `src/` is `filter_by_quality` below, which is itself unused,
+    so this is transitively dead in production.
+
+    Read the semantics carefully before wiring it up: this takes the minimum ACROSS
+    OBSERVATIONS per position, which DISCARDS the compounding that
+    `get_vertex_joint_quality` provides. Under the design's model
+    (`planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`) repeated
+    high-quality observation of a position should INCREASE confidence; a per-position
+    minimum instead lets one bad read veto a hundred good ones. That is the
+    conservative posture, and it may be the right one if observations are correlated
+    (see td-2tg8) — but it is a different model from the documented default, not an
+    implementation of it.
+
 # Arguments
 - `vertex_data`: QualmerVertexData containing quality evidence
 - `dataset_id::String`: Dataset identifier
@@ -267,6 +318,21 @@ least one observation from the specified dataset.
 # Get high-quality k-mers (Q30+)
 high_qual_kmers = filter_by_quality(graph, 30, "dataset_01")
 ```
+
+!!! note "Unused by the core assembly paths (audit td-8zle, 2026-08)"
+    No callers in `src/`; exercised only by
+    `test/4_assembly/quality_functions_test.jl` and
+    `test/3_feature_extraction_kmer/qualmer-analysis.jl`.
+
+    This is the natural quality gate for graph traversal, and its absence is
+    precisely why the greedy qualmer arm was quality-blind (td-4e19d): a
+    quality-filtering primitive existed, was tested, and was never called, so the
+    arm's traversal stayed count-based while the framework was described as
+    Phred-weighted. The opt-in `traversal_weighting = :quality` gate in
+    `rhizomorph/assembly.jl` now does this job, but via
+    `get_vertex_joint_quality` rather than this function, because it wants the
+    compounding model rather than the per-position minimum this inherits from
+    `get_vertex_min_quality`.
 """
 function filter_by_quality(graph, min_phred::Int, dataset_id::String)
     filtered_kmers = []

@@ -1,0 +1,13 @@
+stage	chemistry	coverage	seed	condition	n_reads	reads_changed_by_decoder	reads_differing_from_oracle	n_decode_failures	n_empty_decodes	stage_b_trustworthy
+B_decision	illumina	10	42	oracle	360	0	0	0	0	true
+B_decision	illumina	10	42	constant40	360	0	0	0	0	true
+B_decision	illumina	10	42	constant02	360	1	1	0	0	true
+B_decision	illumina	10	42	antioracle	360	0	0	0	0	true
+B_decision	pacbio	10	42	oracle	27	0	0	0	0	true
+B_decision	pacbio	10	42	constant40	27	0	0	0	0	true
+B_decision	pacbio	10	42	constant02	27	24	24	0	0	true
+B_decision	pacbio	10	42	antioracle	27	0	0	0	0	true
+B_decision	ont	10	42	oracle	18	0	0	0	0	true
+B_decision	ont	10	42	constant40	18	0	0	0	0	true
+B_decision	ont	10	42	constant02	18	18	18	0	0	true
+B_decision	ont	10	42	antioracle	18	18	18	0	0	true
