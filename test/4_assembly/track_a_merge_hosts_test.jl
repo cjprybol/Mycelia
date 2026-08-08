@@ -12,8 +12,7 @@
 #   * per-cell host provenance is recorded
 #   * re-running is idempotent, and a previously merged cell that disagrees with
 #     its source is a collision rather than an overwrite
-#   * the expected-matrix constants, the cell-id format, and the ROW SCHEMA
-#     mirrored from the harness have not drifted
+#   * the expected-matrix constants mirrored from the harness have not drifted
 #
 # Dependency-free apart from JSON / SHA / DataFrames / CSV (all direct Mycelia
 # deps that load without importing Mycelia). No network, no QUAST, no assembly.
@@ -39,17 +38,18 @@ function _tam_throws_with(f, needles::Vector{String})
     return ""
 end
 
-# Parse `const ROW_KEYS = (...)` out of the harness SOURCE and return the field names
-# in declaration order.
-#
-# TRACK_A_ROW_KEYS is a hand-maintained mirror of that tuple and `merged_tables`
-# projects every cell onto it, so a column the harness appends but the mirror omits
-# vanishes from the merged table while the per-cell JSON still carries it. Asserting
-# `DataFrames.names(results_df) == TRACK_A_ROW_KEYS` cannot catch that — it compares
-# the mirror with itself. This reads the other side of the mirror.
+# Extract ROW_KEYS from the harness source by PAREN-DEPTH counting (from #448), with
+# the exactly-one-occurrence requirement this file's other guards use. Depth counting
+# is the better extractor — it cannot truncate on a `)` inside the literal the way a
+# lazy regex can. Requiring a single occurrence is the better anchor — `match` returns
+# the FIRST hit, so a `#= =#`-commented old copy above a drifted live const otherwise
+# reports agreement. Combining them is strictly stronger than either alone.
 function _tam_harness_row_keys(harness::AbstractString)
-    m = match(r"const\s+ROW_KEYS\s*=\s*\(", harness)
-    m === nothing && error("no `const ROW_KEYS = (` in the harness source")
+    opens = collect(eachmatch(r"const\s+ROW_KEYS\s*=\s*\(", harness))
+    length(opens) == 1 ||
+        error("expected exactly 1 `const ROW_KEYS = (` in the harness source, found " *
+              "$(length(opens)) — a shadowing copy makes the comparison below vacuous")
+    m = opens[1]
     start = m.offset + ncodeunits(m.match)
     depth = 1
     stop = 0
@@ -77,8 +77,7 @@ function _tam_cell(; organism = "Lambda", technology = "illumina", coverage = 30
         seed = 42, arm = "qualmer", accession = "NC_001416", k = 31,
         n_reads = 1000, n_contigs = 5, NGA50 = 1316.0, misassemblies = 0.0,
         genome_fraction = 98.5, duplication_ratio = 1.0, largest_contig = 48000,
-        wall_seconds = 12.5, peak_rss_bytes = 1_000_000,
-        rss_baseline_bytes = 900_000, peak_rss_method = "sampled", status = "ok")
+        wall_seconds = 12.5, peak_rss_bytes = 1_000_000, status = "ok")
     return Dict{String, Any}(
         "organism" => organism, "accession" => accession, "technology" => technology,
         "coverage" => coverage, "seed" => seed, "decoder_arm" => arm, "k" => k,
@@ -86,8 +85,7 @@ function _tam_cell(; organism = "Lambda", technology = "illumina", coverage = 30
         "misassemblies" => misassemblies, "genome_fraction" => genome_fraction,
         "duplication_ratio" => duplication_ratio, "largest_contig" => largest_contig,
         "wall_seconds" => wall_seconds, "peak_rss_bytes" => peak_rss_bytes,
-        "rss_baseline_bytes" => rss_baseline_bytes,
-        "peak_rss_method" => peak_rss_method, "status" => status)
+        "status" => status)
 end
 
 function _tam_write_cell(root, cell_id, cell)
@@ -101,32 +99,71 @@ end
 
 Test.@testset "Track A cross-host merge (td-bblmi)" begin
     Test.@testset "expected matrix mirrors the harness (drift guard)" begin
-        # These constants are DUPLICATED from track_a_baseline_benchmark.jl. The
-        # harness now guards its driver with `if abspath(PROGRAM_FILE) == @__FILE__`,
-        # so it CAN be included — but it imports Mycelia (this merge needs none of
-        # it) and defines top-level consts that collide in runtests.jl's shared Main,
-        # so the duplication stays. If the harness changes its matrix or its cell-id
-        # format, "missing" would be computed against the wrong set — so assert the
-        # mirror against the harness SOURCE rather than trusting the duplication.
+        # These constants are DUPLICATED from track_a_baseline_benchmark.jl, which
+        # cannot be included (it runs the benchmark at include time). If the
+        # harness changes its matrix or its cell-id format, "missing" would be
+        # computed against the wrong set — so assert the mirror against the
+        # harness SOURCE rather than trusting the duplication.
         harness = read(
             joinpath(@__DIR__, "..", "..", "benchmarking",
                 "track_a_baseline_benchmark.jl"), String)
+        # The harness now builds ids via `cell_id_for`, which appends `__k$(k)` only
+        # for a non-default k so the pre---k trees stay resumable. Assert BOTH branches
+        # of that expression, so this guard still fires if either the base format or the
+        # k rule drifts away from track_a_cell_id above.
         Test.@test occursin(
-            "cell_id = \"\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)\"", harness)
-        # The harness builds ids via `cell_id_for`, which appends `__k$(k)` only for a
-        # non-default k so the pre-`--k` trees stay resumable. Greping the base literal
-        # alone PASSES WITHOUT TESTING THAT RULE, so assert the k branch and the call
-        # site too — the guard must fire if either half drifts from track_a_cell_id.
+            "\"\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)\"", harness)
         Test.@test occursin(
-            "return k == 31 ? cell_id : \"\$(cell_id)__k\$(k)\"", harness)
+            "\"\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)__k\$(k)\"", harness)
         Test.@test occursin("cell_id = cell_id_for(org, tech, cov, seed, arm)", harness)
-        # And the mirror itself holds for a non-default k, in both directions.
+
+        # The ROW SCHEMA is mirrored too, and it silently fell two columns behind for
+        # four review rounds: peak_rss_method and rss_baseline_bytes were added to the
+        # harness so a reader can tell a sampled per-cell peak from a high-water delta,
+        # and the merge kept emitting the 17-column schema — so the cross-host table,
+        # the ONE table where the two hosts' methods actually mix, carried the value
+        # and dropped the provenance that makes it interpretable.
+        #
+        # Nothing caught it because the only assertions on this constant compare the
+        # merge's OUTPUT against the merge's OWN constant (below, and again in the
+        # merged-table testsets). That is self-consistent by construction: it is a
+        # tautology, not a drift guard. This compares against the harness instead.
+        schema_ok, harness_row_keys = track_a_row_keys_match_harness()
+        Test.@test schema_ok
+        Test.@test harness_row_keys == TRACK_A_ROW_KEYS
+        # Fails closed: an unreadable or unparseable harness must not read as agreement.
+        Test.@test !isempty(harness_row_keys)
+        # Absent provenance values must land as the HARNESS sentinels, not `missing`.
+        # Mirroring the column NAMES was not enough: `get(cell, k, missing)` filled
+        # them with `missing` for every pre-schema checkpoint (all 432 on disk), so
+        # the merged table carried the names and no usable values, and the operation
+        # the harness docstring prescribes — filter on peak_rss_method before
+        # aggregating — threw ArgumentError on Missing. _tam_cell omits both keys, so
+        # every other merge test runs this exact path and asserts nothing about it.
+        # Compare against the HARNESS SOURCE, not against the literals written into
+        # the constant in the same commit. The first version of these two assertions
+        # did the latter, which cannot fail: drifting the harness sentinel to
+        # "not-recorded"/-2 left this suite fully green while the two files disagreed
+        # about exactly the columns the mirror exists to keep in step.
+        defaults_ok, harness_defaults = track_a_absent_defaults_match_harness()
+        Test.@test defaults_ok
+        Test.@test harness_defaults == TRACK_A_ABSENT_DEFAULTS
+        # Fails closed: an unreadable, unparseable, absent or DUPLICATED definition
+        # must not read as agreement. Duplicated matters because `match` takes the
+        # first hit — a `#= … =#`-commented old copy above a drifted live const, the
+        # idiomatic way to comment out a multi-line Julia const, reported ok = true.
+        Test.@test !isempty(harness_defaults)
+        Test.@test length(harness_defaults) == length(TRACK_A_ABSENT_DEFAULTS)
+
+        # The two columns whose absence was the defect.
+        Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
+        Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
+
+        # And the mirror holds for a non-default k in both directions.
         Test.@test track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 19) ==
                    "T4__pacbio__50x__seed123__kmer__k19"
         Test.@test track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 31) ==
                    track_a_cell_id("T4", "pacbio", 50, 123, "kmer")
-        Test.@test track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 19) !=
-                   track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 31)
         for org in TRACK_A_ORGANISMS
             Test.@test occursin("(\"$org\", ", harness)
         end
@@ -164,13 +201,10 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         Test.@test harness_keys[1] == "organism"
         Test.@test harness_keys[end] == "status"
         # The assertion that would have caught the dropped provenance columns.
-        # `merged_tables` projects every cell onto TRACK_A_ROW_KEYS, so a key the
-        # harness writes and this list omits is dropped from track_a_results.tsv
-        # silently — the per-cell JSON keeps it, the aggregate does not.
         Test.@test harness_keys == TRACK_A_ROW_KEYS
-        # Called out by name because they are the pair whose loss is unrecoverable
-        # rather than cosmetic: the hosts measure peak RSS by different methods by
-        # construction, and `peak_rss_method` is the only thing separating them.
+        # Named because their loss is unrecoverable rather than cosmetic: the hosts
+        # measure peak RSS by different methods by construction, and peak_rss_method
+        # is the only thing separating them.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
         Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
     end
@@ -389,17 +423,13 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         mktempdir() do dir
             a = joinpath(dir, "lovelace")
             b = joinpath(dir, "lrc")
-            # Lovelace: QUAST failing (largest_contig 0 despite contigs), and no
-            # SLURM wrapper, so its RSS column is the broken high-water delta.
+            # Lovelace: QUAST failing (largest_contig 0 despite contigs).
             _tam_write_cell(a, "T4__illumina__30x__seed42__qualmer",
                 _tam_cell(organism = "T4", n_contigs = 12, largest_contig = 0,
-                    NGA50 = 0.0, genome_fraction = 0.0,
-                    peak_rss_method = "highwater-delta", rss_baseline_bytes = -1))
-            # Lawrencium: QUAST working, and JULIA_NUM_THREADS exported by the sbatch
-            # wrapper, so its RSS column is a real sampled peak.
+                    NGA50 = 0.0, genome_fraction = 0.0))
+            # Lawrencium: QUAST working.
             _tam_write_cell(b, "phi29__illumina__30x__seed42__qualmer",
-                _tam_cell(organism = "phi29", largest_contig = 19_000,
-                    peak_rss_method = "sampled"))
+                _tam_cell(organism = "phi29", largest_contig = 19_000))
             ids = ["T4__illumina__30x__seed42__qualmer",
                 "phi29__illumina__30x__seed42__qualmer"]
             result = merge_hosts(["lovelace" => a, "lrc" => b]; expected_ids = ids)
@@ -408,21 +438,21 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             # Drop-in compatible with the harness's own aggregate.
             Test.@test DataFrames.names(results_df) == TRACK_A_ROW_KEYS
             Test.@test DataFrames.nrow(results_df) == 2
+            # _tam_cell omits both provenance keys, i.e. the shape of all 432
+            # checkpoints on disk. They must merge to the HARNESS sentinels, not
+            # `missing`: with `missing` the merged table carried the column names and
+            # no usable values, and the operation the harness docstring prescribes —
+            # "always filter on peak_rss_method before aggregating" — threw
+            # ArgumentError on Missing. Column names alone were not the fix.
+            Test.@test all(results_df.peak_rss_method .== "unknown")
+            Test.@test all(results_df.rss_baseline_bytes .== -1)
+            # The prescribed filter must actually run on the merged table.
+            Test.@test DataFrames.nrow(
+                results_df[results_df.peak_rss_method .== "unknown", :]) == 2
             Test.@test "host" in DataFrames.names(prov_df)
             Test.@test "quast_evidence" in DataFrames.names(prov_df)
             Test.@test "source_digest" in DataFrames.names(prov_df)
             Test.@test Set(prov_df.host) == Set(["lovelace", "lrc"])
-            # The peak-RSS provenance must SURVIVE the merge. The two hosts measure
-            # peak_rss_bytes by different methods by construction, and the harness
-            # docstring tells readers to filter on peak_rss_method before aggregating
-            # — unsatisfiable if the merged table drops the column.
-            Test.@test "peak_rss_method" in DataFrames.names(results_df)
-            Test.@test "rss_baseline_bytes" in DataFrames.names(results_df)
-            Test.@test Set(results_df.peak_rss_method) ==
-                       Set(["highwater-delta", "sampled"])
-            Test.@test Set(prov_df.peak_rss_method) ==
-                       Set(["highwater-delta", "sampled"])
-            Test.@test Set(results_df.rss_baseline_bytes) == Set([-1, 900_000])
 
             # This is the item-1 <-> item-3 bridge: the merged matrix mixes metric
             # definitions BY HOST, and the guard must see it.
@@ -524,7 +554,8 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             Test.@test :unreachable_source in [p.kind for p in problems]
             # NOT waivable: --allow-incomplete says the matrix is partial, not that
             # a requested source may vanish.
-            code2, problems2 = merge_exit_status(result;
+            code2,
+            problems2 = merge_exit_status(result;
                 allow_incomplete = true, allow_collisions = true)
             Test.@test code2 == 1
             Test.@test any(p -> p.kind == :unreachable_source && p.fatal, problems2)
@@ -631,35 +662,58 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             result = merge_hosts(["h" => host]; expected_ids = [cid])
             path = write_merge_report(joinpath(dir, "r.md"), result; output_dir = dir)
             text = read(path, String)
-            # The class carries a suffix, so a bare-name lookup rendered 0 forever.
-            row = first(filter(l -> startswith(l, "| h |"), split(text, "\n")))
-            Test.@test occursin("1", row)
-            Test.@test !occursin("| h | 0 | 0 | 0 | 0 | 0 |", row)
+            lines = split(text, "\n")
+            # The report emits TWO tables keyed by host: the Sources table near the
+            # top and the quast_evidence x host evidence table under "## Metric
+            # provenance". `first(filter(...))` over the whole report selects the
+            # SOURCES row, so the evidence table — the thing this testset is named
+            # for — was never examined, and both assertions were satisfied trivially
+            # by the sources row (it contains "1" from the checkpoint count and from
+            # the tmp path, and its different arity makes the `!occursin` vacuous).
+            # Anchor on the section header instead, so the row is selected by
+            # position in the report rather than by a pattern both tables match.
+            prov_idx = findfirst(l -> startswith(l, "## Metric provenance"), lines)
+            Test.@test prov_idx !== nothing
+            row = first(filter(l -> startswith(l, "| h |"), lines[(prov_idx + 1):end]))
+            # Assert the FULL row, not `occursin("1", row)`. The class carries a
+            # suffix (`malformed:unreadable(largest_contig)`), so a bare-name lookup
+            # rendered the malformed column 0 forever; the count must land in the
+            # LAST column (`malformed` is last in EVIDENCE_CLASSES) and in no other.
+            # A substring check cannot tell those apart — inverting the bucketing so
+            # a malformed cell is counted as `quast:scored` left the old assertions
+            # green while the report told an operator the opposite.
+            Test.@test row == "| h | 0 | 0 | 0 | 0 | 1 |"
         end
     end
 
     Test.@testset "CR: nested values canonicalize stably" begin
         # Falling through to `string(v)` rendered a nested object in Dict iteration
         # order, so two hosts with EQUAL content could digest differently.
-        a = _tam_cell(); a["extra"] = Dict("z" => 1, "a" => 2, "m" => [1, 2, 3])
-        b = _tam_cell(); b["extra"] = Dict("a" => 2, "m" => [1, 2, 3], "z" => 1)
+        a = _tam_cell();
+        a["extra"] = Dict("z" => 1, "a" => 2, "m" => [1, 2, 3])
+        b = _tam_cell();
+        b["extra"] = Dict("a" => 2, "m" => [1, 2, 3], "z" => 1)
         Test.@test cell_digest(a) == cell_digest(b)
         Test.@test isempty(differing_fields(a, b))
-        c = _tam_cell(); c["extra"] = Dict("z" => 9, "a" => 2, "m" => [1, 2, 3])
+        c = _tam_cell();
+        c["extra"] = Dict("z" => 9, "a" => 2, "m" => [1, 2, 3])
         Test.@test cell_digest(a) != cell_digest(c)
     end
 
     Test.@testset "CR: a non-numeric shard flag is usage error, not a stacktrace" begin
         saved = copy(ARGS)
         try
-            empty!(ARGS); append!(ARGS, ["--coverages", "10,notanumber"])
+            empty!(ARGS);
+            append!(ARGS, ["--coverages", "10,notanumber"])
             Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) === nothing
-            empty!(ARGS); append!(ARGS, ["--coverages", "10,30"])
+            empty!(ARGS);
+            append!(ARGS, ["--coverages", "10,30"])
             Test.@test _parse_int_flag("--coverages", TRACK_A_COVERAGES) == [10, 30]
             empty!(ARGS)
             Test.@test _parse_int_flag("--seeds", TRACK_A_SEEDS) == TRACK_A_SEEDS
         finally
-            empty!(ARGS); append!(ARGS, saved)
+            empty!(ARGS);
+            append!(ARGS, saved)
         end
     end
 end
