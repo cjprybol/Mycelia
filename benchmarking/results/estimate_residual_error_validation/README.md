@@ -169,3 +169,32 @@ sound.
   sequence, which is the friendliest possible case for a k-mer spectrum method.
 
 Each of these can only make the estimator behave worse than measured here.
+
+## What this harness STRUCTURALLY CANNOT test
+
+Distinct from the list above, which is what this run did not cover. The following
+is out of reach at any point in the grid, because of how the harness is built —
+so absence of a finding here is not evidence of absence.
+
+**k-mer space saturation.** The 13-mer space is 4^13 = 67,108,864. Against a
+20 kb reference, the reads occupy at most ~4% of it, so every cell in this grid
+runs in the unsaturated regime. On real-sized input that is not true: E. coli at
+5 Mb and 30x with 10% error needs roughly 200M distinct 13-mers, about 3x the
+whole space. Unrelated loci must then share k-mers, counts inflate,
+`solid_fraction` rises toward 1, and the estimate collapses.
+
+A scale-model probe confirms the mechanism — holding the genome at 20 kb and
+shrinking the k-mer space by lowering `k_ref` reproduces the saturation ratio
+cheaply. At true e = 0.05, C = 30: saturation 0.0042 at k_ref=13 gives 0.0379
+(matching this grid), but saturation 0.55 at k_ref=9 gives 0.0146, and saturation
+>= 0.95 at k_ref <= 7 returns **exactly 0.0** for reads carrying 5% error. That
+is a silent, total failure, and `e = 0` fed to `k = 1/e - 1` is a division by
+zero.
+
+**This is a larger defect than the coverage bias documented above, and no grid
+this harness can run would have revealed it.** Enlarging the reference to a
+realistic genome is the fix, and it moves the harness out of laptop scope.
+
+The general lesson for reading any validation: "what was not tested" and "what
+the design cannot test" are different claims, and only the second one is a
+property of the instrument.
