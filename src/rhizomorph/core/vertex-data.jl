@@ -434,9 +434,11 @@ mutable struct UltralightQualityKmerVertexData{T}
     const dataset_counts::Dict{String, Int}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}  # UNCLAMPED exact-mean accumulator (td-n8ax)
 
     function UltralightQualityKmerVertexData(kmer::T) where {T}
-        new{T}(kmer, 0, Dict{String, Int}(), Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+        new{T}(kmer, 0, Dict{String, Int}(), Vector{UInt8}(),
+            Dict{String, Vector{UInt8}}(), Dict{String, Vector{UInt32}}())
     end
 end
 
@@ -461,10 +463,11 @@ mutable struct UltralightQualityBioSequenceVertexData{T}
     const dataset_counts::Dict{String, Int}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}  # UNCLAMPED exact-mean accumulator (td-n8ax)
 
     function UltralightQualityBioSequenceVertexData(sequence::T) where {T}
         new{T}(sequence, 0, Dict{String, Int}(),
-            Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+            Vector{UInt8}(), Dict{String, Vector{UInt8}}(), Dict{String, Vector{UInt32}}())
     end
 end
 
@@ -494,6 +497,11 @@ tracking from lightweight mode with quality aggregation.
 - `dataset_observations::Dict{String, Set{String}}`: Per-dataset unique observation IDs
 - `joint_quality::Vector{UInt8}`: Per-position joint Phred scores
 - `dataset_joint_quality::Dict{String, Vector{UInt8}}`: Per-dataset joint quality
+- `dataset_quality_sum::Dict{String, Vector{UInt32}}`: Per-dataset UNCLAMPED running
+  sum of decoded Phred per position. Unlike `dataset_joint_quality` (a UInt8 sum
+  clamped at 255), this never saturates, so `get_vertex_mean_quality` can recover
+  the exact per-position mean (`sum ./ dataset_counts`) that the corrector needs —
+  making aggregate storage corrector-compatible (td-n8ax).
 """
 mutable struct LightweightQualityKmerVertexData{T}
     const Kmer::T
@@ -502,10 +510,12 @@ mutable struct LightweightQualityKmerVertexData{T}
     const dataset_observations::Dict{String, Set{String}}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}
 
     function LightweightQualityKmerVertexData(kmer::T) where {T}
         new{T}(kmer, 0, Dict{String, Int}(), Dict{String, Set{String}}(),
-            Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+            Vector{UInt8}(), Dict{String, Vector{UInt8}}(),
+            Dict{String, Vector{UInt32}}())
     end
 end
 
@@ -524,6 +534,8 @@ Lightweight quality-aware vertex data for variable-length BioSequence graphs.
 - `dataset_observations::Dict{String, Set{String}}`: Per-dataset unique observation IDs
 - `joint_quality::Vector{UInt8}`: Per-position joint Phred scores
 - `dataset_joint_quality::Dict{String, Vector{UInt8}}`: Per-dataset joint quality
+- `dataset_quality_sum::Dict{String, Vector{UInt32}}`: Per-dataset UNCLAMPED running
+  sum of decoded Phred per position (exact per-position mean via `sum ./ counts`).
 """
 mutable struct LightweightQualityBioSequenceVertexData{T}
     const sequence::T
@@ -532,10 +544,12 @@ mutable struct LightweightQualityBioSequenceVertexData{T}
     const dataset_observations::Dict{String, Set{String}}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}
 
     function LightweightQualityBioSequenceVertexData(sequence::T) where {T}
         new{T}(sequence, 0, Dict{String, Int}(), Dict{String, Set{String}}(),
-            Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+            Vector{UInt8}(), Dict{String, Vector{UInt8}}(),
+            Dict{String, Vector{UInt32}}())
     end
 end
 

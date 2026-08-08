@@ -494,6 +494,24 @@ function _merge_quality_vector!(dest::Vector{UInt8}, src::Vector{UInt8})
     end
 end
 
+# UNCLAMPED per-position sum merge for the exact-mean accumulator
+# (dataset_quality_sum, td-n8ax). Must NOT saturate at any realistic sequencing
+# depth: UInt32 holds a per-position summed Phred up to ~4.29e9, i.e. ~1e8
+# observations at Q40 — far beyond WGS coverage. (A checked/UInt64 widening is a
+# follow-up if ultra-deep amplicon/metagenomic single-kmer depth ever approaches
+# that.) The wide sum is what lets get_vertex_mean_quality recover the exact mean.
+function _merge_quality_vector!(dest::Vector{UInt32}, src::Vector{UInt32})
+    if !isempty(src)
+        if isempty(dest)
+            append!(dest, src)
+        else
+            for i in eachindex(src)
+                dest[i] += src[i]
+            end
+        end
+    end
+end
+
 function _create_reduced_vertex(kmer, memory_profile::Symbol)
     if memory_profile == :ultralight
         return UltralightKmerVertexData(kmer)

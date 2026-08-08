@@ -982,6 +982,7 @@ function _iterative_checkpoint_configuration(;
         n_k_rungs::Union{Nothing, Int},
         graph_mode::Symbol,
         qualmer_prefilter_min_count::Int,
+        qualmer_memory_profile::Symbol,
         enable_parallel::Bool,
         # opt4 (td-jbjd, review fix C2): captured for exact-equality resume
         # validation, same as every other behavior-affecting kwarg below --
@@ -1018,6 +1019,7 @@ function _iterative_checkpoint_configuration(;
         "n_k_rungs" => n_k_rungs,
         "graph_mode" => string(graph_mode),
         "qualmer_prefilter_min_count" => qualmer_prefilter_min_count,
+        "qualmer_memory_profile" => string(qualmer_memory_profile),
         "enable_parallel" => enable_parallel,
         "skip_frozen_reads" => skip_frozen_reads,
         "freeze_streak_threshold" => freeze_streak_threshold,
@@ -1947,6 +1949,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         n_k_rungs::Union{Nothing, Int} = nothing,
         graph_mode::Symbol = :canonical,
         qualmer_prefilter_min_count::Int = 1,
+        qualmer_memory_profile::Symbol = :full,
         verbose::Bool = true,
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
@@ -2132,6 +2135,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         n_k_rungs = n_k_rungs,
         graph_mode = graph_mode,
         qualmer_prefilter_min_count = qualmer_prefilter_min_count,
+        qualmer_memory_profile = qualmer_memory_profile,
         enable_parallel = enable_parallel,
         skip_frozen_reads = skip_frozen_reads,
         freeze_streak_threshold = freeze_streak_threshold,
@@ -2583,7 +2587,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 println("Building qualmer graph with k=$k...")
             end
             graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode,
-                min_count = qualmer_prefilter_min_count)
+                min_count = qualmer_prefilter_min_count,
+                memory_profile = qualmer_memory_profile)
             num_kmers = length(MetaGraphsNext.labels(graph))
 
             if verbose
