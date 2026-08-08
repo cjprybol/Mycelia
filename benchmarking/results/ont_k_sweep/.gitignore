@@ -1,0 +1,17 @@
+# ONT k-selection sweep (td-4e19d.28) — artifact policy.
+#
+# COMMITTED (the durable knowledge tier): ont_k_sweep_results.tsv,
+# ont_k_sweep_summary.tsv, README.md. These are small, plain-text, and are the
+# deliverable the pre-registration decision rests on.
+#
+# IGNORED (bulky and deterministically regenerable from the committed script
+# plus its recorded seeds): the downloaded reference, per-cell simulated reads,
+# per-cell contig FASTAs, per-cell QUAST output trees, and the per-cell JSON
+# resume checkpoints. Re-running `benchmarking/ont_k_sweep.jl` with the same
+# --output-dir reconstructs all of it.
+#
+# NOTE the per-cell contig FASTAs are large in the low-k regime specifically
+# (ONT/30x/k=11 emits ~149k contigs), which is exactly why they are not tracked.
+cells/
+refs/
+shard-logs/
