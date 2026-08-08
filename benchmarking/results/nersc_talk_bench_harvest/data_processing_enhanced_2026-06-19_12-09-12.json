@@ -1,0 +1,189 @@
+{
+  "resource_utilization": {
+    "total_allocations": 2485119,
+    "peak_memory_estimate_mb": 177.99
+  },
+  "system_info": {
+    "julia_version": {
+      "major": 1,
+      "minor": 10,
+      "patch": 10,
+      "prerelease": [],
+      "build": []
+    },
+    "total_memory": 540164243456,
+    "platform": "x86_64-linux-gnu",
+    "hostname": "nid006998",
+    "cpu_threads": 256
+  },
+  "benchmark_name": "data_processing",
+  "performance_summary": {
+    "benchmark_duration_minutes": 1.8,
+    "total_files_processed": 5,
+    "total_data_size_mb": 4.24,
+    "throughput_mbps": 25.2
+  },
+  "timestamp": "2026-06-19T12:09:12.001",
+  "detailed_results": {
+    "count_records_file1": {
+      "std_time": 1.5863887362621814e8,
+      "median_time": 3.371227e7,
+      "mean_time": 1.2317966166666667e8,
+      "memory": 4557208,
+      "min_time": 2.9482936e7,
+      "max_time": 3.06343779e8,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.829461375,
+        "gc_count": 4,
+        "allocations": 496
+      }
+    },
+    "assess_duplication_rates": {
+      "std_time": 1.291763032546883e9,
+      "median_time": 1.516710801e9,
+      "mean_time": 1.516710801e9,
+      "memory": 48622962,
+      "min_time": 6.03296401e8,
+      "max_time": 2.430125201e9,
+      "allocations": 695010,
+      "memory_stats": {
+        "gc_time": 1.136587192,
+        "gc_count": 10,
+        "allocations": 0
+      }
+    },
+    "load_balancing_mixed_sizes": {
+      "std_time": 1.930016634418275e7,
+      "median_time": 1.125839815e8,
+      "mean_time": 1.125839815e8,
+      "memory": 18082936,
+      "min_time": 9.8936703e7,
+      "max_time": 1.2623126e8,
+      "allocations": 120161,
+      "memory_stats": {
+        "gc_time": 0.856713894,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "fastq_to_table_conversion": {
+      "std_time": 9.730995513087445e8,
+      "median_time": 9.217787335e8,
+      "mean_time": 9.217787335e8,
+      "memory": 177985160,
+      "min_time": 2.33693442e8,
+      "max_time": 1.609864025e9,
+      "allocations": 1169587,
+      "memory_stats": {
+        "gc_time": 1.083834631,
+        "gc_count": 13,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_4_threads": {
+      "std_time": 1.9931307229652863e7,
+      "median_time": 5.18202715e7,
+      "mean_time": 5.18202715e7,
+      "memory": 13680168,
+      "min_time": 3.7726709e7,
+      "max_time": 6.5913834e7,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.872903331,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "count_records_file3": {
+      "std_time": 1.6266852457797248e7,
+      "median_time": 4.3880726e7,
+      "mean_time": 4.8437073666666664e7,
+      "memory": 4557208,
+      "min_time": 3.4934238e7,
+      "max_time": 6.6496257e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.819351269,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "determine_read_lengths": {
+      "std_time": 3.9599186811316244e7,
+      "median_time": 7.461072e7,
+      "mean_time": 8.872306533333333e7,
+      "memory": 10627216,
+      "min_time": 5.8113247e7,
+      "max_time": 1.33445229e8,
+      "allocations": 109609,
+      "memory_stats": {
+        "gc_time": 0.841758257,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_1_threads": {
+      "std_time": 6.521523725542417e7,
+      "median_time": 9.08760945e7,
+      "mean_time": 9.08760945e7,
+      "memory": 13680168,
+      "min_time": 4.4761958e7,
+      "max_time": 1.36990231e8,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.874419798,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_2_threads": {
+      "std_time": 7.379176863845452e6,
+      "median_time": 4.8096458e7,
+      "mean_time": 4.8096458e7,
+      "memory": 13680168,
+      "min_time": 4.2878592e7,
+      "max_time": 5.3314324e7,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.879577857,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "sequential_fastq_reading": {
+      "std_time": 2.5481570064841635e6,
+      "median_time": 3.4313109e7,
+      "mean_time": 3.4492455666666664e7,
+      "memory": 4557208,
+      "min_time": 3.203871e7,
+      "max_time": 3.7125548e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.870515203,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "count_records_file2": {
+      "std_time": 2.221718375600592e6,
+      "median_time": 2.9149943e7,
+      "mean_time": 2.9514634333333332e7,
+      "memory": 4557208,
+      "min_time": 2.7497825e7,
+      "max_time": 3.1896135e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.801914363,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    }
+  },
+  "configuration": {
+    "n_files": 5,
+    "read_length": 150,
+    "reads_per_file": 10000,
+    "description": "Small scale - quick validation"
+  }
+}
