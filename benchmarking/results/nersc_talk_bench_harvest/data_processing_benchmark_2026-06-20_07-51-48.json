@@ -1,0 +1,179 @@
+{
+  "suite_name": "Data Processing Performance",
+  "metadata": {
+    "cpu_info": {
+      "model": "AMD EPYC 7763 64-Core Processor",
+      "speed": 2450,
+      "cpu_times!user": 9472010,
+      "cpu_times!nice": 30,
+      "cpu_times!sys": 1463640,
+      "cpu_times!idle": 207380250,
+      "cpu_times!irq": 0
+    },
+    "julia_version": {
+      "major": 1,
+      "minor": 10,
+      "patch": 10,
+      "prerelease": [],
+      "build": []
+    },
+    "memory_total": 540164222976,
+    "timestamp": "2026-06-20T07:49:38.653"
+  },
+  "results": {
+    "count_records_file1": {
+      "std_time": 1.414344468788413e8,
+      "median_time": 5.7648109e7,
+      "mean_time": 1.33916273e8,
+      "memory": 4557208,
+      "min_time": 4.6986059e7,
+      "max_time": 2.97114651e8,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.790321786,
+        "gc_count": 4,
+        "allocations": 496
+      }
+    },
+    "assess_duplication_rates": {
+      "std_time": 1.3181400762922456e9,
+      "median_time": 1.4895733455e9,
+      "mean_time": 1.4895733455e9,
+      "memory": 48622962,
+      "min_time": 5.57507559e8,
+      "max_time": 2.421639132e9,
+      "allocations": 695010,
+      "memory_stats": {
+        "gc_time": 1.08039224,
+        "gc_count": 10,
+        "allocations": 0
+      }
+    },
+    "load_balancing_mixed_sizes": {
+      "std_time": 7.441615099731006e6,
+      "median_time": 8.55361375e7,
+      "mean_time": 8.55361375e7,
+      "memory": 18082936,
+      "min_time": 8.0274121e7,
+      "max_time": 9.0798154e7,
+      "allocations": 120161,
+      "memory_stats": {
+        "gc_time": 0.808317734,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "fastq_to_table_conversion": {
+      "std_time": 9.190612426449795e8,
+      "median_time": 9.52539709e8,
+      "mean_time": 9.52539709e8,
+      "memory": 177985160,
+      "min_time": 3.02665272e8,
+      "max_time": 1.602414146e9,
+      "allocations": 1169587,
+      "memory_stats": {
+        "gc_time": 1.085459915,
+        "gc_count": 13,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_4_threads": {
+      "std_time": 2.0615302225696328e6,
+      "median_time": 3.5206852e7,
+      "mean_time": 3.5206852e7,
+      "memory": 13680168,
+      "min_time": 3.374913e7,
+      "max_time": 3.6664574e7,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.82854896,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "count_records_file3": {
+      "std_time": 1.0559143350892628e6,
+      "median_time": 3.152379e7,
+      "mean_time": 3.1125776e7,
+      "memory": 4557208,
+      "min_time": 2.9928699e7,
+      "max_time": 3.1924839e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.843996762,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "determine_read_lengths": {
+      "std_time": 3.4980747791634254e7,
+      "median_time": 7.7103541e7,
+      "mean_time": 8.665563666666667e7,
+      "memory": 10627216,
+      "min_time": 5.7443145e7,
+      "max_time": 1.25420224e8,
+      "allocations": 109609,
+      "memory_stats": {
+        "gc_time": 0.838672704,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_1_threads": {
+      "std_time": 4.702913602977714e7,
+      "median_time": 6.5378071e7,
+      "mean_time": 6.5378071e7,
+      "memory": 13680168,
+      "min_time": 3.212345e7,
+      "max_time": 9.8632692e7,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.859139827,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "parallel_processing_2_threads": {
+      "std_time": 3.9486857915783194e6,
+      "median_time": 3.45182605e7,
+      "mean_time": 3.45182605e7,
+      "memory": 13680168,
+      "min_time": 3.1726118e7,
+      "max_time": 3.7310403e7,
+      "allocations": 90200,
+      "memory_stats": {
+        "gc_time": 0.810864925,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "sequential_fastq_reading": {
+      "std_time": 7.158508118490356e6,
+      "median_time": 2.4454875e7,
+      "mean_time": 2.8390326666666668e7,
+      "memory": 4557208,
+      "min_time": 2.4062943e7,
+      "max_time": 3.6653162e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.83647606,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    },
+    "count_records_file2": {
+      "std_time": 4.1497418300427236e6,
+      "median_time": 2.7981282e7,
+      "mean_time": 2.7327657666666668e7,
+      "memory": 4557208,
+      "min_time": 2.2889892e7,
+      "max_time": 3.1111799e7,
+      "allocations": 30038,
+      "memory_stats": {
+        "gc_time": 0.812338563,
+        "gc_count": 4,
+        "allocations": 0
+      }
+    }
+  }
+}
