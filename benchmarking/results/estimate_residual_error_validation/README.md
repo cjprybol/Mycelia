@@ -133,7 +133,17 @@ So the estimator is *precise* and *biased*. More replicates do not help.
 
 ## Consequence for the proposed k rule
 
-The pre-registration proposes selecting k as `k >= 1/e - 1`. Feeding it this
+**Provenance correction (2026-08-08).** An earlier version of this sentence
+attributed the rule `k >= 1/e - 1` to the pre-registration. That is wrong and the
+error was propagated from here into several other notes. The rule does **not**
+appear in `planning/PLAN-2026-03-28-rhizomorph-preregistration.md` (577 lines,
+searched) or anywhere under `manuscript/`. It lives in
+`src/development/intelligent-assembly.jl` — a file `Mycelia.jl` does not include —
+and in `tutorials/18_advanced_assembly_theory_and_practice.jl`, which is broken on
+master. It traces to 2020 Mycelia-Dev notes. A *proposed, unratified* decision
+record suggests registering it; that is a proposal, not a registration.
+
+A candidate k rule, `k >= 1/e - 1`, would consume this estimate. Feeding it this
 estimator, with realistic (overconfident or absent) quality — these two columns
 are identical, per the headline above:
 
@@ -163,10 +173,28 @@ sound.
   measurement, and the error model is uniform-random substitutions and isolated
   indels.
 - Nothing about **homopolymer-clustered indels**, the dominant real ONT mode.
-- Nothing about **non-uniform coverage**. Coverage is uniform by construction;
-  real data is not, and the solid/non-solid threshold is coverage-sensitive.
+- **CORRECTION (2026-08-08): coverage in this harness is NOT uniform, and an
+  earlier version of this line wrongly said it was.** Reads are 5 kb drawn from a
+  20 kb LINEAR reference with start positions uniform on 1..15001, which produces a
+  trapezoid, not a rectangle. Verified: the plateau sits at **1.333x the nominal
+  label** (a "C=100" column is 133x in its middle), and **30% of the reference lies
+  below 0.8x nominal** at every coverage, tapering to ~0 at both ends.
+
+  Two consequences for every table above. The coverage axis is **mislabelled by
+  +33%** in the plateau. And because the estimator's bias is coverage-dependent and
+  the positive bias lives at low depth, each cell is a *mixture* over a 1x-to-1.33x
+  depth range rather than a measurement at one depth — so the reported
+  low-coverage over-estimate is partly manufactured by the reference geometry, and
+  the "zero crossing near C=10-30" is really a crossing of that mixture at plateau
+  depths of roughly 13-40. The sign and the mechanism stand; the x-axis does not.
 - Nothing about **repeat-rich or low-complexity genomes**. The reference is random
   sequence, which is the friendliest possible case for a k-mer spectrum method.
+- **Reads are 25% of the reference** (5 kb of 20 kb). Real reads are 1e-5 to 1e-3
+  of a genome. This inflates inter-read k-mer sharing far above anything real.
+- **The effective genome-level n is 3, not 720.** The same RNG draws the reference
+  and then the reads, so each seed yields a different reference. Finding 4's
+  "replicate CV across 3 seeds" therefore conflates genome variation with read
+  variation, and there are only three references in the entire grid.
 
 Each of these can only make the estimator behave worse than measured here.
 
