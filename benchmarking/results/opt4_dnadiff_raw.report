@@ -1,0 +1,87 @@
+/Users/cameronprybol/workspace/tmp/opt4_dnadiff_6ZNkvu/NC_001416/NC_001416.fna /Users/cameronprybol/workspace/tmp/opt4_dnadiff_6ZNkvu/raw_contigs.fasta
+NUCMER
+
+                               [REF]                [QRY]
+[Sequences]
+TotalSeqs                          1                30664
+AlignedSeqs               1(100.00%)           322(1.05%)
+UnalignedSeqs               0(0.00%)        30342(98.95%)
+
+[Bases]
+TotalBases                     48502              1331734
+AlignedBases           48454(99.90%)        102230(7.68%)
+UnalignedBases             48(0.10%)      1229504(92.32%)
+
+[Alignments]
+1-to-1                           124                  124
+TotalLength                    58956                58956
+AvgLength                     475.45               475.45
+AvgIdentity                    99.96                99.96
+
+M-to-M                           322                  322
+TotalLength                   102230               102230
+AvgLength                     317.48               317.48
+AvgIdentity                    99.84                99.84
+
+[Feature Estimates]
+Breakpoints                      644                    9
+Relocations                        0                    0
+Translocations                   123                    0
+Inversions                         0                    0
+
+Insertions                         3                  207
+InsertionSum                      48                43290
+InsertionAvg                   16.00               209.13
+
+TandemIns                          0                    0
+TandemInsSum                       0                    0
+TandemInsAvg                    0.00                 0.00
+
+[SNPs]
+TotalSNPs                          4                    4
+GT                         1(25.00%)            1(25.00%)
+GA                          0(0.00%)            1(25.00%)
+GC                          0(0.00%)             0(0.00%)
+CT                          0(0.00%)             0(0.00%)
+CA                          0(0.00%)            1(25.00%)
+CG                          0(0.00%)             0(0.00%)
+AC                         1(25.00%)             0(0.00%)
+AT                          0(0.00%)             0(0.00%)
+AG                         1(25.00%)             0(0.00%)
+TC                          0(0.00%)             0(0.00%)
+TA                          0(0.00%)             0(0.00%)
+TG                         1(25.00%)            1(25.00%)
+
+TotalGSNPs                         3                    3
+GC                          0(0.00%)             0(0.00%)
+GT                         1(33.33%)            1(33.33%)
+GA                          0(0.00%)            1(33.33%)
+TC                          0(0.00%)             0(0.00%)
+TA                          0(0.00%)             0(0.00%)
+TG                         1(33.33%)            1(33.33%)
+AC                          0(0.00%)             0(0.00%)
+AT                          0(0.00%)             0(0.00%)
+AG                         1(33.33%)             0(0.00%)
+CG                          0(0.00%)             0(0.00%)
+CA                          0(0.00%)             0(0.00%)
+CT                          0(0.00%)             0(0.00%)
+
+TotalIndels                        0                    0
+G.                          0(0.00%)             0(0.00%)
+C.                          0(0.00%)             0(0.00%)
+A.                          0(0.00%)             0(0.00%)
+T.                          0(0.00%)             0(0.00%)
+.G                          0(0.00%)             0(0.00%)
+.A                          0(0.00%)             0(0.00%)
+.T                          0(0.00%)             0(0.00%)
+.C                          0(0.00%)             0(0.00%)
+
+TotalGIndels                       0                    0
+G.                          0(0.00%)             0(0.00%)
+T.                          0(0.00%)             0(0.00%)
+A.                          0(0.00%)             0(0.00%)
+C.                          0(0.00%)             0(0.00%)
+.G                          0(0.00%)             0(0.00%)
+.C                          0(0.00%)             0(0.00%)
+.T                          0(0.00%)             0(0.00%)
+.A                          0(0.00%)             0(0.00%)

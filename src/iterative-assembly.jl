@@ -457,14 +457,62 @@ const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
         :substitution_decode_memory_gated,
         :raw_frontier_metrics,
         :cleaned_frontier_metrics,
+        :raw_frontier_rejection_causes,
+        :cleaned_frontier_rejection_causes,
+        :raw_frontier_work_summary,
+        :cleaned_frontier_work_summary,
         :graph_cleanup,
         :ladder_index,
         :k,
         :iteration,
     )
 )
-const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS =
-    Set{Symbol}(values(_CHECKPOINT_INDEL_TELEMETRY_KEYS))
+# FROZEN v2 WIRE CONTRACT. This is the set of fields a schema-v2 checkpoint row
+# MUST carry, and it is deliberately an explicit literal rather than
+# `values(_CHECKPOINT_INDEL_TELEMETRY_KEYS)`: deriving it would make every
+# additive telemetry field retroactively mandatory, so any checkpoint written by
+# an earlier build would fail the mandatory-field check below. Do NOT add a name
+# here without bumping `_ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION`; purely
+# additive fields belong in the accept-list above and must normalize from an
+# empty default so absent-in-old-checkpoint stays legal.
+#
+# The compatibility this buys is ONE-WAY, and deliberately so. FORWARD (this
+# build reads a checkpoint an earlier build wrote) is safe: an additive field
+# that is absent normalizes from its empty default. BACKWARD (an EARLIER build
+# reads a checkpoint this build wrote) is NOT: `_checkpoint_symbolized_dict`
+# rejects any field outside that build's accept-list, and
+# `_symbolize_indel_frontier_metric` rejects a row carrying more fields than it
+# knows, so the earlier build fails with an unsupported-field error rather than
+# ignoring the addition. Bumping
+# `_ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION` does NOT fix that -- it would
+# additionally break the forward direction, converting a downgrade-only failure
+# into an upgrade failure too. Resume a checkpoint with the build that wrote it
+# or a newer one.
+const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS = Set{Symbol}((
+    :profile_requested,
+    :requested,
+    :attempted,
+    :completed,
+    :truncated,
+    :engaged,
+    :admitted,
+    :admitted_windows,
+    :rejected_windows,
+    :graph_source,
+    :decision_reason,
+    :frontier_work_limit,
+    :frontier_metric_sample_limit,
+    :raw_frontier_evaluated,
+    :cleaned_frontier_evaluated,
+    :bounded_windowing_forced,
+    :substitution_decode_memory_gated,
+    :raw_frontier_metrics,
+    :cleaned_frontier_metrics,
+    :graph_cleanup,
+    :ladder_index,
+    :k,
+    :iteration,
+))
 const _CHECKPOINT_INDEL_METRIC_KEYS = Dict{String, Symbol}(
     string(key) => key for key in (
         :anchored,
@@ -548,6 +596,48 @@ const _CHECKPOINT_FRONTIER_REASONS = Dict{String, Symbol}(
         :work_limit,
         :frontier_exhausted,
     )
+)
+# Per-window rejection-cause taxonomy for the branching-frontier scheduler.
+# `raw_frontier_metrics` is capped at `_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT`
+# and keeps the FIRST samples by read index, so any rejection breakdown computed
+# from it is a biased prefix. These histograms instead accumulate exactly one
+# cause per EVALUATED window and persist only the counters, which keeps the rung
+# telemetry O(number of causes) while making the breakdown exact at any scale.
+const _INDEL_FRONTIER_PROBE_REJECTION_CAUSES = Dict{Symbol, Symbol}(
+    reason => Symbol("probe_", reason)
+    for reason in values(_CHECKPOINT_FRONTIER_REASONS) if reason !== :complete
+)
+# Probe reasons emitted with `anchored = false` for a reason OTHER than "the
+# probe ran and found no start vertex". `:encode_error` is a harness sentinel
+# from `_probe_indel_window_metric` (the probe never ran at all), while
+# `:empty_graph` and `:empty_observation` are structural pre-checks inside
+# `_probe_indel_frontier` that return BEFORE the start-vertex lookup. All three
+# are classified ahead of the anchor conjunct so `:unanchored` keeps its literal
+# meaning -- it is reachable from `:unanchored_start` and nothing else -- rather
+# than becoming a four-way union bucket that hides which of the four occurred.
+const _INDEL_FRONTIER_PRE_ANCHOR_REASONS = Base.Set{Symbol}((
+    :encode_error,
+    :empty_graph,
+    :empty_observation,
+))
+const _INDEL_FRONTIER_REJECTION_CAUSES = Base.Set{Symbol}((
+    :admitted,
+    :unanchored,
+    :partial_columns,
+    :work_limit_exceeded,
+    :probe_unknown,
+    values(_INDEL_FRONTIER_PROBE_REJECTION_CAUSES)...,
+))
+const _INDEL_FRONTIER_REJECTION_CAUSE_NAMES = Dict{String, Symbol}(
+    string(cause) => cause for cause in _INDEL_FRONTIER_REJECTION_CAUSES
+)
+# `frontier_work` order statistics over every evaluated window. Only these six
+# numbers are persisted; the per-window values stay transient. p50/p90/p99 use
+# nearest-rank on the sorted values, so every statistic is an observed sample
+# (an exact `Int`) and `min <= p50 <= p90 <= p99 <= max` holds by construction.
+const _INDEL_FRONTIER_WORK_SUMMARY_KEYS = (:count, :min, :p50, :p90, :p99, :max)
+const _INDEL_FRONTIER_WORK_SUMMARY_NAMES = Dict{String, Symbol}(
+    string(key) => key for key in _INDEL_FRONTIER_WORK_SUMMARY_KEYS
 )
 const _CHECKPOINT_GRAPH_CLEANUP_KEYS = Set{String}((
     "graph_cleanup_vertices_before",
@@ -893,6 +983,15 @@ function _iterative_checkpoint_configuration(;
         graph_mode::Symbol,
         qualmer_prefilter_min_count::Int,
         enable_parallel::Bool,
+        # opt4 (td-jbjd, review fix C2): captured for exact-equality resume
+        # validation, same as every other behavior-affecting kwarg below --
+        # resuming a checkpoint under DIFFERENT freeze settings would otherwise
+        # silently switch an exact run into an approximate one (or vice versa)
+        # rather than tripping `_validate_checkpoint_configuration`'s mismatch
+        # guard.
+        skip_frozen_reads::Bool,
+        freeze_streak_threshold::Int,
+        freeze_across_rungs::Bool,
         skip_solid::Bool,
         hard_window::Bool,
         windowed_decode::Bool,
@@ -920,6 +1019,9 @@ function _iterative_checkpoint_configuration(;
         "graph_mode" => string(graph_mode),
         "qualmer_prefilter_min_count" => qualmer_prefilter_min_count,
         "enable_parallel" => enable_parallel,
+        "skip_frozen_reads" => skip_frozen_reads,
+        "freeze_streak_threshold" => freeze_streak_threshold,
+        "freeze_across_rungs" => freeze_across_rungs,
         "skip_solid" => skip_solid,
         "hard_window" => hard_window,
         "windowed_decode" => windowed_decode,
@@ -1000,6 +1102,15 @@ function _empty_indel_rung_telemetry(profile_requested::Bool)::Dict{Symbol, Any}
         :substitution_decode_memory_gated => false,
         :raw_frontier_metrics => Dict{Symbol, Any}[],
         :cleaned_frontier_metrics => Dict{Symbol, Any}[],
+        :raw_frontier_rejection_causes => Dict{Symbol, Int}(),
+        :cleaned_frontier_rejection_causes => Dict{Symbol, Int}(),
+        # Zero-filled six-key form, NOT an empty object: the
+        # `:no_candidate_windows` scheduler path already emits
+        # `_indel_frontier_work_summary(Int[])`, and two different "no work
+        # data" encodings would make `summary[:count]` a `KeyError` on one of
+        # them and a `0` on the other. One total shape, always.
+        :raw_frontier_work_summary => _indel_frontier_work_summary(Int[]),
+        :cleaned_frontier_work_summary => _indel_frontier_work_summary(Int[]),
         :graph_cleanup => Dict{String, Any}(),
     )
 end
@@ -1240,6 +1351,62 @@ function _validate_indel_frontier_metric(
     return nothing
 end
 
+function _checkpoint_indel_rejection_causes(
+        value::Any,
+        field::String,
+)::Dict{Symbol, Int}
+    value isa AbstractDict || throw(ArgumentError(
+        "checkpoint $field must be an object"))
+    causes = Dict{Symbol, Int}()
+    for (key, count) in value
+        cause = _checkpoint_enum_symbol(
+            _checkpoint_key_string(key, "checkpoint $field"),
+            _INDEL_FRONTIER_REJECTION_CAUSE_NAMES,
+            "$field cause",
+        )
+        haskey(causes, cause) && throw(ArgumentError(
+            "checkpoint $field repeats cause $cause"))
+        causes[cause] = _checkpoint_nonnegative_int(count, "$field $cause")
+    end
+    return causes
+end
+
+function _checkpoint_indel_work_summary(
+        value::Any,
+        field::String,
+)::Dict{Symbol, Int}
+    value isa AbstractDict || throw(ArgumentError(
+        "checkpoint $field must be an object"))
+    # An empty object stays legal ON THE WIRE because every pre-diagnostics
+    # checkpoint omits the field entirely. It normalizes to the zero-filled
+    # six-key form this build always writes (including for profile-disabled
+    # rungs), so no consumer ever has to handle two "no work data" shapes.
+    isempty(value) && return _indel_frontier_work_summary(Int[])
+    summary = Dict{Symbol, Int}()
+    for (key, statistic) in value
+        name = _checkpoint_enum_symbol(
+            _checkpoint_key_string(key, "checkpoint $field"),
+            _INDEL_FRONTIER_WORK_SUMMARY_NAMES,
+            "$field statistic",
+        )
+        haskey(summary, name) && throw(ArgumentError(
+            "checkpoint $field repeats statistic $name"))
+        summary[name] = _checkpoint_nonnegative_int(statistic, "$field $name")
+    end
+    length(summary) == length(_INDEL_FRONTIER_WORK_SUMMARY_KEYS) ||
+        throw(ArgumentError(
+            "checkpoint $field must contain every order statistic"))
+    summary[:min] <= summary[:p50] <= summary[:p90] <= summary[:p99] <=
+        summary[:max] || throw(ArgumentError(
+        "checkpoint $field order statistics must be monotone"))
+    if summary[:count] == 0
+        all(summary[name] == 0 for name in (:min, :p50, :p90, :p99, :max)) ||
+            throw(ArgumentError(
+                "checkpoint $field with zero count requires zero statistics"))
+    end
+    return summary
+end
+
 function _normalize_indel_rung_telemetry(
         row::AbstractDict,
         require_schema_v2::Bool = true,
@@ -1337,6 +1504,21 @@ function _normalize_indel_rung_telemetry(
             end
         end
     end
+    for key in (
+            :raw_frontier_rejection_causes,
+            :cleaned_frontier_rejection_causes,
+    )
+        normalized[key] = _checkpoint_indel_rejection_causes(
+            get(normalized, key, Dict{Symbol, Int}()),
+            "indel telemetry $key",
+        )
+    end
+    for key in (:raw_frontier_work_summary, :cleaned_frontier_work_summary)
+        normalized[key] = _checkpoint_indel_work_summary(
+            get(normalized, key, Dict{Symbol, Int}()),
+            "indel telemetry $key",
+        )
+    end
     if require_schema_v2
         sample_limit = normalized[:frontier_metric_sample_limit]
         for (metric_key, evaluated_key) in (
@@ -1425,6 +1607,38 @@ function _normalize_indel_rung_telemetry(
         normalized[:cleaned_frontier_evaluated] <=
             normalized[:raw_frontier_evaluated] || throw(ArgumentError(
             "checkpoint cleaned frontier evaluations exceed raw evaluations"))
+    end
+    # EXACTNESS CROSS-CHECK. The scheduler records exactly one cause per
+    # evaluated window, so a populated histogram MUST sum to its evaluated
+    # counter. This is the same class of check `raw_frontier_metrics` already
+    # gets against `raw_frontier_evaluated` above, and it is what makes the
+    # histogram usable as evidence rather than merely well-formed -- an exact
+    # breakdown that is never reconciled against the count it breaks down is
+    # not stronger than the sampled prefix it replaced.
+    #
+    # Gated on non-emptiness because the field is ADDITIVE. A schema-v2
+    # checkpoint written before these diagnostics existed carries no histogram
+    # and normalizes to an empty one, which must stay legal (see the FROZEN
+    # required-key note above). An empty histogram beside a non-zero counter is
+    # therefore indistinguishable at the wire level from a legacy row, and
+    # cannot be rejected without a version bump that would break the forward
+    # direction. Every producer in THIS build populates the histogram whenever
+    # it evaluates a window, so the check binds on all of them; emptiness is a
+    # legacy escape hatch, not a live producer shape.
+    #
+    # Ordered AFTER the counter cross-checks above on purpose: a row whose
+    # COUNTER is corrupt should report the counter's own error, not have it
+    # masked by the histogram that faithfully described the original count.
+    for (cause_key, evaluated_key) in (
+            (:raw_frontier_rejection_causes, :raw_frontier_evaluated),
+            (:cleaned_frontier_rejection_causes, :cleaned_frontier_evaluated),
+    )
+        causes = normalized[cause_key]
+        isempty(causes) && continue
+        total = sum(values(causes))
+        total == normalized[evaluated_key] || throw(ArgumentError(
+            "checkpoint indel telemetry $cause_key sums to $total, which does " *
+            "not match $evaluated_key=$(normalized[evaluated_key])"))
     end
     if !profile_requested && any(
             normalized[key] != 0 for key in (
@@ -1736,6 +1950,10 @@ function mycelia_iterative_assemble(input_fastq::String;
         verbose::Bool = true,
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
+        gc_between_batches::Bool = false,
+        skip_frozen_reads::Bool = false,
+        freeze_streak_threshold::Int = 2,
+        freeze_across_rungs::Bool = false,
         enable_checkpointing::Bool = true,
         checkpoint_interval::Int = 5,
         skip_solid::Bool = false,
@@ -1776,6 +1994,19 @@ function mycelia_iterative_assemble(input_fastq::String;
     indel_schedule in (:unrestricted, :frontier_budgeted) ||
         throw(ArgumentError("indel_schedule must be :unrestricted or " *
                             ":frontier_budgeted; got :$(indel_schedule)"))
+
+    # opt4 (td-jbjd, review fix C3): freeze_streak_threshold=0 would make
+    # `freeze_streaks[i] >= freeze_streak_threshold` (see `_frozen_read_at`,
+    # below) true for EVERY read from pass 1 onward (streaks start all-zero),
+    # silently disabling the corrector entirely whenever skip_frozen_reads=true.
+    # Fail closed instead: a threshold this permissive is never a legitimate
+    # configuration, so reject it independent of skip_frozen_reads (a caller
+    # that later flips skip_frozen_reads=true without revisiting the threshold
+    # must not be silently broken).
+    freeze_streak_threshold >= 1 || throw(ArgumentError(
+        "freeze_streak_threshold must be at least 1 (got " *
+        "$freeze_streak_threshold); a threshold of 0 marks every read frozen " *
+        "from pass 1, disabling correction entirely when skip_frozen_reads=true"))
 
     isfile(input_fastq) || throw(ArgumentError(
         "input FASTQ file does not exist: $input_fastq"))
@@ -1902,6 +2133,9 @@ function mycelia_iterative_assemble(input_fastq::String;
         graph_mode = graph_mode,
         qualmer_prefilter_min_count = qualmer_prefilter_min_count,
         enable_parallel = enable_parallel,
+        skip_frozen_reads = skip_frozen_reads,
+        freeze_streak_threshold = freeze_streak_threshold,
+        freeze_across_rungs = freeze_across_rungs,
         skip_solid = skip_solid,
         hard_window = hard_window,
         windowed_decode = windowed_decode,
@@ -2249,6 +2483,26 @@ function mycelia_iterative_assemble(input_fastq::String;
     final_pass_graph_reusable = false
     completed_runtime = nothing
 
+    # opt4 (td-jbjd, pass 1): per-read consecutive-no-improvement streak, used to
+    # skip re-decoding "frozen" reads when `skip_frozen_reads=true` (default off
+    # keeps this `nothing` for the life of the run, a true no-op). Declared
+    # OUTSIDE the k-loop so `freeze_across_rungs=true` can persist counts across
+    # k-advances; the within-rung default resets it inside the k-loop below
+    # (mirrors `prev_soft_weights`, :2287) and it is lazily sized to the read
+    # count on first use (:2310-ish, once `current_reads` is known).
+    #
+    # opt4 (td-jbjd, pass 2, finding #4): NOT persisted to checkpoints. A run
+    # resumed from a checkpoint (`enable_checkpointing=true`) restarts streak
+    # counting from zero at the resume point rather than continuing where the
+    # interrupted run left off. This is safe on the default (disabled) path --
+    # `skip_frozen_reads=false` never allocates `freeze_streaks`, so resume is
+    # unaffected -- and on the approximate path it only ever makes the resumed
+    # run marginally LESS aggressive about skipping (a few extra passes decode
+    # reads that would otherwise already have been frozen), never more
+    # aggressive, so it does not weaken the accuracy-sign-off tolerance
+    # established for the from-scratch run.
+    freeze_streaks::Union{Nothing, Vector{Int}} = nothing
+
     # Main k-mer progression loop
     while !resume_run_complete && k <= max_k
         if verbose
@@ -2285,6 +2539,14 @@ function mycelia_iterative_assemble(input_fastq::String;
         # carry over.
         prev_soft_weights = nothing
 
+        # opt4 (td-jbjd, pass 1): within-rung default resets the per-read freeze
+        # streak at every new k rung (the biggest graph change, fact/risk 7);
+        # `freeze_across_rungs=true` persists it across k instead. No-op when
+        # `skip_frozen_reads=false` (freeze_streaks stays `nothing`).
+        if skip_frozen_reads && !freeze_across_rungs
+            freeze_streaks = nothing
+        end
+
         # Iterative improvement loop for current k
         while iteration <= max_iterations_per_k
             if verbose
@@ -2307,6 +2569,13 @@ function mycelia_iterative_assemble(input_fastq::String;
                 # same descriptor used for the checkpoint content hash.
                 current_reads = resume_fastq_reads
                 resume_fastq_reads = nothing
+            end
+
+            # opt4 (td-jbjd, pass 1): lazily allocate the freeze-streak vector once
+            # this k rung's read count is known — fires once per k under the
+            # within-rung default, once per run under freeze_across_rungs=true.
+            if skip_frozen_reads && freeze_streaks === nothing
+                freeze_streaks = zeros(Int, length(current_reads))
             end
 
             # Build qualmer graph from current read set
@@ -2408,6 +2677,10 @@ function mycelia_iterative_assemble(input_fastq::String;
                 current_reads, graph, k,
                 verbose = verbose,
                 batch_size = batch_size,
+                gc_between_batches = gc_between_batches,
+                skip_frozen_reads = skip_frozen_reads,
+                freeze_streak_threshold = freeze_streak_threshold,
+                freeze_streaks = freeze_streaks,
                 enable_parallel = enable_parallel,
                 graph_mode = graph_mode,
                 skip_solid = skip_solid,
@@ -2749,8 +3022,11 @@ end
 # graph Viterbi for genuine ambiguity is the critical-path lever: on err=0.01 data
 # ~78% of reads carry an error k-mer, so cheaply clearing the simple ones collapses
 # the graph-decode fraction toward the true bubble/repeat ~5–15%.
-# Only invoked on the :scalable tier (`cheap_correct=true`, canonical graph); the
-# :exhaustive path never calls it and is byte-identical.
+# Only invoked on the :scalable tier (`cheap_correct=true`). The live gate is
+# `graph_mode != :singlestrand`, NOT `graph_mode == :canonical`: :scalable builds
+# a :doublestrand graph, so a canonical-only reading would describe Stage 0 as
+# OFF on the production tier. The :exhaustive path never calls it and is
+# byte-identical.
 # ------------------------------------------------------------------------------
 
 # Graph-label lookup key for the k-mer at 1-based read position `i` (bases
@@ -3154,6 +3430,137 @@ function _indel_frontier_admitted(
            metrics.frontier_work <= work_limit
 end
 
+"""
+    _indel_frontier_rejection_cause(metric, work_limit) -> Symbol
+
+Classify why one probed decode window was (or was not) admitted to the
+pair-HMM by `_indel_frontier_admitted`.
+
+Pure: takes the metric dictionary produced by `_probe_indel_window_metric` plus
+the frontier budget, and touches no graph. `:admitted` is returned exactly when
+`_indel_frontier_admitted` would return `true` for the same window, so the
+histogram built from this function reconciles with the admission counters.
+
+Apart from the `_INDEL_FRONTIER_PRE_ANCHOR_REASONS` pre-check the branch order
+mirrors the `&&` chain in `_indel_frontier_admitted` conjunct for conjunct, so
+the FIRST failing conjunct names the cause:
+
+| Conjunct                             | Cause when it fails      |
+|:-------------------------------------|:-------------------------|
+| `metrics.anchored`                   | `:unanchored`            |
+| `metrics.reason == :complete`        | `:probe_<probe reason>`  |
+| `completed_columns == window_length` | `:partial_columns`       |
+| `frontier_work <= work_limit`        | `:work_limit_exceeded`   |
+
+A window that is BOTH unanchored and over budget therefore reports
+`:unanchored`, matching the short-circuit that actually rejected it.
+
+PRE-ANCHOR REASONS. The anchor conjunct is checked before the reason lookup, so
+without a pre-check every reason that carries `anchored = false` would collapse
+into `:unanchored`. FOUR do: `:encode_error` (a harness sentinel from
+`_probe_indel_window_metric` -- the probe never ran, so `anchored = false` is
+synthetic rather than an anchor finding), `:empty_graph` and
+`:empty_observation` (structural pre-checks in `_probe_indel_frontier` that
+return before the start-vertex lookup), and `:unanchored_start` (the genuine
+anchor finding). The first three are therefore classified BEFORE the anchor
+conjunct, leaving `:unanchored` reachable from `:unanchored_start` and nothing
+else. `_indel_frontier_admitted` is `false` for all four -- they are all
+`anchored = false` -- so the `:admitted` equivalence above is unaffected by
+where in the chain they are named.
+
+REACHABILITY of the persisted taxonomy is deliberately uneven, and the uneven
+members are the defensive ones:
+
+  * `:probe_unanchored_start` is UNREACHABLE by construction -- that reason is
+    absorbed by the `:unanchored` bucket above, which is the more informative
+    name for it.
+  * `:partial_columns` and `:work_limit_exceeded` are DEFENSIVE ONLY from a
+    real probe: `_probe_indel_frontier` returns `:complete` exactly when it
+    consumed every column within budget, so `reason == :complete` already
+    implies both remaining conjuncts. Either bucket appearing in a histogram
+    built from live scheduler output signals a broken probe kernel invariant,
+    not an ordinary rejection. They are kept because the classifier is a pure
+    function over a dictionary and must stay total for hand-built and
+    round-tripped metrics.
+  * `:probe_unknown` is the catch-all for a probe reason outside
+    `_CHECKPOINT_FRONTIER_REASONS`; it degrades loudly instead of silently
+    mapping onto a real bucket.
+"""
+function _indel_frontier_rejection_cause(
+        metric::AbstractDict,
+        work_limit::Int,
+)::Symbol
+    reason = get(metric, :reason, nothing)
+    reason isa Symbol && reason in _INDEL_FRONTIER_PRE_ANCHOR_REASONS &&
+        return _INDEL_FRONTIER_PROBE_REJECTION_CAUSES[reason]
+    get(metric, :anchored, false) === true || return :unanchored
+    if reason !== :complete
+        return get(
+            _INDEL_FRONTIER_PROBE_REJECTION_CAUSES, reason, :probe_unknown)
+    end
+    get(metric, :completed_columns, -1) == get(metric, :window_length, -2) ||
+        return :partial_columns
+    get(metric, :frontier_work, typemax(Int)) <= work_limit ||
+        return :work_limit_exceeded
+    return :admitted
+end
+
+function _record_indel_frontier_cause!(
+        causes::Dict{Symbol, Int},
+        metric::AbstractDict,
+        work_limit::Int,
+)::Symbol
+    cause = _indel_frontier_rejection_cause(metric, work_limit)
+    causes[cause] = get(causes, cause, 0) + 1
+    return cause
+end
+
+# `:encode_error` sentinels carry no `frontier_work`, so they are counted in the
+# cause histogram but contribute nothing to the order statistics.
+function _record_indel_frontier_work!(
+        works::Vector{Int},
+        metric::AbstractDict,
+)::Nothing
+    frontier_work = get(metric, :frontier_work, nothing)
+    # `=== nothing` is the ONLY benign case (the `:encode_error` sentinel omits
+    # the field). Everything else is pushed unconverted, so a future widening of
+    # the metric's numeric type throws HERE rather than being silently dropped
+    # from the order statistics by an `isa Int` guard.
+    frontier_work === nothing && return nothing
+    push!(works, frontier_work)
+    return nothing
+end
+
+"""
+    _indel_frontier_work_summary(works) -> Dict{Symbol, Int}
+
+Reduce the per-window `frontier_work` values of one rung to the six order
+statistics persisted in the rung telemetry. Percentiles use nearest-rank, so
+each is an observed value and monotonicity holds without interpolation.
+"""
+function _indel_frontier_work_summary(
+        works::Vector{Int},
+)::Dict{Symbol, Int}
+    if isempty(works)
+        return Dict{Symbol, Int}(
+            key => 0 for key in _INDEL_FRONTIER_WORK_SUMMARY_KEYS)
+    end
+    # `works` is dead in every caller once the summary is built, so sort in
+    # place: this runs on a memory-gated path where a second full copy of the
+    # per-window vector is the largest avoidable allocation.
+    sorted = sort!(works)
+    n = length(sorted)
+    nearest_rank(quantile) = sorted[clamp(ceil(Int, quantile * n), 1, n)]
+    return Dict{Symbol, Int}(
+        :count => n,
+        :min => first(sorted),
+        :p50 => nearest_rank(0.50),
+        :p90 => nearest_rank(0.90),
+        :p99 => nearest_rank(0.99),
+        :max => last(sorted),
+    )
+end
+
 function _indel_candidate_windows(
         reads::Vector{<:FASTX.FASTQ.Record},
         k::Int,
@@ -3389,6 +3796,14 @@ function _evaluate_indel_frontier_schedule_impl(
         sources = get!(window_sources, read_index, Dict{UnitRange{Int}, Symbol}())
         sources[window] = :substitution
     end
+    # Exact per-window diagnostics. Unlike `raw_metrics`/`cleaned_metrics` these
+    # are NOT capped at `_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT`; every evaluated
+    # window contributes one cause, and `*_works` is reduced to six order
+    # statistics before it leaves this function.
+    raw_causes = Dict{Symbol, Int}()
+    raw_works = Int[]
+    cleaned_causes = Dict{Symbol, Int}()
+    cleaned_works = Int[]
     if isempty(candidates)
         return (
             graph = raw_graph,
@@ -3404,6 +3819,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :no_candidate_windows,
             raw_evaluated = 0,
             cleaned_evaluated = 0,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics = Dict{Symbol, Any}[],
             cleaned_metrics = Dict{Symbol, Any}[],
             cleanup = Dict{String, Any}(),
@@ -3432,6 +3851,8 @@ function _evaluate_indel_frontier_schedule_impl(
         metric[:window_stop] = last(window)
         metric[:admitted] = admitted
         raw_evaluated += 1
+        _record_indel_frontier_cause!(raw_causes, metric, work_limit)
+        _record_indel_frontier_work!(raw_works, metric)
         if length(raw_metrics) < _INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT
             push!(raw_metrics, metric)
         end
@@ -3461,6 +3882,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_memory_limit,
                 raw_evaluated,
                 cleaned_evaluated = 0,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics = Dict{Symbol, Any}[],
                 cleanup,
@@ -3487,6 +3912,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_out_of_memory,
                 raw_evaluated,
                 cleaned_evaluated = 0,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics = Dict{Symbol, Any}[],
                 cleanup = Dict{String, Any}(
@@ -3508,6 +3937,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :raw_frontier_affordable,
             raw_evaluated,
             cleaned_evaluated = 0,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics = Dict{Symbol, Any}[],
             cleanup = Dict{String, Any}(),
@@ -3555,6 +3988,9 @@ function _evaluate_indel_frontier_schedule_impl(
                     metric[:window_stop] = last(window)
                     metric[:admitted] = admitted
                     cleaned_evaluated += 1
+                    _record_indel_frontier_cause!(
+                        cleaned_causes, metric, work_limit)
+                    _record_indel_frontier_work!(cleaned_works, metric)
                     cleaning_lost_anchor |= raw_anchored[candidate_index] &&
                                             !get(metric, :anchored, false)
                     if length(cleaned_metrics) <
@@ -3576,7 +4012,17 @@ function _evaluate_indel_frontier_schedule_impl(
             out_of_memory || rethrow()
             cleaned_graph = nothing
             cleaned_weighted_graph = nothing
-            empty!(cleaned_metrics)
+            # Resetting the diagnostics is LOAD-BEARING, not hygiene: the
+            # per-window loop above already recorded one cause and one work
+            # value for every window it probed before the throw, while this
+            # branch reports `cleaned_evaluated = 0`. Leaving either container
+            # populated would publish a histogram that cannot sum to its
+            # evaluated counter. Rebind rather than `empty!` -- this is the one
+            # path whose PURPOSE is releasing memory, and `empty!` retains the
+            # buffer's capacity.
+            cleaned_metrics = Dict{Symbol, Any}[]
+            cleaned_causes = Dict{Symbol, Int}()
+            cleaned_works = Int[]
             cleaned_evaluated = 0
             fill!(cleaned_admitted, false)
             for (candidate_index, (read_index, window)) in enumerate(candidates)
@@ -3620,6 +4066,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = :cleaning_out_of_memory,
             raw_evaluated,
             cleaned_evaluated,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics,
             cleanup,
@@ -3673,6 +4123,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_memory_limit,
                 raw_evaluated,
                 cleaned_evaluated,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics,
                 cleanup,
@@ -3703,6 +4157,10 @@ function _evaluate_indel_frontier_schedule_impl(
                 decision_reason = :weighted_graph_out_of_memory,
                 raw_evaluated,
                 cleaned_evaluated,
+                raw_causes,
+                cleaned_causes,
+                raw_work_summary = _indel_frontier_work_summary(raw_works),
+                cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
                 raw_metrics,
                 cleaned_metrics,
                 cleanup = Dict{String, Any}(
@@ -3724,6 +4182,10 @@ function _evaluate_indel_frontier_schedule_impl(
             decision_reason = reason,
             raw_evaluated,
             cleaned_evaluated,
+            raw_causes,
+            cleaned_causes,
+            raw_work_summary = _indel_frontier_work_summary(raw_works),
+            cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
             raw_metrics,
             cleaned_metrics,
             cleanup,
@@ -3732,8 +4194,6 @@ function _evaluate_indel_frontier_schedule_impl(
 
     reason = if cleaning_status == :out_of_memory
         :cleaning_out_of_memory
-    elseif cleaning_status == :weighted_memory_limit
-        :weighted_graph_memory_limit
     elseif cleaning_status == :memory_limit
         :cleaning_memory_limit
     elseif cleaning_lost_anchor
@@ -3755,6 +4215,10 @@ function _evaluate_indel_frontier_schedule_impl(
         decision_reason = reason,
         raw_evaluated,
         cleaned_evaluated,
+        raw_causes,
+        cleaned_causes,
+        raw_work_summary = _indel_frontier_work_summary(raw_works),
+        cleaned_work_summary = _indel_frontier_work_summary(cleaned_works),
         raw_metrics,
         cleaned_metrics,
         cleanup,
@@ -3808,6 +4272,8 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         cleaned_graph = nothing,
         cleaned_weighted_graph = nothing,
@@ -3825,6 +4291,7 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
     _divergent = improve_read_likelihood_windowed_detail(
         read, graph, k, hard_vertices;
         graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph, cleaned_graph = cleaned_graph,
         cleaned_weighted_graph = cleaned_weighted_graph,
         indel_window_sources = indel_window_sources, diagnostics = diagnostics,
@@ -3846,13 +4313,92 @@ is the number dropped for a length mismatch.
 Without `indel_window_sources`, `indel_params === nothing` selects substitution
 and non-`nothing` selects the indel pair-HMM. A source map overrides that choice
 per window: `:raw` and `:cleaned` use the pair-HMM, while `:substitution` uses the
-unchanged length-preserving kernel even under a global indel profile. The global
-profile still requests complete-span partitioning and original-coordinate
-reassembly. Length-changing pair-HMM corrections cannot shift later original
+unchanged length-preserving kernel even under a global indel profile.
+Complete-span partitioning and original-coordinate reassembly follow
+`_read_runs_indel_decode` (td-4mbg): they apply when the read has at least one
+ADMITTED window, or when no source map was supplied at all and a global profile
+is active. A read whose every scheduled window was demoted therefore takes the
+same truncated partition as the substitution-only arm.
+Length-changing pair-HMM corrections cannot shift later original
 window coordinates; substitution length divergence is dropped defensively.
 Exposed for the windowed-decode correctness test.
 """
 const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
+# Window sources that actually run the pair-HMM: every valid source EXCEPT the
+# demoted one. `:substitution` means the scheduler evaluated that window and
+# REJECTED it, so it decodes through the unchanged length-preserving kernel.
+#
+# DERIVED, not a parallel literal. `_read_runs_indel_decode` selects the
+# in-place length-preserving splice when nothing here matches, and that splice
+# writes `@inbounds` without a length guard -- its safety depends on every
+# window having taken the length-preserving kernel. A hand-maintained copy that
+# omitted a newly-added source would route a length-CHANGING decode into that
+# splice: silent truncation if it lengthened the window, an out-of-bounds read
+# if it shortened it. Deriving makes the complement impossible to get wrong, and
+# the window-level kernel selection inside `improve_read_likelihood_windowed_detail`
+# reads the same tuple, so the read-level and window-level views of "does this run
+# the pair-HMM" cannot disagree.
+const _INDEL_ADMITTED_WINDOW_SOURCES = Tuple(
+    filter(!=(:substitution), _VALID_INDEL_WINDOW_SOURCES))
+
+"""
+    _read_runs_indel_decode(indel_params, indel_window_sources) -> Bool
+
+Whether THIS read actually runs an indel decode, which selects both the
+complete-span window partition and the original-coordinate splice.
+
+td-4mbg: the two decisions that select indel machinery each asked a PASS-level
+question in place of this READ-level one -- `complete_span = indel_params !==
+nothing || indel_window_sources !== nothing` at the partition, and `indel_params
+=== nothing` at the splice -- so the mere presence of a frontier-scheduled source
+map put a read on the indel path even when every window in that map had been
+demoted to `:substitution`.
+
+THE PARTITION IS THE BEHAVIOURAL CHANGE. Complete-span partitioning covers the
+whole hard span in anchored windows instead of truncating each merged range to
+one `max_window` prefix. When a merged hard range EXCEEDS `max_window` the
+rejected-frontier read therefore decodes more bases than the substitution-only
+arm decodes on the same read, and each later window carries a k-base start
+anchor whose TERMINAL overlap must match the next window's original anchor --
+that check (`_indel_window_terminal_anchor_matches`) is where
+`window_anchor_rejections` come from, while `_trim_indel_window_overlap`
+failures increment `trace_contract_errors`. When no merged range exceeds
+`max_window` the two partitions coincide and the defect is latent on that read.
+
+THE SPLICE CHANGE IS OUTPUT-NEUTRAL, not a second fix. When this predicate is
+false every window resolves to `:substitution`, so every accepted window was
+length-preserving and `_splice_indel_windows` would reproduce the in-place
+overwrite byte for byte. It is changed for consistency and to keep the in-place
+arm's length assumption derivable from one predicate; it is not observable.
+
+SCOPE. A wholly-rejected `:frontier_budgeted` pass nulls `effective_indel_params`
+while deliberately RETAINING the window-source map, so those reads flip from
+complete-span to truncated here too. That is intended, and it is a change rather
+than a no-op.
+
+With no source map the legacy `indel_params` test stands (first line of the
+body), so the profile-disabled path and `:unrestricted` are unchanged BY
+CONSTRUCTION. The illumina byte-identity oracle is a separate EMPIRICAL check;
+re-measure it after any change here rather than inferring it from this sentence.
+
+Evidence for the defect and for this change is generated by
+`benchmarking/indel_reroute_evidence.jl` (multi-seed, both arms, committed so the
+numbers are reproducible). Do not quote single-seed contig lengths as an effect
+size: largest-contig is a discontinuous order statistic and one correction can
+join or split a contig.
+"""
+function _read_runs_indel_decode(
+        indel_params::Union{Nothing, IndelDecodeParams},
+        indel_window_sources::Union{
+            Nothing, AbstractDict{UnitRange{Int}, Symbol}},
+)::Bool
+    indel_window_sources === nothing && return indel_params !== nothing
+    indel_params === nothing && return false
+    for source in values(indel_window_sources)
+        source in _INDEL_ADMITTED_WINDOW_SOURCES && return true
+    end
+    return false
+end
 
 function _merge_soft_edge_weights!(
         destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -3861,6 +4407,29 @@ function _merge_soft_edge_weights!(
     for (edge_id, weight) in staged.weights
         destination.weights[edge_id] =
             get(destination.weights, edge_id, 0.0) + weight
+    end
+    return nothing
+end
+
+# opt1: parallel-branch capture. When a `sink` vector is supplied the per-read /
+# per-window staged accumulator is APPENDED in decode order (indexed-write
+# ownership, no shared mutation) instead of merged into the shared `soft_weights`.
+# The batch loop later folds the captured lists flat in read×window order,
+# reproducing the serial left-fold bit-for-bit. `sink === nothing` keeps the
+# serial merge path unchanged.
+function _capture_or_merge_soft_weights!(
+        soft_weights,
+        sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}},
+        staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+)::Nothing
+    if sink !== nothing
+        push!(sink, staged)
+    elseif soft_weights !== nothing
+        _merge_soft_edge_weights!(soft_weights, staged)
+    else
+        error("staged soft-EM weights with no destination (both sink and " *
+              "soft_weights are nothing)")
     end
     return nothing
 end
@@ -3934,6 +4503,8 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         cleaned_graph = nothing,
         cleaned_weighted_graph = nothing,
@@ -3955,12 +4526,18 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     # boundary k-mer is solid. Quality-aware decoding leaves the target endpoint free
     # so the last k-mer remains correctable.
     effective_pad = pad === nothing ? k : pad
+    # td-4mbg: complete-span partitioning and the original-coordinate splice below
+    # are both indel-decode machinery, so they follow whether THIS read actually
+    # runs one. A frontier-scheduled read whose every window was demoted to
+    # `:substitution` takes the same truncated windows, and the same in-place
+    # overwrite, as the substitution-only arm takes on that read.
+    runs_indel_decode = _read_runs_indel_decode(indel_params, indel_window_sources)
     windows = _hard_window_ranges(
         read, k, hard_vertices;
         pad = effective_pad,
         max_window = max_window,
         graph_mode = graph_mode,
-        complete_span = indel_params !== nothing || indel_window_sources !== nothing)
+        complete_span = runs_indel_decode)
     isempty(windows) && return read, false, 0, 0
 
     seq_chars = collect(FASTX.sequence(String, read))
@@ -3998,13 +4575,17 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         window_graph = window_source == :cleaned ? cleaned_graph : graph
         window_weighted_graph = window_source == :cleaned ?
                                 cleaned_weighted_graph : weighted_graph
-        window_indel_params = window_source == :substitution ? nothing : indel_params
+        # Test ADMITTED membership rather than `!= :substitution` so this and
+        # `_read_runs_indel_decode` read the same tuple (td-4mbg).
+        window_indel_params = window_source in _INDEL_ADMITTED_WINDOW_SOURCES ?
+                              indel_params : nothing
         if window_graph === nothing
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
             continue
         end
-        staged_soft_weights = soft_weights === nothing ?
+        staged_soft_weights = (soft_weights === nothing &&
+                               soft_weights_sink === nothing) ?
                               nothing :
                               Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         decoded_sub,
@@ -4021,9 +4602,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             # path/trace/length contract passes, so structural failures merge an
             # empty accumulator. Changed windows remain staged until their splice
             # and overlap contracts pass below.
-            if soft_weights !== nothing
-                _merge_soft_edge_weights!(
+            if staged_soft_weights !== nothing
+                _capture_or_merge_soft_weights!(
                     soft_weights,
+                    soft_weights_sink,
                     Base.something(staged_soft_weights),
                 )
             end
@@ -4088,9 +4670,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 (owned_window, String(dseq_chars), String(dqual_chars)))
             accepted_window = true
         end
-        if accepted_window && soft_weights !== nothing
-            _merge_soft_edge_weights!(
+        if accepted_window && staged_soft_weights !== nothing
+            _capture_or_merge_soft_weights!(
                 soft_weights,
+                soft_weights_sink,
                 something(staged_soft_weights),
             )
         end
@@ -4099,9 +4682,12 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     isempty(accepted) &&
         return read, false, decoded_windows, divergent_windows
 
-    if indel_params === nothing
+    if !runs_indel_decode
         # Substitution: length-preserving in-place overwrite (byte-identical to the
-        # pre-indel path — oracle preservation).
+        # pre-indel path — oracle preservation). td-4mbg widened this from
+        # `indel_params === nothing` to the read-level predicate: every accepted
+        # window here decoded through the length-preserving kernel, so the
+        # length-changing rebuild has nothing to reassemble.
         for (w, dseq, dqual) in accepted
             dseq_chars = collect(dseq)
             dqual_chars = collect(dqual)
@@ -4266,12 +4852,25 @@ mutable struct CorrectorDiagnostics
     # the first uncorrectable position — see the decode-truncation defect). It is
     # the completeness guarantee: every such read is still scored at input length.
     substitution_length_divergences::Threads.Atomic{Int}
+    # opt1 actuation counter: incremented once per PARALLEL decode batch (the
+    # `if use_parallel` branch). A silent revert to serial leaves this at 0 while
+    # byte-identity still holds, so tests assert >0 to catch a lost parallel path.
+    parallel_decode_batches::Threads.Atomic{Int}
+    # opt4 (td-jbjd, pass 2): incremented once per read whose per-pass decode was
+    # skipped BECAUSE it is frozen (skip_frozen_reads=true and its consecutive
+    # no-improvement streak >= freeze_streak_threshold) -- NOT reads skipped for
+    # skip_solid/hard_window/pass-decode-off reasons, which are pre-existing gate
+    # skips unrelated to opt4 (finding #5: a gate-skipped read was never evaluated
+    # for improvement, so it must not be counted as "frozen"). Always 0 when
+    # skip_frozen_reads=false (the default no-op path).
+    frozen_reads_skipped::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -4424,14 +5023,33 @@ first two/three/four values are unaffected.
 
 `soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
-NOT thread-safe, so supplying it forces sequential processing for this pass.
+thread-safe under parallel decode: each read/window's staged contributions are
+captured and folded into this accumulator in read×window order after the
+`Threads.@threads` loop, byte-identical to serial.
 
-`cheap_correct` (td-bjnt): when `true` (and `graph_mode==:canonical`), run the
+`cheap_correct` (td-bjnt): when `true` (and `graph_mode != :singlestrand`), run the
 Stage 0 k-mer-spectrum correction pass (`_stage0_cheap_correct`) over the read set
 BEFORE any gating/decode, cheaply fixing simple single-substitution errors with a
 linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
 (bubbles/repeats). The decode then operates on the cheaply-corrected reads. Only
 enabled on the :scalable tier.
+
+`skip_frozen_reads`/`freeze_streak_threshold`/`freeze_streaks` (opt4, td-jbjd):
+when `skip_frozen_reads=true`, a read whose per-read decode has produced NO
+improvement for `freeze_streak_threshold` (default 2) consecutive calls against
+the CALLER-supplied `freeze_streaks` vector is treated as converged and skipped
+this pass (OR'd into the existing skip-solid/hard-window gate) — an approximate,
+opt-in optimization that trades a bounded amount of accuracy for skipped work
+(default OFF). `freeze_streaks` is caller-owned: this function only reads and
+mutates the vector it is given (a decoded read resets its entry to 0 on
+improvement or advances it by 1 otherwise; a frozen-skipped read's entry also
+advances). It defaults to `nothing`, in which case `skip_frozen_reads=true` is
+INERT (no read is ever frozen) and a `@warn` fires to surface the
+misconfiguration. `freeze_across_rungs` is NOT a parameter of this function — it
+only governs whether `mycelia_iterative_assemble`'s outer k-loop resets or
+persists the `freeze_streaks` vector it threads into each call across a k-advance;
+a direct caller of this function controls that scope itself by choosing whether
+to pass a fresh or a carried-forward `freeze_streaks` vector.
 
 Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
 decode_gated)` where `skip_fraction` is the fraction of reads passed through WITHOUT
@@ -4446,6 +5064,10 @@ two/three/four values are unaffected.
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
         batch_size::Int = 10000,
+        gc_between_batches::Bool = false,
+        skip_frozen_reads::Bool = false,
+        freeze_streak_threshold::Int = 2,
+        freeze_streaks::Union{Nothing, Vector{Int}} = nothing,
         enable_parallel::Bool = false,
         graph_mode::Symbol = :canonical,
         skip_solid::Bool = false,
@@ -4475,6 +5097,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             k;
             verbose = verbose,
             batch_size = batch_size,
+            gc_between_batches = gc_between_batches,
+            skip_frozen_reads = skip_frozen_reads,
+            freeze_streak_threshold = freeze_streak_threshold,
+            freeze_streaks = freeze_streaks,
             enable_parallel = enable_parallel,
             graph_mode = graph_mode,
             skip_solid = skip_solid,
@@ -4498,10 +5124,26 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     end
 end
 
+# opt5 (td-jbjd): resolve whether the corrector's forced between-batch
+# GC.gc() fires, from the gc_between_batches keyword (primary) and the
+# MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback). Pure and
+# side-effect free so the wiring is truth-table testable without running
+# the corrector — the GC itself is output-invisible, so byte-identity
+# alone cannot lock that the keyword actually gates it.
+function _gc_between_batches_enabled(gc_between_batches::Bool)::Bool
+    return gc_between_batches ||
+           get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in
+           ("1", "true", "yes")
+end
+
 function _improve_read_set_likelihood_impl(
         reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool,
         batch_size::Int,
+        gc_between_batches::Bool,
+        skip_frozen_reads::Bool,
+        freeze_streak_threshold::Int,
+        freeze_streaks::Union{Nothing, Vector{Int}},
         enable_parallel::Bool,
         graph_mode::Symbol,
         skip_solid::Bool,
@@ -4559,6 +5201,13 @@ function _improve_read_set_likelihood_impl(
     if cheap_correct && graph_mode == :singlestrand
         @warn "cheap_correct is not supported for graph_mode=:singlestrand; disabling Stage 0 cheap correction." graph_mode
     end
+    # opt4 (td-jbjd, review fix I5): skip_frozen_reads=true with no
+    # freeze_streaks vector supplied is a silent no-op (`_frozen_read_at` below
+    # is unconditionally `false` when `freeze_streaks === nothing`) -- surface
+    # the misconfiguration rather than let a caller believe freezing is active.
+    if skip_frozen_reads && freeze_streaks === nothing
+        @warn "skip_frozen_reads=true but freeze_streaks not supplied; freezing is inert this call"
+    end
     # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
     # corrector needs the solid set. Compute once, share both consumers.
     need_solid = (skip_solid || cheap_correct) && graph_mode != :singlestrand
@@ -4567,7 +5216,9 @@ function _improve_read_set_likelihood_impl(
     # Stage 0 CHEAP correction (td-bjnt): fix simple single-substitution errors
     # with a linear k-mer-spectrum scan BEFORE any gating/decode, so graph Viterbi
     # is reserved for genuine ambiguity. The decode below then runs on the
-    # cheaply-corrected reads. Gated on :scalable (cheap_correct=true, canonical).
+    # cheaply-corrected reads. Gated on :scalable (`cheap_correct=true`); the
+    # graph-mode condition is `!= :singlestrand`, which :doublestrand (:scalable)
+    # and :canonical both satisfy.
     cheap_corrections = 0
     work_reads = reads
     if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
@@ -4602,9 +5253,16 @@ function _improve_read_set_likelihood_impl(
     # Precompute per-read skip decisions ONCE (cheap k-mer-membership checks) so the
     # adaptive low-k gate can measure the natural decode fraction and the decode loop
     # can reuse the same flags (no double evaluation).
+    # opt4 (td-jbjd, pass 1): OR a frozen (converged, N-consecutive-pass-stable)
+    # read into the existing skip-solid/hard-window skip decision — reuses the
+    # already-proven skip path (fact 5) rather than new decode-bypass plumbing.
+    # `freeze_streaks === nothing` (default, `skip_frozen_reads=false`) makes this
+    # predicate always `false`, so the disabled path is unaffected.
+    _frozen_read_at = i -> skip_frozen_reads && freeze_streaks !== nothing &&
+                           freeze_streaks[i] >= freeze_streak_threshold
     base_skip_flags = Vector{Bool}(undef, total_reads)
     @inbounds for i in 1:total_reads
-        base_skip_flags[i] = _gate_skip(work_reads[i])
+        base_skip_flags[i] = _gate_skip(work_reads[i]) || _frozen_read_at(i)
     end
     natural_decode_fraction = total_reads > 0 ?
                               count(!, base_skip_flags) / total_reads : 0.0
@@ -4671,6 +5329,14 @@ function _improve_read_set_likelihood_impl(
         pass_indel_telemetry[:cleaned_frontier_evaluated] = decision.cleaned_evaluated
         pass_indel_telemetry[:raw_frontier_metrics] = decision.raw_metrics
         pass_indel_telemetry[:cleaned_frontier_metrics] = decision.cleaned_metrics
+        pass_indel_telemetry[:raw_frontier_rejection_causes] =
+            decision.raw_causes
+        pass_indel_telemetry[:cleaned_frontier_rejection_causes] =
+            decision.cleaned_causes
+        pass_indel_telemetry[:raw_frontier_work_summary] =
+            decision.raw_work_summary
+        pass_indel_telemetry[:cleaned_frontier_work_summary] =
+            decision.cleaned_work_summary
         pass_indel_telemetry[:graph_cleanup] = decision.cleanup
         indel_admitted = decision.admitted
         scheduled_weighted_graph_oom = decision.decision_reason in (
@@ -4748,15 +5414,13 @@ function _improve_read_set_likelihood_impl(
     # otherwise use the precomputed gate flags.
     _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
-    # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
-    # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
-    # `Threads.@threads` still creates a distinct task with one Julia thread, so
-    # keep the explicit parallel contract (including task-local snapshot rebinding)
-    # active instead of silently taking the sequential branch on single-thread CI.
-    use_parallel = enable_parallel && soft_weights === nothing
-    if enable_parallel && soft_weights !== nothing
-        @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
-    end
+    # opt1: soft-EM accumulation is now thread-safe — the parallel branch captures
+    # each read's per-window staged accumulators into its own sink list (indexed
+    # write, no shared mutation), then folds them FLAT in read×window order after
+    # the loop, reproducing the serial left-fold bit-for-bit (windowed decodes
+    # contribute one staged accumulator per window; non-windowed one per read). So
+    # parallel + soft-EM coexist byte-identically on both decode paths.
+    use_parallel = enable_parallel
 
     if verbose
         println("  Processing $total_reads reads in batches of $batch_size")
@@ -4819,6 +5483,10 @@ function _improve_read_set_likelihood_impl(
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
     # decode operates on already-simplified reads.
+    # Resolve the between-batch GC policy ONCE (opt5, td-jbjd): it is
+    # output-neutral, so it is a stable per-run setting rather than a
+    # per-batch env re-read.
+    gc_between_batches_enabled = _gc_between_batches_enabled(gc_between_batches)
     for batch_start in 1:batch_size:total_reads
         batch_end = min(batch_start + batch_size - 1, total_reads)
         batch_reads = work_reads[batch_start:batch_end]
@@ -4826,6 +5494,7 @@ function _improve_read_set_likelihood_impl(
         batch_improvements = 0
 
         if use_parallel
+            Threads.atomic_add!(diag.parallel_decode_batches, 1)
             # Parallel processing for large batches
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
 
@@ -4833,6 +5502,14 @@ function _improve_read_set_likelihood_impl(
             # word) — the @threads writes below would otherwise race on the shared
             # word and undercount the skip fraction (review I2).
             skip_flags = fill(false, length(batch_reads))
+
+            # opt1: one sink LIST per read (indexed write, no race); the decode
+            # appends its per-window staged accumulators in order. Folded flat in
+            # read×window order after the loop. `nothing` when soft-EM is off.
+            batch_local = soft_weights === nothing ? nothing :
+                          Vector{
+                              Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}}(
+                              undef, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 Mycelia.Rhizomorph._with_soft_edge_weight_snapshot(
                     parallel_soft_edge_weight_snapshot,
@@ -4845,6 +5522,15 @@ function _improve_read_set_likelihood_impl(
                         read_index = batch_start + i - 1
                         read_window_sources = get(
                             scheduled_window_sources, read_index, nothing)
+                        # opt1: one sink LIST per read (indexed write, no race); the
+                        # decode appends its per-window staged accumulators in order,
+                        # folded flat into `soft_weights` in read×window order below.
+                        local_sink = soft_weights === nothing ? nothing :
+                                     Vector{
+                                         Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}()
+                        if soft_weights !== nothing
+                            batch_local[i] = local_sink
+                        end
                         improved_read,
                         was_improved = (use_windowed &&
                                         (force_indel_windowing ||
@@ -4853,6 +5539,8 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k, hard_vertices;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = nothing,
+                            soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             cleaned_graph = scheduled_cleaned_graph,
                             cleaned_weighted_graph =
@@ -4866,6 +5554,8 @@ function _improve_read_set_likelihood_impl(
                             read, decode_graph, k;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
+                            soft_weights = nothing,
+                            soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             diagnostics = diag,
                             indel_params = effective_indel_params,
@@ -4884,14 +5574,86 @@ function _improve_read_set_likelihood_impl(
                 if was_improved
                     batch_improvements += 1
                 end
+                # opt4 (pass 2, td-jbjd findings #2/#5): mirror the serial
+                # semantics exactly -- a single mutually-exclusive update per read,
+                # matching the serial skip-branch + decode-branch pair. `skip_flags`
+                # records whether THIS read was skipped in the @threads loop above
+                # (for ANY reason -- gate, frozen, or pass-decode-off); a skipped
+                # read's `was_improved` is always `false` (set at the skip
+                # assignment above), so it alone cannot distinguish "skipped" from
+                # "decoded, no improvement". A decoded read updates its streak as
+                # before; a skipped read only updates its streak (+ the frozen
+                # diagnostic) when freezing is WHY it was skipped -- a gate/
+                # pass-decode-off skip was never evaluated for improvement and must
+                # not conflate "not looked at" with "converged". No-op when
+                # freeze_streaks is nothing.
+                if freeze_streaks !== nothing
+                    read_index = batch_start + i - 1
+                    if skip_flags[i]
+                        if _frozen_read_at(read_index)
+                            freeze_streaks[read_index] += 1
+                            # opt4 (td-jbjd, review fix I6): a read that is
+                            # ALREADY frozen (streak >= threshold) still counts
+                            # as frozen when a global `pass_decode_off` pass also
+                            # skips every other read -- but this pass's skip was
+                            # NOT caused by freezing specifically (every read was
+                            # skipped regardless of its streak), so attributing
+                            # it to `frozen_reads_skipped` would over-count vs
+                            # the counter's documented contract ("NOT reads
+                            # skipped for pass-decode-off reasons"). The streak
+                            # itself still advances (state stays correct); only
+                            # the diagnostic attribution is gated.
+                            if !pass_decode_off
+                                Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                            end
+                        end
+                    else
+                        freeze_streaks[read_index] =
+                            was_improved ? 0 : freeze_streaks[read_index] + 1
+                    end
+                end
+            end
+
+            # opt1: fold captured per-window soft-EM contributions into the shared
+            # accumulator flat in ascending read×window order — identical summation
+            # order to the serial path, so weights are bit-identical despite float
+            # non-associativity.
+            if soft_weights !== nothing
+                for i in eachindex(batch_reads)
+                    isassigned(batch_local, i) || continue   # skipped reads
+                    for staged in batch_local[i]
+                        _merge_soft_edge_weights!(soft_weights, staged)
+                    end
+                end
             end
         else
-            # Sequential processing (also the soft-EM path: accumulation into
-            # `soft_weights` happens per-read inside improve_read_likelihood).
+            # Sequential processing (soft-EM in this serial branch accumulates
+            # per-read into `soft_weights` inside improve_read_likelihood; the
+            # parallel branch captures into per-read sinks and folds after the loop).
             for (i, read) in enumerate(batch_reads)
                 if _skip_this_read_at(batch_start + i - 1)
                     updated_reads[batch_start + i - 1] = read   # skip the decode
                     skipped_reads += 1
+                    # opt4 (pass 2, td-jbjd finding #5): a read skipped here was NOT
+                    # evaluated for improvement this pass, so its freeze streak is
+                    # only touched when FREEZING is why it was skipped (an
+                    # already-frozen read stays frozen and counts toward
+                    # frozen_reads_skipped). A read skipped for skip_solid /
+                    # hard_window / pass-decode-off reasons was never looked at --
+                    # extending its streak would conflate "not evaluated" with
+                    # "converged". No-op when freeze_streaks is nothing.
+                    if freeze_streaks !== nothing && _frozen_read_at(batch_start + i - 1)
+                        freeze_streaks[batch_start + i - 1] += 1
+                        # opt4 (td-jbjd, review fix I6): mirror the parallel
+                        # branch -- do not attribute this skip to
+                        # `frozen_reads_skipped` when a global
+                        # `pass_decode_off` pass is why EVERY read (frozen or
+                        # not) was skipped this pass. The streak still
+                        # advances; only the diagnostic counter is gated.
+                        if !pass_decode_off
+                            Threads.atomic_add!(diag.frozen_reads_skipped, 1)
+                        end
+                    end
                     continue
                 end
                 read_index = batch_start + i - 1
@@ -4924,6 +5686,14 @@ function _improve_read_set_likelihood_impl(
                 if was_improved
                     batch_improvements += 1
                 end
+                # opt4 (pass 1): reset the freeze streak on improvement, else
+                # extend it — the state the NEXT pass's frozen-skip decision
+                # (via _frozen_read_at) consumes. No-op when freeze_streaks is
+                # nothing (skip_frozen_reads=false).
+                if freeze_streaks !== nothing
+                    freeze_streaks[batch_start + i - 1] =
+                        was_improved ? 0 : freeze_streaks[batch_start + i - 1] + 1
+                end
             end
         end
 
@@ -4937,8 +5707,18 @@ function _improve_read_set_likelihood_impl(
             println("    Batch $batch_num/$total_batches: $(batch_improvements)/$(length(batch_reads)) improvements ($(round(improvement_rate, digits=1))%)")
         end
 
-        # Force garbage collection between batches for memory efficiency
-        if batch_end < total_reads
+        # Between-batch GC is opt-in (td-jbjd opt5). The forced stop-the-world
+        # GC.gc() here parked ALL @threads decode workers between batches — the
+        # mechanism most consistent with the ~286% CPU observed on the td-n8ax
+        # E.coli @30x gate (a flat/bounded memory plateau) — while buying nothing
+        # once memory is already bounded. Default OFF (the speedup); re-enable via
+        # the gc_between_batches keyword (primary) or the
+        # MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback, for memory-
+        # constrained hosts). GC is output-neutral, so corrected reads are
+        # byte-identical either way. (The other GC.gc(true) calls in this file —
+        # OOM handlers and proactive memory-release paths — are unaffected; they
+        # stay for fail-closed safety.)
+        if batch_end < total_reads && gc_between_batches_enabled
             GC.gc()
         end
     end
@@ -5075,6 +5855,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -5106,6 +5888,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
     likelihood_improvement = find_optimal_sequence_path(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
         substitution_error_rate = substitution_error_rate,
@@ -5143,6 +5926,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -5178,6 +5963,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     viterbi_result = try_viterbi_path_improvement(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        soft_weights_sink = soft_weights_sink,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
         substitution_error_rate = substitution_error_rate,
@@ -5901,6 +6687,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_anchor_rejections => 0,
             :window_divergences => 0,
             :substitution_length_divergences => 0,
+            :parallel_decode_batches => 0,
+            :frozen_reads_skipped => 0,
         )
     else
         Dict(
@@ -5916,6 +6704,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :window_divergences => diagnostics.window_divergences[],
             :substitution_length_divergences =>
                 diagnostics.substitution_length_divergences[],
+            :parallel_decode_batches => diagnostics.parallel_decode_batches[],
+            :frozen_reads_skipped => diagnostics.frozen_reads_skipped[],
         )
     end
 
@@ -6033,7 +6823,17 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # verifies k + mode match its re-assembly parameters before reusing.
         :final_graph_k => final_pass_graph_k,
         :final_graph_mode => final_pass_graph_mode,
-        :final_graph_reusable => final_pass_graph_reusable
+        :final_graph_reusable => final_pass_graph_reusable,
+        # opt1 actuation counter: total PARALLEL decode batches across all passes
+        # (0 on a serial/exhaustive run). Lets an integration test prove the
+        # parallel path actually ran rather than silently reverting to serial.
+        :parallel_decode_batches =>
+            (diagnostics === nothing ? 0 : diagnostics.parallel_decode_batches[]),
+        # opt4 (td-jbjd, pass 2) actuation counter: total reads skipped BECAUSE
+        # frozen, across all passes (0 when skip_frozen_reads=false, the default).
+        # Mirrors parallel_decode_batches's top-level convenience export.
+        :frozen_reads_skipped =>
+            (diagnostics === nothing ? 0 : diagnostics.frozen_reads_skipped[]),
     )
 
     if verbose
@@ -6213,6 +7013,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        soft_weights_sink::Union{
+            Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
@@ -6223,7 +7025,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
 )::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing} where {F, L}
     indel_attempt_started = false
     indel_outcome_recorded = false
-    staged_soft_weights = soft_weights === nothing ?
+    staged_soft_weights = (soft_weights === nothing &&
+                           soft_weights_sink === nothing) ?
                           nothing :
                           Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
     try
@@ -6483,7 +7286,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         soft_result_is_valid = indel_params !== nothing ||
                                length(corrected_sequence_string) ==
                                length(sequence_string)
-        if soft_weights !== nothing && soft_result_is_valid
+        if staged_soft_weights !== nothing && soft_result_is_valid
             # Bound the competing-path GENERATION with the same discipline as the
             # decode bounds above (td-e70t speed residual C5c): engage the walk band
             # + successor cap ONLY where the width beam is already finite (the
@@ -6571,9 +7374,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         end
         improved_record = FASTX.FASTQ.Record(
             FASTX.identifier(read), corrected_sequence_string, improved_quality)
-        if soft_weights !== nothing
-            _merge_soft_edge_weights!(
+        if staged_soft_weights !== nothing
+            _capture_or_merge_soft_weights!(
                 soft_weights,
+                soft_weights_sink,
                 something(staged_soft_weights),
             )
         end
@@ -6840,7 +7644,13 @@ end
 # FLOOR — an edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is clamped to at least
 # its raw coverage, so a real but SKEWED minority allele (e.g. a 10x branch in a
 # 20x/10x bubble) NEVER decays toward zero regardless of a heavier sibling. Only
-# near-zero-support (error) edges are free to decay below the cleaning gate. This
+# near-zero-support (error) edges are free to decay toward zero. That decay does
+# NOT reach any cleaning predicate: `clean_corrector_graph!` gates on RAW vertex
+# evidence and never consults the soft weight (`evidence-functions.jl` states the
+# soft signal acts through `compute_edge_weight` / the Viterbi transition score
+# and warns against exactly this conflation). The mechanism is transition-score
+# decay -- the next decode routes AWAY from the decayed edge, so the graph
+# REBUILT from those decoded reads carries less support for it. This
 # fixes the prior v2's collapse of skewed variants (the responsibility split alone
 # gave `W_min' = N*W/(W_maj+W_min)`, a geometric decay to zero for any imbalance).
 

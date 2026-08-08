@@ -21,6 +21,22 @@
 #       readlen <= 500  -> "short-low-error"  regime, Illumina error model
 #       readlen  > 500  -> "long-high-error"  regime, Nanopore error model
 #
+# TECHNOLOGY WIRING. The regime technology drives BOTH halves of a cell:
+#   1. READ SIMULATION — `Mycelia.observe(...; tech=tech)` picks the error-TYPE
+#      mix (substitution- vs indel-dominated) and the quality model.
+#   2. CORRECTOR ERROR PROFILE — `assemble_genome(...; sequencing_tech=tech)`
+#      selects the indel-aware decode profile (`Mycelia.indel_error_profile`).
+#      :nanopore / :pacbio_clr enable the pair-HMM gap moves; :illumina stays on
+#      the substitution-only path.
+# The second half was NOT wired before the `corrector_sequencing_tech` column
+# existed: `run_arm` called `assemble_genome` without `sequencing_tech`, so
+# `AssemblyConfig` fell back to its `:illumina` default even on
+# nanopore-simulated long reads. Every readlen > 500 row from such a run is a
+# SUBSTITUTION-ONLY result labeled "nanopore" and is NOT comparable to a row
+# from a run that has this wiring. Absence of the `corrector_sequencing_tech`
+# column identifies those CSVs; they are retained under benchmarking/results/
+# for provenance. Compare only across rows whose corrector profile agrees.
+#
 # SCALE-ASSERTION GUARD (rhizomorph_scale_guard.jl): a VERDICT is only printed
 # when effective coverage x effective genome length exceeds a floor. Below the
 # floor the harness emits a SMOKE-ONLY notice, so a toy run can never be quoted
@@ -44,7 +60,11 @@
 #   MYCELIA_RGV_READLEN        comma-separated read lengths (default 150,5000)
 #   MYCELIA_RGV_COVERAGE       target fold coverage per cell (default 30; smoke default 10)
 #   MYCELIA_RGV_K              assembly k-mer size (default 21)
-#   MYCELIA_RGV_SEED           RNG seed for reproducibility (default 42)
+#   MYCELIA_RGV_SEED           comma-separated RNG seeds; each is an independent
+#                              replicate of the whole (err x readlen) grid and is
+#                              written to the `seed` CSV column (default 42). Use
+#                              "42,123,456" to produce the replicate axis the
+#                              paired-Wilcoxon analysis pairs over.
 #   MYCELIA_RGV_SCALE_FLOOR    override the scale-guard floor in bases
 #   MYCELIA_RUN_EXTERNAL       truthy -> run QUAST per arm and parse its
 #                              alignment-validated metrics (Genome fraction,
@@ -52,6 +72,44 @@
 #                              into the CSV (metric_source="quast"); degrades
 #                              gracefully to internal size-ratio metrics
 #                              (metric_source="internal") if QUAST is absent
+#
+# CSV columns that exist for RESULT INTEGRITY (not for the science directly):
+#
+#   seed              — the RNG seed this run used (MYCELIA_RGV_SEED). REQUIRED to
+#                       make seed a usable parallelization axis and to run the
+#                       pre-registration's paired-Wilcoxon rule over seeds
+#                       42/123/456: once shards are merged, replicate rows are
+#                       indistinguishable without it, so pairs cannot be formed.
+#                       See bead td-59o7 and `rgv_paired_wilcoxon.jl`.
+#   corrector_sequencing_tech
+#                     — the error profile the CORRECTOR actually ran, read BACK
+#                       from the assembler's own `assembly_stats["sequencing_tech"]`
+#                       stamp rather than echoed from the input argument. An
+#                       echoed column would read green even with the wiring
+#                       broken, which is the whole failure mode it exists to
+#                       make non-recurring. "n/a" on the naive arm, whose route
+#                       does not stamp the field; "error" when the arm itself
+#                       threw, so an exception is distinguishable from a healthy
+#                       naive arm (ok=false alone did not disambiguate them).
+#   corrector_indel_engaged
+#                     — read BACK from `assembly_stats["indel_engaged"]`: the
+#                       runtime count of reads on which the pair-HMM gap moves
+#                       actually FIRED. `corrector_sequencing_tech` proves only
+#                       that the tech reached `AssemblyConfig`; assembly.jl
+#                       deliberately separates `indel_moves` (profile INTENT)
+#                       from `indel_engaged` (runtime OUTCOME), so a "nanopore"
+#                       row with corrector_indel_engaged==0 is an indel-aware
+#                       profile that never engaged — the residual the tech column
+#                       cannot see. `missing` where the route stamps no corrector
+#                       telemetry (the naive arm) or where the arm threw.
+#   metric_source     — WHICH metric definition produced this row: "quast"
+#                       (alignment-validated) vs "internal*" (size-ratio proxy).
+#   quast_min_contig  — the --min-contig threshold QUAST was run at. Part of the
+#                       metric definition too: two rows both labelled "quast" but
+#                       filtered at different thresholds are not comparable.
+#                       Recording it makes a future change to the threshold policy
+#                       trip `metric_source_guard.jl` instead of silently moving
+#                       numbers. See beads td-28o0 / td-9p91.
 
 import Pkg
 if isinteractive()
@@ -72,6 +130,11 @@ include(joinpath(@__DIR__, "rhizomorph_scale_guard.jl"))
 # Pure, dependency-free QUAST report.tsv parser + per-arm metric attribution
 # (shared with the unit test and with mode_comparison.jl).
 include(joinpath(@__DIR__, "quast_report_parsing.jl"))
+# Pure, dependency-free QUAST --min-contig threshold policy (bead td-28o0). The
+# inline `max(50, glen ÷ 10)` this replaces demanded a 16,890 bp contig for T4,
+# which the naive arm cannot reach, so QUAST failed and the run degraded to
+# internal metrics. See that file's header for the ceiling rationale.
+include(joinpath(@__DIR__, "quast_min_contig.jl"))
 
 # === Configuration parsing =================================================
 
@@ -91,7 +154,11 @@ end
 Map a read length to a (label, technology) read-regime pair. Short reads model
 low-error Illumina chemistry; long reads model high-error Nanopore chemistry.
 The per-base error is still overridden by the swept error rate — the technology
-selects the error-TYPE mix (substitution- vs indel-dominated) and quality model.
+selects the error-TYPE mix (substitution- vs indel-dominated) and quality model
+for READ SIMULATION, and it is ALSO passed to `assemble_genome` as
+`sequencing_tech`, where it selects the CORRECTOR's indel-aware error profile.
+One symbol therefore governs both the simulated chemistry and the correction
+model that must match it.
 """
 function regime_for_readlen(readlen::Int)
     return readlen <= 500 ? ("short-low-error", :illumina) : ("long-high-error", :nanopore)
@@ -170,29 +237,85 @@ end
 # === One assembly arm ======================================================
 
 """
+Read an integer telemetry counter back out of an assembler's `assembly_stats`.
+Returns `missing` when the key is absent — the naive route stamps no corrector
+telemetry — or when the value is not interpretable as an integer, so an UNSTAMPED
+route can never be confused with a stamped zero (the two mean opposite things for
+`indel_engaged`).
+"""
+function _stat_int(stats, key::AbstractString)
+    v = get(stats, key, missing)
+    v === missing && return missing
+    v isa Integer && return Int(v)
+    v isa Real && return round(Int, v)
+    parsed = tryparse(Int, string(v))
+    return parsed === nothing ? missing : parsed
+end
+
+"""
 Run one assembly ARM (`corrector` = :none or :iterative) on `reads`, both pinned
 to DoubleStrand, write contigs to FASTA, and return a metrics NamedTuple. On
 failure the arm is recorded with `ok=false` rather than aborting the whole sweep.
+
+`sequencing_tech` is REQUIRED (no default) so a caller cannot silently fall back
+to the assembler's `:illumina` default on nanopore-simulated reads — that silent
+fallback is exactly the defect this keyword fixes. It is passed to BOTH arms.
+`AssemblyConfig` consults it in THREE places, not two: unconditionally at
+construction to VALIDATE the symbol against `_correction_profile_technologies()`
+(src/rhizomorph/assembly.jl), in the `:olc` layout branch, and in the iterative
+corrector's error-profile lookup. Only the latter two can change output, and the
+sweep pins `layout=:native`, so on `corrector=:none` the tech is inert for the
+RESULT — it is merely validated on an arm that previously never saw it. Both
+symbols `regime_for_readlen` emits are valid, and
+`rhizomorph_correction_validation_sweep_wiring_test.jl` asserts that inertness
+byte-for-byte on the contig FASTA rather than assuming it.
+
+`assembler` is dependency injection for that wiring test ONLY; it defaults to the
+production `Mycelia.Rhizomorph.assemble_genome`, so runtime behavior is unchanged.
+
+The returned `corrector_sequencing_tech` is read back from the assembler's own
+`assembly_stats["sequencing_tech"]` stamp — never echoed from the argument — so a
+future re-break of the wiring shows up in the CSV instead of reading green.
+`corrector_indel_engaged` is read back the same way from
+`assembly_stats["indel_engaged"]` and answers what the tech column cannot: not
+that the indel-aware profile was SELECTED, but that its gap moves actually FIRED.
+On the exception path the tech is recorded as `"error"` — a sentinel distinct
+from the healthy naive arm's `"n/a"`.
 """
-function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String, tag::String)
+function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String,
+        tag::String; sequencing_tech::Symbol,
+        assembler = Mycelia.Rhizomorph.assemble_genome)
     contigs_path = joinpath(outdir, "$(tag)_$(corrector)_contigs.fasta")
     t0 = time()
     local result
     try
-        result = Mycelia.Rhizomorph.assemble_genome(
+        result = assembler(
             reads;
             k = k,
             graph_mode = Mycelia.Rhizomorph.DoubleStrand,
             corrector = corrector,
+            sequencing_tech = sequencing_tech,
             verbose = false
         )
     catch e
-        @warn "Assembly arm failed" corrector tag exception = (e, catch_backtrace())
+        @warn "Assembly arm failed" corrector tag sequencing_tech exception = (
+            e, catch_backtrace())
         return (ok = false, corrector = corrector, n_contigs = 0, total_length = 0,
             largest_contig = 0, n50 = 0, genome_fraction = 0.0, runtime_s = time() - t0,
-            contigs_path = "")
+            contigs_path = "", corrector_sequencing_tech = "error",
+            corrector_indel_engaged = missing)
     end
     runtime = time() - t0
+    # Read BACK from the assembler's own stamp (assembly.jl stamps this on the
+    # iterative and hybrid-OLC routes). The naive route does not stamp it, so
+    # "n/a" is the expected value there.
+    corrector_tech = string(get(result.assembly_stats, "sequencing_tech", "n/a"))
+    # Runtime OUTCOME of the indel-aware profile, as distinct from the profile
+    # INTENT that `corrector_tech` records. assembly.jl separates `indel_moves`
+    # (the profile requested gap moves) from `indel_engaged` (a gap move actually
+    # fired), so a "nanopore" row with 0 engagements is a selected-but-never-used
+    # profile — invisible to the tech column alone.
+    corrector_indel = _stat_int(result.assembly_stats, "indel_engaged")
 
     open(contigs_path, "w") do io
         for (i, contig) in enumerate(result.contigs)
@@ -221,7 +344,8 @@ function run_arm(reads, corrector::Symbol, k::Int, glen::Int, outdir::String, ta
     return (ok = true, corrector = corrector, n_contigs = n_contigs,
         total_length = total_length, largest_contig = largest_contig, n50 = n50,
         genome_fraction = genome_fraction, runtime_s = round(runtime; digits = 3),
-        contigs_path = contigs_path)
+        contigs_path = contigs_path, corrector_sequencing_tech = corrector_tech,
+        corrector_indel_engaged = corrector_indel)
 end
 
 # === Main sweep ============================================================
@@ -234,7 +358,13 @@ function run_sweep()
     readlens = _parse_int_list(get(ENV, "MYCELIA_RGV_READLEN", ""), [150, 5000])
     coverage = parse(Float64, get(ENV, "MYCELIA_RGV_COVERAGE", smoke ? "10" : "30"))
     k = parse(Int, get(ENV, "MYCELIA_RGV_K", "21"))
-    seed = parse(Int, get(ENV, "MYCELIA_RGV_SEED", "42"))
+    # Seed is a LIST, matching ERR and READLEN. It was a scalar, so no launcher
+    # could produce the replicate axis the paired analysis needs: a pairable
+    # multi-seed table required three separate manual submissions plus a
+    # three-way `--csv` merge, a procedure documented nowhere. The axis was
+    # asserted by the schema and not wired by the harness (bead td-59o7).
+    seeds = _parse_int_list(get(ENV, "MYCELIA_RGV_SEED", ""), [42])
+    seed = first(seeds)   # the reference seed, for the banner and for k clamping
     scale_floor = parse(Float64, get(ENV, "MYCELIA_RGV_SCALE_FLOOR", string(SCALE_FLOOR_BASES)))
     run_external = _truthy(get(ENV, "MYCELIA_RUN_EXTERNAL", "false"))
 
@@ -245,6 +375,9 @@ function run_sweep()
     println("Read lengths   : $readlens")
     println("Coverage       : $(coverage)x")
     println("k              : $k")
+    # Printed so the seed is recoverable from a run log even for runs whose CSV
+    # predates the `seed` column (see rgv_seed_backfill.jl).
+    println("Seeds          : $(join(seeds, ", "))")
     println("Arms           : naive (corrector=:none) vs iterative (corrector=:iterative), both DoubleStrand")
     println("Scale floor    : $(scale_floor) bases")
     println("QUAST          : $(run_external ? "enabled" : "disabled (set MYCELIA_RUN_EXTERNAL=true)")")
@@ -260,6 +393,15 @@ function run_sweep()
     glen = length(refseq)
     println("Reference: $ref_label ($glen bp)")
 
+    # QUAST --min-contig for this reference. Fixed by the reference alone (never by
+    # the assembly being scored), so every arm of every cell is filtered
+    # identically and the arms stay comparable by construction. See
+    # quast_min_contig.jl for why this is clamped from above.
+    min_contig = quast_min_contig(glen)
+    println("QUAST --min-contig: $min_contig bp (genome_len ÷ " *
+            "$(MIN_CONTIG_GENOME_DIVISOR), clamped to " *
+            "[$(MIN_CONTIG_FLOOR_BP), $(MIN_CONTIG_CEILING_BP)])")
+
     # k must not exceed the shortest read; clamp and warn rather than fail.
     min_readlen = minimum(min.(readlens, glen))
     if k > min_readlen
@@ -267,34 +409,56 @@ function run_sweep()
         k = min_readlen
     end
 
-    rng = Random.MersenneTwister(seed)
+    # One RNG per seed, constructed inside the loop, so each replicate is
+    # reproducible on its own rather than depending on how many cells preceded it.
 
     rows = DataFrames.DataFrame(
         reference = String[], genome_len = Int[], error_rate = Float64[],
         regime = String[], readlen = Int[], tech = String[], target_coverage = Float64[],
-        effective_coverage = Float64[], k = Int[], arm = String[], ok = Bool[],
+        effective_coverage = Float64[], k = Int[],
+        # First-class replicate identifier (bead td-59o7): without it, merged
+        # shards cannot be paired, so the pre-reg's paired-Wilcoxon over seeds
+        # 42/123/456 is not runnable.
+        seed = Int[],
+        arm = String[], ok = Bool[],
         n_contigs = Int[], total_length = Int[], largest_contig = Int[], n50 = Int[],
         genome_fraction = Float64[], runtime_s = Float64[],
+        # The error profile the CORRECTOR actually ran, read BACK from the
+        # assembler's assembly_stats stamp and NOT echoed from the input
+        # argument — an echoed column would read green even if the wiring
+        # regressed. "n/a" on the naive arm, which does not stamp the field.
+        corrector_sequencing_tech = String[],
+        # Whether the indel-aware pair-HMM moves actually FIRED at runtime, read
+        # back from assembly_stats["indel_engaged"]. The tech column proves only
+        # that the profile was SELECTED; this proves it was USED. `missing` on
+        # the naive arm, which stamps no corrector telemetry.
+        corrector_indel_engaged = Union{Missing, Int}[],
         # Alignment-validated QUAST metrics (populated per arm when QUAST ran);
         # `genome_fraction` above stays the INTERNAL total_length/glen size ratio.
         quast_genome_fraction = Union{Missing, Float64}[],
         quast_nga50 = Union{Missing, Float64}[],
         quast_num_misassemblies = Union{Missing, Float64}[],
         quast_duplication_ratio = Union{Missing, Float64}[],
-        metric_source = String[]
+        metric_source = String[],
+        # The --min-contig threshold QUAST was run at: part of the metric
+        # DEFINITION, recorded so a change to the policy is detectable rather
+        # than silent (beads td-28o0 / td-9p91).
+        quast_min_contig = Int[]
     )
 
     # Track the minimum effective coverage across cells for the scale guard: the
     # weakest cell governs whether the whole sweep earns a VERDICT.
     min_effective_coverage = Inf
 
-    println("\n--- Sweeping (error_rate x read-regime) x {naive, iterative} ---")
-    for err in errs
+    println("\n--- Sweeping (seed x error_rate x read-regime) x {naive, iterative} ---")
+    for seed in seeds
+        rng = Random.MersenneTwister(seed)
+        for err in errs
         for readlen in readlens
             regime, tech = regime_for_readlen(readlen)
-            cell_dir = joinpath(workdir, "err$(err)_len$(readlen)")
+            cell_dir = joinpath(workdir, "seed$(seed)_err$(err)_len$(readlen)")
             mkpath(cell_dir)
-            println("\n[cell] err=$err  regime=$regime  readlen=$readlen  tech=$tech")
+            println("\n[cell] seed=$seed  err=$err  regime=$regime  readlen=$readlen  tech=$tech")
 
             reads,
             sampled_bases = simulate_regime_reads(refseq, readlen, coverage, err, tech, rng)
@@ -303,9 +467,13 @@ function run_sweep()
             println("  simulated $(length(reads)) reads, effective coverage $(eff_cov)x")
 
             for corrector in (:none, :iterative)
-                tag = "$(ref_label)_err$(err)_len$(readlen)"
+                tag = "$(ref_label)_seed$(seed)_err$(err)_len$(readlen)"
                 arm_name = corrector == :none ? "naive" : "iterative"
-                res = run_arm(reads, corrector, k, glen, cell_dir, tag)
+                # `tech` from regime_for_readlen drives BOTH read simulation
+                # (above) and the corrector's error profile (here). Passing it is
+                # what makes a "nanopore" row actually indel-aware.
+                res = run_arm(reads, corrector, k, glen, cell_dir, tag;
+                    sequencing_tech = tech)
 
                 # Optional QUAST validation for THIS arm (per-arm attribution:
                 # one assembly per invocation so the alignment-based metrics land
@@ -335,7 +503,7 @@ function run_sweep()
                         Mycelia.run_quast(res.contigs_path;
                             outdir = quast_dir,
                             reference = ref_path,
-                            min_contig = max(50, glen ÷ 10))
+                            min_contig = min_contig)
                         ran = true
                     catch e
                         @warn "QUAST external tool unavailable/failed — falling back to internal metrics" arm_name exception = (
@@ -365,20 +533,27 @@ function run_sweep()
                         reference = ref_label, genome_len = glen, error_rate = err,
                         regime = regime, readlen = readlen, tech = String(tech),
                         target_coverage = coverage, effective_coverage = eff_cov, k = k,
+                        seed = seed,
                         arm = arm_name, ok = res.ok, n_contigs = res.n_contigs,
                         total_length = res.total_length, largest_contig = res.largest_contig,
                         n50 = res.n50, genome_fraction = res.genome_fraction,
                         runtime_s = res.runtime_s,
+                        corrector_sequencing_tech = res.corrector_sequencing_tech,
+                        corrector_indel_engaged = res.corrector_indel_engaged,
                         quast_genome_fraction = quast.quast_genome_fraction,
                         quast_nga50 = quast.quast_nga50,
                         quast_num_misassemblies = quast.quast_num_misassemblies,
                         quast_duplication_ratio = quast.quast_duplication_ratio,
-                        metric_source = quast.metric_source))
+                        metric_source = quast.metric_source,
+                        quast_min_contig = min_contig))
                 println("    $(rpad(arm_name, 9)) -> ok=$(res.ok) contigs=$(res.n_contigs) " *
                         "total=$(res.total_length)bp largest=$(res.largest_contig) " *
                         "n50=$(res.n50) frac=$(res.genome_fraction)% " *
+                        "corr_tech=$(res.corrector_sequencing_tech) " *
+                        "indel_engaged=$(res.corrector_indel_engaged) " *
                         "src=$(quast.metric_source) $(res.runtime_s)s")
             end
+        end
         end
     end
 

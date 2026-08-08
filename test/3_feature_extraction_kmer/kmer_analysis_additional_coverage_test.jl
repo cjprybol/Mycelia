@@ -282,18 +282,28 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 close(gzip_stream)
             end
 
-            histogram_file = Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts)
-            Test.@test isfile(histogram_file)
+            # `jellyfish_counts_to_kmer_frequency_histogram` shells out to the
+            # coreutils pipeline gzip|cut|sort|uniq|sed. Skip cleanly when any is
+            # absent (e.g. `sort` ENOENT on a minimal CI image) rather than
+            # aborting the whole `Pkg.test` suite.
+            histogram_tools = ("gzip", "cut", "sort", "uniq", "sed")
+            missing_histogram_tools = filter(t -> Sys.which(t) === nothing, collect(histogram_tools))
+            if !isempty(missing_histogram_tools)
+                Test.@test_skip "Missing external tools for jellyfish histogram: $(join(missing_histogram_tools, ", "))"
+            else
+                histogram_file = Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts)
+                Test.@test isfile(histogram_file)
 
-            histogram = DelimitedFiles.readdlm(histogram_file, '\t', Int, '\n';
-                skipstart = 1)
-            Test.@test size(histogram, 1) == 3
-            Test.@test vec(histogram[1, :]) == [1, 1]
-            Test.@test vec(histogram[2, :]) == [2, 2]
-            Test.@test vec(histogram[3, :]) == [1, 4]
+                histogram = DelimitedFiles.readdlm(histogram_file, '\t', Int, '\n';
+                    skipstart = 1)
+                Test.@test size(histogram, 1) == 3
+                Test.@test vec(histogram[1, :]) == [1, 1]
+                Test.@test vec(histogram[2, :]) == [2, 2]
+                Test.@test vec(histogram[3, :]) == [1, 4]
 
-            Test.@test Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts) ==
-                       histogram_file
+                Test.@test Mycelia.jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts) ==
+                           histogram_file
+            end
         end
 
         Test.@testset "DNA saturation helpers" begin

@@ -263,6 +263,30 @@ kind = "physical_mock"
 source = "ATCC MSA-1003"
 accessions = []
 
+# ---------------------------------------------------------------------------
+# NAMESPACE WARNING: these hypothesis_slices `id` values (H1-H7) are a
+# BENCHMARK-FAMILY taxonomy internal to this harness. Except for H1 (Viterbi vs
+# greedy, which aligns with manuscript H1), they do NOT correspond by number to
+# the Rhizomorph manuscript's pre-registered scientific hypotheses H1-H7. Do NOT
+# cross-reference a manifest slice id against the manuscript or claim-ledger by
+# number.
+#
+#   Manifest slice ids (this file):        Manuscript H1-H7 (pre-registered):
+#     H1 Viterbi vs greedy smoke             H1 Viterbi DP > greedy      [aligned]
+#     H2 contiguity across k/strand          H2 K-shortest alternatives
+#     H3 repeat/fork resolution              H3 weighted vs uniform K-paths
+#     H4 quality-weighted robustness         H4 cross-domain interface
+#     H5 heterogeneous community recovery    H5 match/exceed SOTA
+#     H6 generative sequence fidelity        H6 metagenome advantage
+#     H7 external assembler comparison       H7 topology predicts quality
+#
+# The two columns share labels but not meaning for H2-H7. The authoritative
+# slice<->hypothesis correspondence, and a full re-namespace of these ids so
+# none collides with a manuscript H#, is deferred to a follow-up task for the
+# author to decide; until then, treat the columns as independent and rely on
+# each slice's own `title`/`summary`.
+# ---------------------------------------------------------------------------
+
 [[hypothesis_slices]]
 id = "H1"
 title = "Viterbi objective vs greedy synthetic fixture smoke"
