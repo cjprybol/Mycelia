@@ -1,8 +1,20 @@
 # Validation of `Mycelia.Rhizomorph.estimate_residual_error` against KNOWN error rates.
 #
 # WHY THIS EXISTS
-# The Rhizomorph pre-registration proposes selecting k from an estimated per-base
-# error rate via `k >= 1/e - 1`. That rule is only as good as `e`. This script
+# A CANDIDATE k-selection rule, `k >= 1/e - 1`, would consume an estimated
+# per-base error rate. That rule is only as good as `e`. This script
+#
+# PROVENANCE (corrected 2026-08-08): this header previously attributed that rule
+# to "the Rhizomorph pre-registration". It is NOT there — searched the
+# pre-registration plan (577 lines) and the whole manuscript directory of the
+# rhizomorph-paper repository, no match. The rule lives in
+# `src/development/intelligent-assembly.jl` (a file `Mycelia.jl` does not
+# include) and in `tutorials/18_advanced_assembly_theory_and_practice.jl` (broken
+# on master), and traces to 2020 Mycelia-Dev notes. A PROPOSED and UNRATIFIED
+# decision record suggests registering it; proposing is not registering. The
+# README carried the same error and was corrected first — this file is the
+# originating copy and was missed in that pass.
+#
 # measures the estimator's bias and variance against ground truth that is exact by
 # construction, and reports its TWO COMPONENTS SEPARATELY, because
 # `estimate_residual_error` returns `max(kmer_component, quality_component)` and a
@@ -179,7 +191,8 @@ function main()
         quality_component = Mycelia.Rhizomorph._quality_residual_error(reads)
         combined = Mycelia.Rhizomorph.estimate_residual_error(reads)
 
-        # What the pre-registration's k rule would do with each number.
+        # What the CANDIDATE k rule would do with each number (see PROVENANCE
+        # in the header — this rule is not registered anywhere).
         implied_k_true = max(3, floor(Int, 1 / true_error - 1))
         implied_k_estimated = combined <= 0.0 ? typemax(Int) :
                               max(3, floor(Int, 1 / combined - 1))

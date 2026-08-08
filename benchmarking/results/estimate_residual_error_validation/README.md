@@ -145,7 +145,20 @@ record suggests registering it; that is a proposal, not a registration.
 
 A candidate k rule, `k >= 1/e - 1`, would consume this estimate. Feeding it this
 estimator, with realistic (overconfident or absent) quality — these two columns
-are identical, per the headline above:
+are identical, per the headline above.
+
+**Slice and aggregation, stated explicitly** (this table is the document's
+payload and it is the one table that does NOT use the same aggregation as the
+rest): substitution, **double-strand**, quality absent, and the cell value is the
+**MEDIAN across the 3 seeds of `implied_k_estimated`** — every other table here
+is a seed-MEAN of the estimate itself. An earlier revision declared neither, so
+a reader recomputing it as a mean got different numbers.
+
+Note also that double-strand is the arm this document independently flags as
+inflated by the non-canonical hash (Finding 2). On the single-strand arm the
+same medians are materially worse at high coverage — e=0.05/C=100 gives 43 rather
+than 30, and e=0.001/C=5 gives 377 rather than 166 — so the "usable near
+C=10-30" reading below is the optimistic arm, not the conservative one.
 
 | true error | k true | C=5 | C=10 | C=30 | C=50 | C=100 |
 | ---------- | ------ | --- | ---- | ---- | ---- | ----- |
@@ -205,19 +218,53 @@ is out of reach at any point in the grid, because of how the harness is built �
 so absence of a finding here is not evidence of absence.
 
 **k-mer space saturation.** The 13-mer space is 4^13 = 67,108,864. Against a
-20 kb reference, the reads occupy at most ~4% of it, so every cell in this grid
+20 kb reference the reads occupy at most ~3% of it, so every cell in this grid
 runs in the unsaturated regime. On real-sized input that is not true: E. coli at
-5 Mb and 30x with 10% error needs roughly 200M distinct 13-mers, about 3x the
-whole space. Unrelated loci must then share k-mers, counts inflate,
-`solid_fraction` rises toward 1, and the estimate collapses.
+5 Mb and 30x with 10% error generates roughly **195M error k-mer INSTANCES**,
+about **2.9x more than the space can hold**, forcing collisions. Unrelated loci
+must then share k-mers, counts inflate, `solid_fraction` rises toward 1, and the
+estimate falls.
 
-A scale-model probe confirms the mechanism — holding the genome at 20 kb and
-shrinking the k-mer space by lowering `k_ref` reproduces the saturation ratio
-cheaply. At true e = 0.05, C = 30: saturation 0.0042 at k_ref=13 gives 0.0379
-(matching this grid), but saturation 0.55 at k_ref=9 gives 0.0146, and saturation
->= 0.95 at k_ref <= 7 returns **exactly 0.0** for reads carrying 5% error. That
-is a silent, total failure, and `e = 0` fed to `k = 1/e - 1` is a division by
-zero.
+> **ARITHMETIC CORRECTION (2026-08-08).** An earlier revision said this "needs
+> roughly 200M **distinct** 13-mers, about 3x the whole space." That is
+> impossible as written: distinct 13-mers cannot exceed 4^13 = 67.1M, nor exceed
+> the ~1.5e8 total 13-mer occurrences in the read set. The 195M figure is error
+> k-mer *instances* (`5e6 x 30 x 0.10 x 13`), not distinct k-mers. Counting
+> distinct gives ~1.17e8, i.e. **1.74x** the space; counting occurrences gives
+> **2.24x**. Both still exceed 1x, so the forced-collision conclusion survives —
+> but the "3x distinct" number was wrong and propagated into several notes.
+
+A scale-model probe explores the mechanism by holding the genome at 20 kb and
+shrinking the k-mer space by lowering `k_ref`. At true e = 0.05, C = 30:
+saturation 0.55 at k_ref=9 gives 0.0146, and saturation >= 0.95 at k_ref <= 7
+returns **exactly 0.0** for reads carrying 5% error.
+
+> **CONFOUND — read before citing the probe (2026-08-08).** An earlier revision
+> called this "confirmed by scale model rather than by argument." It is not
+> confirmation, because the probe's single independent variable moves two things
+> at once. Lowering `k_ref` shrinks the space *and* changes the estimator's own
+> operating point, since `1 - solid_fraction^(1/k_ref)` is explicitly
+> k-dependent. The probe's own output shows the confound: from k=21 to k=11 the
+> estimate falls 0.04208 -> 0.03417 while saturation is still <= 5.7%, and at
+> k=17 and k=21 saturation is **0.0000** yet the bias is already -0.0097 and
+> -0.0079. A meaningful share of the decline is intrinsic k-dependence that would
+> be present at zero saturation.
+>
+> What the probe DOES establish, by algebra rather than inference, is the
+> endpoint: at k <= 7 every window is solid, so `solid_fraction = 1` and the
+> estimate is **exactly 0.0** for reads carrying 5% error. That degenerate mode
+> is real. It is demonstrated at k=7, and the claim being made is about k_ref=13
+> at genome scale — a different claim, which this probe cannot separate.
+>
+> Isolating saturation requires varying it at FIXED k_ref: hold k_ref=13 and
+> sweep genome length or coverage upward. That run is above laptop scale and
+> must be HPC-routed. Until it exists, treat the k_ref=13 genome-scale claim as
+> supported by the collision-bound arithmetic above, not by this probe.
+
+Downstream, `e = 0` fed to a `k = 1/e - 1` rule does not raise a division error
+in Julia (`1/0.0 == Inf`); it fails as an `InexactError` on `Int(Inf)`, and the
+harness here guards it with a `typemax(Int)` sentinel. The hazard is the silent
+0.0, not the arithmetic.
 
 **This is a larger defect than the coverage bias documented above, and no grid
 this harness can run would have revealed it.** Enlarging the reference to a
