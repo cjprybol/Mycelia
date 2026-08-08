@@ -120,12 +120,23 @@ function error_optimized_k_sequence(error_rate::Float64, max_k::Int = 101,
                   Primes.nextprime(lower_bound_k)
 
     # Generate dynamic prime pattern.
-    # KEYWORD call, matching `Mycelia.Rhizomorph.dynamic_k_prime_pattern`. Do not
-    # revert this to the positional form: the canonical definition declares no
-    # three-positional-argument method, so a positional call is a `MethodError`
-    # the moment this function is moved into `Rhizomorph` — which is where it has
-    # to go to reach production.
-    return dynamic_k_prime_pattern(start_prime; max_k = max_k, initial_step = 2)
+    #
+    # FULLY QUALIFIED and KEYWORD-called, deliberately. Both halves matter:
+    #
+    #   * Qualified, because `Rhizomorph` declares no `export` and `Mycelia` does
+    #     not `using` it, so the bare name resolves to NOTHING from this file. An
+    #     earlier revision left it bare after deleting the sibling definition that
+    #     used to satisfy it, which turned the "just uncomment the include in
+    #     Mycelia.jl" wiring path into a runtime `UndefVarError` — raised at CALL
+    #     time, not include time, so it would not even surface on load.
+    #   * Keyword, because the canonical definition declares no
+    #     three-positional-argument method; a positional call is a `MethodError`
+    #     the moment this function is moved into `Rhizomorph`.
+    #
+    # Written this way the call is correct under BOTH wiring paths — moved into
+    # Rhizomorph, or reached from a top-level include.
+    return Mycelia.Rhizomorph.dynamic_k_prime_pattern(
+        start_prime; max_k = max_k, initial_step = 2)
 end
 
 """

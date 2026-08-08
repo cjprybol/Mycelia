@@ -76,20 +76,54 @@ Test.@testset "Rhizomorph Dynamic K Selection" begin
                    [11, 13, 17, 23, 31]
     end
 
-    Test.@testset "Keyword signature is the only one" begin
-        # A positional `(start_k, max_k, initial_step)` form used to exist in
-        # `src/development/intelligent-assembly.jl`. It was removed because the
-        # obvious way to wire that file's `error_optimized_k_sequence` into
-        # production is to move it into `Rhizomorph`, where a positional call
-        # would then silently pick up the wrong method — or, once the duplicate
-        # is gone, fail confusingly at the call site instead of here.
+    Test.@testset "dynamic_k_prime_pattern is defined exactly once, with keywords" begin
+        # A second `dynamic_k_prime_pattern` used to live in
+        # `src/development/intelligent-assembly.jl` with a POSITIONAL signature,
+        # while the canonical one here takes KEYWORDS.
         #
-        # This test pins the calling convention: if someone reintroduces a
-        # three-positional-argument method, this fails loudly and immediately.
-        Test.@test_throws MethodError Mycelia.Rhizomorph.dynamic_k_prime_pattern(11, 31, 2)
+        # This check is SOURCE-LEVEL on purpose, and the reason is the whole
+        # point of the test. `src/development/` is not included by `Mycelia.jl`,
+        # so the duplicate never entered any method table — a runtime oracle
+        # against `Mycelia.Rhizomorph`'s methods is asking a different generic
+        # function about a change that never touched it, and stays green with the
+        # duplicate restored. Verified by mutation: re-adding the deleted method
+        # to top-level `Mycelia` leaves a runtime check passing.
+        #
+        # Only a source-level oracle can observe a definition in an unloaded file.
+        # NOTE the `m` flag. Without it Julia anchors `^` to the start of the
+        # whole STRING, not each line, so reading a file wholesale and matching
+        # `^\s*function` finds nothing — the oracle then reports 0 definitions
+        # and goes red for a reason unrelated to what it is testing. That is how
+        # the first version of this test "passed" its own positive control.
+        definition_pattern = r"^\s*function\s+dynamic_k_prime_pattern\("m
+        definition_files = String[]
+        source_root = joinpath(pkgdir(Mycelia), "src")
+        for (root, _, files) in walkdir(source_root), file in files
 
-        # The keyword defaults must also stay reachable with no arguments.
-        Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern() isa Vector{Int}
+            endswith(file, ".jl") || continue
+            path = joinpath(root, file)
+            occursin(definition_pattern, read(path, String)) &&
+                push!(definition_files, path)
+        end
+
+        canonical_suffix = joinpath("rhizomorph", "algorithms", "dynamic-k-selection.jl")
+        Test.@test length(definition_files) == 1
+        # `all` rather than `only`, so a second definition FAILS cleanly instead of
+        # throwing ArgumentError from `only` — a red test that errors is harder to
+        # read than one that reports the assertion it broke.
+        Test.@test all(path -> endswith(path, canonical_suffix), definition_files)
+
+        # Pin the METHOD COUNT too, so reintroducing a positional method inside
+        # Rhizomorph itself (which a source check alone would also catch, but
+        # only if it is spelled as a top-level `function`) fails here as well.
+        Test.@test length(methods(Mycelia.Rhizomorph.dynamic_k_prime_pattern)) == 2
+
+        # Assert the VALUE, not the type. The function carries a
+        # `::Vector{Int}` return annotation, so Julia converts the result and an
+        # `isa Vector{Int}` check can only fail if the call throws — it stayed
+        # green under mutants that corrupted every default and the element type.
+        Test.@test Mycelia.Rhizomorph.dynamic_k_prime_pattern() ==
+                   [11, 13, 17, 23, 31, 41, 53, 67, 83, 101]
     end
 
     Test.@testset "BioSequence observations are accepted directly" begin
