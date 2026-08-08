@@ -339,7 +339,8 @@ Test.@testset "Long Read Metagenomic Assembly" begin
             end
             try
                 result = Mycelia.run_metamdbg(
-                    ont_reads = ont_fastq, outdir = metamdbg_ont_outdir,
+                    ont_reads = ont_fastq, ont_r10_4_plus = true,
+                    outdir = metamdbg_ont_outdir,
                     abundance_min = 2, threads = threads)
                 Test.@test result.outdir == metamdbg_ont_outdir
                 Test.@test !isempty(result.contigs)
