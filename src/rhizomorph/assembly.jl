@@ -116,24 +116,83 @@ function _qualmer_joint_confidence(vertex_data)
 end
 
 """
-Edge score under an explicit `weighting`. `:quality` delegates to the existing
-`Rhizomorph.edge_quality_weight`, which averages the decoded Phred WITHIN each quality
-evidence entry and then SUMS those per-entry means across entries — so it grows with
-edge coverage and is unbounded. It returns `0.0` for an edge with no evidence entries,
-and falls back to `count_evidence` for entries carrying no quality.
+Per-position JOINT quality for a qualmer EDGE, reduced to its weakest position — the
+edge-side counterpart of `_qualmer_joint_confidence`, and deliberately the same two
+reductions in the same order.
 
-!!! warning "Scales are not commensurable under `:quality`"
-    `_quality_weighted_walk` multiplies this by the vertex score, which is on the joint
-    0-255 scale (or an evidence count when quality is absent). The product therefore
-    mixes units and its variance is dominated by the unbounded edge term, which makes
-    the walk MORE coverage-driven under `:quality`, not less. This is tolerable only
-    because the fallback walk runs solely when the primary extraction yields nothing;
-    it is not a calibrated score and must not be reported as one. Tracked for the
-    dependence-aware rework (td-2tg8).
+ACROSS OBSERVATIONS, Phred is SUMMED (log-space addition = multiplying error
+probabilities) and clamped to `[0, 255]`, matching `combine_phred_scores` exactly, so
+the number returned here is on the identical scale as the vertex confidence.
+
+ACROSS POSITIONS, the minimum is taken, because a transition is a conjunction of the
+bases spanning it in the same sense that a k-mer is a conjunction of its own.
+
+Returns `nothing` — NOT `0.0` — when the edge carries no recoverable quality, so the
+caller can fall back to the evidence score instead of reading absent evidence as
+confidently bad. Reduced edge types (`AllReducedEdgeData`) keep no per-entry quality
+vectors at all, so they return `nothing` by construction.
+
+Entries of unequal length are truncated to the shortest, which under-counts rather than
+indexing out of bounds; the reduction is a minimum, so truncation can only make the
+score more conservative.
+"""
+function _qualmer_edge_joint_quality_confidence(edge_data)
+    edge_data isa Rhizomorph.AllReducedEdgeData && return nothing
+    entries = Rhizomorph.collect_evidence_entries(edge_data.evidence)
+    isempty(entries) && return nothing
+
+    observations = Vector{Vector{Float64}}()
+    for entry in entries
+        entry isa Rhizomorph.EdgeQualityEvidenceEntry || continue
+        combined = vcat(
+            Rhizomorph.decode_quality_scores(entry.from_quality),
+            Rhizomorph.decode_quality_scores(entry.to_quality))
+        isempty(combined) || push!(observations, combined)
+    end
+    isempty(observations) && return nothing
+
+    width = minimum(length, observations)
+    width == 0 && return nothing
+    weakest = Inf
+    for position in 1:width
+        total = 0.0
+        for observation in observations
+            total += observation[position]
+        end
+        weakest = min(weakest, clamp(total, 0.0, 255.0))
+    end
+    return weakest
+end
+
+"""
+Edge score under an explicit `weighting`.
+
+`:quality` returns the edge's JOINT-quality confidence
+(`_qualmer_edge_joint_quality_confidence`), which is the SAME reduction, on the SAME
+clamped 0-255 joint-Phred scale, as the vertex score returned by
+`_qualmer_vertex_score(_, :quality)`. `_quality_weighted_walk` multiplies the two, so
+they have to be commensurable: this call site previously delegated to
+`Rhizomorph.edge_quality_weight`, which averages decoded Phred WITHIN an evidence entry
+and then SUMS those per-entry means ACROSS entries — an unbounded quantity that grows
+linearly in edge coverage. Multiplied against a bounded vertex confidence, that edge
+term dominated the product's variance and made the walk MORE coverage-driven under
+`:quality` than under `:evidence`, which is the opposite of the option's purpose.
+Caught in PR #453 review.
+
+An edge carrying no recoverable quality falls back to the evidence score, for the same
+reason `_qualmer_vertex_score` does: absent evidence is not bad evidence. The `max(1.0,
+…)` floor keeps a legitimately-observed edge from zeroing the product outright, so a
+weak edge is deprioritised rather than made unreachable.
+
+The independence assumption behind summing Phred is unvalidated (see the ASSUMPTION
+NOTICE on `combine_phred_scores`); this score inherits it, and the dependence-aware
+rework is tracked as td-2tg8.
 """
 function _qualmer_edge_score(edge_data, weighting::Symbol)
     weighting == :evidence && return _qualmer_edge_score(edge_data)
-    return max(1.0, Float64(Rhizomorph.edge_quality_weight(edge_data)))
+    confidence = _qualmer_edge_joint_quality_confidence(edge_data)
+    confidence === nothing && return _qualmer_edge_score(edge_data)
+    return max(1.0, confidence)
 end
 
 """

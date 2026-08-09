@@ -41,7 +41,17 @@ Test.@testset "Qualmer quality channel (td-4e19d.2)" begin
 
     # A genome complex enough that k=11 k-mers are mostly unique, so the assembly is
     # structured rather than one degenerate blob.
-    genome = BioSequences.LongDNA{4}(rand(rng, collect("ACGT"), 600))
+    #
+    # Draw from `QC_BASES` (a `Vector{DNA}`), not `collect("ACGT")`. `LongDNA{4}` DOES
+    # accept a `Vector{Char}` — BioSequences 3.4.2 dispatches it to the generic
+    # `LongSequence{A}(it)` iterable constructor (constructors.jl:46), so the previous
+    # form was not a latent MethodError, and PR #453 review's claim that it was is
+    # wrong. It went through a Char->DNA conversion the rest of this file does not,
+    # which is the actual reason to change it: every other base drawn here (the
+    # substitution errors on line 60, the artifact base below) is already a `DNA`, and
+    # one construction path differing from all the others is a place for a future
+    # alphabet change to diverge silently.
+    genome = BioSequences.LongDNA{4}(rand(rng, QC_BASES, 600))
     k = 11
     read_length = 120
     coverage = 12
@@ -222,6 +232,81 @@ Test.@testset "Qualmer quality channel (td-4e19d.2)" begin
         # ...and survives under count-based weighting, which is exactly the failure mode
         # the quality channel is supposed to fix.
         Test.@test contains_artifact(evidence_assembly)
+    end
+
+    Test.@testset "edge and vertex quality scores are commensurable" begin
+        # `_quality_weighted_walk` multiplies a vertex score by an edge score, so the two
+        # have to be the same KIND of number. Under `:quality` the edge side used to
+        # delegate to `Rhizomorph.edge_quality_weight`, which averages decoded Phred
+        # WITHIN an evidence entry and then SUMS those per-entry means ACROSS entries —
+        # an unbounded quantity growing linearly in edge coverage, multiplied against a
+        # vertex confidence clamped to [0, 255]. The product's variance was therefore
+        # dominated by the edge term's coverage, making `:quality` MORE coverage-driven
+        # than `:evidence`, the opposite of the option's purpose (PR #453 review).
+        rhizomorph = Mycelia.Rhizomorph
+        scale_rng = StableRNGs.StableRNG(7)
+        scale_genome = BioSequences.LongDNA{4}(rand(scale_rng, QC_BASES, 200))
+        scale_k = 11
+        scale_read_length = 80
+        weak_position = 40
+        n_observations = 10
+
+        # Identical sequences, two quality stories. `weak` puts ONE position at Q2 in
+        # EVERY observation — a recurrent low-quality base, which evidence count cannot
+        # see and a within-entry mean can only dilute.
+        strong_reads = [FASTX.FASTQ.Record("edge_$(i)",
+                            scale_genome[1:scale_read_length],
+                            fill(UInt8(0x28), scale_read_length))
+                        for i in 1:n_observations]
+        weak_quality = fill(UInt8(0x28), scale_read_length)
+        weak_quality[weak_position] = 0x02
+        weak_reads = [FASTX.FASTQ.Record("edge_$(i)",
+                          scale_genome[1:scale_read_length], copy(weak_quality))
+                      for i in 1:n_observations]
+
+        strong_graph = rhizomorph.build_qualmer_graph(
+            strong_reads, scale_k; mode = :canonical)
+        weak_graph = rhizomorph.build_qualmer_graph(
+            weak_reads, scale_k; mode = :canonical)
+        edges_of(g) = collect(Mycelia.MetaGraphsNext.edge_labels(g))
+        quality_scores(g) = [rhizomorph._qualmer_edge_score(g[e...], :quality)
+                             for e in edges_of(g)]
+        evidence_scores(g) = [rhizomorph._qualmer_edge_score(g[e...], :evidence)
+                              for e in edges_of(g)]
+        legacy_scores(g) = [Float64(rhizomorph.edge_quality_weight(g[e...]))
+                            for e in edges_of(g)]
+
+        # The old operand is literally off the vertex's scale: 10 observations at Q40
+        # sum to 400, where the vertex confidence saturates at 255.
+        Test.@test maximum(legacy_scores(strong_graph)) > 255.0
+        # The new one is not. Same ceiling as `_qualmer_joint_confidence`, because it is
+        # the same reduction — summed Phred per position, clamped, weakest position wins.
+        Test.@test maximum(quality_scores(strong_graph)) <= 255.0
+        Test.@test minimum(quality_scores(strong_graph)) == 255.0
+        vertex_confidences = [rhizomorph._qualmer_joint_confidence(strong_graph[v])
+                              for v in Mycelia.MetaGraphsNext.labels(strong_graph)]
+        Test.@test maximum(vertex_confidences) == maximum(quality_scores(strong_graph))
+
+        # WEAKEST LINK, and it is quality rather than coverage doing the work: the two
+        # graphs carry identical sequences at identical depth, so their evidence scores
+        # are equal, and only the quality story differs.
+        Test.@test evidence_scores(weak_graph) == evidence_scores(strong_graph)
+        # 10 independent Q2 observations sum to 20 — the recurrent bad base, seen as
+        # often as everything else, still cannot buy confidence.
+        Test.@test minimum(quality_scores(weak_graph)) == 20.0
+        Test.@test minimum(quality_scores(weak_graph)) <
+                   minimum(quality_scores(strong_graph))
+        # The per-entry MEAN barely registers it: averaged over the 22 positions an edge
+        # spans, one Q2 base moves the legacy weight by under a tenth, which is why the
+        # old score could not express "this transition rests on a bad base".
+        Test.@test minimum(legacy_scores(weak_graph)) >
+                   0.9 * minimum(legacy_scores(strong_graph))
+
+        # Absent quality is still no opinion, not a confident zero: an edge with no
+        # recoverable quality falls back to the evidence score rather than scoring 0.0
+        # and being made unreachable.
+        Test.@test rhizomorph._qualmer_edge_joint_quality_confidence(
+            strong_graph[first(edges_of(strong_graph))...]) !== nothing
     end
 
     Test.@testset "option validation" begin
