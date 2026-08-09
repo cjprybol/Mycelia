@@ -317,6 +317,10 @@ function coefficient_of_variation_table(df::DataFrames.DataFrame)::DataFrames.Da
     df = ok_cells(df)
     group_keys = [:organism, :technology, :coverage, :decoder_arm]
     hasproperty(df, :k) && push!(group_keys, :k)
+    # Same reason as :k — a `--traversal-weighting quality` run is a different assembler,
+    # so pooling it with the :evidence baseline reports a between-assembler spread as the
+    # between-seed CV. Guarded by hasproperty so pre-option harvests still load.
+    hasproperty(df, :traversal_weighting) && push!(group_keys, :traversal_weighting)
     grouped = DataFrames.groupby(df, group_keys)
     rows = NamedTuple[]
     for group in grouped
