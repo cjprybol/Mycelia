@@ -212,6 +212,62 @@ Test.@testset "ONT k-sweep helpers" begin
         end
     end
 
+    Test.@testset "write_summary survives a tree in which nothing succeeded" begin
+        # The reachable case: `--aggregate-only` over a tree where every
+        # checkpoint carries error / quast_failed / empty_assembly. That is the
+        # RECOVERY path — the one an operator reaches for precisely when the run
+        # went badly — and it used to raise a column-not-found error from `sort!`
+        # on a 0x0 DataFrame, aborting before verdict_stats.tsv was written. The
+        # operator got a DataFrames internal error instead of the diagnosis
+        # "nothing succeeded", and lost the second output too.
+        function row_with(status, nga50_status)
+            return cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = empty_metrics(), nga50_status = nga50_status,
+                outcome = "degenerate", wall_seconds = 1.0, status = status)
+        end
+
+        mktempdir() do dir
+            failed = DataFrames.DataFrame([
+                row_with("quast_failed", "quast_failed"),
+                row_with("error", "quast_failed"),
+                row_with("empty_assembly", "no_contigs")
+            ])
+            summary = write_summary(dir, failed)
+            Test.@test DataFrames.nrow(summary) == 0
+            # An empty summary must still carry the SCHEMA. A 0x0 frame writes a
+            # headerless file, which no downstream reader can distinguish from a
+            # truncated write.
+            Test.@test Tuple(Symbol.(DataFrames.names(summary))) == SUMMARY_KEYS
+            out = joinpath(dir, "ont_k_sweep_summary.tsv")
+            Test.@test isfile(out)
+            Test.@test split(first(eachline(out)), '\t') == collect(String.(SUMMARY_KEYS))
+
+            # The aggregation must reach its second output rather than aborting
+            # in the first — losing verdict_stats.tsv was the actual damage.
+            write_verdict_stats(dir, failed)
+            Test.@test isfile(joinpath(dir, "verdict_stats.tsv"))
+        end
+
+        # SCHEMA SYNC: the hardcoded empty-case column list must equal the
+        # columns the populated path actually produces, or the empty file
+        # silently documents a table that no longer exists.
+        mktempdir() do dir
+            ok = DataFrames.DataFrame([
+                cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = merge(empty_metrics(),
+                    (; NGA50 = 4000.0, genome_fraction = 99.0,
+                        quast_contigs = 1.0)),
+                nga50_status = "measured", outcome = "partial",
+                wall_seconds = 1.0, status = "ok")
+            ])
+            populated = write_summary(dir, ok)
+            Test.@test DataFrames.nrow(populated) == 1
+            Test.@test Tuple(Symbol.(DataFrames.names(populated))) == SUMMARY_KEYS
+        end
+    end
+
     Test.@testset "classify_outcome rejects a censored value instead of zeroing it" begin
         # Both call sites used to coerce `missing` to 0.0 before calling this,
         # reintroducing the collapse the harness exists to prevent. It was live

@@ -770,6 +770,15 @@ function write_aggregate(root, rows)
     return df
 end
 
+# The summary table's schema, named once so the empty case can be written with
+# the same columns as the populated case. A 0x0 DataFrame is not an empty
+# summary — it is a file with no header, which no downstream reader can tell
+# apart from a truncated write.
+const SUMMARY_KEYS = (:organism, :technology, :k, :coverage, :n_seeds,
+    :n_measured_nga50, :n_degenerate, :median_nga50, :median_genome_fraction,
+    :median_contigs, :median_contigs_ge_min, :median_max_contig,
+    :nga50_status_mix, :outcome, :median_wall_seconds)
+
 """
 Per-(technology, k, coverage) summary across seeds.
 
@@ -820,8 +829,22 @@ function write_summary(root, df)
                 median_wall_seconds = Statistics.median(Float64.(g.wall_seconds))
             ))
     end
-    summary_df = DataFrames.DataFrame(summary_rows)
-    sort!(summary_df, [:organism, :technology, :k, :coverage])
+    # No `status == "ok"` cell anywhere is a legitimate state, and it is the
+    # RECOVERY state: `--aggregate-only` over a tree where every checkpoint
+    # carries error / quast_failed / empty_assembly. Building the frame from an
+    # empty NamedTuple vector yields 0x0, and `sort!` on 0x0 then raises
+    # column-not-found — aborting the aggregation before write_verdict_stats
+    # runs, so the operator loses verdict_stats.tsv too and gets a
+    # column-not-found error in place of the diagnosis "nothing succeeded".
+    # Emit the schema with no rows instead, and say so.
+    summary_df = if isempty(summary_rows)
+        @warn "no cell has status=ok; writing an empty summary with the full " *
+              "schema. Every checkpoint carries error, quast_failed, or " *
+              "empty_assembly — check the per-cell logs." root
+        DataFrames.DataFrame([name => Any[] for name in SUMMARY_KEYS])
+    else
+        sort(DataFrames.DataFrame(summary_rows), [:organism, :technology, :k, :coverage])
+    end
     CSV.write(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df;
         delim = '\t', missingstring = "NA")
     return summary_df
