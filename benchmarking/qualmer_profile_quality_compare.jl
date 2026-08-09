@@ -24,6 +24,10 @@
 
 import Mycelia, FASTX, BioSequences, Dates
 
+# Gate decision lives in a dependency-free sibling so its FAILURE path can be
+# exercised without running a real assembly (see the file header).
+include(joinpath(@__DIR__, "qualmer_profile_quality_verdict.jl"))
+
 const ACCESSION = get(ENV, "MYCELIA_QC_ACCESSION", "NC_001422.1")
 const COV = parse(Int, get(ENV, "MYCELIA_QC_COVERAGE", "30"))
 const K = parse(Int, get(ENV, "MYCELIA_QC_K", "19"))
@@ -87,12 +91,9 @@ for profile in PROFILES
 end
 
 # Verdict: aggregate profiles must not materially underperform :full at real scale.
-if any(r -> r[1] == :full, results)
-    full_gf = first(r[3] for r in results if r[1] == :full)
-    for (prof, _, g, _, _) in results
-        prof == :full && continue
-        verdict = g >= full_gf - 0.01 ? "PARITY" : "DEGRADED"
-        println("VERDICT $prof vs :full genome_fraction: $g vs $full_gf -> $verdict")
-    end
-end
+# This is the decision-2 AUTHORITATIVE gate, so an errored profile, a missing
+# :full baseline, or a DEGRADED verdict must all exit NON-ZERO. Until td-5olt
+# these branches only printed, so the gate passed unconditionally.
+gate_passed = qualmer_qc_gate_check(results, PROFILES)
 println("=== qualmer profile quality compare DONE (UTC): $(Dates.now(Dates.UTC)) ===")
+gate_passed || error("qualmer profile quality gate FAILED — see the GATE FAIL lines above")
