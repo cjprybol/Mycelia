@@ -108,6 +108,15 @@ This is the part that matters most for manuscript accuracy, and the answer is
 not uniform. `benchmarking/qualmer_corrector_quality_sensitivity.jl` measures it
 in three stages, because the stages disagree.
 
+> **Schema note.** The committed `qualmer_corrector_quality_verdicts.tsv` predates
+> two columns the harness now emits — `verdict_is_interpretable` and
+> `n_stage_b_decode_failures` — added so a run whose measurements FAILED cannot
+> publish a confident boolean (PR #453 review). No value in the committed table
+> changes under the new logic: every row already carries
+> `n_conditions_failed = 0`, i.e. all four conditions succeeded, which is the case
+> in which the new rules and the old ones agree. The two columns appear on the next
+> regeneration; the table is not re-run here because these are SLURM workloads.
+
 ### Stage A — the machinery reads Phred (unit level)
 
 | function                                   | Q40     | Q2       | consumes quality |
