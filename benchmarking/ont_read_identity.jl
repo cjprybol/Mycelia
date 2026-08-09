@@ -18,8 +18,17 @@
 # The per-base error rate matters because it fixes the arithmetic that governs
 # whether k-mer assembly on these reads can work at all:
 #
-#     P(error-free k-mer) = (1 - e)^k
-#     error-free k-mer coverage = raw coverage x (1 - e)^k
+#     P(error-free k-mer | read aligned) = (1 - e)^k
+#     error-free k-mer coverage = raw coverage x aligned_base_fraction x (1-e)^k
+#
+# Note the second factor. e is measured from alignments, so it is defined only
+# over reads that aligned — but raw coverage is charged for every read, and an
+# unalignable one (Badread emits ~1% junk and ~1% random reads by default)
+# contributes no k-mer matching the reference. Dropping those reads from the
+# estimate rather than counting them as zero would make the error-free coverage
+# optimistic by exactly the unaligned base fraction. Both the mapped-only and
+# the all-reads quantities are reported, in the console table and in
+# kmer_survival_ladder.tsv.
 #
 # so this script MEASURES e rather than inheriting it from a model name. Two
 # independent estimates are reported:
@@ -48,6 +57,14 @@
 # BLAST identity is the one that governs k-mer survival, because a k-mer is
 # destroyed by every erroneous base it covers, not by every error EVENT. It is
 # therefore the estimate used for the (1-e)^k table.
+#
+# COMMITTED ARTIFACTS ARE FROM THE PRE-CORRECTION RUN. The TSVs currently under
+# results/ont_read_identity/ were produced before the aligned-base-fraction
+# factor and the read-length columns existed, so they carry the mapped-only
+# quantities and no `aligned_base_fraction`. The identity distributions in them
+# are unaffected — e is measured the same way — but the error-free coverage
+# column is the optimistic one. Re-run this script to refresh them; do not add
+# the missing columns by hand.
 #
 # Usage:
 #   julia --project=. benchmarking/ont_read_identity.jl
@@ -131,7 +148,9 @@ function parse_cigar(cigar::AbstractString)
 end
 
 """
-    identities_from_sam(sam_path) -> (; rows, n_primary, n_unmapped, n_skipped)
+    identities_from_sam(sam_path) -> (; rows, n_primary, n_unmapped, n_skipped,
+                                       n_records, total_read_bases,
+                                       scored_read_bases, n_missing_seq)
 
 Per-read identity for every PRIMARY alignment in `sam_path`.
 
@@ -152,12 +171,29 @@ Identity is reconstructed from CIGAR + the NM tag (edit distance):
                 insertion_events + deletion_events)
 
 A record with no NM tag is skipped rather than assumed error-free.
+
+READ LENGTHS are tallied alongside the identities, for both mapped and unmapped
+records, because the k-mer arithmetic downstream needs a denominator over ALL
+sequenced bases. `total_read_bases` covers every primary record; the identity
+of the read is irrelevant to the fact that it consumed coverage.
+`scored_read_bases` covers only the records that produced an identity. The ratio
+is the fraction of sequenced bases that can contribute an aligned k-mer at all.
+
+Lengths come from SEQ on the primary record, which is the full read: soft
+clipping keeps the sequence, and the hard-clipped records are the supplementary
+ones this function already excludes. `n_missing_seq` counts primary records
+whose SEQ is `*`; those contribute zero to the denominator, which would bias the
+aligned fraction OPTIMISTIC, so the caller warns rather than quietly proceeding.
 """
 function identities_from_sam(sam_path::AbstractString)
     rows = NamedTuple[]
     n_primary = 0
     n_unmapped = 0
     n_skipped = 0
+    n_records = 0
+    n_missing_seq = 0
+    total_read_bases = 0
+    scored_read_bases = 0
     for line in eachline(sam_path)
         (isempty(line) || startswith(line, '@')) && continue
         fields = split(line, '\t')
@@ -166,10 +202,17 @@ function identities_from_sam(sam_path::AbstractString)
         flag === nothing && (n_skipped += 1; continue)
         # 0x100 secondary, 0x800 supplementary
         (flag & 0x100 != 0 || flag & 0x800 != 0) && continue
+
+        n_records += 1
+        read_length = fields[10] == "*" ? 0 : length(fields[10])
+        read_length == 0 && (n_missing_seq += 1)
+        total_read_bases += read_length
+
         if flag & 0x4 != 0
             n_unmapped += 1
             push!(rows,
                 (read_id = String(fields[1]), mapped = false,
+                    read_length = read_length,
                     blast_identity = NaN, gap_compressed_identity = NaN,
                     aligned_columns = 0, mismatches = 0, inserted_bases = 0,
                     deleted_bases = 0))
@@ -202,16 +245,19 @@ function identities_from_sam(sam_path::AbstractString)
         (blast_denominator <= 0 || gap_denominator <= 0) && (n_skipped += 1; continue)
 
         n_primary += 1
+        scored_read_bases += read_length
         push!(rows,
             (
                 read_id = String(fields[1]), mapped = true,
+                read_length = read_length,
                 blast_identity = matches / blast_denominator,
                 gap_compressed_identity = matches / gap_denominator,
                 aligned_columns = cigar.aligned_columns, mismatches = mismatches,
                 inserted_bases = cigar.inserted_bases,
                 deleted_bases = cigar.deleted_bases))
     end
-    return (; rows, n_primary, n_unmapped, n_skipped)
+    return (; rows, n_primary, n_unmapped, n_skipped, n_records,
+        total_read_bases, scored_read_bases, n_missing_seq)
 end
 
 """
@@ -395,8 +441,23 @@ if abspath(PROGRAM_FILE) == @__FILE__
     gap_summary = quantile_summary(measured_gap)
     declared_summary = quantile_summary(declared)
 
-    n_reads_total = length(declared)
+    # The SAM, not the FASTQ headers, is the read census: `declared` only counts
+    # reads carrying Badread's `read_identity=` field, so under --reads on a real
+    # ONT run it is empty and "reads in FASTQ" would print 0 over a full dataset.
+    # minimap2 emits one primary record per read, mapped or not.
+    n_reads_total = alignment.n_records
     n_mapped = length(measured_blast)
+
+    # The fraction of SEQUENCED bases that can contribute an aligned k-mer at
+    # all. Unmapped reads are the whole point: they consume raw coverage and
+    # contribute nothing, so an estimate built only from mapped reads is
+    # optimistic by exactly this factor. See the ladder below.
+    aligned_base_fraction = alignment.total_read_bases == 0 ? NaN :
+                            alignment.scored_read_bases / alignment.total_read_bases
+    if alignment.n_missing_seq > 0
+        @warn "primary records without SEQ; their bases are absent from the " *
+              "denominator, which biases aligned_base_fraction OPTIMISTIC" alignment.n_missing_seq
+    end
 
     # COVERAGE and SEED describe the reads only when this script generated them.
     # Under --reads they are whatever the flags happened to default to and have no
@@ -409,10 +470,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
                  "$(COVERAGE)x / seed $(SEED)" : "--reads $(basename(reads_path))"
 
     println("\n--- Observed read identity (Lambda / ONT / $(provenance)) ---")
-    println("  reads in FASTQ:            $(n_reads_total)")
+    println("  reads (primary records):   $(n_reads_total)")
     println("  primary alignments scored: $(n_mapped)")
     println("  unmapped reads:            $(alignment.n_unmapped)")
     println("  records skipped:           $(alignment.n_skipped)")
+    println("  bases sequenced:           $(alignment.total_read_bases)")
+    println("  bases in scored reads:     $(alignment.scored_read_bases) " *
+            "($(fmt(aligned_base_fraction)) of sequenced)")
+    println("  reads with Badread header: $(length(declared))")
 
     for (label, summary) in (("BLAST identity (alignment-measured)", blast_summary),
         ("gap-compressed identity (alignment-measured)", gap_summary),
@@ -428,22 +493,43 @@ if abspath(PROGRAM_FILE) == @__FILE__
     #
     # e is taken from the MEAN alignment-measured BLAST identity: k-mer survival is
     # destroyed per erroneous BASE, which is what BLAST identity counts.
+    #
+    # e is a property of the reads that COULD be aligned, and it is not defined
+    # for the ones that could not — there is no CIGAR to recompute identity
+    # from. But raw coverage is charged for every read regardless, and an
+    # unalignable read (Badread's junk and random reads, at ~1% each by default,
+    # plus anything else that fails to map) contributes no k-mer that matches the
+    # reference. So (1-e)^k alone answers "of the bases that aligned, what
+    # fraction of k-mers are clean" — an estimate over a filtered population that
+    # excludes exactly the reads that damage the result. Multiplying by the
+    # aligned base fraction extends it to the population that actually exists.
+    #
+    # BOTH are reported. The mapped-only column is the historical quantity and
+    # remains the right number when the question is about alignable reads; the
+    # all-reads column is the one to use for provisioning coverage, because raw
+    # coverage is what the operator buys.
     if blast_summary !== nothing
         error_rate = 1 - blast_summary.mean
         println("\n--- Implied k-mer survival at measured e = $(fmt(error_rate)) ---")
-        println("  (P(error-free k-mer) = (1-e)^k; error-free coverage = raw coverage x P)")
-        header = rpad("k", 5) * rpad("P(clean)", 12) *
+        println("  (P(clean | mapped) = (1-e)^k; P(clean | all reads) = " *
+                "aligned_base_fraction x (1-e)^k = $(fmt(aligned_base_fraction)) x (1-e)^k)")
+        println("  (error-free coverage = raw coverage x P(clean | all reads))")
+        header = rpad("k", 5) * rpad("P|mapped", 12) * rpad("P|all", 12) *
                  join([rpad("$(c)x", 10) for c in COVERAGE_LADDER])
         println("  " * header)
         ladder_rows = NamedTuple[]
         for k in K_LADDER
             p = (1 - error_rate)^k
-            println("  " * rpad(k, 5) * rpad(fmt(p), 12) *
-                    join([rpad(fmt(c * p), 10) for c in COVERAGE_LADDER]))
+            p_all = aligned_base_fraction * p
+            println("  " * rpad(k, 5) * rpad(fmt(p), 12) * rpad(fmt(p_all), 12) *
+                    join([rpad(fmt(c * p_all), 10) for c in COVERAGE_LADDER]))
             for c in COVERAGE_LADDER
                 push!(ladder_rows,
                     (k = k, p_error_free_kmer = p, coverage = c,
-                        error_free_kmer_coverage = c * p))
+                        error_free_kmer_coverage = c * p,
+                        aligned_base_fraction = aligned_base_fraction,
+                        p_error_free_kmer_all_reads = p_all,
+                        error_free_kmer_coverage_all_reads = c * p_all))
             end
         end
         CSV.write(joinpath(OUTPUT_DIR, "kmer_survival_ladder.tsv"),
@@ -470,7 +556,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 source = source, n = summary.n, min = summary.min, q05 = summary.q05,
                 q25 = summary.q25, median = summary.median, mean = summary.mean,
                 q75 = summary.q75, q95 = summary.q95, max = summary.max,
-                n_reads_total = n_reads_total, n_unmapped = alignment.n_unmapped))
+                n_reads_total = n_reads_total, n_unmapped = alignment.n_unmapped,
+                total_read_bases = alignment.total_read_bases,
+                scored_read_bases = alignment.scored_read_bases,
+                aligned_base_fraction = aligned_base_fraction))
     end
     CSV.write(joinpath(OUTPUT_DIR, "read_identity_summary.tsv"),
         DataFrames.DataFrame(summary_rows); delim = '\t')

@@ -26,6 +26,15 @@
 # at 30x, which is what makes the pilot's result worth resolving rather than
 # explaining away.
 #
+# That 5.0x is the MAPPED-ONLY figure: e is measured from alignments and so is
+# defined only over reads that aligned, while raw coverage is charged for every
+# read. `ont_read_identity.jl` now also reports an aligned base fraction, and
+# the all-reads figure is 5.0x times that fraction — strictly lower, and lower
+# by the ~2% of reads that Badread's junk/random defaults make unalignable.
+# The direction of the argument is unchanged (the all-reads figure is still
+# several-fold above 1x at 30x/k=31); the exact multiplier should be read off a
+# refreshed kmer_survival_ladder.tsv rather than from this comment.
+#
 # HYPOTHESES UNDER TEST
 #   H-a  k-selection artifact — k = 31 is simply too long for this error rate,
 #        and the degeneracy dissolves into a per-chemistry k choice.
