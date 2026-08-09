@@ -87,6 +87,76 @@ Test.@testset "Badread nanopore argument pinning" begin
         Test.@test flag_value(args, "--length") == "8000,6000"
     end
 
+    Test.@testset "the default outfile is keyed to the whole profile" begin
+        # `simulate_nanopore_reads` SKIPS Badread when its output path already
+        # exists. The default path used to be derived from only the reference and
+        # the quantity, so a call overriding the error model, the identity
+        # distribution, or the seed resolved to the same path as a default-profile
+        # call and silently returned that call's reads. Nothing errors: the FASTQ
+        # is well-formed and the read count is right, and only the error process —
+        # the variable being manipulated — is wrong.
+        default_path = Mycelia._badread_nanopore_outfile("ref.fna", "30x";
+            error_model = "nanopore2023", qscore_model = "nanopore2023",
+            identity = "95,99,2.5", length_dist = "15000,13000", seed = nothing)
+
+        # BACKWARD COMPATIBILITY: the pinned defaults must still produce exactly
+        # the historical path, or every already-generated file silently becomes a
+        # cache miss and every recorded ONT benchmark is regenerated under a new
+        # name.
+        Test.@test default_path == "ref.badread.nanopore_r10.30x.fq.gz"
+
+        # Each profile parameter must move the path ON ITS OWN. Asserting only
+        # that "some override differs" would pass a key that incorporated, say,
+        # error_model and ignored identity.
+        overrides = [
+            (; error_model = "nanopore2020"),
+            (; qscore_model = "nanopore2018"),
+            (; identity = "90,98,5"),
+            (; length_dist = "8000,6000"),
+            (; seed = 42)
+        ]
+        paths = String[]
+        for override in overrides
+            settings = merge(
+                (; error_model = "nanopore2023", qscore_model = "nanopore2023",
+                    identity = "95,99,2.5", length_dist = "15000,13000",
+                    seed = nothing),
+                override)
+            path = Mycelia._badread_nanopore_outfile("ref.fna", "30x"; settings...)
+            Test.@test path != default_path
+            push!(paths, path)
+        end
+        # ...and they must be distinct FROM EACH OTHER, not merely from the
+        # default. A key that collapsed every non-default profile onto one
+        # "non-default" path would satisfy the assertions above while still
+        # serving one profile's reads for another's request.
+        Test.@test length(unique(paths)) == length(paths)
+
+        # Deterministic: the same profile must resolve to the same path across
+        # processes, or the cache never hits and every call re-runs Badread.
+        Test.@test Mycelia._badread_nanopore_outfile("ref.fna", "30x";
+            error_model = "nanopore2020", qscore_model = "nanopore2023",
+            identity = "95,99,2.5", length_dist = "15000,13000", seed = nothing) ==
+                   paths[1]
+
+        # Quantity and reference remain part of the key.
+        Test.@test Mycelia._badread_nanopore_outfile("ref.fna", "50x";
+            error_model = "nanopore2023", qscore_model = "nanopore2023",
+            identity = "95,99,2.5", length_dist = "15000,13000",
+            seed = nothing) != default_path
+
+        # The suffix is empty for the defaults and a filesystem-safe token
+        # otherwise — no path separators, no shell metacharacters.
+        Test.@test Mycelia._badread_nanopore_profile_suffix(
+            error_model = "nanopore2023", qscore_model = "nanopore2023",
+            identity = "95,99,2.5", length_dist = "15000,13000",
+            seed = nothing) == ""
+        nondefault_suffix = Mycelia._badread_nanopore_profile_suffix(
+            error_model = "nanopore2023", qscore_model = "nanopore2023",
+            identity = "90,98,5", length_dist = "15000,13000", seed = nothing)
+        Test.@test occursin(r"^\.profile-[0-9a-f]+$", nondefault_suffix)
+    end
+
     Test.@testset "no flag is ever emitted without a value" begin
         args = Mycelia._badread_nanopore_args(
             fasta = "r.fna", quantity = "1x", seed = 7)
