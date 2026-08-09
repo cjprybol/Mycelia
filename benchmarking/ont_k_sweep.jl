@@ -1024,8 +1024,24 @@ if abspath(PROGRAM_FILE) == @__FILE__
         # with n_reads = 0 and wall_seconds = 0" — a fabricated account:
         # `error_row` hardcodes both of those values on EVERY error path, so
         # they carry no information about where the failure occurred.)
+        #
+        # Reading the checkpoint is itself guarded, for the same reason
+        # `load_all_checkpoints` guards it: a `cell_result.json` truncated by a
+        # crash mid-write makes `JSON.parsefile` or `canonical` throw, and an
+        # unguarded throw HERE escapes the cell loop and terminates Phase 2 —
+        # one bad kilobyte killing a multi-hour run, the exact outcome the
+        # aggregation path was hardened against. An unreadable checkpoint is
+        # treated as ABSENT, so the cell is recomputed and overwrites it, which
+        # is also the recovery `load_all_checkpoints` documents.
+        cached = nothing
         if isfile(ckpt)
-            cached = canonical(JSON.parsefile(ckpt))
+            try
+                cached = canonical(JSON.parsefile(ckpt))
+            catch e
+                @warn "unreadable checkpoint; recomputing this cell" cell=cell_id exception=e
+            end
+        end
+        if cached !== nothing
             if cached.status in RETRYABLE_STATUSES
                 println("  [$(cell_index)/$(N_CELLS)] $(cell_id) — cached row is " *
                         "$(cached.status); retrying")
