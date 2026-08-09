@@ -18,44 +18,79 @@ println(&quot;- Annotation: Prodigal, Pyrodigal, Prodigal-gv, Augustus, MetaEuk&
 println(&quot;- Alignment: BWA, minimap2, BLAST&quot;)
 println(&quot;- Phylogenetics: IQ-TREE, RAxML, MrBayes&quot;)
 println(&quot;- Visualization: Circos, IGV, Artemis&quot;)
-println(&quot;- Quality Control: FastQC, Quast, BUSCO&quot;)</code></pre><h3 id="Wrapper-entry-points"><a class="docs-heading-anchor" href="#Wrapper-entry-points">Wrapper entry points</a><a id="Wrapper-entry-points-1"></a><a class="docs-heading-anchor-permalink" href="#Wrapper-entry-points" title="Permalink"></a></h3><p>The wrappers below expose thin Julia entry points for external tools. Use these examples as templates and replace paths with real inputs. These snippets are shown as documentation only and are not executed in docs builds.</p><pre><code class="language-julia hljs">Mycelia.install_autocycler()
+println(&quot;- Quality Control: FastQC, Quast, BUSCO&quot;)</code></pre><h3 id="Wrapper-entry-points"><a class="docs-heading-anchor" href="#Wrapper-entry-points">Wrapper entry points</a><a id="Wrapper-entry-points-1"></a><a class="docs-heading-anchor-permalink" href="#Wrapper-entry-points" title="Permalink"></a></h3><p>The wrappers below expose thin Julia entry points for external tools. Use these examples as templates and replace paths with real inputs. These snippets are shown as documentation only and are not executed in docs builds. Autocycler 0.5.2 is a reproducible compatibility pin for bacterial isolates where mostly complete alternative long-read assemblies are expected; it is not a generic metagenome/eukaryote assembler or an automatically current release.</p><pre><code class="language-julia hljs">Mycelia.install_autocycler()
 Mycelia.run_autocycler(
-    long_reads=&quot;reads.fastq&quot;,
-    out_dir=&quot;autocycler_out&quot;,
-    read_type=&quot;ont_r10&quot;,
+    long_reads = &quot;reads.fastq&quot;,
+    out_dir = &quot;autocycler_out&quot;,
+    read_type = &quot;ont_r10&quot;,
 )
 Mycelia.run_autocycler_polished(
-    long_reads=&quot;reads.fastq&quot;,
-    short_reads_1=&quot;reads_R1.fastq&quot;,
-    short_reads_2=&quot;reads_R2.fastq&quot;,
-    out_dir=&quot;autocycler_polished_out&quot;,
-    read_type=&quot;ont_r10&quot;,
+    long_reads = &quot;reads.fastq&quot;,
+    short_reads_1 = &quot;reads_R1.fastq&quot;,
+    short_reads_2 = &quot;reads_R2.fastq&quot;,
+    out_dir = &quot;autocycler_polished_out&quot;,
+    read_type = &quot;ont_r10&quot;,
 )
 
 # High-level corrected multi-input workflows use typed sibling adapters.
-unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-    (&quot;reads_R1.fastq.gz&quot;, &quot;reads_R2.fastq.gz&quot;),
+unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
+    &quot;reads_R1.fastq.gz&quot;,
+    &quot;reads_R2.fastq.gz&quot;,
     &quot;reads_ont.fastq.gz&quot;;
     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
         output_dir = &quot;hybrid_unicycler_out&quot;,
+        # Cumulative stable source + correction-output copy budget.
+        input_snapshot_byte_ceiling = 500_000_000_000,
     ),
 )
-autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-    (&quot;reads_R1.fastq.gz&quot;, &quot;reads_R2.fastq.gz&quot;),
+# Unicycler&#39;s mutable Conda environment is bound to the realized package
+# inventory for this run (name, version, build, and channel for every package).
+unicycler_toolchain = unicycler_result.assembly_stats[&quot;toolchain&quot;]
+unicycler_toolchain[&quot;package_inventory_sha256&quot;]
+unicycler_toolchain[&quot;packages&quot;]
+autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
+    &quot;reads_R1.fastq.gz&quot;,
+    &quot;reads_R2.fastq.gz&quot;,
     &quot;reads_hifi.fastq.gz&quot;;
     config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
         long_read_tech = :pacbio_hifi,
         autocycler_read_type = :pacbio_hifi,
         output_dir = &quot;hybrid_autocycler_out&quot;,
+        input_snapshot_byte_ceiling = 500_000_000_000,
     ),
 )
 autocycler_result.assembly_stats[&quot;toolchain&quot;]
 
-metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
-combined HiFi-plus-ONT adapter.
-Mycelia.run_metamdbg(hifi_reads = &quot;reads_hifi.fastq.gz&quot;)
+# Both high-level workflows bind the original source content and corrected
+# FASTQ path, size, and content to deterministic SHA-256 provenance.
+read_content = unicycler_result.assembly_stats[&quot;read_content_provenance&quot;]
+read_content[&quot;source_inputs&quot;]
+read_content[&quot;corrected_fastqs&quot;]
+# Ceiling, free-space, write, or hash failures attempt exact identity-bound
+# partial-snapshot cleanup. Cleanup is never silent: a failure propagates when
+# no result can be returned or retains and reports exact evidence with the
+# result. High-level children consume the already-bound corrected snapshots
+# directly, without a second scratch copy. Standalone run_unicycler and
+# run_autocycler_polished calls still expose input_spool_parent and
+# input_spool_byte_ceiling when a direct wrapper needs bounded scratch.
 
-Mycelia.run_bcalm([&quot;reads_R1.fastq&quot;, &quot;reads_R2.fastq&quot;], &quot;bcalm_out&quot;; kmer_size=31)
+metaMDBG v1.4 accepts one or more HiFi FASTQs, or one or more ONT R10.4-or-
+later FASTQs with an explicit attestation. It is never a HiFi-plus-ONT or
+Illumina-plus-long adapter. Synchronous execution returns :complete only after
+semantic FASTA/GFA validation; collected or dry-run jobs return :planned.
+metamdbg_hifi_result = Mycelia.run_metamdbg(
+    hifi_reads = [&quot;reads_hifi_1.fastq.gz&quot;, &quot;reads_hifi_2.fastq.gz&quot;],
+)
+@assert metamdbg_hifi_result.status == :complete
+metamdbg_hifi_result.provenance.package_inventory
+metamdbg_hifi_result.provenance.package_inventory_sha256
+metamdbg_ont_result = Mycelia.run_metamdbg(
+    ont_reads = [&quot;reads_ont_1.fastq.gz&quot;, &quot;reads_ont_2.fastq.gz&quot;],
+    ont_r10_4_plus = true,
+)
+@assert metamdbg_ont_result.status == :complete
+
+Mycelia.run_bcalm([&quot;reads_R1.fastq&quot;, &quot;reads_R2.fastq&quot;], &quot;bcalm_out&quot;; kmer_size = 31)
 Mycelia.ggcat_build(&quot;reads.fastq&quot;, &quot;graph.lz4&quot;, 31)
 Mycelia.ggcat_query(&quot;graph.lz4&quot;, &quot;queries.fasta&quot;, &quot;ggcat_hits.tsv&quot;, 31)
 
@@ -63,7 +98,7 @@ Mycelia.foldseek_easy_search(&quot;query_structures/&quot;, &quot;target_db/&quo
 Mycelia.run_pantools([&quot;--help&quot;])
 
 Mycelia.install_prokrustean()
-Mycelia.prokrustean_build_graph(&quot;example.ebwt&quot;, &quot;prokrustean.bin&quot;; kmin=21)</code></pre><h2 id="Part-2:-Bioconda-Integration"><a class="docs-heading-anchor" href="#Part-2:-Bioconda-Integration">Part 2: Bioconda Integration</a><a id="Part-2:-Bioconda-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Bioconda-Integration" title="Permalink"></a></h2><p>Bioconda provides a standardized way to install and manage bioinformatics software packages.</p><pre><code class="language-julia hljs">println(&quot;\n=== Bioconda Integration ===&quot;)</code></pre><h3 id="Environment-Management"><a class="docs-heading-anchor" href="#Environment-Management">Environment Management</a><a id="Environment-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Environment-Management" title="Permalink"></a></h3><p>Create and manage conda environments for different tools</p><pre><code class="language-julia hljs">println(&quot;--- Environment Management ---&quot;)</code></pre><p>TODO: Implement bioconda environment management</p><ul><li>Create tool-specific environments</li><li>Install packages with dependency resolution</li><li>Manage environment versions</li><li>Export and reproduce environments</li></ul><p>Example environment specification</p><pre><code class="language-julia hljs">environment_spec = Dict(
+Mycelia.prokrustean_build_graph(&quot;example.ebwt&quot;, &quot;prokrustean.bin&quot;; kmin = 21)</code></pre><h2 id="Part-2:-Bioconda-Integration"><a class="docs-heading-anchor" href="#Part-2:-Bioconda-Integration">Part 2: Bioconda Integration</a><a id="Part-2:-Bioconda-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Bioconda-Integration" title="Permalink"></a></h2><p>Bioconda provides a standardized way to install and manage bioinformatics software packages.</p><pre><code class="language-julia hljs">println(&quot;\n=== Bioconda Integration ===&quot;)</code></pre><h3 id="Environment-Management"><a class="docs-heading-anchor" href="#Environment-Management">Environment Management</a><a id="Environment-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Environment-Management" title="Permalink"></a></h3><p>Create and manage conda environments for different tools</p><pre><code class="language-julia hljs">println(&quot;--- Environment Management ---&quot;)</code></pre><p>TODO: Implement bioconda environment management</p><ul><li>Create tool-specific environments</li><li>Install packages with dependency resolution</li><li>Manage environment versions</li><li>Export and reproduce environments</li></ul><p>Example environment specification</p><pre><code class="language-julia hljs">environment_spec = Dict(
     &quot;name&quot; =&gt; &quot;mycelia-analysis&quot;,
     &quot;channels&quot; =&gt; [&quot;conda-forge&quot;, &quot;bioconda&quot;],
     &quot;dependencies&quot; =&gt; [
@@ -160,25 +195,18 @@ println(&quot;- Version control everything&quot;)
 println(&quot;- Document all parameters&quot;)
 println(&quot;- Use containerization when possible&quot;)
 println(&quot;- Provide example datasets&quot;)</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n=== Tool Integration Summary ===&quot;)
-println(&quot;✓ Understanding external tool integration strategies&quot;)
-println(&quot;✓ Implementing bioconda environment management&quot;)
-println(&quot;✓ Creating robust workflow architectures&quot;)
-println(&quot;✓ Integrating with HPC and cloud platforms&quot;)
-println(&quot;✓ Implementing quality control and validation&quot;)
-println(&quot;✓ Ensuring reproducibility and documentation&quot;)
-println(&quot;✓ Optimizing performance and resource usage&quot;)
-println(&quot;✓ Creating user-friendly interfaces&quot;)
-println(&quot;✓ Applying comprehensive testing strategies&quot;)
-println(&quot;✓ Understanding deployment and distribution&quot;)
-
-println(&quot;\nCongratulations! You have completed all Mycelia tutorials.&quot;)
-println(&quot;You now have a comprehensive understanding of:&quot;)
-println(&quot;- Data acquisition and quality control&quot;)
-println(&quot;- K-mer analysis and genome assembly&quot;)
-println(&quot;- Assembly validation and gene annotation&quot;)
-println(&quot;- Comparative genomics and tool integration&quot;)
+println(&quot;Topics introduced in this survey:&quot;)
+println(&quot;- External-tool wrapper entry points&quot;)
+println(&quot;- Environment and dependency-management concepts&quot;)
+println(&quot;- Workflow, HPC, cloud, and resource-management concepts&quot;)
+println(&quot;- Quality-control, reproducibility, and testing concepts&quot;)
+println(&quot;- Interface, deployment, and distribution concepts&quot;)
+println()
+println(&quot;Sections marked TODO are conceptual placeholders, not implemented exercises.&quot;)
+println(&quot;You have reached the end of Tutorial 8; this survey does not certify&quot;)
+println(&quot;completion of every workflow or every Mycelia tutorial.&quot;)
 println()
 println(&quot;Continue exploring the Mycelia package for advanced features&quot;)
 println(&quot;and consider contributing to the project!&quot;)
 
-nothing</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../07_comparative_genomics/">« Step 7: Comparative Genomics</a><a class="docs-footer-nextpage" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Saturday 8 August 2026 19:17">Saturday 8 August 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+nothing</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../07_comparative_genomics/">« Step 7: Comparative Genomics</a><a class="docs-footer-nextpage" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 9 August 2026 16:23">Sunday 9 August 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
