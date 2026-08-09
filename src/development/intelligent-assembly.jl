@@ -60,7 +60,10 @@ end
 # checking the decision record first -- it is retained as the historical record
 # of a rule that was proposed for registration and rejected.
 #
-# Five reasons, four of them properties of this function as written:
+# Five reasons. THREE are properties of this function as written (1-3); reason 4
+# is an upstream integration risk about its INPUT, and reason 5 is a property of
+# the repository's wiring, not of the code below. The distinction matters: 1-3
+# survive any change elsewhere, 4 and 5 do not.
 #  1. It does not return a k. It returns a Vector{Int} -- a prime LADDER up to
 #     max_k (default 101). Any text registering it "as written" as a scalar k
 #     selector misdescribes it.
