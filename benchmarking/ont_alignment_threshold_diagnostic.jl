@@ -20,6 +20,14 @@
 # wrote, so it cannot perturb the sweep's results and costs only QUAST time.
 #
 # INTERPRETATION
+#
+# FILTER ON `rescore_status` FIRST. A row whose status is not `ok` or
+# `nonzero_with_report` carries all-missing metrics because QUAST produced no
+# report — not because nothing aligned. Read unfiltered, such a row is
+# indistinguishable from the strongest evidence this script can produce for an
+# assembler defect, which is the most consequential hypothesis the sweep tests.
+# Both readings below assume the uninterpretable rows have been dropped.
+#
 #   * Genome fraction rises sharply as the threshold is relaxed  -> the assembly
 #     recovers the genome at an accuracy below QUAST's default cut. The
 #     degeneracy is a real property of uncorrected k-mer assembly on long reads
@@ -95,7 +103,16 @@ function candidate_cells(sweep_dir)
         # entry of CENSORED_STATUSES, so such a checkpoint would be silently
         # dropped and this script would report "nothing to do" over a tree full
         # of censored cells.
-        parsed = JSON.parsefile(checkpoint)
+        # Guarded for the same reason `load_all_checkpoints` guards its read: a
+        # checkpoint truncated by a crash mid-write makes JSON.parsefile throw,
+        # and an unguarded throw here would abort the whole diagnostic over one
+        # unreadable cell instead of skipping it.
+        parsed = try
+            JSON.parsefile(checkpoint)
+        catch e
+            @warn "unreadable checkpoint; skipping cell" cell=entry exception=e
+            continue
+        end
         row = Dict{String, Any}(parsed)
         try
             row["nga50_status"] = canonical(parsed).nga50_status
@@ -110,17 +127,61 @@ function candidate_cells(sweep_dir)
 end
 
 """
-    rescore(contigs, reference, outdir, min_identity) -> NamedTuple
+    rescore_status_for(exited_nonzero, has_report) -> String
+
+How a QUAST invocation terminated, from its exit status and whether it left a
+report. Split out from `rescore` so the classification is reachable without a
+QUAST installation; the meaning of each value is documented on `rescore`.
+"""
+function rescore_status_for(exited_nonzero::Bool, has_report::Bool)
+    if !exited_nonzero
+        return has_report ? "ok" : "no_report"
+    else
+        return has_report ? "nonzero_with_report" : "nonzero_no_report"
+    end
+end
+
+"""
+    rescore(contigs, reference, outdir, min_identity) -> (; metrics, status)
 
 Run QUAST over `contigs` at an explicit `--min-identity`, returning the parsed
-metrics (all-missing if QUAST declines or errors).
+metrics AND how the run terminated.
 
 `--min-contig 500` matches the sweep and the Track-A pilot, so the only variable
 between rows of the output is the identity threshold.
+
+The status is returned, and persisted per row, because an all-missing metric row
+has two completely different meanings and they are otherwise indistinguishable:
+
+  * QUAST ran and nothing aligned at this threshold — a MEASUREMENT, and the
+    input to this script's INTERPRETATION block.
+  * QUAST could not run — missing conda env, OOM, an out-of-range
+    `--min-identity` (QUAST rejects < 80.0), an unreadable reference. Not a
+    measurement of anything.
+
+Collapsing the second into the first is how a tool failure becomes evidence:
+"genome fraction stays near zero even at 80%" is exactly the observation the
+header reads as support for an assembler defect, the most consequential
+hypothesis the sweep tests. A row that reached this table only because QUAST
+was broken would supply that evidence while looking entirely normal.
+
+Statuses:
+
+  * `ok`                   — exited 0 and wrote report.tsv. Metrics are a
+                             measurement; all-missing means nothing aligned.
+  * `nonzero_with_report`  — exited non-zero but still emitted a report. Metrics
+                             are parseable but the run complained.
+  * `nonzero_no_report`    — exited non-zero and wrote nothing. THIS is the
+                             ambiguous class: "nothing survived filtering" and
+                             "QUAST is broken" look identical from here. Exclude
+                             from threshold interpretation.
+  * `no_report`            — exited 0 and wrote nothing. Anomalous; treat as
+                             `nonzero_no_report`.
 """
 function rescore(contigs, reference, outdir, min_identity)
     mkpath(outdir)
     Mycelia.add_bioconda_env("quast")
+    exited_nonzero = false
     try
         run(pipeline(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n quast quast.py
@@ -128,22 +189,22 @@ function rescore(contigs, reference, outdir, min_identity)
              --min-identity $(min_identity) --reference $(reference) $(contigs)`,
             stdout = devnull, stderr = devnull))
     catch e
-        # QUAST exits non-zero when nothing survives filtering, which IS a
-        # result. But a missing conda env, an OOM, an out-of-range
-        # --min-identity (QUAST rejects < 80.0), or an unreadable reference land
-        # in this same branch and produce the same all-missing row — and an
-        # all-missing row across the whole ladder is exactly the observation
-        # this script's INTERPRETATION block reads as evidence for an assembler
-        # defect. Warn so the two are distinguishable in the log rather than
-        # only in the operator's memory.
-        @warn "QUAST returned non-zero; recording as no-alignment at this " *
-              "threshold. If this fires at EVERY threshold for a cell, check " *
-              "it is not an environment or argument failure." min_identity exception=e
-        return empty_metrics()
+        exited_nonzero = true
+        @warn "QUAST returned non-zero at this threshold; the row is recorded " *
+              "with a non-ok rescore_status and must be excluded from threshold " *
+              "interpretation. If this fires at EVERY threshold for a cell, " *
+              "check it is not an environment or argument failure." min_identity exception=e
     end
     report = joinpath(outdir, "report.tsv")
-    return isfile(report) ? parse_quast_metrics(report) : empty_metrics()
+    has_report = isfile(report)
+    status = rescore_status_for(exited_nonzero, has_report)
+    metrics = has_report ? parse_quast_metrics(report) : empty_metrics()
+    return (; metrics, status)
 end
+
+# Rows whose metrics are a measurement rather than a report about the tool. Only
+# these may be read as evidence about the assembly.
+const INTERPRETABLE_RESCORE_STATUSES = ("ok", "nonzero_with_report")
 
 if abspath(PROGRAM_FILE) == @__FILE__
     println("=== ONT alignment-threshold diagnostic (td-4e19d.28) ===")
@@ -191,7 +252,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
         for min_identity in IDENTITIES
             outdir = joinpath(OUT_DIR, cell["cell_id"], "idy$(min_identity)")
-            metrics = rescore(contigs, references[organism], outdir, min_identity)
+            result = rescore(contigs, references[organism], outdir, min_identity)
+            metrics = result.metrics
             push!(rows,
                 (
                     cell_id = cell["cell_id"], organism = cell["organism"],
@@ -200,6 +262,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                     min_identity = min_identity,
                     asm_contigs_ge_min = cell["asm_contigs_ge_min"],
                     asm_max_contig = cell["asm_max_contig"],
+                    rescore_status = result.status,
                     genome_fraction = metrics.genome_fraction,
                     NGA50 = metrics.NGA50,
                     NA50 = metrics.NA50,
@@ -207,6 +270,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                     unaligned_length = metrics.unaligned_length,
                     misassemblies = metrics.misassemblies))
             println("  $(cell["cell_id"]) @ IDY $(min_identity)%: " *
+                    "[$(result.status)] " *
                     "GF=$(ismissing(metrics.genome_fraction) ? "NA" : metrics.genome_fraction)% " *
                     "NGA50=$(ismissing(metrics.NGA50) ? "NA" : metrics.NGA50) " *
                     "largest_aln=$(ismissing(metrics.largest_alignment) ? "NA" : metrics.largest_alignment)")
@@ -220,6 +284,21 @@ if abspath(PROGRAM_FILE) == @__FILE__
         CSV.write(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"), df;
             delim = '\t', missingstring = "NA")
         println("\nWrote $(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"))")
+
+        # State the interpretable/uninterpretable split at the point of use. An
+        # uninterpretable row is all-missing and therefore reads, to the naked
+        # eye and to any consumer that does not filter, as "nothing aligned even
+        # at 80%" — this script's stated evidence for an assembler defect.
+        n_bad = count(r -> !(r.rescore_status in INTERPRETABLE_RESCORE_STATUSES),
+            eachrow(df))
+        println("Rows: $(DataFrames.nrow(df)) total, " *
+                "$(DataFrames.nrow(df) - n_bad) interpretable, $(n_bad) not.")
+        if n_bad > 0
+            @warn "rows with a non-interpretable rescore_status are present. " *
+                  "They carry all-missing metrics because QUAST did not " *
+                  "produce a report, NOT because nothing aligned. Filter on " *
+                  "rescore_status before reading this table as evidence." n_bad
+        end
     end
     println("End: $(Dates.now())")
 end  # PROGRAM_FILE guard
