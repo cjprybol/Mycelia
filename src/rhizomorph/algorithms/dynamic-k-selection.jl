@@ -196,6 +196,26 @@ function dynamic_k_prime_pattern(start_k::Int = 11; max_k::Int = 101, initial_st
     return candidate_ks
 end
 
+# DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): NON-PRODUCTION.
+# No call site; do not wire it as-is.
+#
+# BUT: its sparsity computation is the ALPHABET-GENERAL REFERENCE
+# IMPLEMENTATION. `_calculate_dynamic_k_sparsity` already computes
+# `float(alphabet_size)^k` with |A| measured from the data, so this is the only
+# one of the five mechanisms that is not hard-coded to log4. Any implementation
+# of the registered collision floor `k >= ceil(log_|A|(G/p))` should lift from
+# here rather than re-derive.
+#
+# THREE DEFECTS must be fixed before that machinery is relied upon. All three
+# fail SILENTLY at a `clamp` boundary rather than raising:
+#   1. `float(|A|)^k` overflows to Inf for |A| >= 1128 at k = 101 (1127^101 is
+#      finite), so sparsity = 1 - n/Inf is exactly 1.0 -- maximally sparse
+#      regardless of data. `dynamic_k_prime_pattern`'s default max_k IS 101.
+#   2. |A| is measured after uppercasing while the window hash does NOT fold
+#      case, so numerator and denominator are counted over different spaces;
+#      sparsity can go negative and clamp to exactly 0.0 -- maximally dense.
+#   3. The denominator is `|A|^k` unconditionally, with no reverse-complement
+#      adjustment, so under Canonical it overstates the space ~2x.
 """
     select_dynamic_kmer_plan(
         observations;
@@ -373,6 +393,22 @@ function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float
     return clamp(1.0 - solid_fraction^(1.0 / k_ref), 0.0, 0.499)
 end
 
+# DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): GUARDED DIAGNOSTIC
+# ONLY. May be reported; MUST NEVER select k or gate a decision. It has no
+# production call site and must not acquire one.
+#
+# Measured behaviour (benchmarking/results/estimate_residual_error_validation/):
+# the estimator is PRECISE but BIASED, and the bias grows with coverage --
+# replicate CV is mostly below 0.02 for e >= 0.01 at C >= 10, while the bias
+# reverses sign near C = 10-30. At e = 0.10 it returns 0.1424 at C = 5 (42%
+# over) and 0.0639 at C = 100 (36% under). Because the error is bias rather than
+# noise, replication cannot remove it.
+#
+# NOT VERIFIED, do not propagate: this estimator has elsewhere been described as
+# having "a probability limit of zero" and "losing Fisher information with
+# depth". No committed artifact in this repository supports either statement,
+# and the measurement above contradicts the variance half. Treat as unsourced
+# until someone derives it.
 """
     estimate_residual_error(reads; k_ref = 13, solid_min = 2) -> Float64
 
@@ -587,6 +623,23 @@ end
 #   * "If none qualifies, fall back to the smallest prime `>= floor_k`" is wrong in
 #     three ways; see the corrected comment at the `return first(candidates)` site
 #     at the bottom of this function.
+# DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): PRODUCTION CONTROL
+# POINT -- this is the single registered entry point for reassembly-k selection,
+# and the only one of the five k-selection mechanisms on the production path.
+#
+# Its CURRENT SCORING IS NON-CONFORMING and must be replaced. It selects on
+# `median_solid_kmer_multiplicity`, whose own caveat below records it as REFUTED
+# and NON-MONOTONE in coverage. The registered rule is a measured level set:
+#
+#     k* = max { k in ladder : S(k) >= tau }   subject to  k >= ceil(log_|A|(G/p))
+#
+# where S(k) is the MEASURED fraction of reference k-mer positions observed
+# error-free. It is a level set, not an argmax: S(k) is monotonically
+# non-increasing in k by construction, so an argmax would always return the
+# smallest admissible rung and the measurement would do no work.
+#
+# This function is retained as the control point because it is wired, NOT
+# because its criterion is sound. Replacing the criterion is downstream work.
 """
     select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
 

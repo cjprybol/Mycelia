@@ -28,92 +28,138 @@ import Primes
 
 # ## 1. Mathematical Foundations of K-mer Selection
 #
-# Mycelia's k-mer selection is based on rigorous mathematical principles derived
-# from extensive research on error rate relationships and genomic properties.
+# K-mer selection balances two competing pressures: k must be long enough that
+# k-mers are unlikely to collide by chance, and short enough that a k-mer
+# survives the read errors intact often enough to be observed.
 
-# ### Error Rate-Based K-mer Selection
+# ### RETIRED: error-rate-based k selection
 #
-# The fundamental relationship between error rate and optimal k-mer size:
-# lower_bound_k = max(3, floor(1/error_rate - 1))
+# Earlier versions of this tutorial taught `lower_bound_k = max(3,
+# floor(1/error_rate - 1))` as the recommended method. **That rule is retired and
+# is not registered.** It is shown only so readers of the older material can see
+# why it was withdrawn.
+#
+# It is a survival-threshold crossing in disguise: since
+# `(1 - e)^(1/e - 1) -> 1/e_euler ~= 0.368`, choosing `k = 1/e - 1` holds
+# error-free k-mer survival near 0.368 across error regimes. But survival at a
+# candidate k is DIRECTLY MEASURABLE, so estimating `e` and inverting adds the
+# estimator's error to something observable -- and that estimator is measurably
+# biased, with the bias growing with coverage.
+#
+# It is also not alphabet-general. `(1 - e)^k` assumes independent, uniform
+# substitution: false for amino acids (structured by BLOSUM/PAM exchangeability)
+# and false for token alphabets (a learned confusion matrix). A modelled survival
+# term cannot be registered across the alphabets Mycelia supports; a measured one
+# can.
 
-function demonstrate_error_rate_kmer_selection()
-    println("Error Rate-Based K-mer Size Selection")
-    println("=====================================")
-    
-    error_rates = [0.01, 0.05, 0.10, 0.15, 0.20]
-    
-    for error_rate in error_rates
-        lower_bound = max(3, Int(floor(1/error_rate - 1)))
-        
-        ## Ensure odd k-mer (better for biological sequences)
+function demonstrate_retired_error_rate_rule()
+    println("RETIRED rule -- historical context only, do not use")
+    println("===================================================")
+    for error_rate in [0.01, 0.05, 0.10, 0.15, 0.20]
+        lower_bound = max(3, Int(floor(1 / error_rate - 1)))
         if lower_bound % 2 == 0
             lower_bound += 1
         end
-        
-        println("Error rate: $(error_rate*100)% → Minimum k-mer size: $lower_bound")
+        survival = (1 - error_rate)^lower_bound
+        println("  e = $(error_rate * 100)% -> k = $lower_bound " *
+                "(k-mer survival $(round(survival, digits = 3)))")
     end
-    
-    return error_rates
+    println("  The survival column is roughly constant. That constant is what the")
+    println("  rule targets -- and it can be measured directly.")
 end
 
-demonstrate_error_rate_kmer_selection()
+demonstrate_retired_error_rate_rule()
 
-# ### Sequence Length Optimization
+# ### CURRENT: measured-survival k selection
 #
-# The log₄(sequence_length) pattern provides optimal starting points for
-# k-mer size selection based on the divergence point where erroneous
-# k-mers begin to dominate true k-mers.
+# The registered rule selects the LARGEST candidate k whose measured k-mer
+# survival still meets a declared threshold, subject to a collision floor:
+#
+#     k* = max { k in ladder : S(k) >= tau }   subject to   k >= ceil(log_|A|(G/p))
+#
+# `S(k)` is the measured fraction of reference k-mer positions observed
+# error-free in at least one read. It is a LEVEL SET, not an argmax: `S(k)` is
+# monotonically non-increasing in k by construction (a reference (k+1)-mer is
+# observable only where the k-mer already is), so an argmax would always return
+# the smallest admissible k and the measurement would do no work.
 
-function demonstrate_log4_optimization()
-    println("\nLog₄ Sequence Length Optimization")
-    println("=================================")
-    
-    sequence_lengths = [100, 1_000, 10_000, 100_000, 1_000_000]
-    
-    for seq_len in sequence_lengths
-        optimal_k = Int(round(log(4, seq_len)))
-        
-        ## Ensure odd and prime when possible
-        if optimal_k % 2 == 0
-            optimal_k += 1
-        end
-        
-        if !Primes.isprime(optimal_k)
-            optimal_k = Primes.nextprime(optimal_k)
-        end
-        
-        println("Sequence length: $(seq_len) bp → Optimal starting k: $optimal_k")
+# ### The collision floor is alphabet-parameterised, not log4
+#
+# `log4(sequence_length)` is the DNA/RNA special case of a general bound, and
+# writing it as log4 hard-codes an alphabet. The general form is
+#
+#     k >= ceil(log_|A|(G / p))
+#
+# where `|A|` is the alphabet size, `G` the reference size in symbols, and `p`
+# the tolerated collision probability. This is a SPACE-EXHAUSTION bound: the
+# k-mer space must be large enough that chance collisions stay below `p`. It is
+# NOT a repeat-resolution bound and NOT a "divergence point where erroneous
+# k-mers dominate" -- observed optima sit well above it, so the floor is
+# necessary and clearly not sufficient.
+
+function demonstrate_collision_floor(; p = 0.01)
+    println("\nAlphabet-parameterised collision floor  k >= ceil(log_|A|(G/p))")
+    println("===============================================================")
+    genome_sizes = [10_000, 1_000_000, 100_000_000, 3_100_000_000]
+    for (alphabet_size, label) in [(4, "DNA/RNA"), (20, "amino acid"), (128, "ASCII n-gram")]
+        floors = [Int(ceil(log(alphabet_size, g / p))) for g in genome_sizes]
+        println("  |A| = $(lpad(alphabet_size, 3)) ($label): $floors")
     end
+    println("  for G = $genome_sizes")
+    println("  |A| = 4 reaches 13 at ~671 kb -- which is why a k_ref of 13 saturates")
+    println("  at bacterial scale. At |A| = 20 even a 3.1 Gb proteome needs k ~= 9,")
+    println("  so an amino-acid graph cannot saturate.")
 end
 
-demonstrate_log4_optimization()
+demonstrate_collision_floor()
 
-# ## 2. Dynamic Prime Pattern Algorithm
+# Under `Canonical` a k-mer and its reverse complement collapse to one class,
+# halving the space and raising the floor by `log_|A|(2)` (+0.5 rungs at |A| = 4).
+# `SingleStrand` and `DoubleStrand` take the floor above unadjusted. Note that
+# `Canonical` and `DoubleStrand` are rejected at config construction for amino
+# acids, strings and tokens -- reverse complement is undefined there -- so for
+# three of the four alphabets only `SingleStrand` is reachable.
+
+# ## 2. Prime K-mer Ladders
 #
-# Mycelia implements a sophisticated dynamic k-mer selection algorithm that
-# exploits the mathematical properties of prime number distribution.
+# `dynamic_k_prime_pattern` generates the CANDIDATE LADDER the selection rule
+# searches over. A prime progression is a SEARCH SCHEDULE -- a way to cover a
+# range of k without evaluating every integer. It is not a selection criterion
+# and carries no claim that prime k beats adjacent composite k.
+#
+# Two call-site notes, because earlier versions of this tutorial got both wrong
+# and raised `UndefVarError`:
+#
+#  1. The function lives in the `Rhizomorph` submodule, which does not re-export
+#     into `Mycelia`'s top level -- call `Mycelia.Rhizomorph.f`, not `Mycelia.f`.
+#  2. `max_k` and `initial_step` are KEYWORD arguments, not positional.
 
-## Generate optimal k-mer progression using dynamic prime pattern
-function demonstrate_dynamic_prime_pattern()
-    println("\nDynamic Prime Pattern K-mer Selection")
-    println("====================================")
-    
-    ## Standard progression for high-quality data
-    k_sequence_standard = Mycelia.dynamic_k_prime_pattern(11, 101, 2)
-    println("Standard progression (start=11): $k_sequence_standard")
-    
-    ## Progression for error-prone data
-    k_sequence_error_prone = Mycelia.dynamic_k_prime_pattern(7, 51, 2)
-    println("Error-prone progression (start=7): $k_sequence_error_prone")
-    
-    ## Error rate optimized progression
-    k_sequence_optimized = Mycelia.error_optimized_k_sequence(0.05, 101, 10000)
-    println("Error-optimized (5% error, 10kb): $k_sequence_optimized")
-    
-    return k_sequence_standard, k_sequence_error_prone, k_sequence_optimized
+function demonstrate_prime_k_ladder()
+    println("\nPrime k ladders (candidate ladders for the selection rule)")
+    println("==========================================================")
+    ladder_standard = Mycelia.Rhizomorph.dynamic_k_prime_pattern(
+        11; max_k = 101, initial_step = 2)
+    println("  start = 11, max_k = 101: $ladder_standard")
+    ladder_error_prone = Mycelia.Rhizomorph.dynamic_k_prime_pattern(
+        7; max_k = 51, initial_step = 2)
+    println("  start =  7, max_k =  51: $ladder_error_prone")
+    return ladder_standard, ladder_error_prone
 end
 
-k_sequences = demonstrate_dynamic_prime_pattern()
+k_ladders = demonstrate_prime_k_ladder()
+
+# ### Removed: `error_optimized_k_sequence`
+#
+# This tutorial previously called `Mycelia.error_optimized_k_sequence(0.05, 101,
+# 10000)` here. That call is REMOVED, for three separate reasons:
+#
+#  * The rule it implements (`k >= 1/error_rate - 1`) is retired -- see section 1.
+#  * The function is not loaded. It lives under `src/development/`, which
+#    `Mycelia.jl` does not include, so the call raised `UndefVarError` anyway.
+#  * Its name misdescribes it: it returns a `Vector{Int}` prime LADDER up to
+#    `max_k` (default 101), not a single optimised k. Its genome-side bound is
+#    optional -- omit the third argument and there is none -- and where present
+#    it is hard-coded to log4, so it does not generalise across alphabets.
 
 # ### Theoretical Advantages of Prime K-mers
 #
@@ -496,7 +542,7 @@ println("SUMMARY: Theoretical Foundations Integrated into Mycelia")
 println("="^60)
 
 println("\n1. Mathematical K-mer Selection:")
-println("   • Error rate formula: k ≥ 1/error_rate - 1")
+println("   • Measured survival level set: k* = max{k : S(k) ≥ τ}, k ≥ ceil(log_|A|(G/p))")
 println("   • Log₄ optimization for sequence length")
 println("   • Dynamic prime pattern progression")
 
