@@ -5,6 +5,7 @@
 #SBATCH --qos=lr_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=12:00:00
@@ -35,7 +36,20 @@ echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
 # Group depot (precompiled deps + Bioconda envs install here).
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""
-export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
+# Julia's thread count is DERIVED from the allocation, never hardcoded. The old
+# `${SLURM_CPUS_PER_TASK:-16}` default was a silent oversubscription hazard: with
+# no --cpus-per-task directive Slurm allocates 1 CPU per task, the variable is
+# unset, and Julia would still spawn 16 threads on 1 core — enough contention to
+# turn the 12-hour completion gate into a false timeout. --cpus-per-task=16 above
+# is now the single source of truth for both Slurm and Julia; if it is ever
+# missing the job fails loudly here rather than silently oversubscribing.
+if [[ -z "${SLURM_CPUS_PER_TASK:-}" ]]; then
+  echo "ERROR: SLURM_CPUS_PER_TASK is unset — the --cpus-per-task directive is missing." >&2
+  echo "       Refusing to guess a thread count (oversubscription risks a false timeout)." >&2
+  exit 1
+fi
+export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+echo "CPUs allocated: ${SLURM_CPUS_PER_TASK}  JULIA_NUM_THREADS=${JULIA_NUM_THREADS}"
 
 cd "${HOME}/workspace/Mycelia/.worktrees/td-n8ax-gate/benchmarking" || exit 1
 
