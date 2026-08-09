@@ -19,7 +19,11 @@ Submit jobs through the SLURM template backend.
 """
 Base.@kwdef struct SlurmExecutor <: AbstractExecutor
     dry_run::Bool = false
+    hold::Bool = false
 end
+
+SlurmExecutor(dry_run::Bool)::SlurmExecutor =
+    SlurmExecutor(; dry_run, hold = false)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -149,8 +153,17 @@ function execute(job::JobSpec, ::LocalExecutor)
     return true
 end
 
-function execute(job::JobSpec, executor::SlurmExecutor)::SubmitResult
-    return submit(job; dry_run = executor.dry_run)
+function execute(
+        job::JobSpec,
+        executor::SlurmExecutor;
+        accepted_sbatch_callback::Function = record -> nothing,
+)::SubmitResult
+    return submit(
+        job;
+        dry_run = executor.dry_run,
+        hold = executor.hold,
+        accepted_sbatch_callback,
+    )
 end
 
 function execute(job::JobSpec, executor::CollectExecutor)::Int
