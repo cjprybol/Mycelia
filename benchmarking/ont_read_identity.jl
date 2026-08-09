@@ -65,6 +65,7 @@ import CodecZlib
 import CSV
 import DataFrames
 import Dates
+import SHA
 import Statistics
 
 const ACCESSION = "NC_001416"   # Lambda, matching the sweep and the Track-A pilot
@@ -261,6 +262,46 @@ end
 
 fmt(x) = string(round(x; digits = 4))
 
+# === Cache identity ===
+
+"""
+    reads_cache_tag(path) -> String
+
+A short token identifying the EXACT read file at `path` — its absolute path, its
+byte size, and its modification time, hashed together.
+
+This exists because the alignment cache is keyed by NAME, and a name derived
+only from `--coverage`/`--seed` says nothing about the reads that were actually
+aligned. Supply `--reads other.fq.gz` on a directory that already holds a SAM
+from a previous run and the "reusing existing SAM" branch would silently report
+that previous run's identity distribution as a measurement of the new read set:
+a wrong number, correctly formatted, with no error anywhere. Every quantity this
+script emits — the identity quantiles, e, the whole (1-e)^k ladder — would be
+about a file the operator never named.
+
+Size and mtime are in the key alongside the path so that REGENERATING the reads
+at the same coverage and seed also busts the cache. That is not hypothetical:
+the sweep's one observed failure was a truncated, non-empty `.fq.gz` left by an
+interrupted run, and a path-only key would have kept scoring the stale SAM.
+Getting this wrong in the safe direction costs one minimap2 run; getting it
+wrong in the other direction costs a fabricated measurement.
+"""
+function reads_cache_tag(path::AbstractString)
+    info = stat(path)
+    key = string(abspath(path), "\n", info.size, "\n", round(Int, info.mtime))
+    return first(SHA.bytes2hex(SHA.sha256(key)), 12)
+end
+
+"""
+    sanitize_for_filename(name) -> String
+
+Reduce `name` to `[A-Za-z0-9._-]` so an arbitrary read-file basename can be
+embedded in a cache filename without inventing path separators.
+"""
+function sanitize_for_filename(name::AbstractString)
+    replace(String(name), r"[^A-Za-z0-9._-]" => "_")
+end
+
 # === Main ===
 
 if abspath(PROGRAM_FILE) == @__FILE__
@@ -326,7 +367,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("Reads:     $(reads_path)")
 
     # --- Align ---------------------------------------------------------------------
-    sam_path = joinpath(OUTPUT_DIR, "ont_$(COVERAGE)x_seed$(SEED).sam")
+    # The SAM cache is keyed to the READ FILE, not to --coverage/--seed. Those two
+    # flags do not determine the reads when --reads overrides them, so a name built
+    # from them alone can collide across entirely different read sets. See
+    # `reads_cache_tag`.
+    reads_label = READS_OVERRIDE === nothing ? "sim_$(COVERAGE)x_seed$(SEED)" :
+                  "reads_" * sanitize_for_filename(basename(READS_OVERRIDE))
+    sam_path = joinpath(OUTPUT_DIR,
+        "ont_$(reads_label)_$(reads_cache_tag(reads_path)).sam")
     if !isfile(sam_path) || filesize(sam_path) == 0
         Mycelia.add_bioconda_env("minimap2")
         println("\nAligning with minimap2 -ax map-ont ...")
@@ -350,7 +398,17 @@ if abspath(PROGRAM_FILE) == @__FILE__
     n_reads_total = length(declared)
     n_mapped = length(measured_blast)
 
-    println("\n--- Observed read identity (Lambda / ONT / $(COVERAGE)x / seed $(SEED)) ---")
+    # COVERAGE and SEED describe the reads only when this script generated them.
+    # Under --reads they are whatever the flags happened to default to and have no
+    # relationship to the file supplied, so they are reported as NA rather than
+    # stamped onto someone else's read set as though they were provenance.
+    read_source = READS_OVERRIDE === nothing ? "simulated" : "override"
+    reported_coverage = READS_OVERRIDE === nothing ? COVERAGE : missing
+    reported_seed = READS_OVERRIDE === nothing ? SEED : missing
+    provenance = READS_OVERRIDE === nothing ?
+                 "$(COVERAGE)x / seed $(SEED)" : "--reads $(basename(reads_path))"
+
+    println("\n--- Observed read identity (Lambda / ONT / $(provenance)) ---")
     println("  reads in FASTQ:            $(n_reads_total)")
     println("  primary alignments scored: $(n_mapped)")
     println("  unmapped reads:            $(alignment.n_unmapped)")
@@ -404,7 +462,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
         push!(summary_rows,
             (
                 organism = ORGANISM, accession = ACCESSION, technology = "ont",
-                coverage = COVERAGE, seed = SEED, badread_version = badread_version,
+                read_source = read_source, reads_file = basename(reads_path),
+                coverage = reported_coverage, seed = reported_seed,
+                badread_version = badread_version,
                 badread_default_identity = default_identity,
                 badread_default_error_model = default_error_model,
                 source = source, n = summary.n, min = summary.min, q05 = summary.q05,
