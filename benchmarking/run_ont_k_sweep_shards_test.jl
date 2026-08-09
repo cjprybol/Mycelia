@@ -161,13 +161,53 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
     Test.@testset "the derived cap is bounded by core count" begin
         # With no MAX_PARALLEL the driver must derive one from the host rather
         # than fanning out to grid size. Bounded above by cores; never below 1.
+        #
+        # The MEMORY side is pinned so this testset measures the CORE bound and
+        # nothing else. Left unpinned it inherits GB_PER_SHARD=20 at 60% of
+        # available RAM, so it silently asserted "this host has >= 34 GB free"
+        # — and on any host that does not, the driver correctly refuses to launch
+        # a shard its own budget says will not fit (exit 2, no banner), and every
+        # assertion below fails for a reason that has nothing to do with cores.
+        # That refusal is intended behaviour and is asserted on purpose by "a
+        # budget too small for one shard aborts instead of launching one"; the
+        # bug was reading it here as a core-bound failure. It fires on a 16 GB
+        # CI runner and on a laptop with 30 GB free alike.
+        #
+        # The CORE bound is checked against a PINNED core count, not against
+        # `Sys.CPU_THREADS`. Those are different quantities and the difference is
+        # not hypothetical: the driver's detect_cores uses `nproc` / `hw.ncpu`,
+        # while Julia reports `hw.perflevel0.logicalcpu` on Apple Silicon — 18 vs
+        # 6 on the development laptop. The two agree on a CI runner with no
+        # performance/efficiency split, which is why an assertion comparing them
+        # can sit here looking correct and fail only off-CI.
         root, track = stage_sandbox()
-        out, _ = run_driver(root, track)
+        out,
+        _ = run_driver(root, track;
+            env = Dict(
+                "SLURM_CPUS_ON_NODE" => "2",
+                "GB_PER_SHARD" => "1",
+                "MEM_FRACTION_PCT" => "100"
+            ))
         m = match(r"max parallel:\s*(\d+)"i, out)
         Test.@test m !== nothing
-        derived = parse(Int, m.captures[1])
-        Test.@test 1 <= derived <= Sys.CPU_THREADS
-        Test.@test peak_concurrency(track) <= derived
+        # EXACTLY the core count: with a 1 GB/shard budget over 100% of available
+        # memory the memory arm cannot be what binds, so the clamp must. An
+        # inequality would pass against a cap that ignored cores entirely.
+        Test.@test parse(Int, m.captures[1]) == 2
+        Test.@test peak_concurrency(track) <= 2
+
+        # And on the unpinned host the derived cap is still a usable number
+        # rather than zero or negative. No upper bound is asserted here: the
+        # host's core count is not observable from Julia (see above).
+        root2, track2 = stage_sandbox()
+        out2,
+        _ = run_driver(root2, track2;
+            env = Dict("GB_PER_SHARD" => "1", "MEM_FRACTION_PCT" => "100"))
+        m2 = match(r"max parallel:\s*(\d+)"i, out2)
+        Test.@test m2 !== nothing
+        derived = parse(Int, m2.captures[1])
+        Test.@test derived >= 1
+        Test.@test peak_concurrency(track2) <= derived
     end
 
     Test.@testset "a SLURM allocation caps below the node" begin
@@ -311,11 +351,28 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
         # An EMPTY value is not malformed -- every other knob here reads empty as
         # "unset, use the default", and the cap must stay consistent with that
         # rather than turning `MAX_PARALLEL= ./run.sh` into an error.
+        #
+        # Empty routes to the DERIVED cap, so the memory budget is pinned for the
+        # same reason as in the core-bound testset above: unpinned, this asserted
+        # that the host had >= 34 GB free, and on a smaller one the driver's
+        # correct refusal (exit 2) was read as "empty was rejected as malformed"
+        # -- the opposite of what is under test.
         root, track = stage_sandbox()
-        out, code = run_driver(root, track; env = Dict("MAX_PARALLEL" => ""))
+        out,
+        code = run_driver(root,
+            track;
+            env = Dict(
+                "MAX_PARALLEL" => "",
+                "GB_PER_SHARD" => "1",
+                "MEM_FRACTION_PCT" => "100"
+            ))
         Test.@test code == 0
         Test.@test length(shard_calls(track)) == 8
         Test.@test match(r"max parallel:\s*(\d+)"i, out) !== nothing
+        # Pinning the budget must not mask a regression that starts REJECTING the
+        # empty value: that path exits 2 naming the knob, which is distinguishable
+        # from the memory refusal only if we assert on it.
+        Test.@test !occursin("MAX_PARALLEL must be", out)
     end
 
     Test.@testset "a malformed memory knob aborts with a diagnostic" begin
