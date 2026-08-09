@@ -207,15 +207,23 @@ end
 # here rather than re-derive.
 #
 # THREE DEFECTS must be fixed before that machinery is relied upon. All three
-# fail SILENTLY at a `clamp` boundary rather than raising:
-#   1. `float(|A|)^k` overflows to Inf for |A| >= 1128 at k = 101 (1127^101 is
-#      finite), so sparsity = 1 - n/Inf is exactly 1.0 -- maximally sparse
-#      regardless of data. `dynamic_k_prime_pattern`'s default max_k IS 101.
+# are silent -- none raises -- but by three DIFFERENT mechanisms; only defect 2
+# involves the `clamp`:
+#   1. `float(|A|)^k` overflows to Inf for |A| >= 1128, so sparsity = 1 - n/Inf
+#      is exactly 1.0 -- maximally sparse regardless of data. In range, so the
+#      clamp does nothing. Reachable here because this function's OWN
+#      `max_search_k` defaults to 101 (not, as an earlier note said, because of
+#      `dynamic_k_prime_pattern`'s default -- that is called after this loop
+#      with an explicit `max_k`).
 #   2. |A| is measured after uppercasing while the window hash does NOT fold
 #      case, so numerator and denominator are counted over different spaces;
-#      sparsity can go negative and clamp to exactly 0.0 -- maximally dense.
-#   3. The denominator is `|A|^k` unconditionally, with no reverse-complement
-#      adjustment, so under Canonical it overstates the space ~2x.
+#      sparsity can go negative and `clamp` returns exactly 0.0 -- maximally
+#      dense. This is the clamp-boundary case.
+#   3. FORWARD-LOOKING, not a present defect: the denominator is `|A|^k` with no
+#      reverse-complement adjustment. This function hashes raw character windows
+#      and takes no `graph_mode`, so it is never in Canonical mode today. It
+#      matters only if this machinery is lifted into a strand-aware caller,
+#      where `|A|^k` would overstate the space ~2x.
 """
     select_dynamic_kmer_plan(
         observations;
@@ -624,8 +632,11 @@ end
 #     three ways; see the corrected comment at the `return first(candidates)` site
 #     at the bottom of this function.
 # DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): PRODUCTION CONTROL
-# POINT -- this is the single registered entry point for reassembly-k selection,
-# and the only one of the five k-selection mechanisms on the production path.
+# POINT -- the single registered entry point for reassembly-k selection, and the
+# only one of the five k-selection mechanisms that is WIRED at all. Note the
+# scope precisely: it is reached only under the opt-in `corrector = :iterative`
+# branch. The default `corrector = :none` never calls it, so "production" here
+# means "the one wired path", not "runs by default".
 #
 # Its CURRENT SCORING IS NON-CONFORMING and must be replaced. It selects on
 # `median_solid_kmer_multiplicity`, whose own caveat below records it as REFUTED

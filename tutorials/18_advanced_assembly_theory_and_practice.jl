@@ -24,7 +24,6 @@ if isinteractive()
 end
 
 import Mycelia
-import Primes
 
 # ## 1. Mathematical Foundations of K-mer Selection
 #
@@ -64,8 +63,11 @@ function demonstrate_retired_error_rate_rule()
         println("  e = $(error_rate * 100)% -> k = $lower_bound " *
                 "(k-mer survival $(round(survival, digits = 3)))")
     end
-    println("  The survival column is roughly constant. That constant is what the")
-    println("  rule targets -- and it can be measured directly.")
+    println("  Survival is near-constant only in the small-e regime (0.370-0.387")
+    println("  for e <= 0.10, a 5% spread); across the whole table it ranges")
+    println("  0.328-0.444 (35%), because odd-rounding and the max(3, .) floor")
+    println("  break the approximation. That near-constant is what the rule")
+    println("  targets -- and it can be measured directly.")
 end
 
 demonstrate_retired_error_rate_rule()
@@ -161,18 +163,29 @@ k_ladders = demonstrate_prime_k_ladder()
 #    optional -- omit the third argument and there is none -- and where present
 #    it is hard-coded to log4, so it does not generalise across alphabets.
 
-# ### Theoretical Advantages of Prime K-mers
+# ### What a prime ladder does and does not buy
 #
-# 1. **Twin Prime Avoidance**: Automatically skips redundant analysis
-# 2. **Progressive Spacing**: Reduces computational overlap
-# 3. **Hardware Optimization**: k=31 fits optimally in 64-bit integers
-# 4. **Biological Relevance**: Primes cannot form perfect repeats
+# The ladder is a SEARCH SCHEDULE. Its benefits are computational, and the one
+# biological claim previously made here was wrong:
+#
+# 1. **Progressive spacing** -- the step widens after each rung, so a wide k
+#    range is covered in few evaluations. This is the real benefit.
+# 2. **Hardware fit** -- k = 31 packs into a 64-bit word under 2-bit DNA
+#    encoding (31 x 2 = 62 bits). DNA/RNA only; it does not transfer to |A| = 20
+#    or to unicode/token alphabets.
+# 3. **RETRACTED -- "primes cannot form perfect repeats, improving
+#    specificity".** This was asserted here as fact and is false. A prime-length
+#    k-mer occurs inside a perfect repeat as freely as any other length.
+#    Primality only prevents the k-mer being an exact tandem repeat of a shorter
+#    unit, which is not the same thing and is not a specificity gain.
+# 4. **No selection claim.** Nothing here says prime k beats adjacent composite
+#    k. Selection is by measured survival (section 1); the ladder only decides
+#    which candidates get measured.
 
-println("\nAdvantages of Prime K-mer Selection:")
-println("• Twin prime avoidance reduces redundant analysis")
-println("• Progressive spacing minimizes computational overlap")
-println("• Hardware-optimized for 64-bit architectures")
-println("• Cannot form perfect repeats, improving specificity")
+println("\nWhat the prime ladder buys:")
+println("• Progressive spacing -- wide k range, few evaluations")
+println("• k = 31 packs into 64 bits under 2-bit DNA encoding (DNA/RNA only)")
+println("• NOT a selection criterion, and no specificity claim -- see section 1")
 
 # ## 3. Strain-Resolved Assembly Framework
 #
@@ -543,7 +556,7 @@ println("="^60)
 
 println("\n1. Mathematical K-mer Selection:")
 println("   • Measured survival level set: k* = max{k : S(k) ≥ τ}, k ≥ ceil(log_|A|(G/p))")
-println("   • Log₄ optimization for sequence length")
+println("   • Alphabet-parameterised collision floor, not log₄")
 println("   • Dynamic prime pattern progression")
 
 println("\n2. Graph Theory Applications:")  

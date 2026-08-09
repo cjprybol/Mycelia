@@ -26,10 +26,13 @@ Assembly method enumeration for unified interface.
     MultiK           # Multi-k assembly with merging -- NOT IMPLEMENTED
 end
 # NOTE: this enum is documentation, not dispatch. Nothing in src/ dispatches on
-# `AssemblyMethod`; the real routing keys off input properties (token_sequences
-# present, sequence type, quality present) inside `assemble_genome`. The tests
+# `AssemblyMethod`. The real routing lives in `assemble_genome`, which branches
+# in order on: `corrector == :iterative`, then `layout == :olc`, then
+# `token_sequences` present, then sequence type, then quality present. The tests
 # assert only `X isa AssemblyMethod`, which cannot fail for any member, so they
-# pin no behaviour.
+# pin no behaviour beyond the members' existence -- and neither `MultiK` nor
+# `HybridOLC` appears even in those. (`HybridOLC` does have real behavioural
+# coverage elsewhere, via an `assembly_stats["method"]` assertion.)
 
 function _graph_mode_symbol(graph_mode::GraphMode)
     if graph_mode == SingleStrand
