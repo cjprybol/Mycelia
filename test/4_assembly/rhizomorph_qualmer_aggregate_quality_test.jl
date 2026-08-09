@@ -402,8 +402,16 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
                        nothing
         end
 
-        # --- H5: multi-dataset isolation. Two datasets on the same k-mers keep
-        #     independent means (the Dict-keyed-by-dataset contract).
+        # --- H5: multi-dataset isolation THROUGH A MERGE. Two datasets observe the
+        #     same k-mers; after their vertices are merged into ONE aggregate graph
+        #     each dataset must still recover its own mean (the Dict-keyed-by-dataset
+        #     contract), and neither accumulator may be dropped or averaged together.
+        #
+        #     Checking two independently-built graphs (the earlier form of this test)
+        #     could not observe the merge at all: a `_merge_reduced_vertex_into!`
+        #     that dropped `dataset_quality_sum` entirely, or that folded B's sum
+        #     into A's, passed it. The merge is exercised here directly because it
+        #     is the one code path where per-dataset state from two sources meets.
         seg = "ATCGGCTAATGCC"  # repeat-free at k=5
         k2 = 5
         r_lo = Mycelia.Rhizomorph._prepare_fastq_observations(
@@ -413,20 +421,40 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
         g_lo = Mycelia.Rhizomorph.build_qualmer_graph(
             r_lo, k2; mode = :singlestrand,
             memory_profile = :ultralight_quality, dataset_id = "A")
-        # Build a second graph for dataset B and confirm each dataset's mean is
-        # independent (no cross-dataset bleed in the per-dataset accumulators).
         g_hi = Mycelia.Rhizomorph.build_qualmer_graph(
             r_hi, k2; mode = :singlestrand,
             memory_profile = :ultralight_quality, dataset_id = "B")
+
+        # Same reads over the same k => identical vertex label sets; non-vacuous.
+        lo_labels = Set(MetaGraphsNext.labels(g_lo))
+        hi_labels = Set(MetaGraphsNext.labels(g_hi))
+        Test.@test !isempty(lo_labels)
+        Test.@test lo_labels == hi_labels
+
+        # Merge B's vertices into A's graph, producing ONE aggregate graph that
+        # carries both datasets on every shared vertex.
+        for x in lo_labels
+            Mycelia.Rhizomorph._merge_reduced_vertex_into!(g_lo[x], g_hi[x])
+        end
+
+        merged_checked = 0
         for x in MetaGraphsNext.labels(g_lo)
-            mA = Mycelia.Rhizomorph.get_vertex_mean_quality(g_lo[x], "A")
+            vd = g_lo[x]
+            mA = Mycelia.Rhizomorph.get_vertex_mean_quality(vd, "A")
+            mB = Mycelia.Rhizomorph.get_vertex_mean_quality(vd, "B")
+            # Both datasets survive the merge with their identities intact...
             Test.@test mA !== nothing && all(isapprox.(mA, 40.0; atol = 1e-9))
-            Test.@test Mycelia.Rhizomorph.get_vertex_mean_quality(g_lo[x], "B") === nothing
-        end
-        for x in MetaGraphsNext.labels(g_hi)
-            mB = Mycelia.Rhizomorph.get_vertex_mean_quality(g_hi[x], "B")
             Test.@test mB !== nothing && all(isapprox.(mB, 20.0; atol = 1e-9))
+            # ...as separate accumulator entries, not a pooled/overwritten one.
+            Test.@test haskey(vd.dataset_quality_sum, "A")
+            Test.@test haskey(vd.dataset_quality_sum, "B")
+            Test.@test vd.dataset_counts["A"] == 1
+            Test.@test vd.dataset_counts["B"] == 1
+            # The nothing-contract still holds for an absent dataset post-merge.
+            Test.@test Mycelia.Rhizomorph.get_vertex_mean_quality(vd, "absent") === nothing
+            merged_checked += 1
         end
+        Test.@test merged_checked > 0
     end
 end
 
