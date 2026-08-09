@@ -432,6 +432,7 @@ end
 # which is a tautology and could not detect drift.
 const TRACK_A_ROW_KEYS = String[
 "organism", "accession", "technology", "coverage", "seed", "decoder_arm", "k",
+"traversal_weighting",
 "n_reads", "n_contigs", "NGA50", "misassemblies", "genome_fraction",
 "duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes",
 "rss_baseline_bytes", "peak_rss_method", "status"
@@ -446,6 +447,10 @@ const TRACK_A_ROW_KEYS = String[
 # ("Always filter on peak_rss_method before aggregating") threw
 # `ArgumentError: unable to check bounds for indices of type Missing`.
 #
+# `traversal_weighting` joins them for the same reason and with the same "evidence"
+# default the harness uses: the option had no CLI surface when any existing checkpoint
+# was written, so the value is known rather than assumed.
+#
 # The harness defaults these to "unknown" / -1 deliberately. "unknown" is
 # absence-only. `-1` is NOT: the harness also emits it from the highwater-delta path
 # when the /proc baseline read fails, and from error_row, so it means "no usable
@@ -456,7 +461,8 @@ const TRACK_A_ROW_KEYS = String[
 # drop-in the docstring claims. Keys absent from this table keep `missing`, which is
 # correct for genuinely-required columns — their absence is a defect, not a default.
 const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
-    "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1)
+    "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1,
+    "traversal_weighting" => "evidence")
 
 # Read a `const` definition out of the harness source, failing closed.
 #
