@@ -11,6 +11,30 @@
 #   - decoder arm "kmer":    quality stripped (FASTQ -> FASTA records) -> plain k-mer graph,
 #     matching the existing FASTA-based benchmark and the future DP arm's graph type.
 #
+# READ THIS BEFORE INTERPRETING THE TWO ARMS AS A COMPARISON (td-4e19d.2).
+# The two arms are NOT two decoders as far as assembly quality is concerned. They take
+# genuinely different code paths, but under the DEFAULT traversal_weighting=:evidence the
+# qualmer arm's per-base quality reaches contig EMISSION only and never a traversal
+# decision, while contig extraction itself (find_eulerian_paths_next / find_contigs_next)
+# is purely topological and shared with the k-mer arm. The arms therefore produce
+# IDENTICAL n_contigs / NGA50 / misassemblies / genome_fraction / duplication_ratio /
+# largest_contig by construction; they differ only in wall_seconds and peak_rss_bytes.
+#
+# This is not a conjecture about the code. In the committed 2026-07-24 pilot table
+# (track_a_pilot_results_20260724.tsv) all 66 paired runs agree byte-for-byte on every
+# assembly metric, and `benchmarking/qualmer_quality_channel_probe.jl` reproduces the
+# same invariance from first principles in 18/18 cells across all three chemistries by
+# re-assembling identical reads under four different quality vectors.
+#
+# Consequences for anyone using this harness:
+#   - Do NOT report a qualmer-vs-kmer difference in assembly quality; there is none to
+#     find, and an apparent one indicates a harness bug rather than a decoder effect.
+#   - The arms ARE a valid comparison of COST (runtime, memory) for carrying quality.
+#   - To benchmark a genuinely quality-dependent decoder, run this harness with
+#     `--traversal-weighting quality` (opt-in; it changes assembly output, so its rows
+#     are NOT comparable to any :evidence row), or use the corrector/Viterbi route.
+# See benchmarking/results/qualmer_quality_channel_probe/README.md for the full scoping.
+#
 # Each cell: simulate reads -> assemble (k = --k, default 31) -> QUAST vs reference -> parse NGA50 /
 # misassemblies / genome fraction / duplication ratio. Per-cell JSON checkpoint enables
 # crash-safe resume. A final step computes NGA50 CV per (organism x tech x coverage x arm)
@@ -23,9 +47,15 @@
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --coverages 30,100 --seeds 42 --technologies illumina,ont
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --output-dir /scratch/track_a
 #   julia --project=. benchmarking/track_a_baseline_benchmark.jl --k 19       # k-mer size; positive ODD integer, default 31
+#   julia --project=. benchmarking/track_a_baseline_benchmark.jl --traversal-weighting quality
 #
 # --k changes the per-cell checkpoint namespace for any k != 31 (see cell_id_for), so a
 # k-sweep and the k=31 baseline can share one --output-dir without colliding.
+#
+# --traversal-weighting behaves the same way: `quality` namespaces the checkpoint AND is
+# recorded as a row column, so an :evidence baseline and a :quality run can share one
+# results tree without either resuming the other's cells or being pooled into the other's
+# NGA50 CV. The two are different measurements of different assemblers, not replicates.
 #
 # Shard flags (--organisms/--technologies/--coverages/--seeds/--arms) take comma-separated
 # values and compose, so an HPC array job can split the matrix and share one results tree.
@@ -84,15 +114,43 @@ const K = let v = findfirst(==("--k"), ARGS)
         parsed = tryparse(Int, raw)
         parsed === nothing && error("--k expects an integer, got $(repr(raw))")
         parsed < 1 && error("--k must be >= 1, got $(parsed)")
-        iseven(parsed) && error("--k must be odd (canonical k-mers require it), got $(parsed)")
+        iseven(parsed) &&
+            error("--k must be odd (canonical k-mers require it), got $(parsed)")
         parsed
     end
 end
 const CV_THRESHOLD = 0.15  # assumed NGA50 coefficient of variation in the power analysis
 
+# Traversal weighting, propagated to `Mycelia.Rhizomorph.assemble_genome`. Without this
+# flag the header's instruction to "pass traversal_weighting=:quality" named something no
+# invocation of this script could reach — the assemble call took no such keyword and the
+# CLI exposed no option for it. Flagged in PR #453 review.
+#
+# Parsed with the same strictness as --k, for the same reason: the value is part of the
+# cell id, so a bare trailing `--traversal-weighting` silently falling back to `evidence`
+# would make a requested :quality run resume and republish the :evidence tree.
+const TRAVERSAL_WEIGHTINGS = ("evidence", "quality")
+const TRAVERSAL_WEIGHTING = let v = findfirst(==("--traversal-weighting"), ARGS)
+    if v === nothing
+        "evidence"
+    elseif v == length(ARGS)
+        error("--traversal-weighting requires a value (got a bare trailing flag). " *
+              "Refusing to default to evidence: the weighting is part of the cell id, " *
+              "so defaulting would silently resume the :evidence tree.")
+    else
+        raw = ARGS[v + 1]
+        if !(raw in TRAVERSAL_WEIGHTINGS)
+            allowed = join(TRAVERSAL_WEIGHTINGS, ", ")
+            error("--traversal-weighting expects one of $(allowed), got $(repr(raw))")
+        end
+        raw
+    end
+end
+
 # Canonical row schema (fixed order so in-memory and JSON-reloaded rows align in the DataFrame).
 const ROW_KEYS = (
     :organism, :accession, :technology, :coverage, :seed, :decoder_arm, :k,
+    :traversal_weighting,
     :n_reads, :n_contigs, :NGA50, :misassemblies, :genome_fraction,
     :duplication_ratio, :largest_contig, :wall_seconds, :peak_rss_bytes,
     :rss_baseline_bytes, :peak_rss_method, :status
@@ -102,7 +160,9 @@ const INT_KEYS = (
     :rss_baseline_bytes)
 const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
-const STR_KEYS = (:organism, :accession, :technology, :decoder_arm, :peak_rss_method, :status)
+const STR_KEYS = (
+    :organism, :accession, :technology, :decoder_arm, :traversal_weighting,
+    :peak_rss_method, :status)
 
 # === Argument parsing ===
 
@@ -153,7 +213,6 @@ end
 const N_CELLS = length(organisms) * length(technologies) * length(coverages) *
                 length(seeds) * length(arms)
 
-
 # === Metrics + row helpers ===
 
 function empty_metrics()
@@ -166,6 +225,7 @@ function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
     return (
         organism = String(org), accession = String(acc), technology = String(tech),
         coverage = Int(cov), seed = Int(seed), decoder_arm = String(arm), k = K,
+        traversal_weighting = TRAVERSAL_WEIGHTING,
         n_reads = Int(n_reads), n_contigs = Int(n_contigs),
         NGA50 = Float64(metrics.NGA50), misassemblies = Float64(metrics.misassemblies),
         genome_fraction = Float64(metrics.genome_fraction),
@@ -193,8 +253,17 @@ end
 # two cases in canonical) is what makes the error message below TRUE: adding a key here
 # really does make it defaultable. Previously OPTIONAL_KEYS was declared but never read,
 # so a maintainer following the message's advice would still have hit the hard error.
+#
+# `traversal_weighting` is the one entry here that IS grouped on, and it earns the
+# exemption on the same ground the k=31 cell-id name does: the option did not exist when
+# any legacy checkpoint was written, so "evidence" is a FACT about how those cells were
+# produced rather than a guess standing in for a lost measurement. Every checkpoint
+# written from here on carries the key explicitly, so the default can only ever apply to
+# a pre-option tree. That is the bar for adding a grouping key to this table — a default
+# that is provably the value, not merely a plausible one.
 const OPTIONAL_KEY_DEFAULTS = Dict{Symbol, Any}(
-    :peak_rss_method => "unknown", :rss_baseline_bytes => -1)
+    :peak_rss_method => "unknown", :rss_baseline_bytes => -1,
+    :traversal_weighting => "evidence")
 const OPTIONAL_KEYS = Tuple(sort(collect(keys(OPTIONAL_KEY_DEFAULTS))))
 
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).
@@ -558,7 +627,8 @@ function run_cell(org, acc, ref, tech, cov, seed, arm, cell_dir)
 
     GC.gc()
     measured = timed_with_peak_rss(
-        () -> Mycelia.Rhizomorph.assemble_genome(asm_input; k = K, verbose = false))
+        () -> Mycelia.Rhizomorph.assemble_genome(asm_input; k = K, verbose = false,
+        traversal_weighting = Symbol(TRAVERSAL_WEIGHTING)))
     result = measured.value
     wall_seconds = measured.wall_seconds
     peak_rss_bytes = measured.peak_rss_bytes
@@ -722,7 +792,20 @@ function write_power_analysis(root, df)
     n_excluded > 0 &&
         @warn "power analysis excludes non-ok and QUAST-unscored cells" n_excluded
     df = df[measured, :]
-    for g in DataFrames.groupby(df, [:organism, :technology, :coverage, :decoder_arm, :k])
+    # :traversal_weighting joins :k as a grouping key for the same reason — an :evidence
+    # cell and a :quality cell are different assemblers on the same inputs, not two draws
+    # from one distribution, so pooling them reports a between-ASSEMBLER spread as the
+    # between-seed CV the pre-registration is about.
+    #
+    # A table assembled outside `canonical` (a hand-built frame, or a results TSV written
+    # before the option existed) has no such column. Fill it with the same value
+    # OPTIONAL_KEY_DEFAULTS uses rather than erroring: pre-option rows are :evidence by
+    # definition, because the keyword had no CLI surface here. `df` is already a copy
+    # from the `measured` filter above, so this does not mutate the caller's frame.
+    hasproperty(df, :traversal_weighting) ||
+        (df[!, :traversal_weighting] = fill("evidence", DataFrames.nrow(df)))
+    for g in DataFrames.groupby(df,
+        [:organism, :technology, :coverage, :decoder_arm, :k, :traversal_weighting])
         nga = Float64.(g.NGA50)
         m = Statistics.mean(nga)
         s = length(nga) > 1 ? Statistics.std(nga; corrected = true) : NaN
@@ -731,6 +814,7 @@ function write_power_analysis(root, df)
             (
                 organism = g.organism[1], technology = g.technology[1],
                 coverage = g.coverage[1], decoder_arm = g.decoder_arm[1],
+                traversal_weighting = g.traversal_weighting[1],
                 n = length(nga), mean_nga50 = round(m; digits = 1),
                 sd_nga50 = round(s; digits = 1), cv_nga50 = round(cv; digits = 4),
                 passes = (isfinite(cv) && cv <= CV_THRESHOLD)))
@@ -789,9 +873,19 @@ end
 # documented "just re-submit, completed cells are skipped" recovery into a silent
 # full recompute. Legacy trees are k=31 by definition (k was a hardcoded const), so
 # keying k=31 to the historical name is unambiguous and needs no migration.
-cell_id_for(org, tech, cov, seed, arm; k = K) =
-    k == 31 ? "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)" :
-    "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)__k$(k)"
+#
+# `traversal_weighting` is namespaced on exactly the same terms and for exactly the same
+# reason. A :quality run assembles a DIFFERENT graph traversal from the :evidence
+# baseline, so sharing a cell id would let one resume and republish the other's contigs.
+# The suffix is again applied only for the non-default value, so every checkpoint written
+# before the option existed keeps its historical name — legacy trees are :evidence by
+# definition, because the keyword had no CLI surface here at all.
+function cell_id_for(org, tech, cov, seed, arm; k = K,
+        traversal_weighting = TRAVERSAL_WEIGHTING)
+    base = k == 31 ? "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)" :
+           "$(org)__$(tech)__$(cov)x__seed$(seed)__$(arm)__k$(k)"
+    return traversal_weighting == "evidence" ? base : "$(base)__w$(traversal_weighting)"
+end
 
 # The row recorded when a cell throws. Extracted from the catch block because it was
 # unreachable from any test there: adding a required `peak_rss_method` keyword to
@@ -799,11 +893,12 @@ cell_id_for(org, tech, cov, seed, arm; k = K) =
 # UndefKeywordError, so the first failing cell aborted the whole matrix from inside
 # its own recovery path — and `--smoke` runs a single deliberately-successful cell,
 # so no test could reach it.
-error_row(org, acc, tech, cov, seed, arm) =
+function error_row(org, acc, tech, cov, seed, arm)
     cell_row(org, acc, tech, cov, seed, arm;
         n_reads = 0, n_contigs = 0, wall_seconds = 0.0, peak_rss_bytes = 0,
         rss_baseline_bytes = -1, peak_rss_method = "unknown",
         metrics = empty_metrics(), status = "error")
+end
 
 # === Main ===
 
@@ -813,110 +908,110 @@ error_row(org, acc, tech, cov, seed, arm) =
 # what makes test/4_assembly/track_a_baseline_benchmark_test.jl possible. `if` does
 # not introduce scope at top level, so the globals below stay global.
 if abspath(PROGRAM_FILE) == @__FILE__
+    println("=== Track A baseline benchmark ===")
+    println("Start: $(Dates.now())")
+    println("Smoke mode: $SMOKE")
+    println("Organisms: $(join((o[1] for o in organisms), ", "))")
+    println("Technologies: $(join(technologies, ", "))")
+    println("Coverages: $(join(coverages, ", "))x")
+    println("Seeds: $(join(seeds, ", "))")
+    println("Decoder arms: $(join(arms, ", "))")
+    println("Traversal weighting: $TRAVERSAL_WEIGHTING")
+    println("Cells to run: $N_CELLS")
+    println("Output dir: $OUTPUT_DIR")
 
-println("=== Track A baseline benchmark ===")
-println("Start: $(Dates.now())")
-println("Smoke mode: $SMOKE")
-println("Organisms: $(join((o[1] for o in organisms), ", "))")
-println("Technologies: $(join(technologies, ", "))")
-println("Coverages: $(join(coverages, ", "))x")
-println("Seeds: $(join(seeds, ", "))")
-println("Decoder arms: $(join(arms, ", "))")
-println("Cells to run: $N_CELLS")
-println("Output dir: $OUTPUT_DIR")
+    mkpath(OUTPUT_DIR)
+    refs_dir = joinpath(OUTPUT_DIR, "refs")
+    cells_dir = joinpath(OUTPUT_DIR, "cells")
+    mkpath(refs_dir)
+    mkpath(cells_dir)
 
-mkpath(OUTPUT_DIR)
-refs_dir = joinpath(OUTPUT_DIR, "refs")
-cells_dir = joinpath(OUTPUT_DIR, "cells")
-mkpath(refs_dir)
-mkpath(cells_dir)
-
-println("\n--- Phase 1: download reference genomes ---")
-ref_paths = Dict{String, String}()
-for (org, acc, expected) in organisms
-    haskey(ref_paths, org) && continue
-    print("  $org ($acc) ... ")
-    rp = Mycelia.download_genome_by_accession(accession = acc, outdir = refs_dir, compressed = false)
-    if !isfile(rp) || filesize(rp) == 0
-        error("download failed for $org ($acc): $rp")
-    end
-    actual = try
-        Mycelia.total_fasta_size(rp)
-    catch
-        -1
-    end
-    if actual > 0 && abs(actual - expected) > 0.2 * expected
-        @warn "reference size mismatch" organism=org expected=expected actual=actual
-    end
-    ref_paths[org] = rp
-    println("$(actual > 0 ? actual : "?") bp")
-end
-
-println("\n--- Phase 2: matrix ($N_CELLS cells) ---")
-rows = NamedTuple[]
-cell_index = 0
-for (org, acc, _expected) in organisms,
-    tech in technologies,
-    cov in coverages,
-    seed in seeds,
-    arm in arms
-    global cell_index += 1
-    # k belongs in the cell id: without it, two runs at different --k write the same
-    # cells/<id>/cell_result.json and the second silently resumes the first's result.
-    # Existing k=31 trees keep their old names, so point a k-sweep at its own
-    # --output-dir rather than reusing a completed one.
-    cell_id = cell_id_for(org, tech, cov, seed, arm)
-    cell_dir = joinpath(cells_dir, cell_id)
-    ckpt = joinpath(cell_dir, "cell_result.json")
-
-    if isfile(ckpt)
-        println("  [$cell_index/$N_CELLS] $cell_id — cached, skipping")
-        push!(rows, canonical(JSON.parsefile(ckpt)))
-        continue
+    println("\n--- Phase 1: download reference genomes ---")
+    ref_paths = Dict{String, String}()
+    for (org, acc, expected) in organisms
+        haskey(ref_paths, org) && continue
+        print("  $org ($acc) ... ")
+        rp = Mycelia.download_genome_by_accession(accession = acc, outdir = refs_dir, compressed = false)
+        if !isfile(rp) || filesize(rp) == 0
+            error("download failed for $org ($acc): $rp")
+        end
+        actual = try
+            Mycelia.total_fasta_size(rp)
+        catch
+            -1
+        end
+        if actual > 0 && abs(actual - expected) > 0.2 * expected
+            @warn "reference size mismatch" organism=org expected=expected actual=actual
+        end
+        ref_paths[org] = rp
+        println("$(actual > 0 ? actual : "?") bp")
     end
 
-    mkpath(cell_dir)
-    print("  [$cell_index/$N_CELLS] $cell_id ... ")
-    row = try
-        run_cell(org, acc, ref_paths[org], tech, cov, seed, arm, cell_dir)
-    catch e
-        @warn "cell failed" cell_id exception = (e, catch_backtrace())
-        error_row(org, acc, tech, cov, seed, arm)
+    println("\n--- Phase 2: matrix ($N_CELLS cells) ---")
+    rows = NamedTuple[]
+    cell_index = 0
+    for (org, acc, _expected) in organisms,
+        tech in technologies,
+        cov in coverages,
+        seed in seeds,
+        arm in arms
+        global cell_index += 1
+        # k belongs in the cell id: without it, two runs at different --k write the same
+        # cells/<id>/cell_result.json and the second silently resumes the first's result.
+        # Existing k=31 trees keep their old names, so point a k-sweep at its own
+        # --output-dir rather than reusing a completed one.
+        cell_id = cell_id_for(org, tech, cov, seed, arm)
+        cell_dir = joinpath(cells_dir, cell_id)
+        ckpt = joinpath(cell_dir, "cell_result.json")
+
+        if isfile(ckpt)
+            println("  [$cell_index/$N_CELLS] $cell_id — cached, skipping")
+            push!(rows, canonical(JSON.parsefile(ckpt)))
+            continue
+        end
+
+        mkpath(cell_dir)
+        print("  [$cell_index/$N_CELLS] $cell_id ... ")
+        row = try
+            run_cell(org, acc, ref_paths[org], tech, cov, seed, arm, cell_dir)
+        catch e
+            @warn "cell failed" cell_id exception = (e, catch_backtrace())
+            error_row(org, acc, tech, cov, seed, arm)
+        end
+        save_cell_json(ckpt, row)
+        push!(rows, row)
+        write_aggregate(OUTPUT_DIR, rows)  # rewrite aggregate each cell (cheap at this scale)
+        println("$(row.status): $(row.n_contigs) contigs, NGA50=$(row.NGA50), " *
+                "GF=$(row.genome_fraction)%, $(round(row.wall_seconds; digits = 1))s")
     end
-    save_cell_json(ckpt, row)
-    push!(rows, row)
-    write_aggregate(OUTPUT_DIR, rows)  # rewrite aggregate each cell (cheap at this scale)
-    println("$(row.status): $(row.n_contigs) contigs, NGA50=$(row.NGA50), " *
-            "GF=$(row.genome_fraction)%, $(round(row.wall_seconds; digits = 1))s")
-end
 
-println("\n--- Phase 3: aggregate + power analysis ---")
-results_df = write_aggregate(OUTPUT_DIR, rows)
-cv_df = write_power_analysis(OUTPUT_DIR, results_df)
+    println("\n--- Phase 3: aggregate + power analysis ---")
+    results_df = write_aggregate(OUTPUT_DIR, rows)
+    cv_df = write_power_analysis(OUTPUT_DIR, results_df)
 
-const ARTIFACT_RUN_ID = "track_a_baseline_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))"
-if HAVE_ARTIFACT_WRITER
-    try
-        write_benchmark_artifacts(
-            ["track_a_results" => results_df, "track_a_power_analysis_cv" => cv_df];
-            # Per-run subdirectory: a fixed "artifacts" path meant six --k invocations
-            # left ONE bundle whose provenance (git SHA, tool versions, command_args)
-            # described only the last run. Unlike the cell JSONs there is no second
-            # copy, so that loss is unrecoverable.
-            output_dir = joinpath(OUTPUT_DIR, "artifacts", ARTIFACT_RUN_ID),
-            run_id = ARTIFACT_RUN_ID,
-            scale = SMOKE ? "smoke" : "full",
-            dataset_ids = [o[2] for o in organisms],
-            command_args = ARGS,
-            metadata = Dict("benchmark" => "track_a_baseline", "k" => K,
-                "cv_threshold" => CV_THRESHOLD)
-        )
-    catch e
-        @warn "provenance artifact bundle failed (results TSVs still written)" exception = e
+    const ARTIFACT_RUN_ID = "track_a_baseline_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))"
+    if HAVE_ARTIFACT_WRITER
+        try
+            write_benchmark_artifacts(
+                ["track_a_results" => results_df, "track_a_power_analysis_cv" => cv_df];
+                # Per-run subdirectory: a fixed "artifacts" path meant six --k invocations
+                # left ONE bundle whose provenance (git SHA, tool versions, command_args)
+                # described only the last run. Unlike the cell JSONs there is no second
+                # copy, so that loss is unrecoverable.
+                output_dir = joinpath(OUTPUT_DIR, "artifacts", ARTIFACT_RUN_ID),
+                run_id = ARTIFACT_RUN_ID,
+                scale = SMOKE ? "smoke" : "full",
+                dataset_ids = [o[2] for o in organisms],
+                command_args = ARGS,
+                metadata = Dict("benchmark" => "track_a_baseline", "k" => K,
+                    "cv_threshold" => CV_THRESHOLD)
+            )
+        catch e
+            @warn "provenance artifact bundle failed (results TSVs still written)" exception = e
+        end
     end
-end
 
-n_ok = count(r -> r.status == "ok", rows)
-println("\nDone: $(length(rows)) cells, $n_ok ok. Results in $OUTPUT_DIR")
-println("End: $(Dates.now())")
+    n_ok = count(r -> r.status == "ok", rows)
+    println("\nDone: $(length(rows)) cells, $n_ok ok. Results in $OUTPUT_DIR")
+    println("End: $(Dates.now())")
 end  # PROGRAM_FILE guard
