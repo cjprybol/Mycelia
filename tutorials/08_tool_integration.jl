@@ -53,46 +53,84 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # The wrappers below expose thin Julia entry points for external tools. Use these
 # examples as templates and replace paths with real inputs. These snippets are
 # shown as documentation only and are not executed in docs builds.
+# Autocycler 0.5.2 is a reproducible compatibility pin for bacterial isolates
+# where mostly complete alternative long-read assemblies are expected; it is not
+# a generic metagenome/eukaryote assembler or an automatically current release.
 #
 # ```julia
 # Mycelia.install_autocycler()
 # Mycelia.run_autocycler(
-#     long_reads="reads.fastq",
-#     out_dir="autocycler_out",
-#     read_type="ont_r10",
+#     long_reads = "reads.fastq",
+#     out_dir = "autocycler_out",
+#     read_type = "ont_r10",
 # )
 # Mycelia.run_autocycler_polished(
-#     long_reads="reads.fastq",
-#     short_reads_1="reads_R1.fastq",
-#     short_reads_2="reads_R2.fastq",
-#     out_dir="autocycler_polished_out",
-#     read_type="ont_r10",
+#     long_reads = "reads.fastq",
+#     short_reads_1 = "reads_R1.fastq",
+#     short_reads_2 = "reads_R2.fastq",
+#     out_dir = "autocycler_polished_out",
+#     read_type = "ont_r10",
 # )
 #
 # # High-level corrected multi-input workflows use typed sibling adapters.
-# unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+# unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
+#     "reads_R1.fastq.gz",
+#     "reads_R2.fastq.gz",
 #     "reads_ont.fastq.gz";
 #     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
 #         output_dir = "hybrid_unicycler_out",
+#         # Cumulative stable source + correction-output copy budget.
+#         input_snapshot_byte_ceiling = 500_000_000_000,
 #     ),
 # )
-# autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+# # Unicycler's mutable Conda environment is bound to the realized package
+# # inventory for this run (name, version, build, and channel for every package).
+# unicycler_toolchain = unicycler_result.assembly_stats["toolchain"]
+# unicycler_toolchain["package_inventory_sha256"]
+# unicycler_toolchain["packages"]
+# autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
+#     "reads_R1.fastq.gz",
+#     "reads_R2.fastq.gz",
 #     "reads_hifi.fastq.gz";
 #     config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
 #         long_read_tech = :pacbio_hifi,
 #         autocycler_read_type = :pacbio_hifi,
 #         output_dir = "hybrid_autocycler_out",
+#         input_snapshot_byte_ceiling = 500_000_000_000,
 #     ),
 # )
 # autocycler_result.assembly_stats["toolchain"]
 #
-# metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
-# combined HiFi-plus-ONT adapter.
-# Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
+# # Both high-level workflows bind the original source content and corrected
+# # FASTQ path, size, and content to deterministic SHA-256 provenance.
+# read_content = unicycler_result.assembly_stats["read_content_provenance"]
+# read_content["source_inputs"]
+# read_content["corrected_fastqs"]
+# # Ceiling, free-space, write, or hash failures attempt exact identity-bound
+# # partial-snapshot cleanup. Cleanup is never silent: a failure propagates when
+# # no result can be returned or retains and reports exact evidence with the
+# # result. High-level children consume the already-bound corrected snapshots
+# # directly, without a second scratch copy. Standalone run_unicycler and
+# # run_autocycler_polished calls still expose input_spool_parent and
+# # input_spool_byte_ceiling when a direct wrapper needs bounded scratch.
 #
-# Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size=31)
+# metaMDBG v1.4 accepts one or more HiFi FASTQs, or one or more ONT R10.4-or-
+# later FASTQs with an explicit attestation. It is never a HiFi-plus-ONT or
+# Illumina-plus-long adapter. Synchronous execution returns :complete only after
+# semantic FASTA/GFA validation; collected or dry-run jobs return :planned.
+# metamdbg_hifi_result = Mycelia.run_metamdbg(
+#     hifi_reads = ["reads_hifi_1.fastq.gz", "reads_hifi_2.fastq.gz"],
+# )
+# @assert metamdbg_hifi_result.status == :complete
+# metamdbg_hifi_result.provenance.package_inventory
+# metamdbg_hifi_result.provenance.package_inventory_sha256
+# metamdbg_ont_result = Mycelia.run_metamdbg(
+#     ont_reads = ["reads_ont_1.fastq.gz", "reads_ont_2.fastq.gz"],
+#     ont_r10_4_plus = true,
+# )
+# @assert metamdbg_ont_result.status == :complete
+#
+# Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size = 31)
 # Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)
 # Mycelia.ggcat_query("graph.lz4", "queries.fasta", "ggcat_hits.tsv", 31)
 #
@@ -100,7 +138,7 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # Mycelia.run_pantools(["--help"])
 #
 # Mycelia.install_prokrustean()
-# Mycelia.prokrustean_build_graph("example.ebwt", "prokrustean.bin"; kmin=21)
+# Mycelia.prokrustean_build_graph("example.ebwt", "prokrustean.bin"; kmin = 21)
 # ```
 
 # ## Part 2: Bioconda Integration
@@ -571,23 +609,16 @@ println("- Provide example datasets")
 
 # ## Summary
 println("\n=== Tool Integration Summary ===")
-println("✓ Understanding external tool integration strategies")
-println("✓ Implementing bioconda environment management")
-println("✓ Creating robust workflow architectures")
-println("✓ Integrating with HPC and cloud platforms")
-println("✓ Implementing quality control and validation")
-println("✓ Ensuring reproducibility and documentation")
-println("✓ Optimizing performance and resource usage")
-println("✓ Creating user-friendly interfaces")
-println("✓ Applying comprehensive testing strategies")
-println("✓ Understanding deployment and distribution")
-
-println("\nCongratulations! You have completed all Mycelia tutorials.")
-println("You now have a comprehensive understanding of:")
-println("- Data acquisition and quality control")
-println("- K-mer analysis and genome assembly")
-println("- Assembly validation and gene annotation")
-println("- Comparative genomics and tool integration")
+println("Topics introduced in this survey:")
+println("- External-tool wrapper entry points")
+println("- Environment and dependency-management concepts")
+println("- Workflow, HPC, cloud, and resource-management concepts")
+println("- Quality-control, reproducibility, and testing concepts")
+println("- Interface, deployment, and distribution concepts")
+println()
+println("Sections marked TODO are conceptual placeholders, not implemented exercises.")
+println("You have reached the end of Tutorial 8; this survey does not certify")
+println("completion of every workflow or every Mycelia tutorial.")
 println()
 println("Continue exploring the Mycelia package for advanced features")
 println("and consider contributing to the project!")

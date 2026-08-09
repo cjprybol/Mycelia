@@ -95,17 +95,10 @@ include(joinpath(@__DIR__, "metric_source_guard.jl"))
 
 # === Expected matrix ========================================================
 #
-# MIRRORS `track_a_baseline_benchmark.jl`. The harness now guards its driver with
-# `if abspath(PROGRAM_FILE) == @__FILE__`, so including it no longer runs the
-# benchmark; the duplication survives for two other reasons. The harness imports
-# Mycelia (plus FASTX/Statistics), and this merge deliberately depends on none of
-# that — it must run from a bare checkout against JSON on disk. And the harness
-# defines top-level consts — ORGANISMS, TECHNOLOGIES, COVERAGES, SEEDS — that
-# collide inside runtests.jl's shared `Main`, which is why even its own contract
-# test includes it in a module. `test/4_assembly/track_a_merge_hosts_test.jl`
-# asserts these constants, the cell-id format, AND the row schema still match the
-# harness SOURCE, so drift fails a test rather than silently mis-computing
-# "missing" or dropping a column from the merged table.
+# MIRRORS `track_a_baseline_benchmark.jl` (which cannot be `include`d — it runs
+# the whole benchmark at include time). `test/4_assembly/track_a_merge_hosts_test.jl`
+# asserts these constants and the cell-id format still match the harness source,
+# so drift fails a test rather than silently mis-computing "missing".
 
 const TRACK_A_ORGANISMS = ("Lambda", "T4", "phi29", "SARS-CoV-2")
 const TRACK_A_TECHNOLOGIES = ("illumina", "pacbio", "ont")
@@ -117,17 +110,15 @@ const TRACK_A_ARMS = ("qualmer", "kmer")
     track_a_cell_id(organism, technology, coverage, seed, arm; k = 31) -> String
 
 The harness's per-cell directory name. Must stay byte-identical to
-`track_a_baseline_benchmark.jl`'s `cell_id_for`, which builds
-`cell_id = "\$(org)__\$(tech)__\$(cov)x__seed\$(seed)__\$(arm)"` and appends
-`__k\$(k)` only for a NON-default k: the 288-cell baseline predates the `--k`
-flag, so keying k=31 to the historical suffix-less name is what keeps those
-completed trees resumable.
+`track_a_baseline_benchmark.jl`'s `cell_id_for`, which appends `__k\$(k)` only for
+a NON-default k: the 288-cell baseline predates the `--k` flag, so keying k=31 to
+the historical suffix-less name is what keeps those completed trees resumable.
 
 A k-sweep tree therefore holds ids this merge does NOT enumerate by default —
 `expected_cell_ids()` sweeps the baseline matrix at k=31 — so its cells are
 reported as outside the expected matrix rather than silently merged in. That is
-deliberate: the cross-host merge reconciles the baseline, and pooling a sweep's k
-into it would corrupt exactly the per-k separation the sweep exists to measure.
+deliberate: the cross-host merge reconciles the baseline, and pooling a sweep's
+k into it would corrupt exactly the per-k separation the sweep exists to measure.
 Pass `k` explicitly to address a sweep cell.
 """
 function track_a_cell_id(organism, technology, coverage, seed, arm; k = 31)
@@ -414,7 +405,8 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
     unexpected_ids = sort(collect(setdiff(Set{String}(keys(seen)), expected)))
 
     unreachable = [h.host for h in per_host if !h.exists]
-    malformed = sort([cid for (cid, cell) in merged
+    malformed = sort([cid
+                      for (cid, cell) in merged
                       if is_malformed_evidence(quast_evidence(cell))])
     return (merged = merged, origin = origin, digests = digests,
         collisions = collisions, duplicates = duplicates,
@@ -428,27 +420,156 @@ end
 # Harness row order, so `track_a_results.tsv` written here is drop-in compatible
 # with `track_a_baseline_benchmark.jl`'s own aggregate.
 #
-# This is a hand-maintained mirror of the harness's `const ROW_KEYS`, and
-# `merged_tables` projects every cell onto it — so a key the harness WRITES but this
-# list OMITS is silently dropped from the merged table even though the per-cell JSON
-# still carries it. `rss_baseline_bytes` / `peak_rss_method` are the pair that makes
-# that fatal rather than cosmetic: the hosts measure peak RSS by DIFFERENT methods by
-# construction (the sbatch wrappers export JULIA_NUM_THREADS, giving "sampled"; a bare
-# `julia` gives "highwater-delta"; pre-schema checkpoints reload as "unknown"), and the
-# harness docstring instructs readers to filter on `peak_rss_method` before aggregating.
-# Dropping the label leaves three incommensurable quantities pooled in one plausible-
-# looking column with nothing left to separate them.
-#
-# `test/4_assembly/track_a_merge_hosts_test.jl` parses `const ROW_KEYS` out of the
-# harness SOURCE and asserts this list equals it — asserting the constant against
-# `DataFrames.names(results_df)` only compares the mirror with itself, which is exactly
-# how the omission survived review.
+# This MIRRORS `ROW_KEYS` in track_a_baseline_benchmark.jl and must stay equal to it.
+# It silently fell two columns behind: `peak_rss_method` and `rss_baseline_bytes`
+# were added to the harness so a reader can tell a sampled per-cell peak from a
+# high-water delta ("Values under different methods are different quantities.
+# Always filter on peak_rss_method before aggregating"), but the merge kept the
+# 17-column schema — so the merged matrix carried the VALUE and dropped the
+# provenance that makes it interpretable, on the one table where the two hosts'
+# methods actually mix. `track_a_row_keys_match_harness()` below now pins the
+# equality; the previous test compared this constant against output built FROM it,
+# which is a tautology and could not detect drift.
 const TRACK_A_ROW_KEYS = String[
 "organism", "accession", "technology", "coverage", "seed", "decoder_arm", "k",
 "n_reads", "n_contigs", "NGA50", "misassemblies", "genome_fraction",
 "duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes",
 "rss_baseline_bytes", "peak_rss_method", "status"
 ]
+
+# Absent-value sentinels, MIRRORING OPTIONAL_KEY_DEFAULTS in the harness.
+#
+# Adding the two provenance columns to TRACK_A_ROW_KEYS was not enough on its own:
+# `get(cell, k, missing)` filled them with `missing` for every pre-schema checkpoint —
+# which is all 432 currently on disk — so the merged table carried the column names
+# and no usable values, and the very operation the harness docstring prescribes
+# ("Always filter on peak_rss_method before aggregating") threw
+# `ArgumentError: unable to check bounds for indices of type Missing`.
+#
+# The harness defaults these to "unknown" / -1 deliberately. "unknown" is
+# absence-only. `-1` is NOT: the harness also emits it from the highwater-delta path
+# when the /proc baseline read fails, and from error_row, so it means "no usable
+# baseline" rather than "column absent" — do not read it as a provenance discriminator
+# on its own; pair it with peak_rss_method.
+#
+# Merging must produce the SAME sentinel as the harness, or a merged table is not the
+# drop-in the docstring claims. Keys absent from this table keep `missing`, which is
+# correct for genuinely-required columns — their absence is a defect, not a default.
+const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
+    "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1)
+
+# Read a `const` definition out of the harness source, failing closed.
+#
+# Requires the pattern to match EXACTLY ONCE. `match` returns the FIRST hit, and a
+# first-hit read is shadowable: an old copy above a drifted live definition is read
+# in preference to the live one, and the guard reports agreement. Anchoring at `^`
+# only defeats `# `-prefixed and indented copies. It does NOT defeat a `#= … =#`
+# block comment — which is the idiomatic way to comment out a multi-line const, i.e.
+# the single most likely maintainer edit — nor a docstring copy, a copy inside a
+# string literal, or two live definitions left by a bad merge resolution. All four
+# were measured returning ok = true against a drifted live const.
+#
+# Zero matches and two-or-more matches are therefore both a refusal to answer, not a
+# pass. `read` is inside the try because `isfile` says nothing about readability: a
+# chmod-000 harness threw SystemError rather than returning a verdict.
+function _harness_const_capture(pattern::Regex)
+    harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
+    isfile(harness) || return nothing
+    src = try
+        read(harness, String)
+    catch
+        return nothing
+    end
+    matches = collect(eachmatch(pattern, src))
+    length(matches) == 1 || return nothing
+    return matches[1].captures[1]
+end
+
+"""
+    track_a_row_keys_match_harness() -> (ok::Bool, harness_keys::Vector{String})
+
+Read `ROW_KEYS` out of the harness SOURCE and compare it to [`TRACK_A_ROW_KEYS`].
+
+The harness cannot be `include`d from here (it parses the global `ARGS` at load and
+imports Mycelia), so this inspects the literal instead.
+
+Fails closed on an unreadable, unparseable, absent OR DUPLICATED definition — see
+`_harness_const_capture` for why "duplicated" belongs in that list.
+
+Limitation worth stating rather than papering over: `const` pins the BINDING, not the
+contents. A harness that builds the literal correctly and then mutates it
+(`ROW_KEYS` is a tuple so this does not apply here, but the sibling `Dict` is
+mutable) is invisible to any source-literal guard.
+"""
+function track_a_row_keys_match_harness()
+    capture = _harness_const_capture(
+        r"(?m)^const\s+ROW_KEYS\s*=\s*\((.*?)\)\s*$"s)
+    capture === nothing && return (false, String[])
+    keys = [String(strip(k))
+            for k in split(replace(capture, "\n" => " "), ",")
+            if !isempty(strip(k))]
+    keys = [startswith(k, ":") ? k[2:end] : k for k in keys]
+    isempty(keys) && return (false, String[])
+    return (keys == TRACK_A_ROW_KEYS, keys)
+end
+
+"""
+    track_a_absent_defaults_match_harness() -> (ok::Bool, harness_defaults::Dict{String, Any})
+
+Read `OPTIONAL_KEY_DEFAULTS` out of the harness SOURCE and compare it to
+[`TRACK_A_ABSENT_DEFAULTS`].
+
+This guard has been wrong three times, each in a different way, and each time the
+error was in its FAILURE DIRECTION rather than its logic:
+
+  * v1 compared the constant to the literals written into it in the same commit — a
+    tautology that could not fail.
+  * v2 pattern-matched the pairs. The numeric alternative had no right boundary, so
+    `-1.5` parsed as `-1`; and a pair whose value the pattern could not match was
+    silently DROPPED, so a harness gaining a third unmirrored column still compared
+    equal. 11/11 drifted harnesses read green.
+  * v3 parsed the AST (fixing both of those) but still took the FIRST source match,
+    so a `#= … =#`-commented old copy above a drifted live const reported agreement.
+
+Hence: parse the literal rather than pattern-match it, reject anything that is not a
+plain `:symbol => <String|Int>` pair, and demand exactly one definition in the file.
+Unrecognised syntax is a MISMATCH, never a pass.
+
+Limitation: `const` pins the binding, not the `Dict` contents. A harness that assigns
+the correct literal and then mutates it at load (`OPTIONAL_KEY_DEFAULTS[:k] = v`, or
+a host-conditional branch) is invisible here. That is irreducible for a source-literal
+guard; it is stated so nobody reads the fail-closed claim as broader than it is.
+"""
+function track_a_absent_defaults_match_harness()
+    capture = _harness_const_capture(
+        r"(?m)^const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*(Dict\{Symbol,\s*Any\}\(.*?\))\s*$"s)
+    capture === nothing && return (false, Dict{String, Any}())
+    expr = try
+        Meta.parse(capture)
+    catch
+        return (false, Dict{String, Any}())
+    end
+    (expr isa Expr && expr.head === :call) || return (false, Dict{String, Any}())
+    parsed = Dict{String, Any}()
+    for arg in expr.args[2:end]
+        (arg isa Expr && arg.head === :call && length(arg.args) == 3 &&
+         arg.args[1] === :(=>)) || return (false, Dict{String, Any}())
+        key, value = arg.args[2], arg.args[3]
+        key isa QuoteNode || return (false, Dict{String, Any}())
+        # QuoteNode's payload is not necessarily a Symbol: `:1` parses to
+        # QuoteNode(1) and String(1) is a MethodError, i.e. a throw where the
+        # contract promises a verdict.
+        (key.value isa Symbol || key.value isa AbstractString) ||
+            return (false, Dict{String, Any}())
+        # Only plain String/Int literals are comparable to this file's mirror. A
+        # Float, a Symbol, `nothing`, `missing`, or any computed expression means the
+        # harness says something this guard cannot represent -> mismatch, not pass.
+        (value isa String || value isa Integer) || return (false, Dict{String, Any}())
+        parsed[String(key.value)] = value
+    end
+    isempty(parsed) && return (false, parsed)
+    return (parsed == TRACK_A_ABSENT_DEFAULTS, parsed)
+end
 
 """
     merged_tables(result) -> (results_df, provenance_df)
@@ -467,7 +588,9 @@ function merged_tables(result)
     prov_rows = Any[]
     for cell_id in ids
         cell = result.merged[cell_id]
-        base = Dict{String, Any}(k => get(cell, k, missing) for k in TRACK_A_ROW_KEYS)
+        base = Dict{String, Any}(
+            k => get(cell, k, get(TRACK_A_ABSENT_DEFAULTS, k, missing))
+            for k in TRACK_A_ROW_KEYS)
         push!(rows, NamedTuple{Tuple(Symbol.(TRACK_A_ROW_KEYS))}(
             Tuple(base[k] for k in TRACK_A_ROW_KEYS)))
         prov_keys = vcat(["cell_id"], TRACK_A_ROW_KEYS,
@@ -943,7 +1066,8 @@ function main()
     report_path = write_merge_report(
         joinpath(output_dir, "merge_report.md"), result; output_dir = output_dir)
 
-    rc, problems = merge_exit_status(result;
+    rc,
+    problems = merge_exit_status(result;
         allow_collisions = allow_collisions, allow_incomplete = allow_incomplete,
         report_hint = report_path)
     for p in problems
@@ -963,8 +1087,7 @@ function main()
         # run. Malformed cells are excluded here only because they are already a
         # separate FATAL problem above; they are never silently tolerated.
         scored = provenance_df[
-            .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .&
-            .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
+        .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .& .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
         if DataFrames.nrow(scored) == 0
             println("\nmetric-definition check: no scored cells to compare — skipped")
         else

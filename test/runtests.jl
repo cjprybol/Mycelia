@@ -13,6 +13,14 @@
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
 #
+# Private-fixture smokes are not enabled by the broad full-suite flags.
+# Their test files document the additional workflow-specific gates and inputs:
+#   - MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
+#   - MYCELIA_RUN_AUTOCYCLER_POLISHED=true (hybrid-smoke subgate)
+#   - MYCELIA_RUN_AUTOCYCLER_SMOKE=true
+#   - MYCELIA_AUTOCYCLER_READ_TYPE=ont_r9|ont_r10|pacbio_clr|pacbio_hifi (required by
+#     the standalone Autocycler smoke; never inferred from a fixture path)
+#
 # External dependencies (skipped by default):
 #   - NCBI datasets CLI, SRA tools (prefetch, fasterq_dump)
 #   - Bioconda tools: QUAST, BUSCO, CheckM, CoverM, mosdepth, MEGAHIT, SPAdes, etc.
@@ -21,11 +29,31 @@
 #
 # Install Julia LTS: curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
 
-const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
-const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
-                             lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
-const MYCELIA_SHOW_PLOTS = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
+
+# Use the same strip-aware boolean parser for broad-suite discovery and private
+# smoke preflight so an accepted broad gate cannot be filtered out later.
+Base.include(
+    @__MODULE__,
+    joinpath(@__DIR__, "multi_input_hybrid_smoke_support.jl"),
+)
+const MYCELIA_RUN_ALL = _multi_input_hybrid_smoke_env_enabled(
+    ENV,
+    "MYCELIA_RUN_ALL",
+)
+const MYCELIA_RUN_EXTERNAL =
+    _multi_input_hybrid_external_suite_enabled(ENV)
+const MYCELIA_SHOW_PLOTS = _multi_input_hybrid_smoke_env_enabled(
+    ENV,
+    "MYCELIA_SHOW_PLOTS",
+)
+
+# Validate private-fixture opt-ins before external-file discovery can filter the
+# corresponding smoke file out of the suite.
+Base.include(
+    @__MODULE__,
+    joinpath(@__DIR__, "multi_input_hybrid_smoke_preflight.jl"),
+)
 
 # Suppress interactive plot display during tests by default; set
 # MYCELIA_SHOW_PLOTS=true for interactive display. The primary guard is at the
