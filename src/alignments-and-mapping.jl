@@ -1280,6 +1280,83 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Build the `--split-prefix` value minimap2 is given for a multi-part index run.
+
+minimap2 writes one intermediate file per index chunk, named `PREFIX.NNNN.tmp`,
+and unlinks them itself on clean exit. They survive only when the process dies
+first (walltime, OOM, cancelled job), at which point they are pure orphans:
+minimap2 cannot resume from them, so nothing can consume them afterwards.
+
+Keeping the derivation in one place means [`cleanup_minimap_split_temps`](@ref)
+and the command builders cannot drift apart in what they consider a temp file.
+"""
+function minimap_split_prefix(outfile::AbstractString)
+    return outfile * ".tmp"
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove the `PREFIX.NNNN.tmp` chunk files minimap2 leaves behind when a
+multi-part-index run is interrupted.
+
+`split_prefix` is the exact value passed to minimap2's `--split-prefix` (see
+[`minimap_split_prefix`](@ref)). Only files in `dirname(split_prefix)` whose
+names begin with `basename(split_prefix)` are considered; the search is not
+recursive, so it cannot escape the output directory.
+
+Returns `(; removed, bytes)` — the number of files removed and the total bytes
+reclaimed — so callers can log the reclaim rather than deleting silently.
+
+Safe against the sibling artifacts that share a stem: the output BAM
+`X.sorted.bam` does not start with `X.sorted.bam.tmp`, and samtools' own sort
+temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
+
+# Arguments
+- `split_prefix`: the `--split-prefix` value used for the run.
+- `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
+"""
+function cleanup_minimap_split_temps(
+        split_prefix::AbstractString; verbose::Bool = true)
+    dir = dirname(split_prefix)
+    isempty(dir) && (dir = ".")
+    base = basename(split_prefix)
+    removed = 0
+    bytes = 0
+    Base.isdir(dir) || return (; removed, bytes)
+    for path in readdir(dir; join = true)
+        name = basename(path)
+        # TODO(human): decide which files this cleanup is willing to delete.
+        # `name` is a candidate basename in the output directory; `base` is
+        # basename(split_prefix). Set `should_remove::Bool`. See the note in the
+        # PR description for the trade-off between an exact `PREFIX.NNNN.tmp`
+        # match and a looser `startswith(name, base)` sweep.
+        should_remove = false
+        should_remove || continue
+        Base.isfile(path) || continue
+        sz = try
+            filesize(path)
+        catch
+            0
+        end
+        try
+            rm(path; force = true)
+            removed += 1
+            bytes += sz
+        catch err
+            @warn "could not remove minimap2 split temp" path exception = err
+        end
+    end
+    if verbose && removed > 0
+        @info "reclaimed minimap2 split-index temps" split_prefix removed gib=round(
+            bytes / 1024^3; digits = 2)
+    end
+    return (; removed, bytes)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Map reads using an existing minimap2 index file.
 
 # Arguments
@@ -1295,7 +1372,20 @@ Map reads using an existing minimap2 index file.
 - `require_index::Bool=true`: Validate index exists (set false to build commands without files on disk).
 
 # Returns
-Named tuple `(cmd, outfile)` producing a BAM file from the mapping.
+Named tuple `(cmd, outfile, split_prefix)` producing a BAM file from the mapping.
+
+This function only *builds* the command; the caller runs it. Because minimap2
+leaves `split_prefix.NNNN.tmp` chunks behind when it is killed mid-run, a caller
+that runs `cmd` itself should wrap it so the temps are reclaimed on failure:
+
+```julia
+res = Mycelia.minimap_map_with_index(; index_file, fastq, outfile)
+try
+    run(res.cmd)
+finally
+    Mycelia.cleanup_minimap_split_temps(res.split_prefix)
+end
+```
 """
 function minimap_map_with_index(;
         fasta::Union{Nothing, AbstractString} = nothing,
@@ -1343,6 +1433,7 @@ function minimap_map_with_index(;
         outfile = output_prefix * "." * basename(index_file) * ".minimap2" *
                   (sorted ? ".sorted" : "") * ".bam"
     end
+    split_prefix = minimap_split_prefix(outfile)
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
     if as_string
@@ -1351,12 +1442,12 @@ function minimap_map_with_index(;
         if sorted
             if keep_header
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                       """
             else
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                       """
@@ -1364,12 +1455,12 @@ function minimap_map_with_index(;
         else
             if keep_header
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
                       """
             else
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                       """
             end
@@ -1385,7 +1476,7 @@ function minimap_map_with_index(;
         append!(map_args, minimap_extra_args)
         push!(map_args, index_file)
         append!(map_args, fastq_inputs)
-        push!(map_args, "--split-prefix=$(outfile).tmp")
+        push!(map_args, "--split-prefix=$(split_prefix)")
         map_cmd = Cmd(map_args)
         if sorted
             if keep_header
@@ -1405,7 +1496,7 @@ function minimap_map_with_index(;
             cmd = pipeline(map_cmd, compress)
         end
     end
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -1436,6 +1527,8 @@ followed by SAM compression with pigz. Handles resource allocation and conda env
 Named tuple containing:
 - `cmd`: Shell command (as string or array)
 - `outfile`: Path to compressed output SAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 """
 function minimap_map(;
         fasta,
@@ -1474,6 +1567,7 @@ function minimap_map(;
         end
         outfile = base_name * "." * output_format
     end
+    split_prefix = minimap_split_prefix(outfile)
 
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
@@ -1486,17 +1580,17 @@ function minimap_map(;
                              " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp -o $(outfile)
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) -o $(outfile)
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
@@ -1505,11 +1599,11 @@ function minimap_map(;
             else
                 if quiet
                     cmd = pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`,
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix) -o $(outfile)`,
                         stdout = devnull,
                         stderr = devnull)
                 else
-                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`
+                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix) -o $(outfile)`
                 end
             end
         end
@@ -1521,25 +1615,25 @@ function minimap_map(;
                              " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
                     cmd = pipeline(cmd, stderr = devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, view_cmd)
                 if quiet
@@ -1556,12 +1650,12 @@ function minimap_map(;
             if sorted
                 if keep_header
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                     """
                 else
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                     """
@@ -1569,19 +1663,19 @@ function minimap_map(;
             else
                 if keep_header
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
                     """
                 else
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                     """
                 end
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 if keep_header
                     sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                     cmd = pipeline(map_cmd, sort_cmd)
@@ -1594,7 +1688,7 @@ function minimap_map(;
                     cmd = pipeline(cmd, stderr = devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 if keep_header
                     view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -`
                 else
@@ -1608,7 +1702,7 @@ function minimap_map(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -1633,6 +1727,8 @@ Map paired-end reads to a reference sequence using minimap2.
 Named tuple containing:
 - `cmd`: Command(s) to execute (String or Pipeline)
 - `outfile`: Path to output BAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 
 # Notes
 - Requires minimap2, and samtools conda environments
@@ -1680,13 +1776,14 @@ function minimap_map_paired_end_with_index(;
         outfile *= ".sorted"
     end
     outfile *= ".bam"
+    split_prefix = minimap_split_prefix(outfile)
     # only run if we will need to do work
     if !isfile(outfile)
         Mycelia.add_bioconda_env("minimap2")
         Mycelia.add_bioconda_env("samtools")
     end
     if as_string
-        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp"
+        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(split_prefix)"
         if sorted
             if keep_header
                 cmd = """
@@ -1714,7 +1811,7 @@ function minimap_map_paired_end_with_index(;
             end
         end
     else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp`
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(split_prefix)`
         if sorted
             if keep_header
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
@@ -1734,7 +1831,7 @@ function minimap_map_paired_end_with_index(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -2118,7 +2215,7 @@ function minimap_merge_map_and_split(;
         )
     end
     minimap_cmd = minimap_result.cmd
-    split_prefix = merged_bam * ".tmp"
+    split_prefix = minimap_split_prefix(merged_bam)
 
     if run_mapping
         if nonempty_file(merged_bam) && !force
@@ -2126,14 +2223,6 @@ function minimap_merge_map_and_split(;
         else
             try
                 run(minimap_cmd)
-                # Best-effort cleanup of minimap2 split-prefix temp files.
-                try
-                    split_base = basename(split_prefix)
-                    for path in readdir(tmpdir; join = true)
-                        startswith(basename(path), split_base) && rm(path; force = true)
-                    end
-                catch
-                end
             catch err
                 msg = sprint(showerror, err)
                 if occursin("E2BIG", msg) ||
@@ -2160,6 +2249,19 @@ function minimap_merge_map_and_split(;
                     )
                 end
                 rethrow()
+            finally
+                # Reclaim minimap2's split-index chunks on EVERY exit path.
+                # minimap2 already unlinks them when it exits cleanly, so the
+                # only path this actually recovers is the interrupted one
+                # (walltime, OOM, scancel) — which is exactly where they used
+                # to survive. Previously this ran inside the `try` after a
+                # successful `run`, i.e. only on the path that needed no help;
+                # a 2026-07 CAMI_I_LOW abort stranded 783 GiB as a result.
+                try
+                    cleanup_minimap_split_temps(split_prefix)
+                catch cleanup_err
+                    @warn "minimap2 split-temp cleanup failed" split_prefix exception = cleanup_err
+                end
             end
         end
     end
@@ -2276,6 +2378,8 @@ Map paired-end reads directly to a reference FASTA using minimap2 (indexes on-th
 Named tuple containing:
 - `cmd`: Command(s) to execute (String or Pipeline)
 - `outfile`: Path to output BAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 
 # Notes
 - Requires minimap2 and samtools conda environments.
@@ -2306,6 +2410,7 @@ function minimap_map_paired_end(;
         outfile *= ".sorted"
     end
     outfile *= ".bam"
+    split_prefix = minimap_split_prefix(outfile)
 
     if !isfile(outfile)
         Mycelia.add_bioconda_env("minimap2")
@@ -2313,7 +2418,7 @@ function minimap_map_paired_end(;
     end
 
     if as_string
-        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(outfile).tmp"
+        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(split_prefix)"
         if sorted
             if keep_header
                 cmd = """
@@ -2341,7 +2446,7 @@ function minimap_map_paired_end(;
             end
         end
     else
-        map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(outfile).tmp`
+        map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(split_prefix)`
         if sorted
             if keep_header
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
@@ -2361,7 +2466,7 @@ function minimap_map_paired_end(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
