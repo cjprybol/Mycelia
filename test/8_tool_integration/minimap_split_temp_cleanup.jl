@@ -10,9 +10,17 @@
 # them afterwards, since minimap2 cannot resume from them. A 2026-07 CAMI_I_LOW
 # run aborted this way and stranded 783 GiB on NERSC scratch.
 #
-# These tests need no external tools: they exercise the prefix derivation and the
-# reclaim helper against synthetic files, and check that the command builders
-# hand the caller a prefix to clean up with (run_mapping is never invoked).
+# The first three testsets need no external tools -- they exercise the prefix
+# derivation and the reclaim helper against synthetic files -- so they run on the
+# default CI path. The fourth calls `minimap_map`, which invokes
+# `add_bioconda_env` before it builds any command string, and so self-gates
+# behind MYCELIA_RUN_EXTERNAL=true.
+#
+# Note what a `finally` alone CANNOT cover: SLURM sends SIGTERM then SIGKILL at
+# walltime, and Julia runs no `finally` on either -- it dies in the signal
+# handler (verified on 1.10.10). That is why `minimap_merge_map_and_split`
+# sweeps BEFORE the run as well as after; the next attempt is the only moment a
+# live Julia process exists after a job-level kill.
 
 import Test
 import Mycelia
@@ -52,6 +60,30 @@ Test.@testset "minimap2 split-index temp cleanup" begin
             #       deletes them, the shape-anchored predicate does not. Without
             #       them this testset passes under either implementation and so
             #       tests nothing about the choice between them.
+            #
+            #   (c) a chunk belonging to a DIFFERENT job, correctly shaped. Every
+            #       fixture in (a) and (b) fails the right-hand regex on its own
+            #       merits, so deleting the `startswith(name, base)` guard
+            #       entirely leaves them all untouched and the testset green.
+            #       This one is the only fixture that pins the LEFT anchor --
+            #       the guard that scopes the sweep to this run's output rather
+            #       than everything in a shared SLURM-array output directory.
+            #
+            #       Its stem must be the SAME BYTE LENGTH as this run's, which
+            #       is why it is derived rather than written out. Without the
+            #       guard the predicate slices at `ncodeunits(base) + 1`
+            #       regardless of what the name is, so a sibling of any OTHER
+            #       length lands mid-name and fails the regex for the wrong
+            #       reason -- sparing the file by accident and letting the
+            #       mutant survive. Equal length forces the slice to land
+            #       exactly on `.0000.tmp`, so only the left anchor can reject
+            #       it. (A hand-written `othersample....` fixture was tried
+            #       first and did NOT kill the mutant, for exactly this reason.)
+            sibling_base = replace(basename(split_prefix), "sample." => "s4mple.")
+            Test.@test ncodeunits(sibling_base) ==
+                       ncodeunits(basename(split_prefix))
+            Test.@test sibling_base != basename(split_prefix)
+            sibling_chunk = joinpath(dir, sibling_base * ".0000.tmp")
             survivors = [
                 outfile,
                 outfile * ".bai",
@@ -60,7 +92,8 @@ Test.@testset "minimap2 split-index temp cleanup" begin
                 split_prefix,                                # bare prefix, no chunk index
                 split_prefix * ".log",                        # non-numeric segment
                 string(split_prefix, ".0000.tmp.bak"),        # trailing suffix past .tmp
-                string(split_prefix, ".notanumber.tmp")       # right shape, wrong segment
+                string(split_prefix, ".notanumber.tmp"),      # right shape, wrong segment
+                sibling_chunk                                 # another job's LIVE chunk
             ]
             for s in survivors
                 write(s, "keep")
@@ -91,23 +124,31 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test r.removed == 0
     end
 
-    Test.@testset "builders return a split_prefix the caller can clean up" begin
-        mktempdir() do dir
-            ref = joinpath(dir, "ref.fa")
-            write(ref, ">ref\n" * "ACGT"^100 * "\n")
-            fq = joinpath(dir, "reads.fq")
-            write(fq, "@r1\nACGT\n+\nIIII\n")
-            outfile = joinpath(dir, "out.sorted.bam")
+    # Gated, because `minimap_map` calls `add_bioconda_env("minimap2")` and
+    # `add_bioconda_env("samtools")` unconditionally BEFORE it builds any
+    # command string -- so merely asking for a command needs a working conda.
+    # The three testsets above genuinely need no external tools, which is what
+    # lets this file run on the default (MYCELIA_RUN_EXTERNAL=false) CI path
+    # where the cleanup predicate is the part that actually matters.
+    if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+        Test.@testset "builders return a split_prefix the caller can clean up" begin
+            mktempdir() do dir
+                ref = joinpath(dir, "ref.fa")
+                write(ref, ">ref\n" * "ACGT"^100 * "\n")
+                fq = joinpath(dir, "reads.fq")
+                write(fq, "@r1\nACGT\n+\nIIII\n")
+                outfile = joinpath(dir, "out.sorted.bam")
 
-            res = Mycelia.minimap_map(;
-                fasta = ref, fastq = fq, mapping_type = "sr",
-                outfile = outfile, as_string = true)
+                res = Mycelia.minimap_map(;
+                    fasta = ref, fastq = fq, mapping_type = "sr",
+                    outfile = outfile, as_string = true)
 
-            Test.@test haskey(res, :split_prefix)
-            Test.@test res.split_prefix == Mycelia.minimap_split_prefix(res.outfile)
-            # The prefix handed back must be the one minimap2 is actually told
-            # to use -- otherwise cleanup would target the wrong files.
-            Test.@test occursin("--split-prefix=$(res.split_prefix)", res.cmd)
+                Test.@test haskey(res, :split_prefix)
+                Test.@test res.split_prefix == Mycelia.minimap_split_prefix(res.outfile)
+                # The prefix handed back must be the one minimap2 is actually told
+                # to use -- otherwise cleanup would target the wrong files.
+                Test.@test occursin("--split-prefix=$(res.split_prefix)", res.cmd)
+            end
         end
     end
 end

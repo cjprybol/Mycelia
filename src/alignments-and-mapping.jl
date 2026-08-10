@@ -1324,7 +1324,22 @@ function cleanup_minimap_split_temps(
     removed = 0
     bytes = 0
     Base.isdir(dir) || return (; removed, bytes)
-    for path in readdir(dir; join = true)
+    # This function is called from `finally` blocks, where a raised exception
+    # REPLACES the one that got us there -- so a cleanup failure would swap a
+    # diagnosable mapping error for a confusing cleanup error. `isdir` above
+    # only rules out nonexistence, not EACCES, nor an EIO on a Lustre/GPFS
+    # mount that has gone away -- which is exactly the condition most likely to
+    # have caused the mapping failure in the first place. Guarding here rather
+    # than at each call site means the function cannot throw at all, so no
+    # caller has to remember to wrap it. Reclaiming disk is never worth losing
+    # the reason the run failed.
+    entries = try
+        readdir(dir; join = true)
+    catch err
+        @warn "could not list directory for minimap2 split-temp cleanup" dir exception = err
+        return (; removed, bytes)
+    end
+    for path in entries
         name = basename(path)
         # Anchored on BOTH ends: the split prefix on the left, minimap2's own
         # `.<n>.tmp` chunk naming on the right. The right-hand anchor is what
@@ -1334,14 +1349,19 @@ function cleanup_minimap_split_temps(
         # chunks. It also spares the artifacts that share the stem: the output
         # BAM, its `.bai`, and samtools' own `.sort.tmp.NNNN.bam` sort temps.
         #
-        # `\d+` rather than `\d{4}`: minimap2 formats the chunk index with %04d,
-        # which is four digits only until a run exceeds 9999 index parts.
+        # `[0-9]+` rather than `\d{4}` on two counts. Not `{4}`: minimap2
+        # formats the chunk index with %04d, which is four digits only until a
+        # run exceeds 9999 index parts. And `[0-9]` rather than `\d`, because
+        # Julia compiles regexes with PCRE's UCP flag set by default, so `\d`
+        # matches any Unicode decimal digit -- Arabic-Indic `٠٠٠٠` would pass.
+        # Nothing here produces such names, but the predicate should say what
+        # it means.
         # ncodeunits, not length: `startswith` guarantees the first ncodeunits
         # BYTES match, and length() counts characters, which would slice at the
         # wrong offset for a non-ASCII path.
         startswith(name, base) || continue
         rest = name[(ncodeunits(base) + 1):end]
-        occursin(r"^\.\d+\.tmp$", rest) || continue
+        occursin(r"^\.[0-9]+\.tmp$", rest) || continue
         Base.isfile(path) || continue
         sz = try
             filesize(path)
@@ -2224,9 +2244,32 @@ function minimap_merge_map_and_split(;
         )
     end
     minimap_cmd = minimap_result.cmd
-    split_prefix = minimap_split_prefix(merged_bam)
+    # Consume the builder's own value rather than re-deriving from merged_bam.
+    # The two agree today, but re-deriving reintroduces exactly the drift seam
+    # `minimap_split_prefix` exists to close: if a builder ever normalizes its
+    # outfile (appends an extension, resolves to an absolute path), the sweep
+    # would target a prefix minimap2 was never given and orphan every chunk --
+    # the original bug, re-created. It is also interpolated into the E2BIG
+    # error text below, which would then print a `--split-prefix` that was not
+    # the one used.
+    split_prefix = minimap_result.split_prefix
 
     if run_mapping
+        # Swept BEFORE the run, not only after. A `finally` cannot cover the
+        # abort that actually caused the 2026-07 incident: SLURM sends the job
+        # step SIGTERM then SIGKILL at walltime, and Julia runs no `finally` on
+        # either (verified on 1.10.10) -- it dies in the signal handler. The
+        # next attempt is therefore the only moment a live Julia process exists
+        # after a job-level kill, which makes this the load-bearing half of the
+        # fix. Safe to do unconditionally: minimap2 cannot resume from these
+        # chunks, so any that exist now are orphans from a previous attempt.
+        #
+        # This also covers the resume branch below, which returns the cached
+        # BAM without ever entering the try/finally -- so a run killed after
+        # writing a nonempty merged_bam would otherwise strand its chunks
+        # permanently, with no code path left that would ever reclaim them.
+        cleanup_minimap_split_temps(split_prefix)
+
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
