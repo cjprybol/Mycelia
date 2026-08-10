@@ -2258,11 +2258,23 @@ function minimap_merge_map_and_split(;
         # Swept BEFORE the run, not only after. A `finally` cannot cover the
         # abort that actually caused the 2026-07 incident: SLURM sends the job
         # step SIGTERM then SIGKILL at walltime, and Julia runs no `finally` on
-        # either (verified on 1.10.10) -- it dies in the signal handler. The
-        # next attempt is therefore the only moment a live Julia process exists
-        # after a job-level kill, which makes this the load-bearing half of the
-        # fix. Safe to do unconditionally: minimap2 cannot resume from these
-        # chunks, so any that exist now are orphans from a previous attempt.
+        # either -- it dies in the signal handler.
+        #
+        # It DOES run `atexit` on SIGTERM, though, and SLURM waits KillWait --
+        # 30s by default -- before escalating. Measured on 1.10.10:
+        #     SIGTERM -> atexit ran, finally did not
+        #     SIGKILL -> neither ran
+        # So the hook registered below reclaims in-job during that grace
+        # window, and this pre-run sweep covers the remaining SIGKILL/OOM-kill
+        # case on the next attempt. Both are needed: a one-shot benchmark that
+        # is never rerun has no next attempt, which is exactly the case an
+        # earlier version of this comment wrongly assumed away.
+        #
+        # Safe to do unconditionally HERE specifically: `merged_bam` is either
+        # a caller override or SHA1-fingerprinted over the input FASTQ list,
+        # and the default tmpdir comes from `mktempdir()`, so two concurrent
+        # runs cannot share a split prefix. That reasoning does NOT transfer to
+        # every caller -- see the note in `merge_and_map_single_end_samples`.
         #
         # This also covers the resume branch below, which returns the cached
         # BAM without ever entering the try/finally -- so a run killed after
@@ -2273,6 +2285,12 @@ function minimap_merge_map_and_split(;
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
+            # Registered before the run so a SIGTERM at walltime reclaims
+            # in-job, inside SLURM's KillWait grace window, instead of
+            # deferring to a next attempt that may never happen. Idempotent
+            # with the pre-run sweep and the `finally` below: a second call on
+            # an already-swept prefix removes nothing.
+            atexit(() -> cleanup_minimap_split_temps(split_prefix; verbose = false))
             try
                 run(minimap_cmd)
             catch err
@@ -2309,11 +2327,11 @@ function minimap_merge_map_and_split(;
                 # to survive. Previously this ran inside the `try` after a
                 # successful `run`, i.e. only on the path that needed no help;
                 # a 2026-07 CAMI_I_LOW abort stranded 783 GiB as a result.
-                try
-                    cleanup_minimap_split_temps(split_prefix)
-                catch cleanup_err
-                    @warn "minimap2 split-temp cleanup failed" split_prefix exception = cleanup_err
-                end
+                # No wrapper here: cleanup_minimap_split_temps guards every
+                # throwing operation internally and documents that it cannot
+                # throw. Wrapping it at one of three call sites would imply the
+                # opposite and invite someone to weaken those internal guards.
+                cleanup_minimap_split_temps(split_prefix)
             end
         end
     end

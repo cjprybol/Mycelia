@@ -730,14 +730,28 @@ function merge_and_map_single_end_samples(;
         fastq = fastq_out,
         index_file = minimap_index
     )
-    # Swept BEFORE the branch, not only inside it. A `finally` covers an
-    # ordinary exception but never a SIGTERM/SIGKILL -- Julia runs no `finally`
-    # on either -- and when the output file already exists this branch is
-    # skipped entirely, so a previous killed run's chunks would have no
-    # remaining code path that could ever reclaim them. Unconditional is safe:
-    # minimap2 cannot resume from these chunks, so any present now are orphans.
-    Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
+    # NOT swept unconditionally here, unlike minimap_merge_map_and_split.
+    #
+    # `outbase` defaults to `normalized_current_date() * "..."`, which is
+    # DATE-ONLY. Every call on a given day from a given working directory
+    # therefore derives the SAME split prefix regardless of `fastq_list`, and
+    # the default `dirname` is "" -> the process CWD. Two concurrent runs under
+    # that default share a prefix, so an unconditional sweep at function entry
+    # would delete a peer's IN-FLIGHT chunks -- turning a disk-space bug into a
+    # truncated-output bug. The shape anchor cannot help: the peer's chunks
+    # match the left anchor too, because the prefix is genuinely the same.
+    #
+    # Sweeping only when we are about to map keeps the peer's no-op path a
+    # no-op. It does leave one hole: a run killed AFTER writing `outfile` keeps
+    # its chunks, since this branch is then skipped forever. That is a leak,
+    # and a leak is strictly better than deleting a file another process is
+    # still writing.
+    #
+    # The real defect is the colliding default; fixing it is a behaviour change
+    # beyond this PR's scope (same-day reuse of `fastq_out`/`tsv_out` is also
+    # wrong under it) and is tracked separately.
     if !isfile(minimap_result.outfile)
+        Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
         # `finally`, because minimap2 leaves its --split-prefix chunks behind
         # only when it is killed mid-run; on a clean exit it removes them itself.
         try
