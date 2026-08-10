@@ -730,6 +730,13 @@ function merge_and_map_single_end_samples(;
         fastq = fastq_out,
         index_file = minimap_index
     )
+    # Swept BEFORE the branch, not only inside it. A `finally` covers an
+    # ordinary exception but never a SIGTERM/SIGKILL -- Julia runs no `finally`
+    # on either -- and when the output file already exists this branch is
+    # skipped entirely, so a previous killed run's chunks would have no
+    # remaining code path that could ever reclaim them. Unconditional is safe:
+    # minimap2 cannot resume from these chunks, so any present now are orphans.
+    Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
     if !isfile(minimap_result.outfile)
         # `finally`, because minimap2 leaves its --split-prefix chunks behind
         # only when it is killed mid-run; on a clean exit it removes them itself.

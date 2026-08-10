@@ -113,6 +113,29 @@ Test.@testset "minimap2 split-index temp cleanup" begin
     end
 
     Test.@testset "is idempotent and safe on a missing directory" begin
+        # Idempotence needs a SECOND call after a real sweep. Both cases below
+        # start with zero matching chunks, so on their own they hold for a
+        # function that does nothing at all -- they test the empty case, not
+        # the repeat case. The pre-run sweep added to every caller means a
+        # second call on an already-swept directory is now the common path.
+        mktempdir() do dir
+            outfile = joinpath(dir, "idem.ref.mmi.minimap2.sorted.bam")
+            prefix = Mycelia.minimap_split_prefix(outfile)
+            for i in 0:1
+                write(string(prefix, ".", lpad(i, 4, '0'), ".tmp"), rand(UInt8, 512))
+            end
+            keep = string(prefix, ".notanumber.tmp")
+            write(keep, "keep")
+
+            first_pass = Mycelia.cleanup_minimap_split_temps(prefix; verbose = false)
+            Test.@test first_pass.removed == 2
+            Test.@test first_pass.bytes == 2 * 512
+
+            second_pass = Mycelia.cleanup_minimap_split_temps(prefix; verbose = false)
+            Test.@test second_pass.removed == 0
+            Test.@test second_pass.bytes == 0
+            Test.@test isfile(keep)
+        end
         mktempdir() do dir
             prefix = joinpath(dir, "nothing-here.bam.tmp")
             r = Mycelia.cleanup_minimap_split_temps(prefix; verbose = false)
