@@ -28,19 +28,39 @@ Test.@testset "minimap2 split-index temp cleanup" begin
             outfile = joinpath(dir, "sample.ref.mmi.minimap2.sorted.bam")
             split_prefix = Mycelia.minimap_split_prefix(outfile)
 
-            # Three minimap2 split chunks, 1 KiB each.
+            # Four minimap2 split chunks, 1 KiB each. The last one carries a
+            # FIVE-digit index on purpose: minimap2 formats the chunk number
+            # with %04d, which stops being four digits once a run exceeds 9999
+            # index parts. Without this fixture a literal `\d{4}` predicate
+            # passes the whole testset, and the choice of `\d+` is untested.
             chunks = [string(split_prefix, ".", lpad(i, 4, '0'), ".tmp") for i in 0:2]
+            push!(chunks, string(split_prefix, ".10000.tmp"))
             for c in chunks
                 write(c, rand(UInt8, 1024))
             end
 
-            # Siblings that share a stem and MUST survive: the real output BAM,
-            # its index, and samtools' own sort temps (a different infix).
+            # Siblings that MUST survive. Two groups, and the second is the one
+            # that gives this test teeth:
+            #
+            #   (a) files that share the OUTPUT stem -- the BAM, its index, and
+            #       samtools' own sort temps. A loose `startswith(name, base)`
+            #       predicate already spares these, so on their own they prove
+            #       nothing about the shape anchor.
+            #
+            #   (b) files that DO start with `split_prefix` but are not chunks.
+            #       These are the discriminating cases: a loose prefix sweep
+            #       deletes them, the shape-anchored predicate does not. Without
+            #       them this testset passes under either implementation and so
+            #       tests nothing about the choice between them.
             survivors = [
                 outfile,
                 outfile * ".bai",
                 string(outfile, ".sort.tmp.0000.bam"),
-                joinpath(dir, "unrelated.sorted.bam")
+                joinpath(dir, "unrelated.sorted.bam"),
+                split_prefix,                                # bare prefix, no chunk index
+                split_prefix * ".log",                        # non-numeric segment
+                string(split_prefix, ".0000.tmp.bak"),        # trailing suffix past .tmp
+                string(split_prefix, ".notanumber.tmp")       # right shape, wrong segment
             ]
             for s in survivors
                 write(s, "keep")
@@ -48,8 +68,8 @@ Test.@testset "minimap2 split-index temp cleanup" begin
 
             result = Mycelia.cleanup_minimap_split_temps(split_prefix; verbose = false)
 
-            Test.@test result.removed == 3
-            Test.@test result.bytes == 3 * 1024
+            Test.@test result.removed == length(chunks)
+            Test.@test result.bytes == length(chunks) * 1024
             for c in chunks
                 Test.@test !isfile(c)
             end

@@ -731,7 +731,13 @@ function merge_and_map_single_end_samples(;
         index_file = minimap_index
     )
     if !isfile(minimap_result.outfile)
-        @time run(minimap_result.cmd)
+        # `finally`, because minimap2 leaves its --split-prefix chunks behind
+        # only when it is killed mid-run; on a clean exit it removes them itself.
+        try
+            @time run(minimap_result.cmd)
+        finally
+            Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
+        end
     end
     results_table_outfiles = [outbase * fmt for fmt in outformats]
     # Determine file paths for .tsv.gz and .jld2

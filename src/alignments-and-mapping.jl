@@ -1326,13 +1326,22 @@ function cleanup_minimap_split_temps(
     Base.isdir(dir) || return (; removed, bytes)
     for path in readdir(dir; join = true)
         name = basename(path)
-        # TODO(human): decide which files this cleanup is willing to delete.
-        # `name` is a candidate basename in the output directory; `base` is
-        # basename(split_prefix). Set `should_remove::Bool`. See the note in the
-        # PR description for the trade-off between an exact `PREFIX.NNNN.tmp`
-        # match and a looser `startswith(name, base)` sweep.
-        should_remove = false
-        should_remove || continue
+        # Anchored on BOTH ends: the split prefix on the left, minimap2's own
+        # `.<n>.tmp` chunk naming on the right. The right-hand anchor is what
+        # makes this safe to run while a SIBLING job is mid-flight -- callers
+        # like the CAMI2 driver run samples as a SLURM array sharing one output
+        # directory, so a bare prefix sweep could delete another task's live
+        # chunks. It also spares the artifacts that share the stem: the output
+        # BAM, its `.bai`, and samtools' own `.sort.tmp.NNNN.bam` sort temps.
+        #
+        # `\d+` rather than `\d{4}`: minimap2 formats the chunk index with %04d,
+        # which is four digits only until a run exceeds 9999 index parts.
+        # ncodeunits, not length: `startswith` guarantees the first ncodeunits
+        # BYTES match, and length() counts characters, which would slice at the
+        # wrong offset for a non-ASCII path.
+        startswith(name, base) || continue
+        rest = name[(ncodeunits(base) + 1):end]
+        occursin(r"^\.\d+\.tmp$", rest) || continue
         Base.isfile(path) || continue
         sz = try
             filesize(path)

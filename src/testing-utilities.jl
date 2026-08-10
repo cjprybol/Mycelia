@@ -508,7 +508,13 @@ function prepare_binning_test_inputs(;
         sorted = true
     )
     if !isfile(mapping.outfile) || filesize(mapping.outfile) == 0
-        run(mapping.cmd)
+        # See sequence-comparison.jl: cleanup belongs on every exit path, since
+        # minimap2 only strands split chunks when it is killed mid-run.
+        try
+            run(mapping.cmd)
+        finally
+            Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)
+        end
     end
 
     depth_file = joinpath(inputs_dir, "jgi_depth.tsv")
