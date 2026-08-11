@@ -163,6 +163,37 @@ Test.@testset "minimap2 split-index temp cleanup" begin
     # A behavioural version lives below behind the external gate. These run on
     # the default CI path so that DELETING a sweep call cannot pass unnoticed,
     # which is the specific regression worth guarding.
+
+    Test.@testset "the delete contract is documented and the gate is real" begin
+        # Julia binds a docstring to the NEXT expression and does NOT skip
+        # comments. Twelve comment lines and three consts once sat between this
+        # docstring and its function, so it was dropped with no warning and
+        # `?cleanup_minimap_split_temps` printed "No documentation found" --
+        # leaving the function that decides which files get DELETED with no
+        # written contract at all. `checkdocs = :none` means the docs build
+        # cannot catch it either.
+        doc = string(Base.Docs.doc(Mycelia.cleanup_minimap_split_temps))
+        Test.@test !occursin("No documentation found", doc)
+        Test.@test occursin("does not throw", doc)
+        Test.@test occursin("split_prefix", doc)
+
+        # The pre-run sweep in minimap_merge_map_and_split must stay gated on
+        # owning the output paths. The SHA1 in the default merged_bam is a
+        # CONTENT hash, so identical arguments give an identical split prefix;
+        # only the mktempdir() default separates concurrent runs, and a caller
+        # can override tmpdir -- benchmarking/15_round_trip_benchmark.jl does.
+        # Ungating this would make a run that was previously a total no-op
+        # unlink a live peer's chunks.
+        src = read(joinpath(dirname(dirname(@__DIR__)), "src",
+                "alignments-and-mapping.jl"), String)
+        Test.@test occursin("owns_output_paths = isnothing(tmpdir) && isnothing(merged_bam)",
+            src)
+        gate = findfirst(
+            "if owns_output_paths\n            cleanup_minimap_split_temps(split_prefix)",
+            src)
+        Test.@test gate !== nothing
+    end
+
     Test.@testset "pre-run sweep is wired at every call site" begin
         srcdir = joinpath(dirname(dirname(@__DIR__)), "src")
 

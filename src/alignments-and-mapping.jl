@@ -1294,28 +1294,6 @@ function minimap_split_prefix(outfile::AbstractString)
     return outfile * ".tmp"
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Remove the `PREFIX.NNNN.tmp` chunk files minimap2 leaves behind when a
-multi-part-index run is interrupted.
-
-`split_prefix` is the exact value passed to minimap2's `--split-prefix` (see
-[`minimap_split_prefix`](@ref)). Only files in `dirname(split_prefix)` whose
-names begin with `basename(split_prefix)` are considered; the search is not
-recursive, so it cannot escape the output directory.
-
-Returns `(; removed, bytes)` — the number of files removed and the total bytes
-reclaimed — so callers can log the reclaim rather than deleting silently.
-
-Safe against the sibling artifacts that share a stem: the output BAM
-`X.sorted.bam` does not start with `X.sorted.bam.tmp`, and samtools' own sort
-temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
-
-# Arguments
-- `split_prefix`: the `--split-prefix` value used for the run.
-- `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
-"""
 # Split prefixes with a minimap2 run currently in flight, plus the one-time exit
 # hook that sweeps them.
 #
@@ -1391,6 +1369,33 @@ function untrack_minimap_split_prefix(split_prefix::AbstractString)
     return nothing
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove the `PREFIX.NNNN.tmp` chunk files minimap2 leaves behind when a
+multi-part-index run is interrupted.
+
+`split_prefix` is the exact value passed to minimap2's `--split-prefix` (see
+[`minimap_split_prefix`](@ref)). Only files in `dirname(split_prefix)` whose
+names begin with `basename(split_prefix)` are considered; the search is not
+recursive, so it cannot escape the output directory.
+
+Returns `(; removed, bytes)` — the number of files removed and the total bytes
+reclaimed — so callers can log the reclaim rather than deleting silently.
+
+Safe against the sibling artifacts that share a stem: the output BAM
+`X.sorted.bam` does not start with `X.sorted.bam.tmp`, and samtools' own sort
+temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
+
+# Arguments
+- `split_prefix`: the `--split-prefix` value used for the run.
+- `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
+
+This function does not throw. Every operation that can fail -- `readdir`,
+`filesize`, `rm` -- is caught individually and downgraded to an `@warn`, so it
+is safe to call from a `finally` block, where a raised exception would REPLACE
+the one that got you there and hide the real cause of the failure.
+"""
 function cleanup_minimap_split_temps(
         split_prefix::AbstractString; verbose::Bool = true)
     dir = dirname(split_prefix)
@@ -2029,6 +2034,10 @@ function minimap_merge_map_and_split(;
     if !isempty(minimap_index)
         @assert isfile(minimap_index) "minimap_index supplied but not found: $minimap_index"
     end
+    # Captured BEFORE tmpdir/merged_bam are resolved: once they are concrete
+    # paths there is no way to tell an auto-derived one from a caller override,
+    # and that distinction is what makes the pre-run sweep safe.
+    owns_output_paths = isnothing(tmpdir) && isnothing(merged_bam)
     tmpdir = isnothing(tmpdir) ? mktempdir() : tmpdir
     mkpath(tmpdir)
     @assert read_id_strategy in (:uuid, :prefix)
@@ -2345,17 +2354,33 @@ function minimap_merge_map_and_split(;
         # is never rerun has no next attempt, which is exactly the case an
         # earlier version of this comment wrongly assumed away.
         #
-        # Safe to do unconditionally HERE specifically: `merged_bam` is either
-        # a caller override or SHA1-fingerprinted over the input FASTQ list,
-        # and the default tmpdir comes from `mktempdir()`, so two concurrent
-        # runs cannot share a split prefix. That reasoning does NOT transfer to
-        # every caller -- see the note in `merge_and_map_single_end_samples`.
+        # Gated on OWNING the output paths, not done unconditionally.
+        #
+        # The SHA1 in the default `merged_bam` is a CONTENT hash over the input
+        # FASTQ list, not a uniqueness token: identical arguments produce an
+        # identical path, and `split_prefix` is a pure function of it. The only
+        # thing that actually separates two concurrent runs is `tmpdir`
+        # defaulting to `mktempdir()` -- and a caller can override it.
+        # benchmarking/15_round_trip_benchmark.jl does exactly that at two call
+        # sites, passing a deterministic `map_tmpdir` under `readset_dir`.
+        #
+        # Hoisting the sweep above the branch created a NEW harm for that case:
+        # a run that would previously have been a total no-op (cached
+        # `merged_bam`, `force` unset -> straight to the resume branch) now
+        # unlinks a peer's live chunks first. minimap2 reopens every chunk BY
+        # NAME at merge time and aborts if one is missing, so the victim dies
+        # rather than silently degrading.
+        #
+        # Same class as the binning sweep's corrected premise: orphan-ness is
+        # not the safety condition, NON-COLLISION is.
         #
         # This also covers the resume branch below, which returns the cached
         # BAM without ever entering the try/finally -- so a run killed after
         # writing a nonempty merged_bam would otherwise strand its chunks
         # permanently, with no code path left that would ever reclaim them.
-        cleanup_minimap_split_temps(split_prefix)
+        if owns_output_paths
+            cleanup_minimap_split_temps(split_prefix)
+        end
 
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
