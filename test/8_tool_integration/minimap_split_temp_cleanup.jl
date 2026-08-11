@@ -10,11 +10,11 @@
 # them afterwards, since minimap2 cannot resume from them. A 2026-07 CAMI_I_LOW
 # run aborted this way and stranded 783 GiB on NERSC scratch.
 #
-# The first three testsets need no external tools -- they exercise the prefix
-# derivation and the reclaim helper against synthetic files -- so they run on the
-# default CI path. The fourth calls `minimap_map`, which invokes
-# `add_bioconda_env` before it builds any command string, and so self-gates
-# behind MYCELIA_RUN_EXTERNAL=true.
+# Four testsets run on the default CI path: they exercise the prefix
+# derivation, the reclaim helper against synthetic files, its idempotence, and
+# the structural wiring of the pre-run sweep at each call site. Two self-gate
+# behind MYCELIA_RUN_EXTERNAL=true, because both reach a command builder and
+# every builder calls `add_bioconda_env` before it assembles a string.
 #
 # Note what a `finally` alone CANNOT cover: SLURM sends SIGTERM then SIGKILL at
 # walltime, and Julia runs no `finally` on either -- it dies in the signal
@@ -166,10 +166,38 @@ Test.@testset "minimap2 split-index temp cleanup" begin
     Test.@testset "pre-run sweep is wired at every call site" begin
         srcdir = joinpath(dirname(dirname(@__DIR__)), "src")
 
+        # Line-anchored AND asserted unique. A bare substring marker is not
+        # enough: "    if run_mapping" also occurs inside
+        # "            if run_mapping && !isfile(index_file)" 180 lines earlier,
+        # so `findfirst` sliced from the wrong block and a sweep hoisted ABOVE
+        # `if run_mapping` still satisfied `sweep < branch`. That mutant --
+        # which would make the sweep fire on the command-generation-only path
+        # and unlink chunks belonging to a process running that same command --
+        # survived the whole suite until this was fixed.
+        # Plain substring counting, NOT a regex: `escape_string` escapes for a
+        # Julia string literal, so `Regex(escape_string("\n    if x\n"))` looks
+        # for a literal backslash-n and matches nothing. That mistake made this
+        # very assertion vacuous on its first run.
+        function count_occurrences(needle, haystack)
+            n = 0
+            i = firstindex(haystack)
+            while true
+                r = findnext(needle, haystack, i)
+                r === nothing && break
+                n += 1
+                i = first(r) + 1
+            end
+            return n
+        end
+
         function body_of(path, marker)
             text = read(joinpath(srcdir, path), String)
+            Test.@test count_occurrences(marker, text) == 1
             idx = findfirst(marker, text)
-            Test.@test idx !== nothing
+            if idx === nothing
+                Test.@test false  # clean failure, not a MethodError on first(nothing)
+                return ""
+            end
             return text[first(idx):end]
         end
 
@@ -177,7 +205,7 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         # resume/caching branch. Order is the whole point -- after the branch
         # it would never run on the cached path, which is where a run killed
         # post-output strands its chunks.
-        merge_body = body_of("alignments-and-mapping.jl", "    if run_mapping")
+        merge_body = body_of("alignments-and-mapping.jl", "\n    if run_mapping\n")
         sweep = findfirst("cleanup_minimap_split_temps(split_prefix)", merge_body)
         branch = findfirst("if nonempty_file(merged_bam)", merge_body)
         Test.@test sweep !== nothing
@@ -198,8 +226,13 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test seq_sweep !== nothing
         Test.@test first(seq_sweep) < first(findfirst("run(minimap_result.cmd)", seq_body))
 
-        # prepare_binning_test_inputs: unconditional, like the merge path --
-        # its inputs_dir comes from mktempdir(), so it cannot collide.
+        # prepare_binning_test_inputs: swept only when `outdir` was NOT
+        # supplied. Its bam name is fixed ("contigs.minimap2.sorted.bam"), so
+        # two concurrent calls sharing an explicit outdir derive one split
+        # prefix and an entry-time sweep would unlink a live peer's chunks.
+        # Orphan-ness is NOT the safety condition -- a peer's in-flight chunks
+        # are equally unresumable and equally match the predicate. Non-collision
+        # is the condition, and only the mktempdir() default guarantees it.
         util = read(joinpath(srcdir, "testing-utilities.jl"), String)
         u_sweep = findfirst(
             "Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)", util)
@@ -207,6 +240,12 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test u_sweep !== nothing
         Test.@test u_branch !== nothing
         Test.@test first(u_sweep) < first(u_branch)
+        # ...and that it is GATED on the default outdir. Ordering alone would
+        # still hold if someone removed the gate, which is the change that
+        # would let a shared explicit outdir delete a live peer's chunks.
+        u_gate = findfirst("if outdir === nothing\n        Mycelia.cleanup_minimap_split_temps",
+            util)
+        Test.@test u_gate !== nothing
     end
 
 
@@ -266,7 +305,7 @@ Test.@testset "minimap2 split-index temp cleanup" begin
     # Gated, because `minimap_map` calls `add_bioconda_env("minimap2")` and
     # `add_bioconda_env("samtools")` unconditionally BEFORE it builds any
     # command string -- so merely asking for a command needs a working conda.
-    # The three testsets above genuinely need no external tools, which is what
+    # The four ungated testsets above need no external tools, which is what
     # lets this file run on the default (MYCELIA_RUN_EXTERNAL=false) CI path
     # where the cleanup predicate is the part that actually matters.
     if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"

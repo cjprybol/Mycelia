@@ -1316,6 +1316,81 @@ temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
 - `split_prefix`: the `--split-prefix` value used for the run.
 - `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
 """
+# Split prefixes with a minimap2 run currently in flight, plus the one-time exit
+# hook that sweeps them.
+#
+# Why a registry rather than an `atexit` per call: `Base.atexit` pushes onto a
+# global vector with NO removal API, so a per-call hook accumulates without
+# bound. `benchmarking/15_round_trip_benchmark.jl` calls the mapping entry point
+# from a five-deep loop nest in one long-lived process, which would register
+# hundreds of hooks -- each doing an `isdir` + `readdir` of scratch at exit,
+# every one after the first a guaranteed no-op because the `finally` already
+# swept that prefix. That cost lands inside the very KillWait window the hook
+# exists to exploit, which is self-defeating at exactly the scale the 2026-07
+# incident happened at.
+const MINIMAP_ACTIVE_SPLIT_PREFIXES = Set{String}()
+const MINIMAP_SPLIT_PREFIX_LOCK = ReentrantLock()
+const MINIMAP_ATEXIT_REGISTERED = Ref(false)
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Register the process-wide exit hook that reclaims minimap2 split-index chunks
+for any run still in flight at shutdown. Idempotent; safe to call per mapping.
+
+Julia runs `atexit` hooks on SIGTERM but not on SIGKILL, and SLURM waits
+`KillWait` (30s by default) between the two, so this reclaims in-job during
+that grace window. Without it the only remaining cover is the next attempt --
+which never comes for a one-shot benchmark.
+"""
+function register_minimap_split_temp_atexit()
+    MINIMAP_ATEXIT_REGISTERED[] && return nothing
+    # `atexit` THROWS if the process is already exiting (Base initdefs.jl:
+    # "cannot register new atexit hook; already exiting."). That race is
+    # reachable here precisely because this is the shutdown path the feature
+    # targets, and this call sits outside the caller's try -- so an unguarded
+    # failure would replace the real shutdown cause with a registration error.
+    try
+        atexit() do
+            for prefix in lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+                collect(MINIMAP_ACTIVE_SPLIT_PREFIXES)
+            end
+                cleanup_minimap_split_temps(prefix)
+            end
+        end
+        MINIMAP_ATEXIT_REGISTERED[] = true
+    catch err
+        @warn "could not register minimap2 split-temp exit hook; " *
+              "relying on the pre-run sweep at the next attempt" exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Mark `split_prefix` as having a minimap2 run in flight, so the exit hook
+reclaims it if the process is terminated.
+"""
+function track_minimap_split_prefix(split_prefix::AbstractString)
+    lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+        push!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Drop `split_prefix` from the in-flight registry once its run has finished.
+"""
+function untrack_minimap_split_prefix(split_prefix::AbstractString)
+    lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+        delete!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
+    end
+    return nothing
+end
+
 function cleanup_minimap_split_temps(
         split_prefix::AbstractString; verbose::Bool = true)
     dir = dirname(split_prefix)
@@ -2285,12 +2360,19 @@ function minimap_merge_map_and_split(;
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
-            # Registered before the run so a SIGTERM at walltime reclaims
-            # in-job, inside SLURM's KillWait grace window, instead of
-            # deferring to a next attempt that may never happen. Idempotent
-            # with the pre-run sweep and the `finally` below: a second call on
-            # an already-swept prefix removes nothing.
-            atexit(() -> cleanup_minimap_split_temps(split_prefix; verbose = false))
+            # Tracked before the run so a SIGTERM at walltime reclaims in-job,
+            # inside SLURM's KillWait grace window, instead of deferring to a
+            # next attempt that may never happen. The hook is registered once
+            # per process and sweeps whatever is in flight; see the registry
+            # above for why this is not an `atexit` per call.
+            #
+            # Not silenced: on the pre-run and `finally` paths `removed` is
+            # normally 0, because minimap2 unlinks its own chunks on a clean
+            # exit, so those log nothing in practice. The exit hook is the only
+            # one that reclaims on the SIGTERM path -- the case that frees
+            # hundreds of GiB -- and an operator needs a record that it fired.
+            register_minimap_split_temp_atexit()
+            track_minimap_split_prefix(split_prefix)
             try
                 run(minimap_cmd)
             catch err
@@ -2332,6 +2414,7 @@ function minimap_merge_map_and_split(;
                 # throw. Wrapping it at one of three call sites would imply the
                 # opposite and invite someone to weaken those internal guards.
                 cleanup_minimap_split_temps(split_prefix)
+                untrack_minimap_split_prefix(split_prefix)
             end
         end
     end
