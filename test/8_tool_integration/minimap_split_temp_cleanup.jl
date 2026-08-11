@@ -147,6 +147,122 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test r.removed == 0
     end
 
+    # ------------------------------------------------------------------
+    # The PRE-RUN sweep at each call site.
+    #
+    # This is the half of the fix that actually covers the incident: a
+    # `finally` never runs on SIGTERM or SIGKILL, so the reclaim has to happen
+    # either in an `atexit` hook (SIGTERM only, inside SLURM's KillWait window)
+    # or at the START of the next attempt. Until these tests existed, deleting
+    # all three pre-run sweep calls left the entire suite green -- the primary
+    # fix was reverted and nothing noticed.
+    #
+    # Structural rather than behavioural, and deliberately so: reaching the
+    # sweep through any of the three entry points requires a command builder,
+    # and every builder calls `add_bioconda_env` before it assembles a string.
+    # A behavioural version lives below behind the external gate. These run on
+    # the default CI path so that DELETING a sweep call cannot pass unnoticed,
+    # which is the specific regression worth guarding.
+    Test.@testset "pre-run sweep is wired at every call site" begin
+        srcdir = joinpath(dirname(dirname(@__DIR__)), "src")
+
+        function body_of(path, marker)
+            text = read(joinpath(srcdir, path), String)
+            idx = findfirst(marker, text)
+            Test.@test idx !== nothing
+            return text[first(idx):end]
+        end
+
+        # minimap_merge_map_and_split: swept unconditionally, BEFORE the
+        # resume/caching branch. Order is the whole point -- after the branch
+        # it would never run on the cached path, which is where a run killed
+        # post-output strands its chunks.
+        merge_body = body_of("alignments-and-mapping.jl", "    if run_mapping")
+        sweep = findfirst("cleanup_minimap_split_temps(split_prefix)", merge_body)
+        branch = findfirst("if nonempty_file(merged_bam)", merge_body)
+        Test.@test sweep !== nothing
+        Test.@test branch !== nothing
+        Test.@test first(sweep) < first(branch)
+
+        # merge_and_map_single_end_samples is the deliberate ASYMMETRY: its
+        # sweep sits INSIDE the branch, not before it. `outbase` defaults to a
+        # date-only string, so two same-day runs in one CWD share a split
+        # prefix, and an entry-time sweep would delete a live peer's chunks --
+        # trading a recoverable leak for unrecoverable truncated output. If
+        # someone "fixes the inconsistency" by hoisting this call, that is a
+        # correctness regression, and this assertion is what catches it.
+        seq_body = body_of("sequence-comparison.jl",
+            "    if !isfile(minimap_result.outfile)")
+        seq_sweep = findfirst(
+            "Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)", seq_body)
+        Test.@test seq_sweep !== nothing
+        Test.@test first(seq_sweep) < first(findfirst("run(minimap_result.cmd)", seq_body))
+
+        # prepare_binning_test_inputs: unconditional, like the merge path --
+        # its inputs_dir comes from mktempdir(), so it cannot collide.
+        util = read(joinpath(srcdir, "testing-utilities.jl"), String)
+        u_sweep = findfirst(
+            "Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)", util)
+        u_branch = findfirst("if !isfile(mapping.outfile)", util)
+        Test.@test u_sweep !== nothing
+        Test.@test u_branch !== nothing
+        Test.@test first(u_sweep) < first(u_branch)
+    end
+
+
+    # Behavioural counterpart to the structural testset above. Gated for the
+    # same reason the builder testset is: the entry point needs a command
+    # builder, and every builder calls `add_bioconda_env` first.
+    #
+    # `run_mapping = true` is what reaches the sweep; a pre-existing nonempty
+    # `merged_bam` then sends execution down the resume branch, which never
+    # invokes minimap2. So this observes the real sweep, at the real call site,
+    # without needing minimap2 to run.
+    if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+        Test.@testset "pre-run sweep reclaims on the resume path" begin
+            mktempdir() do dir
+                ref = joinpath(dir, "ref.fa")
+                write(ref, ">ref\n" * "ACGT"^500 * "\n")
+                fq = joinpath(dir, "reads.fq")
+                write(fq, join(["@r$i\nACGT\n+\nIIII\n" for i in 1:100]))
+
+                merged = joinpath(dir, "merged.sorted.bam")
+                write(merged, "nonempty, so the resume branch is taken")
+
+                prefix = Mycelia.minimap_split_prefix(merged)
+                chunks = [string(prefix, ".", lpad(i, 4, '0'), ".tmp") for i in 0:1]
+                for c in chunks
+                    write(c, rand(UInt8, 2048))
+                end
+                # Must survive: right stem, wrong shape.
+                survivor = string(prefix, ".notanumber.tmp")
+                write(survivor, "keep")
+
+                Mycelia.minimap_merge_map_and_split(
+                    reference_fasta = ref,
+                    mapping_type = "sr",
+                    single_end_fastqs = [fq],
+                    outdir = dir,
+                    tmpdir = dir,
+                    merged_bam = merged,
+                    run_mapping = true,
+                    run_splitting = false,
+                    gzip_prefixed_fastqs = false
+                )
+
+                for c in chunks
+                    Test.@test !isfile(c)
+                end
+                Test.@test isfile(survivor)
+                # The cached BAM must be left exactly as found -- the sweep
+                # reclaims orphans, it does not invalidate the resume.
+                Test.@test isfile(merged)
+                Test.@test read(merged, String) ==
+                          "nonempty, so the resume branch is taken"
+            end
+        end
+    end
+
     # Gated, because `minimap_map` calls `add_bioconda_env("minimap2")` and
     # `add_bioconda_env("samtools")` unconditionally BEFORE it builds any
     # command string -- so merely asking for a command needs a working conda.
