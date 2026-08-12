@@ -164,6 +164,33 @@ Test.@testset "minimap2 split-index temp cleanup" begin
     # the default CI path so that DELETING a sweep call cannot pass unnoticed,
     # which is the specific regression worth guarding.
 
+    Test.@testset "cleanup cannot throw, including on an unreadable parent" begin
+        # The no-throw contract is what lets all three call sites invoke this
+        # from a `finally` with no wrapper. It was false until now: `isdir` sat
+        # ABOVE the try, and Julia's `stat` re-raises on every errno except
+        # ENOENT/ENOTDIR/EINVAL, so an unreadable parent threw an IOError that
+        # would REPLACE the mapping exception -- and, from the atexit hook,
+        # would fail an otherwise successful job at shutdown.
+        mktempdir() do root
+            locked = joinpath(root, "locked")
+            mkpath(locked)
+            chmod(locked, 0o000)
+            try
+                # NB: calling `Base.isdir` on a path under `locked` would itself
+                # throw here -- that IS the defect under test, so it must not
+                # appear in the test's own setup.
+                r = Mycelia.cleanup_minimap_split_temps(
+                    joinpath(locked, "sub", "out.bam.tmp"); verbose = false)
+                Test.@test r.removed == 0
+                Test.@test r.bytes == 0
+            catch err
+                Test.@test false  # any throw at all violates the contract
+            finally
+                chmod(locked, 0o755)
+            end
+        end
+    end
+
     Test.@testset "the delete contract is documented and the gate is real" begin
         # Julia binds a docstring to the NEXT expression and does NOT skip
         # comments. Twelve comment lines and three consts once sat between this

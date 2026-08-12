@@ -1403,21 +1403,27 @@ function cleanup_minimap_split_temps(
     base = basename(split_prefix)
     removed = 0
     bytes = 0
-    Base.isdir(dir) || return (; removed, bytes)
     # This function is called from `finally` blocks, where a raised exception
     # REPLACES the one that got us there -- so a cleanup failure would swap a
-    # diagnosable mapping error for a confusing cleanup error. `isdir` above
-    # only rules out nonexistence, not EACCES, nor an EIO on a Lustre/GPFS
-    # mount that has gone away -- which is exactly the condition most likely to
-    # have caused the mapping failure in the first place. Guarding here rather
-    # than at each call site means the function cannot throw at all, so no
-    # caller has to remember to wrap it. Reclaiming disk is never worth losing
-    # the reason the run failed.
+    # diagnosable mapping error for a confusing cleanup error. Guarding here
+    # rather than at each call site means no caller has to remember to wrap it.
+    # Reclaiming disk is never worth losing the reason the run failed.
+    #
+    # `isdir` is INSIDE the try. Julia's `stat` re-raises for every errno except
+    # ENOENT/ENOTDIR/EINVAL, so `isdir` throws an IOError on EACCES, EIO, ELOOP
+    # and ENAMETOOLONG -- measured on 1.10.10 against a chmod-000 parent. An
+    # earlier version put it one line above the try while the comment named
+    # EACCES as the case it was guarding, which left the no-throw contract
+    # false in exactly the Lustre/GPFS-went-away scenario most likely to have
+    # caused the mapping failure in the first place. The same call is made from
+    # the atexit hook, where an escaping IOError makes Julia print
+    # `error during exit hooks` and exit nonzero -- turning a successful SLURM
+    # job into a failed one on the shutdown path the hook exists to serve.
     entries = try
-        readdir(dir; join = true)
+        Base.isdir(dir) ? readdir(dir; join = true) : String[]
     catch err
         @warn "could not list directory for minimap2 split-temp cleanup" dir exception = err
-        return (; removed, bytes)
+        String[]
     end
     for path in entries
         name = basename(path)
