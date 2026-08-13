@@ -27,13 +27,42 @@ const VITERBI_ACCURACY_FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "viterbi_acc
 const VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "viterbi_accuracy_b8"
 )
+# k-stamped sibling of the default, used whenever k is not the historical 11 so
+# a k=9 run cannot silently overwrite the committed k=11 artifacts.
+function _viterbi_accuracy_default_output_dir(k::Integer)::String
+    return k == 11 ? VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR :
+           joinpath(@__DIR__, "results", "viterbi_accuracy_b8_k$(k)")
+end
 # PRIME k (was 9 = 3x3, the worst period-3 case). A composite k aliases
 # period-p tandem repeats onto self-overlapping k-mers, which can make single-k
 # correction look either trivially perfect or pathologically wrong; a prime k
 # breaks that periodicity. Matches the prime-only k progression the iterative
 # corrector uses (find_initial_k draws from Primes.primes; build_k_ladder and
 # next_prime_k snap to primes).
-const VITERBI_ACCURACY_K = 11
+#
+# k is selectable so the accuracy arm and its controls can be produced at the
+# SAME k. They diverged once -- the committed accuracy table was k=9 while the
+# over-correction and null tables were k=11 -- which made the controls describe
+# a different graph from the result they were reported against. Selecting k per
+# run, and stamping it into the run id and default output directory, means two
+# parameterizations can no longer overwrite or be mistaken for each other.
+#
+# This stays a `const`: Kmers.RNAKmer{K} / DNAKmer{K} take K as a TYPE
+# parameter, so it must be resolved at load time. Reading argv/ENV here keeps
+# that property while making the value selectable per process.
+function _viterbi_accuracy_k_at_load()::Int
+    index = findfirst(==("--k"), ARGS)
+    if !isnothing(index) && index < length(ARGS)
+        return parse(Int, ARGS[index + 1])
+    end
+    inline = findfirst(argument -> startswith(argument, "--k="), ARGS)
+    if !isnothing(inline)
+        return parse(Int, split(ARGS[inline], "="; limit = 2)[2])
+    end
+    return parse(Int, get(ENV, "VITERBI_ACCURACY_K", "11"))
+end
+
+const VITERBI_ACCURACY_K = _viterbi_accuracy_k_at_load()
 
 struct ViterbiAccuracyFixture
     dataset_id::String
@@ -46,7 +75,9 @@ struct ViterbiAccuracyFixture
 end
 
 function main(args::Vector{String} = ARGS)::Nothing
-    output_dir = _viterbi_accuracy_arg_value(args, "--output-dir", VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR)
+    output_dir = _viterbi_accuracy_arg_value(
+        args, "--output-dir", _viterbi_accuracy_default_output_dir(VITERBI_ACCURACY_K)
+    )
     write_plots = !("--skip-plots" in args)
     artifacts = run_viterbi_accuracy_benchmark(output_dir; write_plots = write_plots)
     println("Wrote B8 Viterbi accuracy benchmark artifacts:")
@@ -58,7 +89,7 @@ function main(args::Vector{String} = ARGS)::Nothing
 end
 
 function run_viterbi_accuracy_benchmark(
-        output_dir::AbstractString = VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR;
+        output_dir::AbstractString = _viterbi_accuracy_default_output_dir(VITERBI_ACCURACY_K);
         write_plots::Bool = true
 )::NamedTuple
     fixtures = viterbi_accuracy_fixtures()
@@ -86,6 +117,14 @@ function run_viterbi_accuracy_benchmark(
     overcorrection = DataFrames.DataFrame(overcorrection_rows)
     null_control = DataFrames.DataFrame(null_rows)
 
+    # Stamp k into every row. The sidecar provenance JSON already records it,
+    # but three independent readers reconstructed k by dividing position counts
+    # by observation counts because they read the .csv and never opened the
+    # sidecar beside it. A column costs nothing and removes the inference.
+    for table in (summary, overcorrection, null_control)
+        table[!, :benchmark_k] = fill(VITERBI_ACCURACY_K, DataFrames.nrow(table))
+    end
+
     artifacts = write_benchmark_artifacts(
         [
             "viterbi_accuracy_summary" => summary,
@@ -93,11 +132,15 @@ function run_viterbi_accuracy_benchmark(
             "viterbi_null_control_summary" => null_control
         ];
         output_dir = output_dir,
-        run_id = "b8_viterbi_accuracy_local_20260625",
+        # The run id carries k. Both the k=9 and k=11 arms previously shared
+        # "b8_viterbi_accuracy_local_20260625", so the id could not distinguish
+        # two parameterizations that disagree row-for-row.
+        run_id = "b8_viterbi_accuracy_local_20260625_k$(VITERBI_ACCURACY_K)",
         scale = "local-smoke",
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
         command_args = [
-            "julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl"],
+            "julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl",
+            "--k", string(VITERBI_ACCURACY_K)],
         metadata = Dict(
             "bead" => "td-he0z.9",
             "benchmark" => "generalized_viterbi_accuracy_vs_error_rate",
@@ -105,6 +148,8 @@ function run_viterbi_accuracy_benchmark(
             "error_rates" => collect(VITERBI_ACCURACY_ERROR_RATES),
             "fixture_dir" => relpath(VITERBI_ACCURACY_FIXTURE_DIR, @__DIR__),
             "unit" => "fixed-length $(VITERBI_ACCURACY_K)-mers/ngrams",
+            # k as a first-class field, not only embedded in the unit string.
+            "k" => VITERBI_ACCURACY_K,
             "controls" => Dict(
                 "over_correction_uncorrupted" => "corrector run on uncorrupted truth; any edit is a false positive",
                 "shuffled_weight_null" => "edge weights permuted (seed $(VITERBI_NULL_SEED)); topology/emission held fixed",
