@@ -1,0 +1,4 @@
+chemistry	coverage	seed	n_reads	decoder_decisions_depend_on_quality	max_reads_differing_from_oracle	n_conditions_failed	end_to_end_assemblies_identical	end_to_end_quality_reached_graph	end_to_end_decoder_ever_ran	end_to_end_max_decode_fraction	end_to_end_skip_fraction
+illumina	10	42	360	true	1	0	true	true	true	0.0583	[1.0, 0.9416666666666667, 0.9833333333333333, 0.9861111111111112]
+pacbio	10	42	27	true	24	0	true	true	false	0.0	[1.0, 1.0, 1.0, 1.0]
+ont	10	42	18	true	18	0	true	true	false	0.0	[1.0, 1.0, 1.0, 1.0]

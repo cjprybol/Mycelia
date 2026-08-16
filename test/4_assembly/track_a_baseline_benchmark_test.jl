@@ -46,15 +46,62 @@ Test.@testset "track A baseline benchmark helpers" begin
     # Interpolating k unconditionally renamed the default k=31 cells, orphaning the
     # 288 Lovelace + 144 LRC checkpoints written before --k existed and silently
     # converting the wrappers' "re-submit to resume" into a full recompute.
+    # Both id keywords are passed explicitly. They default to process-wide consts read
+    # from ARGS, so a suite that relied on the defaults would assert something different
+    # depending on how the runner was invoked — `--traversal-weighting quality` made
+    # these two assertions fail while the code was behaving exactly as designed.
     Test.@testset "cell_id is backward compatible at default k" begin
-        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer"; k = 31) ==
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "evidence") ==
                    "Lambda__ont__10x__seed42__kmer"
         # A non-default k must still be distinguishable, or two sweeps collide on one
         # checkpoint and the second silently republishes the first's result.
-        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer"; k = 19) ==
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 19, traversal_weighting = "evidence") ==
                    "Lambda__ont__10x__seed42__kmer__k19"
-        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer"; k = 19) !=
-                   cell_id_for("Lambda", "ont", 10, 42, "kmer"; k = 31)
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 19, traversal_weighting = "evidence") !=
+                   cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "evidence")
+    end
+
+    # --- --traversal-weighting namespaces the same way --------------------------
+    # The header used to tell users to "pass traversal_weighting=:quality", which no
+    # invocation of this script could do — the assemble call took no such keyword and
+    # the CLI exposed no option (PR #453 review). Now that it does, a :quality run must
+    # not be able to resume, republish, or be pooled with the :evidence baseline.
+    Test.@testset "traversal weighting namespaces the cell id" begin
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "evidence") ==
+                   "Lambda__ont__10x__seed42__kmer"
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "quality") ==
+                   "Lambda__ont__10x__seed42__kmer__wquality"
+        # Composes with --k rather than replacing it.
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 19, traversal_weighting = "quality") ==
+                   "Lambda__ont__10x__seed42__kmer__k19__wquality"
+        Test.@test cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "quality") !=
+                   cell_id_for("Lambda", "ont", 10, 42, "kmer";
+            k = 31, traversal_weighting = "evidence")
+
+        # The weighting reaches the row, so a mixed tree can be split downstream. A
+        # namespaced checkpoint alone would keep the two runs from overwriting each
+        # other while still letting write_power_analysis pool them into one CV.
+        Test.@test :traversal_weighting in ROW_KEYS
+        Test.@test error_row(
+            "Lambda", "NC_001416", "ont", 10, 42, "kmer").traversal_weighting in TRAVERSAL_WEIGHTINGS
+
+        # A pre-option checkpoint has no such key. "evidence" is not a guess there: the
+        # keyword had no CLI surface when those cells were written.
+        legacy = Dict("organism" => "Lambda", "accession" => "NC_001416",
+            "technology" => "ont", "coverage" => 10, "seed" => 42,
+            "decoder_arm" => "kmer", "k" => 31, "n_reads" => 100, "n_contigs" => 1,
+            "NGA50" => 0.0, "misassemblies" => 0.0, "genome_fraction" => 0.0,
+            "duplication_ratio" => 0.0, "largest_contig" => 0, "wall_seconds" => 1.0,
+            "peak_rss_bytes" => 0, "status" => "ok")
+        Test.@test canonical(legacy).traversal_weighting == "evidence"
     end
 
     # --- Resume tolerance is provenance-only ------------------------------------
