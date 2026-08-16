@@ -30,7 +30,12 @@ Test.@testset "Aqua.jl" begin
         deps_compat = false,
         # BenchmarkTools is used by repo-level benchmarking scripts outside
         # the Mycelia module, so it is intentionally not loaded by the package.
-        stale_deps = (ignore = [:BenchmarkTools],),
+        #
+        # XML is a direct dep ONLY so that [compat] can pin the transitive
+        # XLSX -> XML resolution away from 0.4.5, which breaks XLSX's
+        # precompilation. Mycelia never imports it, so Aqua would otherwise
+        # correctly flag it as stale. Remove this entry together with the pin.
+        stale_deps = (ignore = [:BenchmarkTools, :XML],),
         # persistent_tasks test fails due to background tasks spawned by dependencies
         # (e.g., HTTP.jl, Makie.jl, etc.) during package loading - not a Mycelia issue
         persistent_tasks = false

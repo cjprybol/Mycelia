@@ -81,6 +81,7 @@ UMAP = "c4f8c510-2410-5be4-91d7-4fbaeb39457e"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 XAM = "d759349c-bcba-11e9-07c2-5b90f8f05f7c"
 XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
+XML = "72c71f33-b9b6-44de-8c94-c961784809e2"
 XMLDict = "228000da-037f-5747-90a9-8195ccbf91a5"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
@@ -98,6 +99,26 @@ MyceliaKernelAbstractionsExt = "KernelAbstractions"
 Aqua = "0.8"
 KernelAbstractions = "0.9"
 UMAP = "0.1.11"
+# TRANSITIVE PIN, not a dependency we use. Mycelia never imports XML; it is
+# declared as a direct dep solely so this bound can constrain the XLSX -> XML
+# resolution.
+#
+# XML 0.4.5 (published 2026-08-13) replaced LazyNode child iteration with a
+# shared mutable cursor. XLSX's _collect_row_nodes retains child LazyNodes
+# across iteration, so under 0.4.5 it raises
+# "XLSXError: No `sheetData` node found in worksheet" from inside XLSX's own
+# @compile_workload -- i.e. XLSX fails to PRECOMPILE, which cascades to
+# FileIOExt and to Mycelia itself. XLSX 0.12.2 is the newest release and
+# declares XML = "0.4.4", which under Julia's caret default admits 0.4.5, so
+# the resolver picks up the breaking change automatically. Upstream states the
+# problem in XML.jl issue #124.
+#
+# This must be `=0.4.4`, NOT `~0.4.4`: Julia's tilde means [0.4.4, 0.5.0), which
+# still admits 0.4.5. Measured on Julia 1.10.11 with XLSX pinned to 0.12.2 --
+# XML 0.4.4 precompiles, XML 0.4.5 fails.
+#
+# Remove once XLSX ships a release that iterates defensively.
+XML = "=0.4.4"
 julia = "1.10"
 
 [extras]
