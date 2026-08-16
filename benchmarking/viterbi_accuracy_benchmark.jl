@@ -113,6 +113,20 @@ end
 # record a `command_args` provenance line reading `--k 11` — a command line the
 # operator never typed, asserting an explicit request that was never made.
 function _viterbi_accuracy_k_from_args(args)
+    # A repeated --k must ERROR rather than resolve. `findfirst` below is
+    # first-wins, which inverts the usual last-wins CLI convention: a wrapper
+    # appending `--k $K` to a base command that already carries `--k 11` would
+    # silently run at 11 and discard the caller's value, then record a
+    # single-flag command line that was never typed. Counting both spellings
+    # also removes the form-dependent precedence (`--k=9 --k 13` and
+    # `--k 13 --k=9` both resolved to 13, because the flag form was consulted
+    # first regardless of position).
+    selections = count(
+        argument -> argument == "--k" || startswith(argument, "--k="), args)
+    selections > 1 && error(
+        "--k was given $(selections) times. Refusing to guess which one is " *
+        "authoritative: k selects the fixtures, the run id, the output " *
+        "directory and the recorded command line. Pass it exactly once.")
     index = findfirst(==("--k"), args)
     if !isnothing(index)
         index == lastindex(args) && error(
@@ -897,16 +911,54 @@ function _viterbi_accuracy_command_args()::Vector{String}
     return base
 end
 
+# Value-taking flags other than --k. This is held to the SAME standard as the
+# k parser above, because the argument for strictness there applies here
+# unchanged and the two live in one file.
+#
+# The previous version returned the default on a bare trailing flag and did no
+# validation at all on the value. Three measured failures, all reachable from
+# ordinary shell quoting accidents:
+#
+#   --output-dir                 -> silently the default directory
+#   --output-dir ""              -> abspath("") is the CWD, so the artifact
+#                                   tree (tables/, plots/, logs/, provenance/,
+#                                   artifact-index.json) was created in the
+#                                   REPO ROOT for the documented invocation
+#   --output-dir --skip-plots    -> the next flag consumed as a path, and
+#                                   --skip-plots silently not applied
+#
+# The empty-value case is the one worth naming: unquoted `--output-dir $DIR`
+# with DIR unset drops the word and gives case 1, quoted `--output-dir "$DIR"`
+# gives case 2. Both look like a normal run.
+function _viterbi_accuracy_require_flag_value(
+        args::Vector{String},
+        flag::AbstractString
+)::String
+    index = findfirst(==(flag), args)
+    isnothing(index) && return ""
+    index == lastindex(args) && error(
+        "$(flag) requires a value (got a bare trailing $(flag)). Refusing to " *
+        "fall back to the default: a silent fallback writes a complete, " *
+        "normal-looking run somewhere the operator did not ask for.")
+    value = args[index + 1]
+    isempty(strip(value)) && error(
+        "$(flag) was given an empty value. Refusing to continue: an empty " *
+        "path resolves to the current working directory, which for the " *
+        "documented invocation is the repository root.")
+    startswith(value, "--") && error(
+        "$(flag) was given $(repr(value)), which is another flag. Refusing to " *
+        "treat a flag as this flag's value; that would also drop " *
+        "$(repr(value)) silently.")
+    return value
+end
+
 function _viterbi_accuracy_arg_value(
         args::Vector{String},
         flag::AbstractString,
         default::AbstractString
 )::String
-    index = findfirst(==(flag), args)
-    if isnothing(index) || index == length(args)
-        return string(default)
-    end
-    return args[index + 1]
+    value = _viterbi_accuracy_require_flag_value(args, flag)
+    return isempty(value) ? string(default) : value
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

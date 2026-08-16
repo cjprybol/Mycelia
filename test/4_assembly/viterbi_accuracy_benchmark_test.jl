@@ -13,12 +13,29 @@ import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "viterbi_accuracy_benchmark.jl"))
 
+# AMBIENT-ENVIRONMENT GUARD -- TERMINAL, and deliberately not a `Test.@test`.
+#
+# k is bound at load time from this process's argv/ENV, so an exported
+# VITERBI_ACCURACY_K (or a stray --k on the test runner's command line) would
+# silently change WHICH parameterization this suite measures while every
+# assertion below still passed. This suite asserts the k=11 numbers.
+#
+# It must ERROR rather than record a failure, because a `Test.@test` is
+# advisory: execution continues past it. The `main()` refusal testset below
+# asserts that `main(["--k", "9", ...])` throws -- which it does only when 9
+# disagrees with the load-time k. Under an exported VITERBI_ACCURACY_K=9 the
+# disagreement vanishes, no error is raised, and `main` falls through to TWO
+# full B8 executions that write into benchmarking/results/ inside the repo. A
+# guard whose downstream consumer depends on it being enforcing cannot be
+# fail-open, so this runs before any testset and stops the file.
+VITERBI_ACCURACY_K == 11 || error(
+    "This suite asserts the k=11 numbers but loaded k=$(VITERBI_ACCURACY_K) " *
+    "(source: $(VITERBI_ACCURACY_K_SOURCE)). Refusing to run: the assertions " *
+    "below would measure a different parameterization, and the main() refusal " *
+    "test would execute the benchmark instead of throwing. Unset " *
+    "VITERBI_ACCURACY_K and remove any --k from the test command line.")
+
 Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
-    # AMBIENT-ENVIRONMENT GUARD. k is bound at load time from this process's
-    # argv/ENV, so an exported VITERBI_ACCURACY_K (or a stray --k on the test
-    # runner's command line) would silently change WHICH parameterization this
-    # suite measures while every assertion below still passed. Pin it: this
-    # testset asserts the k=11 numbers, so it must be running at k=11.
     Test.@test VITERBI_ACCURACY_K == 11
     Test.@test VITERBI_ACCURACY_K_SOURCE == "default"
 
@@ -150,6 +167,46 @@ Test.@testset "k selection is validated, never silently defaulted" begin
         String[], Dict("VITERBI_ACCURACY_K" => "abc"))
     Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
         String[], Dict("VITERBI_ACCURACY_K" => "0"))
+    # Empty INLINE form -- what unquoted `--k=$K` produces with K unset.
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+        ["--k="], Dict{String, String}())
+    # A REPEATED --k must error rather than resolve. Left unguarded this is
+    # first-wins, so a wrapper appending --k to a command that already carries
+    # one would silently discard the caller's value and then record a
+    # single-flag command line that was never typed. Both spellings count, in
+    # every combination, because precedence was previously form-dependent
+    # rather than positional.
+    for duplicate in (
+        ["--k", "9", "--k", "13"],
+        ["--k=9", "--k=13"],
+        ["--k=9", "--k", "13"],
+        ["--k", "13", "--k=9"])
+        Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+            duplicate, Dict{String, String}())
+    end
+end
+
+Test.@testset "value-taking flags are validated, never silently defaulted" begin
+    # --output-dir is held to the same standard as --k. Each case below was
+    # measured against the previous implementation and silently succeeded:
+    # a bare trailing flag fell back to the default directory, an empty value
+    # resolved through abspath("") to the CWD (the repository root for the
+    # documented invocation), and a following flag was consumed as the path
+    # while itself being dropped.
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--skip-plots", "--output-dir"], "--output-dir", "/tmp/fallback")
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--output-dir", ""], "--output-dir", "/tmp/fallback")
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--output-dir", "   "], "--output-dir", "/tmp/fallback")
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--output-dir", "--skip-plots"], "--output-dir", "/tmp/fallback")
+    # Absent flag still yields the default; a real value is returned verbatim.
+    Test.@test _viterbi_accuracy_arg_value(
+        ["--skip-plots"], "--output-dir", "/tmp/fallback") == "/tmp/fallback"
+    Test.@test _viterbi_accuracy_arg_value(
+        ["--output-dir", "/tmp/real"], "--output-dir", "/tmp/fallback") ==
+               "/tmp/real"
 end
 
 Test.@testset "default output directory is k-stamped unconditionally" begin
