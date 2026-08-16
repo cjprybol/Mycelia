@@ -14,6 +14,14 @@ import Test
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "viterbi_accuracy_benchmark.jl"))
 
 Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
+    # AMBIENT-ENVIRONMENT GUARD. k is bound at load time from this process's
+    # argv/ENV, so an exported VITERBI_ACCURACY_K (or a stray --k on the test
+    # runner's command line) would silently change WHICH parameterization this
+    # suite measures while every assertion below still passed. Pin it: this
+    # testset asserts the k=11 numbers, so it must be running at k=11.
+    Test.@test VITERBI_ACCURACY_K == 11
+    Test.@test VITERBI_ACCURACY_K_SOURCE == "default"
+
     output_dir = mktempdir(prefix = "viterbi_accuracy_b8_test_")
     artifacts = run_viterbi_accuracy_benchmark(output_dir; write_plots = false)
     summary = CSV.read(artifacts.summary_csv, DataFrames.DataFrame)
@@ -31,6 +39,16 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
     Test.@test isfile(artifacts.index)
     Test.@test isfile(artifacts.provenance)
 
+    # k is stamped into the emitted rows and into the run id, so a reader of the
+    # .csv alone (the manuscript repo reads a hand-copied .csv, not the sidecar)
+    # can tell which parameterization produced it. Asserted against the LITERAL
+    # 11, never against VITERBI_ACCURACY_K — comparing the column to the constant
+    # that filled it is self-referential and would pass at any k, including a k
+    # inherited from an ambient environment variable.
+    Test.@test "benchmark_k" in DataFrames.names(summary)
+    Test.@test all(summary.benchmark_k .== 11)
+    Test.@test all(endswith.(summary.benchmark_run_id, "_k11"))
+
     # Control A — over-correction on un-corrupted input.
     overcorrection = CSV.read(artifacts.overcorrection_csv, DataFrames.DataFrame)
     Test.@test artifacts.overcorrection_rows == 9
@@ -38,6 +56,8 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
     Test.@test all(overcorrection.injected_error_count .== 0)
     Test.@test all(overcorrection.over_correction_edit_distance .>= 0)
     Test.@test all(0.0 .<= overcorrection.over_correction_rate .<= 1.0)
+    Test.@test "benchmark_k" in DataFrames.names(overcorrection)
+    Test.@test all(overcorrection.benchmark_k .== 11)
     # Cross-field accounting invariant: a row has zero changed observations iff it
     # has zero over-correction edit distance. Exercises the numerator logic even
     # though every observed row is the (expected) zero case — a mis-indexed or
@@ -55,6 +75,8 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
     Test.@test artifacts.null_control_rows == 9
     Test.@test DataFrames.nrow(null_control) == 9
     Test.@test all(null_control.null_seed .== 20260711)
+    Test.@test "benchmark_k" in DataFrames.names(null_control)
+    Test.@test all(null_control.benchmark_k .== 11)
     for col in (:real_injected_error_recall, :weight_null_injected_error_recall,
         :rewire_null_injected_error_recall)
         Test.@test all(0.0 .<= null_control[!, col] .<= 1.0)
@@ -78,6 +100,96 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
     # the portable "null <= real" invariant above carries over unchanged.
     Test.@test Statistics.mean(null_control.rewire_null_injected_error_recall) == 0.0
     Test.@test all(.!null_control.rewire_null_decoded)
+end
+
+Test.@testset "k selection is validated, never silently defaulted" begin
+    # The parser takes `args`/`env` as parameters precisely so these rules can be
+    # exercised without launching a process. Every case below is a wrong-answer
+    # path, not a usability nicety: k selects the fixtures, the run id, the output
+    # directory and the recorded command line, so a silent fallback publishes one
+    # parameterization's numbers under another's identity.
+    no_env = Dict{String, String}()
+
+    # Value forms resolve, and report which form won.
+    Test.@test _viterbi_accuracy_k_at_load(["--k", "13"], no_env) == 13
+    Test.@test _viterbi_accuracy_k_at_load(["--k=13"], no_env) == 13
+    Test.@test _viterbi_accuracy_resolve_k(["--k", "13"], no_env).source == "--k"
+    Test.@test _viterbi_accuracy_resolve_k(["--k=13"], no_env).source == "--k="
+
+    # A bare trailing `--k` must ERROR. The realistic trigger is an unquoted
+    # `--k $K` with K unset: the empty word disappears and `--k` lands last.
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k"], no_env)
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+        ["--output-dir", "/tmp/b8", "--skip-plots", "--k"], no_env)
+
+    # Non-integer and out-of-range values error rather than defaulting.
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "abc"], no_env)
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "0"], no_env)
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "-3"], no_env)
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k=abc"], no_env)
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k=0"], no_env)
+    # `--k` followed by the NEXT flag is a missing value, not a value of "--skip-plots".
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "--skip-plots"], no_env)
+
+    # No selection at all is the only path to the default.
+    Test.@test _viterbi_accuracy_k_at_load(String[], no_env) == 11
+    Test.@test _viterbi_accuracy_resolve_k(String[], no_env).source == "default"
+    Test.@test _viterbi_accuracy_k_at_load(["--skip-plots"], no_env) == 11
+
+    # Environment variable: honoured, validated, and outranked by the flag.
+    Test.@test _viterbi_accuracy_k_at_load(String[], Dict("VITERBI_ACCURACY_K" => "9")) == 9
+    Test.@test _viterbi_accuracy_resolve_k(
+        String[], Dict("VITERBI_ACCURACY_K" => "9")).source == "VITERBI_ACCURACY_K"
+    Test.@test _viterbi_accuracy_k_at_load(
+        ["--k", "13"], Dict("VITERBI_ACCURACY_K" => "9")) == 13
+    # SET BUT EMPTY is an explicit selection of "", not the default path — the
+    # form an unset shell variable produces under `VITERBI_ACCURACY_K="$K"`.
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+        String[], Dict("VITERBI_ACCURACY_K" => ""))
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+        String[], Dict("VITERBI_ACCURACY_K" => "abc"))
+    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
+        String[], Dict("VITERBI_ACCURACY_K" => "0"))
+end
+
+Test.@testset "default output directory is k-stamped unconditionally" begin
+    # Every k gets its own tree, INCLUDING the default 11. The earlier k == 11
+    # special case pointed the default invocation at the committed historical
+    # directory, so the most common command overwrote git-tracked artifacts with
+    # no --force and no backup. Expected values are pinned literally: comparing
+    # the function to a re-derivation of itself would pass under that mutation.
+    Test.@test basename(_viterbi_accuracy_default_output_dir(11)) ==
+               "viterbi_accuracy_b8_k11"
+    Test.@test basename(_viterbi_accuracy_default_output_dir(9)) ==
+               "viterbi_accuracy_b8_k9"
+    Test.@test _viterbi_accuracy_default_output_dir(9) !=
+               _viterbi_accuracy_default_output_dir(11)
+    # The historical directory is frozen: no k resolves onto it.
+    Test.@test basename(VITERBI_ACCURACY_HISTORICAL_OUTPUT_DIR) == "viterbi_accuracy_b8"
+    Test.@test _viterbi_accuracy_default_output_dir(11) !=
+               VITERBI_ACCURACY_HISTORICAL_OUTPUT_DIR
+    Test.@test _viterbi_accuracy_default_output_dir(9) !=
+               VITERBI_ACCURACY_HISTORICAL_OUTPUT_DIR
+end
+
+Test.@testset "main() refuses a --k it cannot honour" begin
+    # k is bound at load time from the process's argv/ENV, so a `--k` inside a
+    # caller-supplied args vector arrives too late. Silently dropping it would
+    # return k=11 tables to a caller who asked for 9 while `--output-dir` from
+    # the SAME vector was honoured. The check runs before any benchmark work.
+    Test.@test_throws ErrorException main(["--k", "9", "--skip-plots"])
+    Test.@test_throws ErrorException main(["--k=9", "--skip-plots"])
+    # Same validation as at load time, so a bad value cannot slip through here.
+    Test.@test_throws ErrorException main(["--k"])
+    Test.@test_throws ErrorException main(["--k", "abc"])
+end
+
+Test.@testset "recorded command line reflects how k was selected" begin
+    # The suite runs with no --k and no VITERBI_ACCURACY_K, so the provenance
+    # command line must NOT assert a --k the operator never typed.
+    Test.@test VITERBI_ACCURACY_K_SOURCE == "default"
+    Test.@test !("--k" in _viterbi_accuracy_command_args())
+    Test.@test !any(startswith.(_viterbi_accuracy_command_args(), "--k="))
 end
 
 Test.@testset "shuffled-weight null preserves topology + weight multiset" begin

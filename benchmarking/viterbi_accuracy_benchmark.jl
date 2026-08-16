@@ -3,6 +3,22 @@
 # Usage:
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --output-dir /tmp/b8 --skip-plots
+#   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --k 9
+#   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --k=9
+#   VITERBI_ACCURACY_K=9 julia --project=. benchmarking/viterbi_accuracy_benchmark.jl
+#
+# k selection (default 11), in precedence order: `--k <int>`, `--k=<int>`, then the
+# VITERBI_ACCURACY_K environment variable. Every form is validated the same way — a
+# valueless `--k`, a non-integer, or k < 1 is a hard error, never a silent fallback to
+# the default (see `_viterbi_accuracy_k_from_args`).
+#
+# k is a PROCESS-LAUNCH parameter, resolved once at load time from this process's argv
+# and ENV. `main(args)` cannot change it and errors if its `args` request a different k;
+# to run a different k, launch a new process.
+#
+# The resolved k and the source it came from are printed as the first line of output, and
+# stamped into the run id, the default output directory, and a `benchmark_k` column on
+# every emitted table.
 
 import BioSequences
 import CairoMakie
@@ -24,22 +40,25 @@ const VITERBI_ACCURACY_ERROR_RATES = (0.01, 0.05, 0.10)
 # random-rewire null randomizes topology (vertices/edge-count/weight-multiset fixed).
 const VITERBI_NULL_SEED = 20260711
 const VITERBI_ACCURACY_FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "viterbi_accuracy")
-const VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR = joinpath(
+const VITERBI_ACCURACY_K_DEFAULT = 11
+const VITERBI_ACCURACY_K_ENV = "VITERBI_ACCURACY_K"
+# FROZEN. This is the pre-k-stamping historical run (committed k=11 artifacts,
+# run id "b8_viterbi_accuracy_local_20260625", cited by the manuscript repo).
+# No code path writes here any more — it is retained only so the committed
+# artifacts and the references to them keep resolving.
+const VITERBI_ACCURACY_HISTORICAL_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "viterbi_accuracy_b8"
 )
-# k-stamped sibling of the default, used whenever k is not the historical 11 so
-# a k=9 run cannot silently overwrite the committed k=11 artifacts.
+# The default output directory is k-stamped UNCONDITIONALLY, including for
+# k=11. An earlier version special-cased k == 11 back onto the historical
+# directory above, which meant the DEFAULT invocation wrote into a directory of
+# git-tracked artifacts with no --force, no backup and no guard: it prevented
+# silent overwrite in one direction (k=9 could not clobber k=11) and left it
+# wide open in the other. Stamping every k makes each parameterization's
+# artifacts a distinct, non-colliding tree.
 function _viterbi_accuracy_default_output_dir(k::Integer)::String
-    return k == 11 ? VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR :
-           joinpath(@__DIR__, "results", "viterbi_accuracy_b8_k$(k)")
+    return joinpath(@__DIR__, "results", "viterbi_accuracy_b8_k$(k)")
 end
-# PRIME k (was 9 = 3x3, the worst period-3 case). A composite k aliases
-# period-p tandem repeats onto self-overlapping k-mers, which can make single-k
-# correction look either trivially perfect or pathologically wrong; a prime k
-# breaks that periodicity. Matches the prime-only k progression the iterative
-# corrector uses (find_initial_k draws from Primes.primes; build_k_ladder and
-# next_prime_k snap to primes).
-#
 # k is selectable so the accuracy arm and its controls can be produced at the
 # SAME k. They diverged once -- the committed accuracy table was k=9 while the
 # over-correction and null tables were k=11 -- which made the controls describe
@@ -47,22 +66,95 @@ end
 # run, and stamping it into the run id and default output directory, means two
 # parameterizations can no longer overwrite or be mistaken for each other.
 #
-# This stays a `const`: Kmers.RNAKmer{K} / DNAKmer{K} take K as a TYPE
-# parameter, so it must be resolved at load time. Reading argv/ENV here keeps
-# that property while making the value selectable per process.
-function _viterbi_accuracy_k_at_load()::Int
-    index = findfirst(==("--k"), ARGS)
-    if !isnothing(index) && index < length(ARGS)
-        return parse(Int, ARGS[index + 1])
-    end
-    inline = findfirst(argument -> startswith(argument, "--k="), ARGS)
-    if !isnothing(inline)
-        return parse(Int, split(ARGS[inline], "="; limit = 2)[2])
-    end
-    return parse(Int, get(ENV, "VITERBI_ACCURACY_K", "11"))
+# k is a free per-run parameter, NOT constrained to primes. The default 11 is
+# chosen for continuity with the committed historical run; 9 is the manuscript's
+# PRE-REGISTERED PRIMARY and is a first-class value here, not a degraded case.
+# The project's own prime-vs-composite ablation
+# (benchmarking/results/rhizomorph_prime_k_ablation, run
+# prime_k_ablation_denovo_degree_repeatclass_20260712) recorded "no robust
+# prime-k advantage isolated from k-size ... factor-sharing composite k recover
+# within seed noise of size-matched coprime primes"; it bounds any
+# factor-sharing penalty below 0.20 rather than excluding an arbitrarily small
+# one. So primality earns no validation rule here.
+#
+# That ablation's separate odd-k note (an even-length DNA/RNA k-mer can equal
+# its own reverse complement) is also not enforced, for two reasons: these
+# fixtures are built in :singlestrand mode, where reverse complements are not
+# canonicalized, and one of the three fixtures is natural-language text with no
+# reverse complement at all. Both pre-registered values (9, 11) are odd anyway,
+# so an odd-only rule would be an untested constraint that changes nothing.
+#
+# k stays a `const`, but NOT because Kmers requires it: Kmers.DNAKmer{k} is
+# constructed from a runtime `Int` elsewhere in this package (see
+# src/sequence-comparison.jl, src/kmer-saturation-analysis.jl,
+# src/kmer-analysis.jl). The `const` is a TYPE STABILITY choice — a non-const
+# global would force the kmer type to be constructed dynamically at every call
+# site in this file. The consequence of binding it at load time is that k comes
+# from THIS PROCESS's argv/ENV: `--k` is a process-launch parameter, so
+# `main(args)` cannot change it (it errors if `args` disagree — see `main`).
+
+# Parse and validate one k value. Validation is deliberately minimal: has a
+# value, parses as an Int, and is >= 1. No odd-only or prime-only rule (see
+# above). The error names both the flag/variable and the offending value so a
+# misrouted shell expansion is identifiable from the message alone.
+function _viterbi_accuracy_parse_k(raw::AbstractString, source::AbstractString)::Int
+    parsed = tryparse(Int, strip(raw))
+    parsed === nothing && error("$(source) expects an integer, got $(repr(raw))")
+    parsed < 1 && error("$(source) must be >= 1, got $(parsed)")
+    return parsed
 end
 
-const VITERBI_ACCURACY_K = _viterbi_accuracy_k_at_load()
+# Returns `nothing` when the arguments do not select a k; otherwise (k, source).
+#
+# A bare trailing `--k` must ERROR, not fall back to the default. The realistic
+# trigger is shell expansion rather than a typo: unquoted `--k $K` with `K`
+# unset drops the empty word entirely, leaving `--k` as the last argument. A
+# silent fallback would then run k=11, write into the k=11 output tree, AND
+# record a `command_args` provenance line reading `--k 11` — a command line the
+# operator never typed, asserting an explicit request that was never made.
+function _viterbi_accuracy_k_from_args(args)
+    index = findfirst(==("--k"), args)
+    if !isnothing(index)
+        index == lastindex(args) && error(
+            "--k requires a value (got a bare trailing --k). Refusing to default to " *
+            "$(VITERBI_ACCURACY_K_DEFAULT): k selects the fixtures, the run id, the " *
+            "output directory and the recorded command line, so defaulting would " *
+            "publish a k=$(VITERBI_ACCURACY_K_DEFAULT) run whose provenance claims " *
+            "--k was explicitly requested.")
+        return (k = _viterbi_accuracy_parse_k(args[index + 1], "--k"), source = "--k")
+    end
+    inline = findfirst(argument -> startswith(argument, "--k="), args)
+    if !isnothing(inline)
+        value = split(args[inline], "="; limit = 2)[2]
+        return (k = _viterbi_accuracy_parse_k(value, "--k="), source = "--k=")
+    end
+    return nothing
+end
+
+# Full resolution: --k / --k= / VITERBI_ACCURACY_K / default, in that order.
+# `args` and `env` are parameters (not globals) so the resolution rules are
+# unit-testable without launching a process. A SET-BUT-EMPTY environment
+# variable is an explicit selection of "" and errors; it is NOT the default
+# path, which is reached only when the variable is absent.
+function _viterbi_accuracy_resolve_k(args = ARGS, env = ENV)
+    from_args = _viterbi_accuracy_k_from_args(args)
+    isnothing(from_args) || return from_args
+    if haskey(env, VITERBI_ACCURACY_K_ENV)
+        return (
+            k = _viterbi_accuracy_parse_k(env[VITERBI_ACCURACY_K_ENV], VITERBI_ACCURACY_K_ENV),
+            source = VITERBI_ACCURACY_K_ENV
+        )
+    end
+    return (k = VITERBI_ACCURACY_K_DEFAULT, source = "default")
+end
+
+function _viterbi_accuracy_k_at_load(args = ARGS, env = ENV)::Int
+    return _viterbi_accuracy_resolve_k(args, env).k
+end
+
+const _VITERBI_ACCURACY_K_RESOLUTION = _viterbi_accuracy_resolve_k()
+const VITERBI_ACCURACY_K = _VITERBI_ACCURACY_K_RESOLUTION.k
+const VITERBI_ACCURACY_K_SOURCE = _VITERBI_ACCURACY_K_RESOLUTION.source
 
 struct ViterbiAccuracyFixture
     dataset_id::String
@@ -75,10 +167,28 @@ struct ViterbiAccuracyFixture
 end
 
 function main(args::Vector{String} = ARGS)::Nothing
+    # `--k` is a PROCESS-LAUNCH parameter: it was resolved at load time from this
+    # process's global ARGS/ENV, so a `--k` inside a caller-supplied `args` vector
+    # arrives too late to take effect. Without this check `main(["--k", "9"])` would
+    # honour `--output-dir` from the same vector while silently dropping `--k`, and
+    # return k=11 tables to a caller who believes they asked for 9. Error instead.
+    requested = _viterbi_accuracy_k_from_args(args)
+    if !isnothing(requested) && requested.k != VITERBI_ACCURACY_K
+        error(
+            "main() received $(requested.source) $(requested.k) but k was already " *
+            "bound to $(VITERBI_ACCURACY_K) (source: $(VITERBI_ACCURACY_K_SOURCE)) at " *
+            "load time. k is a process-launch parameter; run a new process with " *
+            "--k $(requested.k) (or VITERBI_ACCURACY_K=$(requested.k)) instead.")
+    end
     output_dir = _viterbi_accuracy_arg_value(
         args, "--output-dir", _viterbi_accuracy_default_output_dir(VITERBI_ACCURACY_K)
     )
     write_plots = !("--skip-plots" in args)
+    # Print k FIRST. Without it nothing on stdout distinguishes "asked for 9, got
+    # 11" from "asked for 11" — the four paths below are byte-identical in both
+    # cases once k resolves to the same value.
+    println("B8 Viterbi accuracy benchmark: k = $(VITERBI_ACCURACY_K) " *
+            "(source: $(VITERBI_ACCURACY_K_SOURCE))")
     artifacts = run_viterbi_accuracy_benchmark(output_dir; write_plots = write_plots)
     println("Wrote B8 Viterbi accuracy benchmark artifacts:")
     println("  root: $(artifacts.root)")
@@ -105,7 +215,7 @@ function run_viterbi_accuracy_benchmark(
 
     # Control A (over-correction on un-corrupted input) and Control B (shuffled-
     # edge-weight null) — the two controls the manuscript flags as missing next
-    # to the recall table. Same fixtures, same prime k, same corrector.
+    # to the recall table. Same fixtures, same k, same corrector.
     overcorrection_rows = NamedTuple[]
     null_rows = NamedTuple[]
     for fixture in fixtures
@@ -117,10 +227,12 @@ function run_viterbi_accuracy_benchmark(
     overcorrection = DataFrames.DataFrame(overcorrection_rows)
     null_control = DataFrames.DataFrame(null_rows)
 
-    # Stamp k into every row. The sidecar provenance JSON already records it,
-    # but three independent readers reconstructed k by dividing position counts
-    # by observation counts because they read the .csv and never opened the
-    # sidecar beside it. A column costs nothing and removes the inference.
+    # Stamp k into every row. The sidecar provenance JSON already records it, but
+    # provenance is exactly what gets dropped when a table is hand-copied across a
+    # repo boundary — and this table is: the manuscript repo keeps its own copy
+    # under manuscript/figure-data/ and renders figures from that copy, not from
+    # this tree. A COLUMN survives a manual copy of the .csv; a SIDECAR beside it
+    # does not. The column costs nothing and makes k travel with the numbers.
     for table in (summary, overcorrection, null_control)
         table[!, :benchmark_k] = fill(VITERBI_ACCURACY_K, DataFrames.nrow(table))
     end
@@ -138,9 +250,7 @@ function run_viterbi_accuracy_benchmark(
         run_id = "b8_viterbi_accuracy_local_20260625_k$(VITERBI_ACCURACY_K)",
         scale = "local-smoke",
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
-        command_args = [
-            "julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl",
-            "--k", string(VITERBI_ACCURACY_K)],
+        command_args = _viterbi_accuracy_command_args(),
         metadata = Dict(
             "bead" => "td-he0z.9",
             "benchmark" => "generalized_viterbi_accuracy_vs_error_rate",
@@ -150,6 +260,9 @@ function run_viterbi_accuracy_benchmark(
             "unit" => "fixed-length $(VITERBI_ACCURACY_K)-mers/ngrams",
             # k as a first-class field, not only embedded in the unit string.
             "k" => VITERBI_ACCURACY_K,
+            # How k was selected: "--k", "--k=", "VITERBI_ACCURACY_K", or
+            # "default". Distinguishes an explicit request from an inherited one.
+            "k_source" => VITERBI_ACCURACY_K_SOURCE,
             "controls" => Dict(
                 "over_correction_uncorrupted" => "corrector run on uncorrupted truth; any edit is a false positive",
                 "shuffled_weight_null" => "edge weights permuted (seed $(VITERBI_NULL_SEED)); topology/emission held fixed",
@@ -766,6 +879,22 @@ function _write_viterbi_control_figure(
     CairoMakie.save(png_path, fig)
     CairoMakie.save(svg_path, fig)
     return (png = png_path, svg = svg_path)
+end
+
+# The recorded command line must reflect how k was ACTUALLY selected. Emitting
+# `--k <k>` unconditionally asserted an explicit flag even when k came from the
+# environment or from the default — a command line the operator never typed.
+# k itself is recorded unambiguously in the `k` metadata field either way.
+function _viterbi_accuracy_command_args()::Vector{String}
+    base = ["julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl"]
+    if VITERBI_ACCURACY_K_SOURCE == "--k"
+        return vcat(base, ["--k", string(VITERBI_ACCURACY_K)])
+    elseif VITERBI_ACCURACY_K_SOURCE == "--k="
+        return vcat(base, ["--k=$(VITERBI_ACCURACY_K)"])
+    elseif VITERBI_ACCURACY_K_SOURCE == VITERBI_ACCURACY_K_ENV
+        return vcat(["$(VITERBI_ACCURACY_K_ENV)=$(VITERBI_ACCURACY_K)"], base)
+    end
+    return base
 end
 
 function _viterbi_accuracy_arg_value(
