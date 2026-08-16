@@ -194,6 +194,7 @@ function main(args::Vector{String} = ARGS)::Nothing
             "load time. k is a process-launch parameter; run a new process with " *
             "--k $(requested.k) (or VITERBI_ACCURACY_K=$(requested.k)) instead.")
     end
+    _viterbi_accuracy_reject_unknown_args(args)
     output_dir = _viterbi_accuracy_arg_value(
         args, "--output-dir", _viterbi_accuracy_default_output_dir(VITERBI_ACCURACY_K)
     )
@@ -934,6 +935,18 @@ function _viterbi_accuracy_require_flag_value(
         args::Vector{String},
         flag::AbstractString
 )::String
+    # Duplicate detection lives HERE rather than beside any one flag, so it
+    # applies to every value-taking flag by construction. Two earlier rounds
+    # hardened one flag each and left the identical hole on the next one; the
+    # cycle only breaks when the guard is written once, over the parameter.
+    # Measured before this check: ["--output-dir","/a","--output-dir","/b"]
+    # returned "/a", so a wrapper appending its own --output-dir to a command
+    # that already carried one silently discarded the caller's directory and
+    # wrote into whatever the base command named.
+    occurrences = count(==(flag), args)
+    occurrences > 1 && error(
+        "$(flag) was given $(occurrences) times. Refusing to guess which one " *
+        "is authoritative; pass it exactly once.")
     index = findfirst(==(flag), args)
     isnothing(index) && return ""
     index == lastindex(args) && error(
@@ -959,6 +972,54 @@ function _viterbi_accuracy_arg_value(
 )::String
     value = _viterbi_accuracy_require_flag_value(args, flag)
     return isempty(value) ? string(default) : value
+end
+
+# Every flag this script understands. A closing whitelist, NOT another per-flag
+# guard: three consecutive rounds hardened one flag each and each time the same
+# harm reappeared on a spelling nobody had hardened yet. A whitelist over the
+# whole argument vector cannot be incomplete in that way -- an argument either
+# matches something here or it stops the run.
+#
+# What it closes, all measured silently succeeding before it existed:
+#
+#   --output-dir=/tmp/x   the INLINE form this file's own usage header
+#                         documents for --k=, silently ignored, so the run
+#                         landed in the default in-repo tree
+#   --outputdir /tmp/x    likewise
+#   --K 9  --k9  -k 9     every misspelling of --k ran at the default k
+#   --skip-plots=true     plots written anyway (membership test, not a prefix)
+#   --help / garbage      accepted, ran a full benchmark
+#
+# Each of those produced a complete, normal-looking run somewhere the operator
+# did not ask for -- verbatim the harm _viterbi_accuracy_require_flag_value
+# refuses for the one spelling it knows about.
+const VITERBI_ACCURACY_BOOLEAN_FLAGS = ("--skip-plots",)
+const VITERBI_ACCURACY_VALUE_FLAGS = ("--output-dir", "--k")
+
+function _viterbi_accuracy_reject_unknown_args(args::Vector{String})::Nothing
+    consumed = falses(length(args))
+    for (position, argument) in pairs(args)
+        consumed[position] && continue
+        if argument in VITERBI_ACCURACY_BOOLEAN_FLAGS
+            consumed[position] = true
+        elseif argument in VITERBI_ACCURACY_VALUE_FLAGS
+            consumed[position] = true
+            # The value was already validated by require_flag_value; here we
+            # only mark it consumed so it is not itself read as a flag.
+            position < lastindex(args) && (consumed[position + 1] = true)
+        elseif startswith(argument, "--k=")
+            consumed[position] = true
+        end
+    end
+    unknown = [args[position] for position in eachindex(args) if !consumed[position]]
+    isempty(unknown) && return nothing
+    error(
+        "unrecognized argument(s): $(join(map(repr, unknown), ", ")). " *
+        "This script accepts --k <n> / --k=<n>, --output-dir <path>, and " *
+        "--skip-plots. Refusing to run: an unrecognized argument silently " *
+        "produces a complete, normal-looking benchmark at the DEFAULT k in " *
+        "the DEFAULT output tree, which is indistinguishable from a run the " *
+        "operator meant to launch.")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

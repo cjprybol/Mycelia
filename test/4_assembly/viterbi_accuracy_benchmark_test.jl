@@ -207,6 +207,47 @@ Test.@testset "value-taking flags are validated, never silently defaulted" begin
     Test.@test _viterbi_accuracy_arg_value(
         ["--output-dir", "/tmp/real"], "--output-dir", "/tmp/fallback") ==
                "/tmp/real"
+    # Duplicate detection is defined over the FLAG PARAMETER, so it covers every
+    # value-taking flag rather than the one it was written for. Before this,
+    # a repeated --output-dir was silently first-wins: the wrapper-append shape
+    # below dropped the caller's directory and wrote to the base command's.
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--output-dir", "/a", "--output-dir", "/b"], "--output-dir", "/tmp/fb")
+    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
+        ["--output-dir", "/repo/results", "--k", "9", "--output-dir", "/scratch/mine"],
+        "--output-dir", "/tmp/fb")
+end
+
+Test.@testset "unrecognized arguments stop the run" begin
+    # A closing whitelist, not a fourth per-flag guard. Each case below was
+    # measured silently producing a complete benchmark at the DEFAULT k in the
+    # DEFAULT in-repo tree, which is indistinguishable from an intended run.
+    #
+    # --output-dir=/tmp/x is the sharp one: the usage header documents the
+    # inline form for --k=, so an operator who generalizes it lands here.
+    for bad in (
+        ["--output-dir=/tmp/x"],
+        ["--outputdir", "/tmp/x"],
+        ["--K", "9"],
+        ["--k9"],
+        ["-k", "9"],
+        ["--skip-plots=true"],
+        ["--help"],
+        ["garbage"])
+        Test.@test_throws ErrorException _viterbi_accuracy_reject_unknown_args(bad)
+    end
+    # Everything the script really accepts must pass, including a value that
+    # looks like a flag-ish token but is positionally a consumed value.
+    for good in (
+        String[],
+        ["--skip-plots"],
+        ["--k", "9"],
+        ["--k=9"],
+        ["--output-dir", "/tmp/x"],
+        ["--k", "9", "--output-dir", "/tmp/x", "--skip-plots"],
+        ["--skip-plots", "--k=11", "--output-dir", "/tmp/x"])
+        Test.@test _viterbi_accuracy_reject_unknown_args(good) === nothing
+    end
 end
 
 Test.@testset "default output directory is k-stamped unconditionally" begin
