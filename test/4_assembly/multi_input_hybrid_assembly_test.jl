@@ -1,4 +1,4 @@
-# td-06er: default-CI contract tests for multi-read-set hybrid assembly.
+# Default-CI contract tests for multi-read-set hybrid assembly.
 #
 # These tests use injected correction and assembler runners, so they exercise
 # pairing, routing, provenance, and cleanup without installing external tools.
@@ -9,11 +9,19 @@
 
 import CodecZlib
 import FASTX
+import Logging
 import Mycelia
 import Test
 
 if !isdefined(Main, :test_throws_message)
     include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
+if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
+    Base.include(
+        @__MODULE__,
+        joinpath(dirname(@__DIR__), "multi_input_hybrid_smoke_support.jl"),
+    )
 end
 
 function multi_input_fastq_record(
@@ -38,6 +46,27 @@ function multi_input_write_fastq(
         end
     end
     return String(path)
+end
+
+function multi_input_mutate_first_sequence!(path::AbstractString)::Nothing
+    original = read(path, String)
+    mutated = replace(
+        original,
+        "ACGTACGT" => "GCGTGCGT";
+        count = 1,
+    )
+    mutated != original || error("FASTQ mutation fixture did not find a sequence.")
+    write(path, mutated)
+    return nothing
+end
+
+function multi_input_capture_error(action::Function)::Any
+    try
+        action()
+    catch caught
+        return caught
+    end
+    return nothing
 end
 
 function multi_input_gzip_file(
@@ -92,6 +121,12 @@ function multi_input_fake_correction_runner(
             joinpath(config.output_dir, "corrected.fastq")
         end
         multi_input_write_fastq(corrected_fastq, corrected_records)
+        corrected_fastq_identity =
+            Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                corrected_fastq,
+                :file,
+                "fake correction output",
+            )
         push!(calls, (
             technology = config.sequencing_tech,
             output_dir = config.output_dir,
@@ -101,8 +136,51 @@ function multi_input_fake_correction_runner(
         ))
         return (;
             corrected_fastq,
+            corrected_fastq_identity,
             corrected_reads = corrected_records,
             ephemeral,
+        )
+    end
+    return correction_runner
+end
+
+function multi_input_reported_correction_runner(
+        calls::Vector{NamedTuple},
+)::Function
+    base_runner = multi_input_fake_correction_runner(calls)
+    function correction_runner(
+            reads::Any,
+            config::Mycelia.Rhizomorph.AssemblyConfig,
+    )::NamedTuple
+        stage = base_runner(reads, config)
+        technology = config.sequencing_tech
+        indel_params = if technology in (:nanopore, :pacbio_clr)
+            Mycelia.IndelDecodeParams(
+                0.1,
+                0.4,
+                0.4,
+                0.2,
+                0.2,
+                3,
+                4,
+                64,
+            )
+        else
+            nothing
+        end
+        max_k = config.k === nothing ? 13 : max(config.k, 13)
+        substitution_error_rate = technology == :pacbio_hifi ? 0.001 : nothing
+        return merge(
+            stage,
+            (;
+                knobs = (
+                    strategy = config.strategy,
+                    skip_solid = technology != :nanopore,
+                ),
+                max_k,
+                indel_params,
+                substitution_error_rate,
+            ),
         )
     end
     return correction_runner
@@ -135,16 +213,120 @@ function multi_input_write_fasta(
     return String(path)
 end
 
+function multi_input_fake_unicycler_toolchain()::Dict{String, Any}
+    packages = NamedTuple[
+        (
+            name = "python",
+            version = "3.11.9",
+            build = "h955ad1f_0_cpython",
+            channel = "conda-forge",
+        ),
+        (
+            name = "spades",
+            version = "4.2.0",
+            build = "h5ca1c30_1",
+            channel = "bioconda",
+        ),
+        (
+            name = "unicycler",
+            version = "0.5.1",
+            build = "pyhdfd78af_0",
+            channel = "bioconda",
+        ),
+    ]
+    return Mycelia._unicycler_toolchain_provenance(
+        inventory_reader = () -> packages,
+    )
+end
+
+function multi_input_fake_autocycler_inventory(;
+        build_suffix::AbstractString = "0",
+)::Vector{NamedTuple}
+    return NamedTuple[
+        (
+            name = specification.name,
+            version = specification.constraint == :present ?
+                      "1.0" : specification.version,
+            build = "test_$(build_suffix)",
+            channel = "bioconda",
+        ) for specification in Mycelia.AUTOCYCLER_REQUIRED_PACKAGE_SPECS
+    ]
+end
+
+function multi_input_fake_autocycler_toolchain(;
+        build_suffix::AbstractString = "0",
+)::Dict{String, Any}
+    return Mycelia._autocycler_toolchain_metadata(
+        multi_input_fake_autocycler_inventory(; build_suffix),
+    )
+end
+
+function multi_input_fake_unicycler_contract(
+        outdir::AbstractString,
+        assembly::AbstractString,
+        graph::AbstractString,
+)::String
+    contract = Dict{String, Any}(
+        "schema" => Mycelia._UNICYCLER_CONTRACT_SCHEMA,
+        "artifacts" => Dict{String, Any}(
+            "assembly" => Mycelia._unicycler_artifact_fingerprint(assembly),
+            "graph" => Mycelia._unicycler_artifact_fingerprint(graph),
+        ),
+    )
+    path = joinpath(outdir, ".mycelia-unicycler-run-contract.json")
+    open(path, "w") do output
+        Mycelia.JSON.print(output, contract)
+        write(output, '\n')
+    end
+    return path
+end
+
+function multi_input_fake_autocycler_lifecycle(
+        outdir::AbstractString,
+        assembly::AbstractString,
+        graph::AbstractString,
+        autocycler_assembly::AbstractString,
+        polypolish_assembly::AbstractString,
+        pypolca_report::AbstractString,
+)::NamedTuple
+    snapshot = (
+        path::AbstractString,
+        label::AbstractString,
+    ) -> Mycelia._autocycler_artifact_snapshot(
+        path,
+        outdir,
+        label,
+    )
+    return (;
+        assembly = snapshot(assembly, "Pypolca-polished assembly FASTA"),
+        graph = snapshot(graph, "Autocycler consensus GFA"),
+        autocycler_assembly = snapshot(
+            autocycler_assembly,
+            "Autocycler consensus FASTA",
+        ),
+        polypolish_assembly = snapshot(
+            polypolish_assembly,
+            "Polypolish assembly FASTA",
+        ),
+        pypolca_report = snapshot(pypolca_report, "Pypolca report"),
+        intermediates = NamedTuple[],
+        planned_intermediates = String[],
+    )
+end
+
 function multi_input_fake_assembler_result(
         outdir::AbstractString;
         gzip::Bool = false,
-        include_graph::Bool = false,
+        include_graph::Bool = true,
         use_contigs_key::Bool = false,
         include_polishing_artifacts::Bool = false,
+        assembly_records::Vector{Pair{String, String}} =
+            ["contig_1" => "ACGTACGT"],
 )::NamedTuple
     extension = gzip ? ".fasta.gz" : ".fasta"
     assembly = multi_input_write_fasta(
         joinpath(outdir, "assembly$(extension)");
+        records = assembly_records,
         gzip,
     )
     if include_graph
@@ -159,17 +341,60 @@ function multi_input_fake_assembler_result(
             )
             pypolca_report = joinpath(outdir, "pypolca.report")
             write(pypolca_report, "corrected_bases\t0\n")
-            return (;
+            lifecycle_artifact_snapshots =
+                multi_input_fake_autocycler_lifecycle(
+                    outdir,
+                    assembly,
+                    graph,
+                    autocycler_assembly,
+                    polypolish_assembly,
+                    pypolca_report,
+                )
+            result = (;
                 assembly,
                 graph,
                 autocycler_assembly,
                 polypolish_assembly,
                 pypolca_report,
+                toolchain = multi_input_fake_autocycler_toolchain(),
+                lifecycle_artifact_snapshots,
             )
+            child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    result,
+                    outdir,
+                )
+            return merge(result, (; child_integrity))
         end
-        return use_contigs_key ? (; contigs = assembly, graph) : (; assembly, graph)
+        toolchain = multi_input_fake_unicycler_toolchain()
+        contract = multi_input_fake_unicycler_contract(
+            outdir,
+            assembly,
+            graph,
+        )
+        result = use_contigs_key ?
+                 (; contigs = assembly, graph, contract, toolchain) :
+                 (; assembly, graph, contract, toolchain)
+        child_integrity =
+            Mycelia.Rhizomorph._multi_input_unicycler_child_integrity(
+                result,
+                outdir,
+            )
+        return merge(result, (; child_integrity))
     end
-    return use_contigs_key ? (; contigs = assembly) : (; assembly)
+    toolchain = multi_input_fake_unicycler_toolchain()
+    return use_contigs_key ? (; contigs = assembly, toolchain) :
+           (; assembly, toolchain)
+end
+
+function multi_input_without_field(
+        result::NamedTuple,
+        field::Symbol,
+)::NamedTuple
+    retained_fields = Tuple(filter(candidate -> candidate != field, keys(result)))
+    return NamedTuple{retained_fields}(
+        Tuple(getproperty(result, candidate) for candidate in retained_fields),
+    )
 end
 
 const MULTI_INPUT_R1 = [
@@ -184,7 +409,7 @@ const MULTI_INPUT_LONG = [
     multi_input_fastq_record("long_a", "ACGTACGTACGT"),
 ]
 
-Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
+Test.@testset "multi-input hybrid assembly contracts" begin
     Test.@testset "typed config validation and distinct contracts" begin
         unicycler = Mycelia.Rhizomorph.UnicyclerHybridConfig(
             short_read_tech = :ultima,
@@ -199,6 +424,11 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test Mycelia.Rhizomorph._long_read_correction_technology(unicycler) ==
                    :pacbio_clr
         Test.@test unicycler.threads == 3
+        Test.@test isconcretetype(typeof(unicycler))
+        Test.@test fieldtype(typeof(unicycler), :correction_options) ===
+                   typeof(unicycler.correction_options)
+        Test.@test fieldtype(typeof(unicycler), :assembler_options) ===
+                   typeof(unicycler.assembler_options)
 
         autocycler = Mycelia.Rhizomorph.AutocyclerPolishConfig(
             long_read_tech = :nanopore,
@@ -245,6 +475,25 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         test_throws_message(ArgumentError, "jobs must be positive") do
             Mycelia.Rhizomorph.AutocyclerPolishConfig(jobs = 0)
         end
+        for constructor in (
+                Mycelia.Rhizomorph.UnicyclerHybridConfig,
+                Mycelia.Rhizomorph.AutocyclerPolishConfig,
+        )
+            test_throws_message(
+                ArgumentError,
+                "input_snapshot_byte_ceiling must be positive",
+            ) do
+                constructor(input_snapshot_byte_ceiling = 0)
+            end
+            test_throws_message(
+                ArgumentError,
+                "exceeds the platform Int range",
+            ) do
+                constructor(
+                    input_snapshot_byte_ceiling = BigInt(typemax(Int)) + 1,
+                )
+            end
+        end
         test_throws_message(ArgumentError, "incompatible") do
             Mycelia.Rhizomorph.AutocyclerPolishConfig(
                 long_read_tech = :pacbio_hifi,
@@ -275,8 +524,881 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 assembler_options = (; executor = :async),
             )
         end
+        test_throws_message(ArgumentError, "correction option :min_coverage") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                correction_options = (; min_coverage = 2),
+            )
+        end
+        test_throws_message(ArgumentError, "Unicycler option :site") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                assembler_options = (; site = :scg),
+            )
+        end
+        for constructor in (
+                Mycelia.Rhizomorph.UnicyclerHybridConfig,
+                Mycelia.Rhizomorph.AutocyclerPolishConfig,
+        )
+            test_throws_message(ArgumentError, "option :input_spool_parent") do
+                constructor(
+                    assembler_options = (; input_spool_parent = "/scratch"),
+                )
+            end
+        end
+        for option in (
+                :long_reads,
+                :short_reads_1,
+                :short_reads_2,
+                :out_dir,
+                :threads,
+                :jobs,
+                :read_type,
+                :polypolish_careful,
+                :keep_intermediates,
+        )
+            test_throws_message(
+                ArgumentError,
+                "Autocycler-polished option :$(option)",
+            ) do
+                Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                    assembler_options = NamedTuple{(option,)}((nothing,)),
+                )
+            end
+        end
+        Test.@testset "unsupported public options fail without side effects" begin
+            mktempdir() do temp_dir
+                constructors = (
+                    (
+                        name = "unicycler",
+                        constructor = Mycelia.Rhizomorph.UnicyclerHybridConfig,
+                    ),
+                    (
+                        name = "autocycler",
+                        constructor = Mycelia.Rhizomorph.AutocyclerPolishConfig,
+                    ),
+                )
+                for contract in constructors
+                    correction_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-unknown-correction",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "correction option :correction_typo is unsupported",
+                    ) do
+                        contract.constructor(
+                            correction_options = (; correction_typo = true),
+                            output_dir = correction_output,
+                        )
+                    end
+                    Test.@test !ispath(correction_output)
+
+                    assembler_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-unknown-assembler",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "option :assembler_typo is unsupported",
+                    ) do
+                        contract.constructor(
+                            assembler_options = (; assembler_typo = true),
+                            output_dir = assembler_output,
+                        )
+                    end
+                    Test.@test !ispath(assembler_output)
+
+                    inert_correction_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-inert-correction",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "correction option :min_coverage is unsupported",
+                    ) do
+                        contract.constructor(
+                            correction_options = (; min_coverage = 2),
+                            output_dir = inert_correction_output,
+                        )
+                    end
+                    Test.@test !ispath(inert_correction_output)
+
+                    inert_spool_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-inert-child-spool",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "option :input_spool_parent is unsupported",
+                    ) do
+                        contract.constructor(
+                            assembler_options = (;
+                                input_spool_parent = temp_dir,
+                            ),
+                            output_dir = inert_spool_output,
+                        )
+                    end
+                    Test.@test !ispath(inert_spool_output)
+
+                    for (option, blank_value) in (
+                            (:conda_runner, ""),
+                            (:environment_prefix, "   "),
+                    )
+                        blank_output = joinpath(
+                            temp_dir,
+                            "$(contract.name)-blank-$(option)",
+                        )
+                        test_throws_message(
+                            ArgumentError,
+                            "option :$(option) must be",
+                        ) do
+                            contract.constructor(
+                                assembler_options =
+                                    NamedTuple{(option,)}((blank_value,)),
+                                output_dir = blank_output,
+                            )
+                        end
+                        Test.@test !ispath(blank_output)
+                    end
+                end
+
+                inert_scheduler_output =
+                    joinpath(temp_dir, "unicycler-inert-scheduler")
+                test_throws_message(
+                    ArgumentError,
+                    "Unicycler option :site is unsupported",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        assembler_options = (; site = :scg),
+                        output_dir = inert_scheduler_output,
+                    )
+                end
+                Test.@test !ispath(inert_scheduler_output)
+
+                invalid_correction_output =
+                    joinpath(temp_dir, "invalid-correction-value")
+                test_throws_message(
+                    ArgumentError,
+                    "correction_options are invalid for short_r1",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        correction_options = (; k = 0, strategy = :scalable),
+                        output_dir = invalid_correction_output,
+                    )
+                end
+                Test.@test !ispath(invalid_correction_output)
+
+                invalid_assembler_output =
+                    joinpath(temp_dir, "invalid-assembler-value")
+                test_throws_message(
+                    ArgumentError,
+                    "Unicycler option :kmers must be nothing or String",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        assembler_options = (; kmers = 21),
+                        output_dir = invalid_assembler_output,
+                    )
+                end
+                Test.@test !ispath(invalid_assembler_output)
+                Test.@test isempty(readdir(temp_dir))
+            end
+        end
         test_throws_message(ArgumentError, "output_dir must be a non-empty path") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(output_dir = "")
+        end
+        test_throws_message(ArgumentError, "output_dir must be a non-empty path") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(output_dir = "   ")
+        end
+    end
+
+    Test.@testset "private-fixture smoke gates fail closed" begin
+        disabled = _multi_input_hybrid_smoke_prerequisites(
+            Dict{String, String}(),
+        )
+        Test.@test disabled == (;
+            run_smoke = false,
+            run_autocycler = false,
+        )
+        for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
+            broad_only =
+                _multi_input_hybrid_smoke_prerequisites(
+                    Dict(broad_gate => "true"),
+                )
+            Test.@test broad_only == (;
+                run_smoke = false,
+                run_autocycler = false,
+            )
+        end
+        test_throws_message(
+            ArgumentError,
+            "also require MYCELIA_RUN_EXTERNAL=true",
+        ) do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+            ))
+        end
+        test_throws_message(
+            ArgumentError,
+            "also require MYCELIA_RUN_EXTERNAL=true",
+        ) do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+            ))
+        end
+        test_throws_message(
+            ArgumentError,
+            "also requires MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true",
+        ) do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+            ))
+        end
+        test_throws_message(ArgumentError, "missing:") do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+            ))
+        end
+
+        mktempdir() do temp_dir
+            r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "smoke-r1.fastq"),
+                [multi_input_fastq_record("smoke_pair/1")],
+            )
+            r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "smoke-r2.fastq"),
+                [multi_input_fastq_record("smoke_pair/2")],
+            )
+            long_reads = multi_input_write_fastq(
+                joinpath(temp_dir, "smoke-long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            environment = Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+                "MYCELIA_HYBRID_SHORT_R1" => r1,
+                "MYCELIA_HYBRID_SHORT_R2" => r2,
+                "MYCELIA_HYBRID_LONG_READS" => long_reads,
+            )
+            missing_file_environment = copy(environment)
+            missing_file_environment["MYCELIA_HYBRID_LONG_READS"] =
+                joinpath(temp_dir, "missing.fastq")
+            test_throws_message(ArgumentError, "FASTQ not found") do
+                _multi_input_hybrid_smoke_prerequisites(
+                    missing_file_environment,
+                )
+            end
+            for (name, value) in (
+                    "MYCELIA_HYBRID_SHORT_TECH" => "nanopore",
+                    "MYCELIA_HYBRID_LONG_TECH" => "illumina",
+            )
+                invalid_environment = copy(environment)
+                invalid_environment[name] = value
+                test_throws_message(ArgumentError, "must be one of") do
+                    _multi_input_hybrid_smoke_prerequisites(
+                        invalid_environment,
+                    )
+                end
+            end
+
+            autocycler_environment = merge(
+                environment,
+                Dict("MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true"),
+            )
+            test_throws_message(ArgumentError, "READ_TYPE is required") do
+                _multi_input_hybrid_smoke_prerequisites(
+                    autocycler_environment,
+                )
+            end
+            for (name, value, message) in (
+                    (
+                        "MYCELIA_AUTOCYCLER_READ_TYPE",
+                        "invalid",
+                        "must be one of",
+                    ),
+                    (
+                        "MYCELIA_AUTOCYCLER_TEST_JOBS",
+                        "many",
+                        "must be an integer",
+                    ),
+                    (
+                        "MYCELIA_AUTOCYCLER_TEST_JOBS",
+                        "5",
+                        "must be between",
+                    ),
+            )
+                invalid_environment = merge(
+                    autocycler_environment,
+                    Dict(
+                        "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
+                        name => value,
+                    ),
+                )
+                test_throws_message(ArgumentError, message) do
+                    _multi_input_hybrid_smoke_prerequisites(
+                        invalid_environment,
+                    )
+                end
+            end
+            valid_environment = merge(
+                autocycler_environment,
+                Dict(
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
+                    "MYCELIA_AUTOCYCLER_TEST_JOBS" => "2",
+                ),
+            )
+            prerequisites =
+                _multi_input_hybrid_smoke_prerequisites(
+                    valid_environment,
+                )
+            Test.@test prerequisites.run_smoke
+            Test.@test prerequisites.run_autocycler
+            Test.@test prerequisites.input_paths == (;
+                short_r1 = abspath(r1),
+                short_r2 = abspath(r2),
+                long_reads = abspath(long_reads),
+            )
+            Test.@test prerequisites.short_read_tech == :illumina
+            Test.@test prerequisites.long_read_tech == :nanopore
+            Test.@test prerequisites.autocycler_read_type == :ont_r10
+            Test.@test prerequisites.autocycler_jobs == 2
+        end
+    end
+
+    Test.@testset "workflow root validates before FASTQ scans" begin
+        mktempdir() do temp_dir
+            stale_root = joinpath(temp_dir, "stale-root")
+            mkpath(stale_root)
+            stale_marker = joinpath(stale_root, "owned.txt")
+            write(stale_marker, "keep\n")
+            blocked_parent = joinpath(temp_dir, "blocked-parent")
+            write(blocked_parent, "not a directory\n")
+            blocked_root = joinpath(blocked_parent, "hybrid")
+            file_root = joinpath(temp_dir, "file-root")
+            write(file_root, "not a directory\n")
+
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function root_validation_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("correction must not run")
+            end
+            function root_validation_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("assembler must not run")
+            end
+            missing_inputs = (
+                (joinpath(temp_dir, "missing-r1.fastq"),),
+                (joinpath(temp_dir, "missing-r2.fastq"),),
+                (joinpath(temp_dir, "missing-long.fastq"),),
+            )
+
+            lazy_consumptions = Ref(0)
+            function lazy_missing_source(path::AbstractString)::Base.Generator
+                return (
+                    begin
+                        lazy_consumptions[] += 1
+                        value
+                    end for value in (String(path),)
+                )
+            end
+            stale_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = stale_root,
+            )
+            test_throws_message(
+                ArgumentError,
+                "prevent stale hybrid assembly reuse",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (
+                        lazy_missing_source(missing_inputs[1][1]),
+                        lazy_missing_source(missing_inputs[2][1]),
+                    ),
+                    lazy_missing_source(missing_inputs[3][1]),
+                    stale_config,
+                    :unicycler;
+                    correction_runner = root_validation_correction_runner,
+                    assembler_runner = root_validation_assembler_runner,
+                )
+            end
+            Test.@test lazy_consumptions[] == 0
+
+            for (message, output_dir) in (
+                    ("prevent stale hybrid assembly reuse", stale_root),
+                    ("non-directory ancestor", blocked_root),
+                    ("exists but is not a directory", file_root),
+            )
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, message) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (missing_inputs[1], missing_inputs[2]),
+                        missing_inputs[3],
+                        config,
+                        :unicycler;
+                        correction_runner = root_validation_correction_runner,
+                        assembler_runner = root_validation_assembler_runner,
+                    )
+                end
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+            Test.@test isfile(stale_marker)
+            Test.@test read(stale_marker, String) == "keep\n"
+            Test.@test !ispath(blocked_root)
+            Test.@test isfile(file_root)
+
+            for output_dir in (
+                    joinpath(temp_dir, "absent-invalid-root"),
+                    mktempdir(temp_dir),
+            )
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, "different counts") do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2[1:1]),
+                        MULTI_INPUT_LONG,
+                        config,
+                        :unicycler;
+                        correction_runner = root_validation_correction_runner,
+                        assembler_runner = root_validation_assembler_runner,
+                    )
+                end
+                if isdir(output_dir)
+                    Test.@test isempty(readdir(output_dir))
+                else
+                    Test.@test !ispath(output_dir)
+                end
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+        end
+    end
+
+    Test.@testset "persistent root preflight preserves fenced parents" begin
+        mktempdir() do temp_dir
+            runtime_fence_root = joinpath(temp_dir, "runtime-fence")
+            mkpath(runtime_fence_root)
+            runtime_fence_marker =
+                Mycelia._output_root_durable_reservation_path_from_canonical(
+                    runtime_fence_root,
+                    "metamdbg-runtime-multi-input-preflight",
+                )
+            mkdir(runtime_fence_marker; mode = 0o700)
+            Mycelia._fsync_metamdbg_directory(runtime_fence_marker)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
+            missing_parent = joinpath(runtime_fence_root, "missing-parent")
+            blocked_output = joinpath(missing_parent, "hybrid-output")
+            blocked_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    blocked_output,
+                )
+            config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = blocked_output,
+            )
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function forbidden_correction_runner(
+                    _reads::Any,
+                    _config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("runtime fence preflight must precede correction")
+            end
+            function forbidden_assembler_runner(
+                    _inputs::Any,
+                    _outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("runtime fence preflight must precede assembly")
+            end
+            observed_error = try
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    config,
+                    :unicycler;
+                    correction_runner = forbidden_correction_runner,
+                    assembler_runner = forbidden_assembler_runner,
+                )
+                nothing
+            catch caught
+                caught isa InterruptException && rethrow()
+                caught
+            end
+            Test.@test observed_error isa ArgumentError
+            if observed_error isa ArgumentError
+                Test.@test occursin(
+                    runtime_fence_marker,
+                    sprint(showerror, observed_error),
+                )
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+            Test.@test !ispath(missing_parent)
+            Test.@test !ispath(blocked_lock)
+            rm(runtime_fence_marker; recursive = true)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
+        end
+    end
+
+    Test.@testset "persistent root reservation is alias-safe" begin
+        mktempdir() do temp_dir
+            physical_parent = joinpath(temp_dir, "physical")
+            mkpath(physical_parent)
+            alias_parent = joinpath(temp_dir, "alias")
+            symlink(physical_parent, alias_parent)
+            physical_output = joinpath(physical_parent, "hybrid-output")
+            alias_output = joinpath(alias_parent, "hybrid-output")
+            physical_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                physical_output,
+            )
+            alias_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                alias_output,
+            )
+            Test.@test physical_lock == alias_lock
+            Test.@test dirname(physical_lock) == physical_parent
+            Test.@test !startswith(physical_lock, "$(physical_output)/")
+
+            failing_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                joinpath(physical_parent, "failing-workflow"),
+            )
+            test_throws_message(ErrorException, "synthetic locked failure") do
+                Mycelia.Rhizomorph._with_multi_input_workflow_lock(failing_lock) do
+                    error("synthetic locked failure")
+                end
+            end
+            Test.@test !ispath(failing_lock)
+
+            first_calls = NamedTuple[]
+            first_base_runner = multi_input_fake_correction_runner(first_calls)
+            correction_entered = Channel{Nothing}(1)
+            release_correction = Channel{Nothing}(1)
+            first_call_blocked = Ref(false)
+            function blocking_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                if !first_call_blocked[]
+                    first_call_blocked[] = true
+                    put!(correction_entered, nothing)
+                    take!(release_correction)
+                end
+                return first_base_runner(reads, config)
+            end
+            function first_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                Test.@test isfile(physical_lock)
+                Test.@test dirname(String(outdir)) == physical_output
+                Test.@test String(outdir) != physical_lock
+                return multi_input_fake_assembler_result(outdir)
+            end
+            first_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = physical_output,
+            )
+            first_task = @async Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                first_config,
+                :unicycler;
+                correction_runner = blocking_correction_runner,
+                assembler_runner = first_assembler_runner,
+            )
+            wait_status = Base.timedwait(
+                () -> isready(correction_entered) || istaskdone(first_task),
+                30.0,
+            )
+            Test.@test wait_status == :ok
+            if !isready(correction_entered)
+                fetch(first_task)
+            end
+            take!(correction_entered)
+
+            second_correction_calls = Ref(0)
+            second_assembler_calls = Ref(0)
+            function second_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                second_correction_calls[] += 1
+                error("second correction must not run")
+            end
+            function second_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                second_assembler_calls[] += 1
+                error("second assembler must not run")
+            end
+            second_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = alias_output,
+            )
+            try
+                test_throws_message(ArgumentError, "already reserved") do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        second_config,
+                        :unicycler;
+                        correction_runner = second_correction_runner,
+                        assembler_runner = second_assembler_runner,
+                    )
+                end
+            finally
+                put!(release_correction, nothing)
+            end
+            first_result = fetch(first_task)
+            Test.@test length(first_calls) == 3
+            Test.@test second_correction_calls[] == 0
+            Test.@test second_assembler_calls[] == 0
+            Test.@test first_result.assembly_stats["output_dir"] == physical_output
+            Test.@test isempty(first_result.assembly_stats["retained_cleanup_files"])
+            Test.@test isempty(first_result.assembly_stats["retained_cleanup_roots"])
+            Test.@test !ispath(physical_lock)
+
+            lifecycle_output = joinpath(physical_parent, "lifecycle-output")
+            lifecycle_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    lifecycle_output,
+                )
+            lock_observations = Bool[]
+            function lock_observing_source(values::Any)::Base.Generator
+                return (
+                    begin
+                        push!(lock_observations, isfile(lifecycle_lock))
+                        value
+                    end for value in values
+                )
+            end
+            lifecycle_calls = NamedTuple[]
+            lifecycle_result =
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (
+                        lock_observing_source(MULTI_INPUT_R1),
+                        lock_observing_source(MULTI_INPUT_R2),
+                    ),
+                    lock_observing_source(MULTI_INPUT_LONG),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = lifecycle_output,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        lifecycle_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        Test.@test isfile(lifecycle_lock)
+                        multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            Test.@test length(lifecycle_calls) == 3
+            Test.@test !isempty(lock_observations)
+            # Structural output-root planning is first, then lazy FASTQ source
+            # preparation and semantic validation occur before the mutating
+            # persistent reservation lock is acquired.
+            Test.@test !any(lock_observations)
+            Test.@test lifecycle_result.assembly_stats["output_dir"] ==
+                       lifecycle_output
+            Test.@test !ispath(lifecycle_lock)
+
+            retarget_parent = joinpath(temp_dir, "retarget-physical")
+            mkpath(retarget_parent)
+            captured_output = joinpath(
+                physical_parent,
+                "retargeted-hybrid-output",
+            )
+            retargeted_alias_output = joinpath(
+                alias_parent,
+                "retargeted-hybrid-output",
+            )
+            captured_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    captured_output,
+                )
+            function retargeting_workflow_lock(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                Test.@test String(lock_path) == captured_lock
+                return Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                    lock_path,
+                ) do
+                    rm(alias_parent)
+                    symlink(retarget_parent, alias_parent)
+                    return action()
+                end
+            end
+            retarget_correction_calls = NamedTuple[]
+            retarget_result =
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = retargeted_alias_output,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        retarget_correction_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        Test.@test String(outdir) == joinpath(
+                            captured_output,
+                            "assembler_unicycler",
+                        )
+                        multi_input_fake_assembler_result(outdir)
+                    end,
+                    workflow_lock_runner = retargeting_workflow_lock,
+                )
+            Test.@test length(retarget_correction_calls) == 3
+            Test.@test retarget_result.assembly_stats["output_dir"] ==
+                       captured_output
+            Test.@test isdir(captured_output)
+            Test.@test !ispath(joinpath(
+                retarget_parent,
+                "retargeted-hybrid-output",
+            ))
+            Test.@test !ispath(captured_lock)
+
+            hierarchy_parent = joinpath(temp_dir, "hierarchy-parent")
+            hierarchy_child = joinpath(hierarchy_parent, "nested")
+            parent_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    hierarchy_parent,
+                )
+            child_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    hierarchy_child,
+                )
+            hierarchy_correction_calls = Ref(0)
+            hierarchy_assembler_calls = Ref(0)
+            function hierarchy_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                hierarchy_correction_calls[] += 1
+                error("hierarchical correction must not run")
+            end
+            function hierarchy_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                hierarchy_assembler_calls[] += 1
+                error("hierarchical assembler must not run")
+            end
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(parent_lock) do
+                test_throws_message(
+                    ArgumentError,
+                    "active ancestor workflow reservation",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = hierarchy_child,
+                        ),
+                        :unicycler;
+                        correction_runner = hierarchy_correction_runner,
+                        assembler_runner = hierarchy_assembler_runner,
+                    )
+                end
+            end
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(child_lock) do
+                test_throws_message(
+                    ArgumentError,
+                    "active descendant workflow reservation",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = hierarchy_parent,
+                        ),
+                        :unicycler;
+                        correction_runner = hierarchy_correction_runner,
+                        assembler_runner = hierarchy_assembler_runner,
+                    )
+                end
+            end
+            Test.@test hierarchy_correction_calls[] == 0
+            Test.@test hierarchy_assembler_calls[] == 0
+            Test.@test !ispath(parent_lock)
+            Test.@test !ispath(child_lock)
+
+            sibling_a = joinpath(temp_dir, "hierarchy-sibling-a")
+            sibling_b = joinpath(temp_dir, "hierarchy-sibling-b")
+            sibling_a_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(sibling_a)
+            sibling_b_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(sibling_b)
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                sibling_a_lock,
+            ) do
+                Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                    sibling_b_lock,
+                ) do
+                    sibling_reservation =
+                        Mycelia.Rhizomorph._require_exclusive_multi_input_workflow_domain(
+                            sibling_b,
+                            sibling_b_lock,
+                        )
+                    Test.@test sibling_reservation === nothing
+                end
+            end
+        end
+    end
+
+    Test.@testset "workflow lock cleanup precedence" begin
+        mktempdir() do temp_dir
+            ordinary_lock = joinpath(temp_dir, "ordinary-cleanup.pid")
+            ordinary_primary = ErrorException("synthetic workflow failure")
+            ordinary_close_calls = Ref(0)
+            ordinary_caught = Test.@test_logs (
+                :warn,
+                r"PID-lock cleanup failed while preserving the primary",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                        () -> throw(ordinary_primary),
+                        ordinary_lock;
+                        lock_closer = lock_handle -> begin
+                            ordinary_close_calls[] += 1
+                            Base.close(lock_handle)
+                            error("synthetic ordinary PID-lock close failure")
+                        end,
+                    )
+                end
+            end
+            Test.@test ordinary_caught === ordinary_primary
+            Test.@test ordinary_close_calls[] == 1
+            Test.@test !ispath(ordinary_lock)
+
+            interrupt_lock = joinpath(temp_dir, "interrupt-cleanup.pid")
+            interrupt_primary = ErrorException("synthetic workflow failure")
+            cleanup_interrupt = InterruptException()
+            interrupt_close_calls = Ref(0)
+            interrupt_caught = multi_input_capture_error() do
+                Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                    () -> throw(interrupt_primary),
+                    interrupt_lock;
+                    lock_closer = lock_handle -> begin
+                        interrupt_close_calls[] += 1
+                        Base.close(lock_handle)
+                        throw(cleanup_interrupt)
+                    end,
+                )
+            end
+            Test.@test interrupt_caught === cleanup_interrupt
+            Test.@test interrupt_close_calls[] == 1
+            Test.@test !ispath(interrupt_lock)
         end
     end
 
@@ -286,6 +1408,222 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             MULTI_INPUT_R2,
             "input",
         ) == 2
+
+        Test.@testset "reader and cursor cleanup precedence" begin
+            ordinary_success_calls = Ref(0)
+            ordinary_success_error = Test.@test_logs (
+                :warn,
+                r"encountered an additional cleanup failure",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._validate_paired_reads(
+                        MULTI_INPUT_R1,
+                        MULTI_INPUT_R2,
+                        "cleanup-success";
+                        cursor_closer = cursor -> begin
+                            ordinary_success_calls[] += 1
+                            error(
+                                "synthetic ordinary cursor close " *
+                                "$(ordinary_success_calls[])",
+                            )
+                        end,
+                    )
+                end
+            end
+            Test.@test ordinary_success_calls[] == 2
+            Test.@test ordinary_success_error isa ErrorException
+            Test.@test occursin(
+                "synthetic ordinary cursor close 1",
+                sprint(showerror, ordinary_success_error),
+            )
+
+            success_interrupt = InterruptException()
+            interrupt_success_calls = Ref(0)
+            interrupt_success_error = Test.@test_logs (
+                :warn,
+                r"encountered an additional cleanup failure",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._validate_paired_reads(
+                        MULTI_INPUT_R1,
+                        MULTI_INPUT_R2,
+                        "cleanup-success-interrupt";
+                        cursor_closer = cursor -> begin
+                            interrupt_success_calls[] += 1
+                            interrupt_success_calls[] == 1 && error(
+                                "synthetic ordinary cursor close before " *
+                                "interrupt",
+                            )
+                            throw(success_interrupt)
+                        end,
+                    )
+                end
+            end
+            Test.@test interrupt_success_calls[] == 2
+            Test.@test interrupt_success_error === success_interrupt
+
+            invalid_r1 = [multi_input_fastq_record("primary_a/1")]
+            invalid_r2 = [multi_input_fastq_record("primary_b/2")]
+            ordinary_failure_calls = Ref(0)
+            ordinary_failure_error = Test.@test_logs (
+                :warn,
+                r"cursor cleanup failed while preserving the primary",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._validate_paired_reads(
+                        invalid_r1,
+                        invalid_r2,
+                        "cleanup-primary";
+                        cursor_closer = cursor -> begin
+                            ordinary_failure_calls[] += 1
+                            error("synthetic cursor close failure")
+                        end,
+                    )
+                end
+            end
+            Test.@test ordinary_failure_calls[] == 2
+            Test.@test ordinary_failure_error isa ArgumentError
+            Test.@test occursin(
+                "out of sync",
+                sprint(showerror, ordinary_failure_error),
+            )
+            Test.@test !occursin(
+                "synthetic cursor close failure",
+                sprint(showerror, ordinary_failure_error),
+            )
+
+            failure_interrupt = InterruptException()
+            interrupt_failure_calls = Ref(0)
+            interrupt_failure_error = Test.@test_logs (
+                :warn,
+                r"encountered an additional cleanup failure",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._validate_paired_reads(
+                        invalid_r1,
+                        invalid_r2,
+                        "cleanup-primary-interrupt";
+                        cursor_closer = cursor -> begin
+                            interrupt_failure_calls[] += 1
+                            interrupt_failure_calls[] == 1 && error(
+                                "synthetic ordinary cursor close before " *
+                                "interrupt",
+                            )
+                            throw(failure_interrupt)
+                        end,
+                    )
+                end
+            end
+            Test.@test interrupt_failure_calls[] == 2
+            Test.@test interrupt_failure_error === failure_interrupt
+
+            mktempdir() do temp_dir
+                corrected_r1_path = multi_input_write_fastq(
+                    joinpath(temp_dir, "corrected-r1.fastq"),
+                    MULTI_INPUT_R1,
+                )
+                corrected_r2_path = multi_input_write_fastq(
+                    joinpath(temp_dir, "corrected-r2.fastq"),
+                    MULTI_INPUT_R2,
+                )
+                corrected_r1 = Mycelia.Rhizomorph._CorrectedReadSet(
+                    corrected_r1_path,
+                    length(MULTI_INPUT_R1),
+                    :illumina,
+                    Dict{String, Any}(),
+                )
+                corrected_r2 = Mycelia.Rhizomorph._CorrectedReadSet(
+                    corrected_r2_path,
+                    length(MULTI_INPUT_R2),
+                    :illumina,
+                    Dict{String, Any}(),
+                )
+                four_cursor_interrupt = InterruptException()
+                four_cursor_calls = Ref(0)
+                four_cursor_error = Test.@test_logs (
+                    :warn,
+                    r"encountered an additional cleanup failure",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._validate_corrected_pair_preserved(
+                            MULTI_INPUT_R1,
+                            MULTI_INPUT_R2,
+                            corrected_r1,
+                            corrected_r2,
+                            length(MULTI_INPUT_R1);
+                            cursor_closer = cursor -> begin
+                                four_cursor_calls[] += 1
+                                four_cursor_calls[] == 4 &&
+                                    throw(four_cursor_interrupt)
+                                error("synthetic ordinary cursor close")
+                            end,
+                        )
+                    end
+                end
+                Test.@test four_cursor_calls[] == 4
+                Test.@test four_cursor_error === four_cursor_interrupt
+
+                identifier_cursor_calls = Ref(0)
+                identifier_error = Test.@test_logs (
+                    :warn,
+                    r"cursor cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._validate_corrected_identifiers_preserved(
+                            [multi_input_fastq_record("input_identifier")],
+                            corrected_r1_path,
+                            "short_r1";
+                            cursor_closer = cursor -> begin
+                                identifier_cursor_calls[] += 1
+                                error("synthetic identifier cursor close")
+                            end,
+                        )
+                    end
+                end
+                Test.@test identifier_cursor_calls[] == 2
+                Test.@test identifier_error isa ArgumentError
+                Test.@test occursin(
+                    "changed read order or identifier",
+                    sprint(showerror, identifier_error),
+                )
+            end
+        end
+
+        distinct_equal_r1 = [multi_input_fastq_record("equal_pair")]
+        distinct_equal_r2 = [multi_input_fastq_record("equal_pair")]
+        Test.@test distinct_equal_r1[1] == distinct_equal_r2[1]
+        Test.@test distinct_equal_r1[1] !== distinct_equal_r2[1]
+        Test.@test Mycelia.Rhizomorph._validate_distinct_in_memory_read_records(
+            distinct_equal_r1,
+            distinct_equal_r2,
+            MULTI_INPUT_LONG,
+        ) === nothing
+        distinct_equal_calls = NamedTuple[]
+        function distinct_equal_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            return multi_input_fake_assembler_result(outdir)
+        end
+        distinct_equal_result =
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (distinct_equal_r1, distinct_equal_r2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    distinct_equal_calls,
+                ),
+                assembler_runner = distinct_equal_assembler_runner,
+            )
+        Test.@test length(distinct_equal_calls) == 3
+        expected_distinct_equal_counts = Dict(
+            "short_r1" => 1,
+            "short_r2" => 1,
+            "long_reads" => length(MULTI_INPUT_LONG),
+        )
+        Test.@test distinct_equal_result.assembly_stats["input_read_counts"] ==
+                   expected_distinct_equal_counts
 
         test_throws_message(ArgumentError, "different counts") do
             Mycelia.Rhizomorph._validate_paired_reads(
@@ -308,6 +1646,200 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 reversed_r1,
                 reversed_r2,
                 "input",
+            )
+        end
+        casava_r1 = [
+            multi_input_fastq_record("casava_pair 1:N:0:ACGT"),
+        ]
+        casava_r2 = [
+            multi_input_fastq_record("casava_pair 2:Y:0:ACGT"),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            casava_r1,
+            casava_r2,
+            "input",
+        ) == 1
+        noted_r1 = [
+            multi_input_fastq_record(
+                "noted_pair/1 note 2:N:0:ACGT",
+            ),
+        ]
+        noted_r2 = [
+            multi_input_fastq_record(
+                "noted_pair/2 note 1:N:0:ACGT",
+            ),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            noted_r1,
+            noted_r2,
+            "input",
+        ) == 1
+        malformed_casava_r1 = [
+            multi_input_fastq_record(
+                "anchored_pair/1 2:N:0:ACGT:trailing",
+            ),
+        ]
+        malformed_casava_r2 = [
+            multi_input_fastq_record(
+                "anchored_pair/2 1:N:0:ACGT:trailing",
+            ),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            malformed_casava_r1,
+            malformed_casava_r2,
+            "input",
+        ) == 1
+
+        invalid_casava_pairs = (
+            (
+                message = "invalid explicit mate roles",
+                r1 = [multi_input_fastq_record("casava_pair 2:N:0:ACGT")],
+                r2 = [multi_input_fastq_record("casava_pair 1:N:0:ACGT")],
+            ),
+            (
+                message = "conflicting explicit mate roles",
+                r1 = [
+                    multi_input_fastq_record(
+                        "conflict_pair/1 2:N:0:ACGT",
+                    ),
+                ],
+                r2 = [
+                    multi_input_fastq_record(
+                        "conflict_pair/2 2:N:0:ACGT",
+                    ),
+                ],
+            ),
+        )
+        workflow_configs = (
+            (
+                workflow = :unicycler,
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            ),
+            (
+                workflow = :autocycler_polished,
+                config = Mycelia.Rhizomorph.AutocyclerPolishConfig(),
+            ),
+        )
+        mktempdir() do casava_dir
+            valid_r1_path = multi_input_write_fastq(
+                joinpath(casava_dir, "valid-r1.fastq"),
+                casava_r1,
+            )
+            valid_r2_path = multi_input_write_fastq(
+                joinpath(casava_dir, "valid-r2.fastq"),
+                casava_r2,
+            )
+            Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+                [valid_r1_path],
+                [valid_r2_path],
+                "input",
+            ) == 1
+
+            for (workflow_index, workflow_config) in enumerate(workflow_configs)
+                for (pair_index, invalid_pair) in enumerate(invalid_casava_pairs)
+                    r1_path = multi_input_write_fastq(
+                        joinpath(
+                            casava_dir,
+                            "invalid-$(workflow_index)-$(pair_index)-r1.fastq",
+                        ),
+                        invalid_pair.r1,
+                    )
+                    r2_path = multi_input_write_fastq(
+                        joinpath(
+                            casava_dir,
+                            "invalid-$(workflow_index)-$(pair_index)-r2.fastq",
+                        ),
+                        invalid_pair.r2,
+                    )
+                    correction_calls = Ref(0)
+                    assembler_calls = Ref(0)
+                    correction_runner = function (
+                            reads::Any,
+                            correction_config::Mycelia.Rhizomorph.AssemblyConfig,
+                    )
+                        correction_calls[] += 1
+                        error("correction must not run")
+                    end
+                    assembler_runner = function (
+                            inputs::Any,
+                            outdir::AbstractString,
+                    )
+                        assembler_calls[] += 1
+                        error("assembler must not run")
+                    end
+                    test_throws_message(ArgumentError, invalid_pair.message) do
+                        Mycelia.Rhizomorph._assemble_paired_short_long(
+                            (r1_path, r2_path),
+                            MULTI_INPUT_LONG,
+                            workflow_config.config,
+                            workflow_config.workflow;
+                            correction_runner,
+                            assembler_runner,
+                        )
+                    end
+                    Test.@test correction_calls[] == 0
+                    Test.@test assembler_calls[] == 0
+                end
+            end
+        end
+        for workflow_config in workflow_configs
+            reconstructed_calls = NamedTuple[]
+            correction_runner = multi_input_fake_correction_runner(
+                reconstructed_calls;
+                transform = function (
+                        index::Int,
+                        records::Vector{FASTX.FASTQ.Record},
+                )
+                    index == 2 || return records
+                    return FASTX.FASTQ.Record[
+                        multi_input_fastq_record(
+                            String(FASTX.identifier(record)),
+                            FASTX.sequence(String, record),
+                        ) for record in records
+                    ]
+                end,
+            )
+            assembler_calls = Ref(0)
+            assembler_runner = function (
+                    inputs::Mycelia.Rhizomorph._CorrectedPairedShortLong,
+                    outdir::AbstractString,
+            )
+                assembler_calls[] += 1
+                corrected_r1_records = multi_input_collect_fastq([
+                    inputs.short_r1.path,
+                ])
+                corrected_r2_records = multi_input_collect_fastq([
+                    inputs.short_r2.path,
+                ])
+                Test.@test String(FASTX.description(only(corrected_r1_records))) ==
+                           "casava_pair 1:N:0:ACGT"
+                Test.@test String(FASTX.description(only(corrected_r2_records))) ==
+                           "casava_pair"
+                Test.@test String(FASTX.identifier(only(corrected_r1_records))) ==
+                           "casava_pair"
+                Test.@test String(FASTX.identifier(only(corrected_r2_records))) ==
+                           "casava_pair"
+                return multi_input_fake_assembler_result(
+                    outdir;
+                    include_polishing_artifacts =
+                        workflow_config.workflow == :autocycler_polished,
+                )
+            end
+            result = Mycelia.Rhizomorph._assemble_paired_short_long(
+                (casava_r1, casava_r2),
+                MULTI_INPUT_LONG,
+                workflow_config.config,
+                workflow_config.workflow;
+                correction_runner,
+                assembler_runner,
+            )
+            Test.@test result.assembly_stats["workflow"] ==
+                       String(workflow_config.workflow)
+            Test.@test length(reconstructed_calls) == 3
+            Test.@test assembler_calls[] == 1
+            Test.@test all(
+                call -> !isfile(call.corrected_fastq),
+                reconstructed_calls,
             )
         end
         test_throws_message(ArgumentError, "must be non-empty") do
@@ -472,6 +2004,159 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
     end
 
+    Test.@testset "path-backed inputs are strictly FASTQ" begin
+        mktempdir() do temp_dir
+            valid_r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "valid-r1.fastq"),
+                [multi_input_fastq_record("strict_pair/1")],
+            )
+            valid_r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "valid-r2.fastq"),
+                [multi_input_fastq_record("strict_pair/2")],
+            )
+            valid_long = multi_input_write_fastq(
+                joinpath(temp_dir, "valid-long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            fasta_input = multi_input_write_fasta(
+                joinpath(temp_dir, "reads.fasta");
+                records = ["not_fastq" => "ACGT"],
+            )
+            mixed_input = joinpath(temp_dir, "mixed.fastq")
+            write(mixed_input, read(valid_long))
+            open(mixed_input, "a") do stream
+                write(stream, ">mixed_fasta\nACGT\n")
+            end
+
+            invalid_sources = (
+                (label = "short_r1", path = fasta_input),
+                (label = "short_r2", path = mixed_input),
+                (label = "long_reads", path = fasta_input),
+            )
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            for (case_index, invalid_source) in enumerate(invalid_sources)
+                short_r1 = invalid_source.label == "short_r1" ?
+                           invalid_source.path : valid_r1
+                short_r2 = invalid_source.label == "short_r2" ?
+                           invalid_source.path : valid_r2
+                selected_long = invalid_source.label == "long_reads" ?
+                                invalid_source.path : valid_long
+                output_dir = joinpath(temp_dir, "invalid-$(case_index)")
+                test_throws_message(ArgumentError, "FASTQ") do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (short_r1, short_r2),
+                        selected_long,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir),
+                        :unicycler;
+                        correction_runner = (reads, config) -> begin
+                            correction_calls[] += 1
+                            error("correction must not run")
+                        end,
+                        assembler_runner = (inputs, outdir) -> begin
+                            assembler_calls[] += 1
+                            error("assembler must not run")
+                        end,
+                    )
+                end
+                Test.@test !ispath(output_dir)
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+
+            fasta_record = FASTX.FASTA.Record("not_fastq", "ACGT")
+            test_throws_message(ArgumentError, "is not FASTQ") do
+                Mycelia.Rhizomorph._multi_input_source_content_identity(
+                    [fasta_record],
+                    "long_reads",
+                )
+            end
+
+            close_failure = multi_input_capture_error() do
+                Mycelia.Rhizomorph._require_path_backed_fastq_sources(
+                    valid_long,
+                    "valid_long";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        error("synthetic valid FASTQ reader close failure")
+                    end,
+                )
+            end
+            Test.@test close_failure isa ArgumentError
+            Test.@test occursin(
+                "synthetic valid FASTQ reader close failure",
+                sprint(showerror, close_failure),
+            )
+
+            close_interrupt = InterruptException()
+            close_interrupt_error = multi_input_capture_error() do
+                Mycelia.Rhizomorph._require_path_backed_fastq_sources(
+                    valid_long,
+                    "valid_long";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        throw(close_interrupt)
+                    end,
+                )
+            end
+            Test.@test close_interrupt_error === close_interrupt
+
+            primary_reader_error = Test.@test_logs (
+                :warn,
+                r"reader cleanup failed while preserving the primary",
+            ) min_level=Logging.Warn match_mode=:any begin
+                multi_input_capture_error() do
+                    Mycelia.Rhizomorph._require_path_backed_fastq_sources(
+                        fasta_input,
+                        "invalid_long";
+                        reader_closer = reader -> begin
+                            close(reader)
+                            error("synthetic invalid reader close failure")
+                        end,
+                    )
+                end
+            end
+            Test.@test primary_reader_error isa ArgumentError
+            Test.@test occursin(
+                "record 1 is not FASTQ",
+                sprint(showerror, primary_reader_error),
+            )
+            Test.@test !occursin(
+                "synthetic invalid reader close failure",
+                sprint(showerror, primary_reader_error),
+            )
+
+            count_close_failure = multi_input_capture_error() do
+                Mycelia.Rhizomorph._count_nonempty_fastq_reads(
+                    valid_long,
+                    "valid_long";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        error("synthetic count reader close failure")
+                    end,
+                )
+            end
+            Test.@test count_close_failure isa ErrorException
+            Test.@test occursin(
+                "synthetic count reader close failure",
+                sprint(showerror, count_close_failure),
+            )
+
+            count_close_interrupt = InterruptException()
+            count_close_interrupt_error = multi_input_capture_error() do
+                Mycelia.Rhizomorph._count_nonempty_reads(
+                    [valid_long],
+                    "valid_long";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        throw(count_close_interrupt)
+                    end,
+                )
+            end
+            Test.@test count_close_interrupt_error === count_close_interrupt
+        end
+    end
+
     Test.@testset "gzip inputs reach independent correction" begin
         mktempdir() do temp_dir
             r1 = multi_input_write_fastq(
@@ -508,13 +2193,833 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "short_r2" => 2,
                 "long_reads" => 1,
             )
+            source_contract = result.assembly_stats[
+                "read_content_provenance"
+            ]["source_inputs"]
+            expected_paths = Dict(
+                "short_r1" => r1_gzip,
+                "short_r2" => r2_gzip,
+                "long_reads" => long_gzip,
+            )
+            for (label, expected_path) in expected_paths
+                identity = source_contract[label]
+                Test.@test identity["kind"] == "path_set"
+                Test.@test identity["source_count"] == 1
+                source = only(identity["sources"])
+                Test.@test source["path"] == abspath(expected_path)
+                Test.@test source["canonical_path"] == realpath(expected_path)
+                Test.@test source["size_bytes"] == filesize(expected_path)
+                Test.@test occursin(r"^[0-9a-f]{64}$", source["sha256"])
+                Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+            end
             Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         end
     end
 
     Test.@testset "lightweight Stage-1 cleanup ownership" begin
+        Test.@testset "retired ephemeral roots survive Base temp cleanup" begin
+            active_project = Base.active_project()
+            active_project isa AbstractString || error(
+                "A project is required for the temp-cleanup child fixture.",
+            )
+            mktempdir() do fixture_root
+                script_path = joinpath(fixture_root, "temp-cleanup-fixture.jl")
+                script = """
+                ENV["LD_LIBRARY_PATH"] = ""
+                Base.eval(Main, :(import Mycelia))
+
+                mode = ARGS[1]
+                report_path = ARGS[2]
+                root_plan = Mycelia.Rhizomorph._plan_workflow_root(nothing)
+                root = Mycelia.Rhizomorph._prepare_workflow_root(root_plan)
+                retained = Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                    root.path;
+                    expected_identity = root.identity,
+                )
+                retained && error("exact fixture cleanup retained its root")
+                mkpath(root.path)
+                write(joinpath(root.path, "sentinel.txt"), "replacement\n")
+                if mode == "forced-purge"
+                    Base.Filesystem.temp_cleanup_purge(force = true)
+                elseif mode != "normal-exit"
+                    error("unknown temp-cleanup fixture mode: \$(mode)")
+                end
+                write(report_path, root.path)
+                """
+                write(script_path, script)
+                project_directory = dirname(String(active_project))
+                project_command = `$(Base.julia_cmd()) --project=$(project_directory)`
+                for mode in ("normal-exit", "forced-purge")
+                    report_path = joinpath(fixture_root, "$(mode).report")
+                    child_command =
+                        `$project_command --startup-file=no --compiled-modules=yes`
+                    child_command =
+                        `$child_command $script_path $mode $report_path`
+                    run(child_command)
+                    retired_root = read(report_path, String)
+                    sentinel = joinpath(retired_root, "sentinel.txt")
+                    Test.@test read(sentinel, String) == "replacement\n"
+                    rm(retired_root; recursive = true, force = true)
+                end
+
+                repository_root = dirname(dirname(@__DIR__))
+                rhizomorph_source = read(
+                    joinpath(
+                        repository_root,
+                        "src",
+                        "rhizomorph",
+                        "assembly.jl",
+                    ),
+                    String,
+                )
+                for protected_call in (
+                        r"persistent_fastq[\s\S]*?tempname\(;\s*cleanup\s*=\s*false\s*\)",
+                        r"input_dir\s*=\s*mktempdir\(;\s*cleanup\s*=\s*false\s*\)",
+                        r"corrector_output_dir\s*=\s*try\s*mktempdir\(;\s*cleanup\s*=\s*false\)",
+                        r"olc_outdir[\s\S]*?mktempdir\(;\s*cleanup\s*=\s*false\s*\)",
+                )
+                    Test.@test occursin(protected_call, rhizomorph_source)
+                end
+                assembly_source = read(
+                    joinpath(repository_root, "src", "assembly.jl"),
+                    String,
+                )
+                Test.@test occursin(
+                    r"tmp_dir\s*=\s*mktempdir\(dirname\(db_dir\);\s*cleanup\s*=\s*false\)",
+                    assembly_source,
+                )
+            end
+        end
+
+        Test.@testset "three correction-owned cleanup paths are all attempted" begin
+            mktempdir() do temp_dir
+                corrected_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                input_root = mktempdir(temp_dir; cleanup = false)
+                corrector_root = mktempdir(temp_dir; cleanup = false)
+                corrected_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        corrected_fastq,
+                        :file,
+                        "test corrected FASTQ",
+                    )
+                input_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        input_root,
+                        :directory,
+                        "test correction input root",
+                    )
+                corrector_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        corrector_root,
+                        :directory,
+                        "test corrector root",
+                    )
+                ordinary_attempts = String[]
+                ordinary_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._cleanup_owned_assembly_artifacts!(
+                        (corrected_identity,),
+                        (input_identity, corrector_identity),
+                        "test Stage-1 ordinary cleanup";
+                        exact_file_remover = (path, identity) -> begin
+                            push!(ordinary_attempts, String(path))
+                            error("synthetic Stage-1 file cleanup failure")
+                        end,
+                        exact_directory_remover = (path, identity) -> begin
+                            push!(ordinary_attempts, String(path))
+                            Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                path,
+                                identity,
+                            )
+                        end,
+                    )
+                end
+                Test.@test ordinary_error isa ErrorException
+                Test.@test ordinary_attempts == [
+                    corrected_fastq,
+                    input_root,
+                    corrector_root,
+                ]
+                Test.@test isfile(corrected_fastq)
+                Test.@test !ispath(input_root)
+                Test.@test !ispath(corrector_root)
+                rm(corrected_fastq; force = true)
+
+                interrupt_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "interrupt-corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                interrupt_input_root = mktempdir(temp_dir; cleanup = false)
+                interrupt_corrector_root = mktempdir(temp_dir; cleanup = false)
+                interrupt_file_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        interrupt_fastq,
+                        :file,
+                        "interrupt corrected FASTQ",
+                    )
+                interrupt_input_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        interrupt_input_root,
+                        :directory,
+                        "interrupt correction input root",
+                    )
+                interrupt_corrector_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        interrupt_corrector_root,
+                        :directory,
+                        "interrupt corrector root",
+                    )
+                cleanup_interrupt = InterruptException()
+                interrupt_attempts = String[]
+                directory_attempts = Ref(0)
+                interrupt_error = Test.@test_logs (
+                    :warn,
+                    r"encountered an additional cleanup failure",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._cleanup_owned_assembly_artifacts!(
+                            (interrupt_file_identity,),
+                            (
+                                interrupt_input_identity,
+                                interrupt_corrector_identity,
+                            ),
+                            "test Stage-1 interrupt cleanup";
+                            exact_file_remover = (path, identity) -> begin
+                                push!(interrupt_attempts, String(path))
+                                error("synthetic ordinary cleanup failure")
+                            end,
+                            exact_directory_remover = (path, identity) -> begin
+                                push!(interrupt_attempts, String(path))
+                                directory_attempts[] += 1
+                                directory_attempts[] == 1 &&
+                                    throw(cleanup_interrupt)
+                                Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                    path,
+                                    identity,
+                                )
+                            end,
+                        )
+                    end
+                end
+                Test.@test interrupt_error === cleanup_interrupt
+                Test.@test interrupt_attempts == [
+                    interrupt_fastq,
+                    interrupt_input_root,
+                    interrupt_corrector_root,
+                ]
+                Test.@test isfile(interrupt_fastq)
+                Test.@test isdir(interrupt_input_root)
+                Test.@test !ispath(interrupt_corrector_root)
+                rm(interrupt_fastq; force = true)
+                rm(interrupt_input_root; recursive = true, force = true)
+            end
+        end
+
+        Test.@testset "successful Stage-1 root-cleanup failure revokes handoff" begin
+            function stage1_cleanup_fixture(
+                    temp_dir::AbstractString,
+                    label::AbstractString,
+            )::NamedTuple
+                corrected_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "$(label)-corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                first_root = mktempdir(temp_dir; cleanup = false)
+                second_root = mktempdir(temp_dir; cleanup = false)
+                corrected_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        corrected_fastq,
+                        :file,
+                        "$(label) corrected FASTQ",
+                    )
+                first_root_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        first_root,
+                        :directory,
+                        "$(label) first root",
+                    )
+                second_root_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        second_root,
+                        :directory,
+                        "$(label) second root",
+                    )
+                return (;
+                    corrected_fastq,
+                    first_root,
+                    second_root,
+                    corrected_identity,
+                    root_identities = (
+                        first_root_identity,
+                        second_root_identity,
+                    ),
+                )
+            end
+
+            mktempdir() do temp_dir
+                ordinary = stage1_cleanup_fixture(temp_dir, "ordinary")
+                ordinary_primary = ErrorException(
+                    "synthetic ordinary Stage-1 root cleanup failure",
+                )
+                ordinary_attempts = String[]
+                ordinary_directory_calls = Ref(0)
+                ordinary_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._finalize_stage1_correction_cleanup!(
+                        ordinary.root_identities,
+                        ordinary.corrected_identity,
+                        true;
+                        exact_file_remover = (path, identity) -> begin
+                            push!(ordinary_attempts, String(path))
+                            Mycelia.Rhizomorph._remove_exact_owned_assembly_file!(
+                                path,
+                                identity,
+                            )
+                        end,
+                        exact_directory_remover = (path, identity) -> begin
+                            push!(ordinary_attempts, String(path))
+                            ordinary_directory_calls[] += 1
+                            ordinary_directory_calls[] == 1 &&
+                                throw(ordinary_primary)
+                            Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                path,
+                                identity,
+                            )
+                        end,
+                    )
+                end
+                Test.@test ordinary_error === ordinary_primary
+                Test.@test ordinary_attempts == [
+                    ordinary.first_root,
+                    ordinary.second_root,
+                    ordinary.corrected_fastq,
+                ]
+                Test.@test !isfile(ordinary.corrected_fastq)
+                Test.@test isdir(ordinary.first_root)
+                Test.@test !ispath(ordinary.second_root)
+                rm(ordinary.first_root; recursive = true, force = true)
+
+                cleanup_interrupt_case = stage1_cleanup_fixture(
+                    temp_dir,
+                    "cleanup-interrupt",
+                )
+                root_primary = ErrorException(
+                    "synthetic Stage-1 root cleanup failure",
+                )
+                cleanup_interrupt = InterruptException()
+                cleanup_interrupt_attempts = String[]
+                cleanup_interrupt_directory_calls = Ref(0)
+                cleanup_interrupt_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._finalize_stage1_correction_cleanup!(
+                        cleanup_interrupt_case.root_identities,
+                        cleanup_interrupt_case.corrected_identity,
+                        true;
+                        exact_file_remover = (path, identity) -> begin
+                            push!(cleanup_interrupt_attempts, String(path))
+                            throw(cleanup_interrupt)
+                        end,
+                        exact_directory_remover = (path, identity) -> begin
+                            push!(cleanup_interrupt_attempts, String(path))
+                            cleanup_interrupt_directory_calls[] += 1
+                            cleanup_interrupt_directory_calls[] == 1 &&
+                                throw(root_primary)
+                            Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                path,
+                                identity,
+                            )
+                        end,
+                    )
+                end
+                Test.@test cleanup_interrupt_error === cleanup_interrupt
+                Test.@test cleanup_interrupt_attempts == [
+                    cleanup_interrupt_case.first_root,
+                    cleanup_interrupt_case.second_root,
+                    cleanup_interrupt_case.corrected_fastq,
+                ]
+                Test.@test isfile(cleanup_interrupt_case.corrected_fastq)
+                Test.@test isdir(cleanup_interrupt_case.first_root)
+                Test.@test !ispath(cleanup_interrupt_case.second_root)
+                rm(cleanup_interrupt_case.corrected_fastq; force = true)
+                rm(
+                    cleanup_interrupt_case.first_root;
+                    recursive = true,
+                    force = true,
+                )
+
+                primary_interrupt_case = stage1_cleanup_fixture(
+                    temp_dir,
+                    "primary-interrupt",
+                )
+                primary_interrupt = InterruptException()
+                primary_interrupt_attempts = String[]
+                primary_interrupt_directory_calls = Ref(0)
+                primary_interrupt_error = Test.@test_logs (
+                    :warn,
+                    r"corrected FASTQ cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._finalize_stage1_correction_cleanup!(
+                            primary_interrupt_case.root_identities,
+                            primary_interrupt_case.corrected_identity,
+                            true;
+                            exact_file_remover = (path, identity) -> begin
+                                push!(primary_interrupt_attempts, String(path))
+                                Mycelia.Rhizomorph._remove_exact_owned_assembly_file!(
+                                    path,
+                                    identity,
+                                )
+                                error("synthetic ordinary FASTQ cleanup failure")
+                            end,
+                            exact_directory_remover = (path, identity) -> begin
+                                push!(primary_interrupt_attempts, String(path))
+                                primary_interrupt_directory_calls[] += 1
+                                primary_interrupt_directory_calls[] == 1 &&
+                                    throw(primary_interrupt)
+                                Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                    path,
+                                    identity,
+                                )
+                            end,
+                        )
+                    end
+                end
+                Test.@test primary_interrupt_error === primary_interrupt
+                Test.@test primary_interrupt_attempts == [
+                    primary_interrupt_case.first_root,
+                    primary_interrupt_case.second_root,
+                    primary_interrupt_case.corrected_fastq,
+                ]
+                Test.@test !isfile(primary_interrupt_case.corrected_fastq)
+                Test.@test isdir(primary_interrupt_case.first_root)
+                Test.@test !ispath(primary_interrupt_case.second_root)
+                rm(
+                    primary_interrupt_case.first_root;
+                    recursive = true,
+                    force = true,
+                )
+            end
+        end
+
+        Test.@testset "single-input hybrid-OLC cleanup precedence" begin
+            config = Mycelia.Rhizomorph.AssemblyConfig(;
+                k = 13,
+                corrector = :iterative,
+                strategy = :scalable,
+                sequencing_tech = :nanopore,
+                layout = :olc,
+                olc_tool = :flye,
+            )
+            mktempdir() do temp_dir
+                ordinary_case = joinpath(temp_dir, "ordinary")
+                mkpath(ordinary_case)
+                ordinary_fastq = multi_input_write_fastq(
+                    joinpath(ordinary_case, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                ordinary_olc_root = Ref("")
+                function ordinary_correction_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig;
+                        materialize_corrected_reads::Bool,
+                )::NamedTuple
+                    Test.@test !materialize_corrected_reads
+                    corrected_fastq_identity =
+                        Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                            ordinary_fastq,
+                            :file,
+                            "ordinary OLC corrected FASTQ",
+                        )
+                    return (;
+                        corrected_fastq = ordinary_fastq,
+                        corrected_fastq_identity,
+                        ephemeral = true,
+                    )
+                end
+                ordinary_primary = ErrorException(
+                    "synthetic single-input OLC failure",
+                )
+                ordinary_attempts = String[]
+                ordinary_error = Test.@test_logs (
+                    :warn,
+                    r"hybrid-OLC cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._assemble_hybrid_olc(
+                            MULTI_INPUT_LONG,
+                            config;
+                            correction_runner = ordinary_correction_runner,
+                            olc_runner = (
+                                _tool,
+                                _corrected_fastq,
+                                _outdir,
+                                _config,
+                            ) -> throw(ordinary_primary),
+                            temp_directory_creator = () -> begin
+                                ordinary_olc_root[] = mktempdir(
+                                    ordinary_case;
+                                    cleanup = false,
+                                )
+                                ordinary_olc_root[]
+                            end,
+                            exact_file_remover = (path, identity) -> begin
+                                push!(ordinary_attempts, String(path))
+                                error("synthetic corrected FASTQ rm failure")
+                            end,
+                            exact_directory_remover = (path, identity) -> begin
+                                push!(ordinary_attempts, String(path))
+                                Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                    path,
+                                    identity,
+                                )
+                            end,
+                        )
+                    end
+                end
+                Test.@test ordinary_error === ordinary_primary
+                Test.@test ordinary_attempts == [
+                    ordinary_fastq,
+                    ordinary_olc_root[],
+                ]
+                Test.@test isfile(ordinary_fastq)
+                Test.@test !ispath(ordinary_olc_root[])
+                rm(ordinary_fastq; force = true)
+
+                interrupt_case = joinpath(temp_dir, "interrupt")
+                mkpath(interrupt_case)
+                interrupt_fastq = multi_input_write_fastq(
+                    joinpath(interrupt_case, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                interrupt_olc_root = Ref("")
+                function interrupt_correction_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig;
+                        materialize_corrected_reads::Bool,
+                )::NamedTuple
+                    Test.@test !materialize_corrected_reads
+                    corrected_fastq_identity =
+                        Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                            interrupt_fastq,
+                            :file,
+                            "interrupt OLC corrected FASTQ",
+                        )
+                    return (;
+                        corrected_fastq = interrupt_fastq,
+                        corrected_fastq_identity,
+                        ephemeral = true,
+                    )
+                end
+                cleanup_interrupt = InterruptException()
+                interrupt_attempts = String[]
+                interrupt_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._assemble_hybrid_olc(
+                        MULTI_INPUT_LONG,
+                        config;
+                        correction_runner = interrupt_correction_runner,
+                        olc_runner = (
+                            _tool,
+                            _corrected_fastq,
+                            outdir,
+                            _config,
+                        ) -> multi_input_write_fasta(
+                            joinpath(outdir, "assembly.fasta"),
+                        ),
+                        contig_wrapper = (
+                            _contigs_fasta,
+                            _tool,
+                            _config,
+                            _stage1,
+                        ) -> :wrapped,
+                        temp_directory_creator = () -> begin
+                            interrupt_olc_root[] = mktempdir(
+                                interrupt_case;
+                                cleanup = false,
+                            )
+                            interrupt_olc_root[]
+                        end,
+                        exact_file_remover = (path, identity) -> begin
+                            push!(interrupt_attempts, String(path))
+                            throw(cleanup_interrupt)
+                        end,
+                        exact_directory_remover = (path, identity) -> begin
+                            push!(interrupt_attempts, String(path))
+                            Mycelia.Rhizomorph._remove_exact_owned_assembly_directory!(
+                                path,
+                                identity,
+                            )
+                        end,
+                    )
+                end
+                Test.@test interrupt_error === cleanup_interrupt
+                Test.@test interrupt_attempts == [
+                    interrupt_fastq,
+                    interrupt_olc_root[],
+                ]
+                Test.@test isfile(interrupt_fastq)
+                Test.@test !ispath(interrupt_olc_root[])
+                rm(interrupt_fastq; force = true)
+            end
+        end
+
+        Test.@testset "producer identity reaches all correction consumers" begin
+            mktempdir() do temp_dir
+                native_config = Mycelia.Rhizomorph.AssemblyConfig(;
+                    k = 13,
+                    corrector = :iterative,
+                    strategy = :scalable,
+                )
+                native_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "native-corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                native_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        native_fastq,
+                        :file,
+                        "native producer FASTQ",
+                    )
+                native_replacement = multi_input_write_fastq(
+                    joinpath(temp_dir, "native-replacement.fastq"),
+                    [multi_input_fastq_record("native_replacement")],
+                )
+                native_replacement_content = read(native_replacement)
+                function native_correction_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig,
+                )::NamedTuple
+                    return (;
+                        corrected_fastq = native_fastq,
+                        corrected_fastq_identity = native_identity,
+                        ephemeral = true,
+                    )
+                end
+                native_error = Test.@test_logs (
+                    :warn,
+                    r"native iterative-corrector FASTQ cleanup failed while preserving",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._assemble_with_iterative_corrector(
+                            MULTI_INPUT_LONG,
+                            native_config;
+                            correction_runner = native_correction_runner,
+                            after_corrected_identity_adoption_hook =
+                                (path, identity) -> begin
+                                    rm(path)
+                                    mv(native_replacement, path)
+                                end,
+                        )
+                    end
+                end
+                Test.@test native_error isa ErrorException
+                Test.@test occursin(
+                    "changed filesystem identity after producer capture",
+                    sprint(showerror, native_error),
+                )
+                Test.@test read(native_fastq) == native_replacement_content
+                rm(native_fastq; force = true)
+
+                native_interrupt_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "native-interrupt.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                native_interrupt_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        native_interrupt_fastq,
+                        :file,
+                        "native Interrupt producer FASTQ",
+                    )
+                native_cleanup_interrupt = InterruptException()
+                function native_interrupt_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig,
+                )::NamedTuple
+                    return (;
+                        corrected_fastq = native_interrupt_fastq,
+                        corrected_fastq_identity = native_interrupt_identity,
+                        ephemeral = true,
+                    )
+                end
+                native_interrupt_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._assemble_with_iterative_corrector(
+                        MULTI_INPUT_LONG,
+                        native_config;
+                        correction_runner = native_interrupt_runner,
+                        after_corrected_identity_adoption_hook =
+                            (path, identity) -> error(
+                                "synthetic native consumer failure",
+                            ),
+                        exact_file_remover = (path, identity) ->
+                            throw(native_cleanup_interrupt),
+                    )
+                end
+                Test.@test native_interrupt_error === native_cleanup_interrupt
+                Test.@test isfile(native_interrupt_fastq)
+                rm(native_interrupt_fastq; force = true)
+
+                olc_config = Mycelia.Rhizomorph.AssemblyConfig(;
+                    k = 13,
+                    corrector = :iterative,
+                    strategy = :scalable,
+                    sequencing_tech = :nanopore,
+                    layout = :olc,
+                    olc_tool = :flye,
+                )
+                olc_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "olc-corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                olc_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                        olc_fastq,
+                        :file,
+                        "OLC producer FASTQ",
+                    )
+                olc_replacement = multi_input_write_fastq(
+                    joinpath(temp_dir, "olc-replacement.fastq"),
+                    [multi_input_fastq_record("olc_replacement")],
+                )
+                olc_replacement_content = read(olc_replacement)
+                olc_calls = Ref(0)
+                function olc_identity_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig;
+                        materialize_corrected_reads::Bool,
+                )::NamedTuple
+                    Test.@test !materialize_corrected_reads
+                    return (;
+                        corrected_fastq = olc_fastq,
+                        corrected_fastq_identity = olc_identity,
+                        ephemeral = true,
+                    )
+                end
+                olc_error = Test.@test_logs (
+                    :warn,
+                    r"hybrid-OLC corrected FASTQ cleanup failed while preserving",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._assemble_hybrid_olc(
+                            MULTI_INPUT_LONG,
+                            olc_config;
+                            correction_runner = olc_identity_runner,
+                            after_corrected_identity_adoption_hook =
+                                (path, identity) -> begin
+                                    rm(path)
+                                    mv(olc_replacement, path)
+                                end,
+                            olc_runner = (tool, fastq, outdir, config) -> begin
+                                olc_calls[] += 1
+                                error("OLC runner must not consume replacement")
+                            end,
+                        )
+                    end
+                end
+                Test.@test olc_error isa ErrorException
+                Test.@test occursin(
+                    "changed filesystem identity after producer capture",
+                    sprint(showerror, olc_error),
+                )
+                Test.@test olc_calls[] == 0
+                Test.@test read(olc_fastq) == olc_replacement_content
+                rm(olc_fastq; force = true)
+
+                legacy_fastq = multi_input_write_fastq(
+                    joinpath(temp_dir, "legacy-corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                legacy_stage = (;
+                    corrected_fastq = legacy_fastq,
+                    ephemeral = true,
+                )
+                test_throws_message(
+                    ErrorException,
+                    "missing corrected_fastq_identity",
+                ) do
+                    Mycelia.Rhizomorph._adopt_stage1_corrected_fastq_identity(
+                        legacy_stage,
+                        legacy_fastq,
+                        "production identity contract",
+                    )
+                end
+                legacy_identity =
+                    Mycelia.Rhizomorph._adopt_stage1_corrected_fastq_identity(
+                        legacy_stage,
+                        legacy_fastq,
+                        "injected legacy identity contract";
+                        allow_legacy_identity_fallback = true,
+                    )
+                Test.@test legacy_identity.path == legacy_fastq
+                function legacy_olc_runner(
+                        _reads::Any,
+                        _config::Mycelia.Rhizomorph.AssemblyConfig;
+                        materialize_corrected_reads::Bool,
+                )::NamedTuple
+                    Test.@test !materialize_corrected_reads
+                    return legacy_stage
+                end
+                legacy_result = Mycelia.Rhizomorph._assemble_hybrid_olc(
+                    MULTI_INPUT_LONG,
+                    olc_config;
+                    correction_runner = legacy_olc_runner,
+                    olc_runner = (tool, fastq, outdir, config) ->
+                        multi_input_write_fasta(
+                            joinpath(outdir, "legacy-assembly.fasta"),
+                        ),
+                    contig_wrapper = (fasta, tool, config, stage) -> :legacy,
+                )
+                Test.@test legacy_result == :legacy
+                Test.@test !isfile(legacy_fastq)
+
+                workflow_root = mktempdir(temp_dir; cleanup = false)
+                multi_calls = NamedTuple[]
+                multi_runner = multi_input_fake_correction_runner(multi_calls)
+                multi_replacement = multi_input_write_fastq(
+                    joinpath(temp_dir, "multi-replacement.fastq"),
+                    [multi_input_fastq_record("multi_replacement")],
+                )
+                multi_replacement_content = read(multi_replacement)
+                multi_cleanup_tokens =
+                    Mycelia.Rhizomorph._Stage1CleanupToken[]
+                multi_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._correct_read_set!(
+                        multi_cleanup_tokens,
+                        MULTI_INPUT_LONG,
+                        :nanopore,
+                        :long_reads,
+                        (; k = 13, strategy = :scalable),
+                        workflow_root,
+                        false,
+                        multi_runner;
+                        after_corrected_identity_adoption_hook =
+                            (path, identity) -> begin
+                                rm(path)
+                                mv(multi_replacement, path)
+                            end,
+                    )
+                end
+                Test.@test multi_error isa ErrorException
+                Test.@test occursin(
+                    "changed filesystem identity after producer capture",
+                    sprint(showerror, multi_error),
+                )
+                Test.@test length(multi_cleanup_tokens) == 1
+                multi_fastq = only(multi_calls).corrected_fastq
+                retained = Test.@test_logs (
+                    :warn,
+                    r"refusing corrected FASTQ cleanup after path identity changed",
+                ) min_level=Logging.Warn begin
+                    Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                        multi_cleanup_tokens,
+                    )
+                end
+                Test.@test retained == [multi_fastq]
+                Test.@test read(multi_fastq) == multi_replacement_content
+                rm(workflow_root; recursive = true, force = true)
+            end
+        end
+
         Test.@test fieldnames(Mycelia.Rhizomorph._Stage1CleanupToken) ==
-                   (:corrected_fastq, :ephemeral)
+                   (:corrected_fastq, :ephemeral, :identity)
         cleanup_tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
         correction_calls = NamedTuple[]
         correction_runner = multi_input_fake_correction_runner(correction_calls)
@@ -534,16 +3039,26 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Mycelia.Rhizomorph._cleanup_multi_input_stages!(cleanup_tokens)
         Test.@test !isfile(corrected.path)
 
-        counted_fastq = tempname() * ".fastq"
-        multi_input_write_fastq(counted_fastq, MULTI_INPUT_LONG)
+        counted_fastq = Ref("")
         function counted_runner(
                 reads::Any,
                 config::Mycelia.Rhizomorph.AssemblyConfig,
         )::NamedTuple
+            counted_fastq[] = multi_input_write_fastq(
+                joinpath(something(config.output_dir), "counted.fastq"),
+                MULTI_INPUT_LONG,
+            )
             return (;
-                corrected_fastq = counted_fastq,
+                corrected_fastq = counted_fastq[],
+                corrected_fastq_identity =
+                    Mycelia.Rhizomorph._owned_assembly_artifact_identity(
+                    counted_fastq[],
+                    :file,
+                    "counted correction output",
+                ),
                 corrected_read_count = 1,
-                ephemeral = true,
+                # The route, not this untrusted bit, owns cleanup authority.
+                ephemeral = false,
                 correction_graph = fill(1, 10),
             )
         end
@@ -560,69 +3075,326 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
         Test.@test corrected_from_count.count == 1
         Test.@test cleanup_tokens == [
-            Mycelia.Rhizomorph._Stage1CleanupToken(counted_fastq, true),
+            Mycelia.Rhizomorph._Stage1CleanupToken(counted_fastq[], true),
         ]
         Mycelia.Rhizomorph._cleanup_multi_input_stages!(cleanup_tokens)
-        Test.@test !isfile(counted_fastq)
+        Test.@test !isfile(counted_fastq[])
 
-        valid_fastq = multi_input_write_fastq(
+        interrupted_fastq = multi_input_write_fastq(
             tempname() * ".fastq",
             MULTI_INPUT_LONG,
         )
-        empty_fastq = tempname() * ".fastq"
-        touch(empty_fastq)
-        fasta_output = tempname() * ".fasta"
-        write(fasta_output, ">not_fastq\nACGT\n")
+        interrupted_tokens = [
+            Mycelia.Rhizomorph._Stage1CleanupToken(interrupted_fastq, true),
+        ]
+        stage_interrupt = InterruptException()
+        caught_stage_interrupt = try
+            Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                interrupted_tokens;
+                pre_remove_hook = path -> throw(stage_interrupt),
+            )
+            nothing
+        catch caught
+            caught
+        end
+        Test.@test caught_stage_interrupt === stage_interrupt
+        Test.@test isfile(interrupted_fastq)
+        rm(interrupted_fastq; force = true)
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "workflow")
+            stage_dir = joinpath(workflow_root, "corrected", "long_reads")
+            external_dir = joinpath(temp_dir, "external")
+            corrected_fastq = multi_input_write_fastq(
+                joinpath(stage_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            external_fastq = multi_input_write_fastq(
+                joinpath(external_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            retargeted_tokens = [
+                Mycelia.Rhizomorph._Stage1CleanupToken(
+                    corrected_fastq,
+                    true,
+                ),
+            ]
+            rm(stage_dir; recursive = true)
+            symlink(external_dir, stage_dir)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing corrected FASTQ cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                    retargeted_tokens,
+                )
+            end
+            Test.@test retained == [corrected_fastq]
+            Test.@test isfile(external_fastq)
+            Test.@test read(external_fastq) == read(
+                joinpath(stage_dir, "corrected.fastq"),
+            )
+        end
+
+        mktempdir() do temp_dir
+            corrected_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            replacement_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "replacement.fastq"),
+                [multi_input_fastq_record("replacement")],
+            )
+            replacement_content = read(replacement_fastq)
+            replaced_tokens = [
+                Mycelia.Rhizomorph._Stage1CleanupToken(
+                    corrected_fastq,
+                    true,
+                ),
+            ]
+            rm(corrected_fastq)
+            mv(replacement_fastq, corrected_fastq)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing corrected FASTQ cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                    replaced_tokens,
+                )
+            end
+            Test.@test retained == [corrected_fastq]
+            Test.@test read(corrected_fastq) == replacement_content
+        end
+
+        mktempdir() do temp_dir
+            corrected_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "barrier-corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            replacement_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "barrier-replacement.fastq"),
+                [multi_input_fastq_record("barrier-replacement")],
+            )
+            replacement_content = read(replacement_fastq)
+            barrier_tokens = [
+                Mycelia.Rhizomorph._Stage1CleanupToken(
+                    corrected_fastq,
+                    true,
+                ),
+            ]
+            function swap_before_exact_file_removal(
+                    path::AbstractString,
+            )::Nothing
+                rm(path)
+                mv(replacement_fastq, path)
+                return nothing
+            end
+            retained = Test.@test_logs (
+                :warn,
+                r"corrected FASTQ cleanup failed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                    barrier_tokens;
+                    pre_remove_hook = swap_before_exact_file_removal,
+                )
+            end
+            Test.@test retained == [corrected_fastq]
+            Test.@test read(corrected_fastq) == replacement_content
+        end
+
+        interrupted_root = mktempdir()
+        root_interrupt = InterruptException()
+        caught_root_interrupt = try
+            Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                interrupted_root;
+                pre_remove_hook = path -> throw(root_interrupt),
+            )
+            nothing
+        catch caught
+            caught
+        end
+        Test.@test caught_root_interrupt === root_interrupt
+        Test.@test isdir(interrupted_root)
+        rm(interrupted_root; recursive = true, force = true)
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "ephemeral-root")
+            external_root = joinpath(temp_dir, "external-root")
+            mkpath(workflow_root)
+            mkpath(external_root)
+            external_marker = joinpath(external_root, "preserve.txt")
+            write(external_marker, "preserve\n")
+            rm(workflow_root; recursive = true)
+            symlink(external_root, workflow_root)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing ephemeral root cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_root!(workflow_root)
+            end
+            Test.@test retained
+            Test.@test read(external_marker, String) == "preserve\n"
+        end
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "ephemeral-root")
+            replacement_root = joinpath(temp_dir, "replacement-root")
+            mkpath(workflow_root)
+            expected_identity =
+                Mycelia.Rhizomorph._workflow_path_identity(
+                    workflow_root,
+                    "test workflow root",
+                )
+            mkpath(replacement_root)
+            replacement_marker = joinpath(replacement_root, "preserve.txt")
+            write(replacement_marker, "replacement\n")
+            rm(workflow_root; recursive = true)
+            mv(replacement_root, workflow_root)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing ephemeral root cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                    workflow_root;
+                    expected_identity,
+                )
+            end
+            Test.@test retained
+            Test.@test read(
+                joinpath(workflow_root, "preserve.txt"),
+                String,
+            ) == "replacement\n"
+        end
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "barrier-root")
+            replacement_root = joinpath(temp_dir, "barrier-replacement-root")
+            mkpath(workflow_root)
+            expected_identity =
+                Mycelia.Rhizomorph._workflow_path_identity(
+                    workflow_root,
+                    "barrier workflow root",
+                )
+            mkpath(replacement_root)
+            replacement_marker = joinpath(replacement_root, "preserve.txt")
+            write(replacement_marker, "barrier replacement\n")
+            function swap_before_exact_root_removal(
+                    path::AbstractString,
+            )::Nothing
+                rm(path; recursive = true)
+                mv(replacement_root, path)
+                return nothing
+            end
+            retained = Test.@test_logs (
+                :warn,
+                r"ephemeral output cleanup failed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                    workflow_root;
+                    expected_identity,
+                    pre_remove_hook = swap_before_exact_root_removal,
+                )
+            end
+            Test.@test retained
+            Test.@test read(
+                joinpath(workflow_root, "preserve.txt"),
+                String,
+            ) == "barrier replacement\n"
+        end
+
         malformed_stages = [
-            ("missing corrected_fastq", (; ephemeral = true)),
             (
-                "no non-empty corrected FASTQ",
-                (;
-                    corrected_fastq = tempname() * ".fastq",
+                "missing corrected_fastq",
+                (reads, config) -> (; ephemeral = true),
+            ),
+            (
+                "regular, non-symlink FASTQ",
+                (reads, config) -> (;
+                    corrected_fastq = joinpath(
+                        something(config.output_dir),
+                        "missing.fastq",
+                    ),
                     corrected_read_count = 1,
                     ephemeral = true,
                 ),
             ),
             (
                 "no non-empty corrected FASTQ",
-                (;
-                    corrected_fastq = empty_fastq,
-                    corrected_read_count = 1,
-                    ephemeral = true,
-                ),
+                function (reads, config)
+                    empty_fastq = joinpath(
+                        something(config.output_dir),
+                        "empty.fastq",
+                    )
+                    touch(empty_fastq)
+                    return (;
+                        corrected_fastq = empty_fastq,
+                        corrected_read_count = 1,
+                        ephemeral = true,
+                    )
+                end,
             ),
             (
                 "missing corrected_read_count",
-                (; corrected_fastq = valid_fastq, ephemeral = false),
+                function (reads, config)
+                    valid_fastq = multi_input_write_fastq(
+                        joinpath(
+                            something(config.output_dir),
+                            "missing-count.fastq",
+                        ),
+                        MULTI_INPUT_LONG,
+                    )
+                    return (; corrected_fastq = valid_fastq, ephemeral = false)
+                end,
             ),
             (
                 "produced 0 corrected reads",
-                (;
-                    corrected_fastq = valid_fastq,
-                    corrected_read_count = 0,
-                    ephemeral = false,
-                ),
+                function (reads, config)
+                    valid_fastq = multi_input_write_fastq(
+                        joinpath(something(config.output_dir), "zero.fastq"),
+                        MULTI_INPUT_LONG,
+                    )
+                    return (;
+                        corrected_fastq = valid_fastq,
+                        corrected_read_count = 0,
+                        ephemeral = false,
+                    )
+                end,
             ),
             (
                 "reported 7 corrected reads",
-                (;
-                    corrected_fastq = valid_fastq,
-                    corrected_read_count = 7,
-                    ephemeral = false,
-                ),
+                function (reads, config)
+                    valid_fastq = multi_input_write_fastq(
+                        joinpath(
+                            something(config.output_dir),
+                            "wrong-count.fastq",
+                        ),
+                        MULTI_INPUT_LONG,
+                    )
+                    return (;
+                        corrected_fastq = valid_fastq,
+                        corrected_read_count = 7,
+                        ephemeral = false,
+                    )
+                end,
             ),
             (
                 "correction output is not FASTQ",
-                (;
-                    corrected_fastq = fasta_output,
-                    corrected_read_count = 1,
-                    ephemeral = false,
-                ),
+                function (reads, config)
+                    fasta_output = joinpath(
+                        something(config.output_dir),
+                        "not-fastq.fasta",
+                    )
+                    write(fasta_output, ">not_fastq\nACGT\n")
+                    return (;
+                        corrected_fastq = fasta_output,
+                        corrected_read_count = 1,
+                        ephemeral = false,
+                    )
+                end,
             ),
         ]
-        for (message, stage) in malformed_stages
+        for (message, bad_runner) in malformed_stages
             tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
-            bad_runner = (reads, config) -> stage
             test_throws_message(ErrorException, message) do
                 Mycelia.Rhizomorph._correct_read_set!(
                     tokens,
@@ -637,9 +3409,278 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             end
             Mycelia.Rhizomorph._cleanup_multi_input_stages!(tokens)
         end
-        rm(valid_fastq; force = true)
-        rm(empty_fastq; force = true)
-        rm(fasta_output; force = true)
+    end
+
+    Test.@testset "correction output authority is route-owned" begin
+        mktempdir() do temp_dir
+            source_r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "source-r1.fastq"),
+                [multi_input_fastq_record("owned_pair/1")],
+            )
+            source_r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "source-r2.fastq"),
+                [multi_input_fastq_record("owned_pair/2")],
+            )
+            source_long = multi_input_write_fastq(
+                joinpath(temp_dir, "source-long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            sources = (source_r1, source_r2, source_long)
+            external_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "external.fastq"),
+                [multi_input_fastq_record("owned_pair/1")],
+            )
+
+            external_runner = (reads, config) -> (;
+                corrected_fastq = external_fastq,
+                corrected_read_count = 1,
+                ephemeral = true,
+            )
+            test_throws_message(ErrorException, "outside its reserved stage") do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    ((source_r1,), (source_r2,)),
+                    (source_long,),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = external_runner,
+                    assembler_runner = (inputs, outdir) ->
+                        error("assembler must not run"),
+                )
+            end
+            Test.@test isfile(external_fastq)
+            Test.@test all(isfile, sources)
+
+            function symlink_runner(reads::Any, config::Any)::NamedTuple
+                corrected_fastq = joinpath(
+                    something(config.output_dir),
+                    "symlink.fastq",
+                )
+                symlink(external_fastq, corrected_fastq)
+                return (;
+                    corrected_fastq,
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                )
+            end
+            test_throws_message(ErrorException, "regular, non-symlink FASTQ") do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    ((source_r1,), (source_r2,)),
+                    (source_long,),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = symlink_runner,
+                    assembler_runner = (inputs, outdir) ->
+                        error("assembler must not run"),
+                )
+            end
+            Test.@test isfile(external_fastq)
+            Test.@test all(isfile, sources)
+
+            stage_escape_root = joinpath(temp_dir, "stage-escape-root")
+            escaped_stage = joinpath(
+                stage_escape_root,
+                "corrected",
+                "long_reads",
+            )
+            external_stage = joinpath(temp_dir, "external-stage")
+            mkpath(dirname(escaped_stage))
+            mkpath(external_stage)
+            symlink(external_stage, escaped_stage)
+            stage_runner_called = Ref(false)
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    stage_escape_root,
+                    false,
+                    (reads, config) -> begin
+                        stage_runner_called[] = true
+                        error("escaped correction runner must not execute")
+                    end,
+                )
+            end
+            Test.@test !stage_runner_called[]
+            Test.@test isempty(readdir(external_stage))
+
+            postcheck_root = joinpath(temp_dir, "stage-postcheck-root")
+            postcheck_external = joinpath(temp_dir, "stage-postcheck-external")
+            mkpath(postcheck_root)
+            mkpath(postcheck_external)
+            postcheck_external_fastq = joinpath(
+                postcheck_external,
+                "corrected.fastq",
+            )
+            function retargeting_stage_runner(
+                    reads::Any,
+                    config::Any,
+            )::NamedTuple
+                stage_dir = something(config.output_dir)
+                rm(stage_dir; recursive = true)
+                symlink(postcheck_external, stage_dir)
+                multi_input_write_fastq(
+                    joinpath(stage_dir, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                return (;
+                    corrected_fastq = joinpath(stage_dir, "corrected.fastq"),
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                )
+            end
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    postcheck_root,
+                    false,
+                    retargeting_stage_runner,
+                )
+            end
+            Test.@test isfile(postcheck_external_fastq)
+
+            replacement_root = joinpath(temp_dir, "stage-replacement-root")
+            mkpath(replacement_root)
+            function replacing_stage_runner(
+                    reads::Any,
+                    config::Any,
+            )::NamedTuple
+                stage_dir = something(config.output_dir)
+                replacement_stage = joinpath(
+                    dirname(stage_dir),
+                    "replacement-stage",
+                )
+                mkpath(replacement_stage)
+                corrected_fastq = multi_input_write_fastq(
+                    joinpath(replacement_stage, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                rm(stage_dir; recursive = true)
+                mv(replacement_stage, stage_dir)
+                return (;
+                    corrected_fastq = joinpath(
+                        stage_dir,
+                        basename(corrected_fastq),
+                    ),
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                )
+            end
+            test_throws_message(
+                ErrorException,
+                "correction stage changed filesystem identity",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    replacement_root,
+                    false,
+                    replacing_stage_runner,
+                )
+            end
+
+            function source_alias_runner(reads::Any, config::Any)::NamedTuple
+                source_path = only(reads)
+                corrected_fastq = joinpath(
+                    something(config.output_dir),
+                    "source-alias.fastq",
+                )
+                Base.hardlink(source_path, corrected_fastq)
+                return (;
+                    corrected_fastq,
+                    corrected_read_count = 1,
+                    ephemeral = false,
+                )
+            end
+            test_throws_message(ErrorException, "aliases an input source") do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    ((source_r1,), (source_r2,)),
+                    (source_long,),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = source_alias_runner,
+                    assembler_runner = (inputs, outdir) ->
+                        error("assembler must not run"),
+                )
+            end
+            Test.@test all(isfile, sources)
+
+            first_corrected = Ref("")
+            correction_index = Ref(0)
+            function corrected_alias_runner(
+                    reads::Any,
+                    config::Any,
+            )::NamedTuple
+                correction_index[] += 1
+                corrected_fastq = joinpath(
+                    something(config.output_dir),
+                    "corrected.fastq",
+                )
+                if correction_index[] == 1
+                    first_corrected[] = multi_input_write_fastq(
+                        corrected_fastq,
+                        multi_input_collect_fastq(reads),
+                    )
+                else
+                    Base.hardlink(first_corrected[], corrected_fastq)
+                end
+                return (;
+                    corrected_fastq,
+                    corrected_read_count = 1,
+                    ephemeral = false,
+                )
+            end
+            test_throws_message(ErrorException, "aliases another corrected read set") do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    ((source_r1,), (source_r2,)),
+                    (source_long,),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = corrected_alias_runner,
+                    assembler_runner = (inputs, outdir) ->
+                        error("assembler must not run"),
+                )
+            end
+            Test.@test correction_index[] == 2
+            Test.@test all(isfile, sources)
+
+            persistent_root = joinpath(temp_dir, "persistent-lie")
+            persistent_calls = NamedTuple[]
+            base_runner = multi_input_fake_correction_runner(persistent_calls)
+            lying_runner = (reads, config) -> merge(
+                base_runner(reads, config),
+                (; ephemeral = true),
+            )
+            persistent_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+                ((source_r1,), (source_r2,)),
+                (source_long,),
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                    output_dir = persistent_root,
+                ),
+                :unicycler;
+                correction_runner = lying_runner,
+                assembler_runner = (inputs, outdir) ->
+                    multi_input_fake_assembler_result(outdir),
+            )
+            Test.@test all(
+                isfile,
+                values(persistent_result.assembly_stats["corrected_fastqs"]),
+            )
+        end
     end
 
     Test.@testset "independent correction profiles and ephemeral cleanup" begin
@@ -673,9 +3714,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                    [:illumina, :illumina, :nanopore]
         Test.@test all(call -> call.k == 17, correction_calls)
         Test.@test all(call -> call.strategy == :scalable, correction_calls)
-        Test.@test captured_inputs[].short_r1.path == correction_calls[1].corrected_fastq
-        Test.@test captured_inputs[].short_r2.path == correction_calls[2].corrected_fastq
-        Test.@test captured_inputs[].long_reads.path == correction_calls[3].corrected_fastq
+        for (label, corrected, call) in (
+                ("short_r1", captured_inputs[].short_r1, correction_calls[1]),
+                ("short_r2", captured_inputs[].short_r2, correction_calls[2]),
+                ("long_reads", captured_inputs[].long_reads, correction_calls[3]),
+        )
+            Test.@test corrected.path != call.corrected_fastq
+            Test.@test occursin("stable_corrected", corrected.path)
+            Test.@test corrected.provenance["correction_output_content"][
+                "path"
+            ] == call.corrected_fastq
+            Test.@test corrected.provenance["consumed_snapshot_content"][
+                "sha256"
+            ] == corrected.provenance["correction_output_content"]["sha256"]
+        end
         Test.@test result.contig_names == ["contig_1"]
         Test.@test result.contigs == ["ACGTACGT"]
         Test.@test result.assembly_stats["workflow"] == "unicycler"
@@ -689,6 +3741,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
         Test.@test result.assembly_stats["corrected_fastqs"] === nothing
         Test.@test result.assembly_stats["tool_artifacts"] === nothing
+        ephemeral_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(ephemeral_artifact_content)) ==
+                   Set(["assembly", "graph", "child_contract"])
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", artifact["sha256"]) for
+            artifact in values(ephemeral_artifact_content)
+        )
+        Test.@test result.assembly_stats["tool_artifact_hashes"] == Dict(
+            "final_assembly" => ephemeral_artifact_content["assembly"]["sha256"],
+            "raw_graph" => ephemeral_artifact_content["graph"]["sha256"],
+            "child_contract" =>
+                ephemeral_artifact_content["child_contract"]["sha256"],
+        )
         Test.@test result.assembly_stats["input_technologies"] == Dict(
             "short_r1" => "illumina",
             "short_r2" => "illumina",
@@ -703,14 +3769,1055 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "strategy" => "scalable",
             ),
             "assembler_options" => Dict{String, Any}(),
+            "input_snapshot_byte_ceiling" =>
+                config.input_snapshot_byte_ceiling,
         )
         Test.@test result.assembly_stats["correction_options"] == Dict(
             "k" => 17,
             "strategy" => "scalable",
         )
+        content_provenance =
+            result.assembly_stats["read_content_provenance"]
+        source_contract = content_provenance["source_inputs"]
+        Test.@test source_contract["schema"] ==
+                   "mycelia-paired-short-long-input-content-v1"
+        for label in ("short_r1", "short_r2", "long_reads")
+            identity = source_contract[label]
+            Test.@test identity["kind"] == "in_memory_fastq"
+            Test.@test identity["record_count"] ==
+                       result.assembly_stats["input_read_counts"][label]
+            Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+            Test.@test occursin(
+                r"^[0-9a-f]{64}$",
+                identity["identifier_sha256"],
+            )
+        end
+        corrected_contract = content_provenance["corrected_fastqs"]
+        Test.@test corrected_contract["schema"] ==
+                   "mycelia-corrected-fastq-content-v1"
+        for label in ("short_r1", "short_r2", "long_reads")
+            identity = corrected_contract[label]
+            Test.@test identity["kind"] == "path"
+            Test.@test isabspath(identity["path"])
+            Test.@test identity["size_bytes"] > 0
+            Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+        end
+        Test.@test result.assembly_stats["toolchain"] ==
+                   multi_input_fake_unicycler_toolchain()
+        correction_provenance = result.assembly_stats["correction_provenance"]
+        Test.@test Set(keys(correction_provenance)) ==
+                   Set(["short_r1", "short_r2", "long_reads"])
+        expected_technologies = Dict(
+            "short_r1" => "illumina",
+            "short_r2" => "illumina",
+            "long_reads" => "nanopore",
+        )
+        for (label, technology) in expected_technologies
+            provenance = correction_provenance[label]
+            Test.@test provenance["status"] == "unavailable"
+            Test.@test provenance["technology"] == technology
+            Test.@test all(
+                available -> !available,
+                values(provenance["availability"]),
+            )
+            for field in (
+                    "knobs",
+                    "max_k",
+                    "indel_params",
+                    "substitution_error_rate",
+            )
+                Test.@test provenance[field] === nothing
+            end
+        end
+        Test.@test isempty(result.assembly_stats["retained_cleanup_files"])
+        Test.@test isempty(result.assembly_stats["retained_cleanup_roots"])
         Test.@test !result.gfa_compatible
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         Test.@test !isdir(dirname(captured_outdir[]))
+    end
+
+    Test.@testset "source snapshots isolate same-call source mutation" begin
+        mktempdir() do temp_dir
+            path_r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "R1.fastq"),
+                MULTI_INPUT_R1,
+            )
+            path_r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "R2.fastq"),
+                MULTI_INPUT_R2,
+            )
+            path_long = multi_input_write_fastq(
+                joinpath(temp_dir, "long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            path_calls = NamedTuple[]
+            path_correction_inputs = Any[]
+            path_base_runner = multi_input_fake_correction_runner(path_calls)
+            function path_mutating_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                push!(path_correction_inputs, copy(reads))
+                stage = path_base_runner(reads, config)
+                if length(path_calls) == 1
+                    multi_input_write_fastq(
+                        path_r1,
+                        FASTX.FASTQ.Record[
+                            multi_input_fastq_record("pair_a/1", "TTTTTTTT"),
+                            MULTI_INPUT_R1[2],
+                        ],
+                    )
+                end
+                return stage
+            end
+            path_assembler_calls = Ref(0)
+            function path_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                path_assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (path_r1, path_r2),
+                path_long,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = path_mutating_correction_runner,
+                assembler_runner = path_assembler_runner,
+            )
+            Test.@test length(path_calls) == 3
+            Test.@test path_assembler_calls[] == 1
+            Test.@test first(path_correction_inputs) != [path_r1]
+            Test.@test all(
+                occursin("stable_inputs", path) for
+                path in first(path_correction_inputs)
+            )
+            Test.@test all(call -> !isfile(call.corrected_fastq), path_calls)
+        end
+
+        in_memory_r1 = copy(MULTI_INPUT_R1)
+        in_memory_r2 = copy(MULTI_INPUT_R2)
+        in_memory_long = copy(MULTI_INPUT_LONG)
+        in_memory_calls = NamedTuple[]
+        in_memory_base_runner =
+            multi_input_fake_correction_runner(in_memory_calls)
+        function in_memory_mutating_correction_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = in_memory_base_runner(reads, config)
+            if length(in_memory_calls) == 1
+                in_memory_r1[1] =
+                    multi_input_fastq_record("pair_a/1", "GGGGGGGG")
+            end
+            return stage
+        end
+        in_memory_assembler_calls = Ref(0)
+        function in_memory_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            in_memory_assembler_calls[] += 1
+            return multi_input_fake_assembler_result(outdir)
+        end
+        Mycelia.Rhizomorph._assemble_paired_short_long(
+            (in_memory_r1, in_memory_r2),
+            in_memory_long,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = in_memory_mutating_correction_runner,
+            assembler_runner = in_memory_assembler_runner,
+        )
+        Test.@test length(in_memory_calls) == 3
+        Test.@test in_memory_assembler_calls[] == 1
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            in_memory_calls,
+        )
+
+        corrected_mutation_calls = NamedTuple[]
+        corrected_assembler_calls = Ref(0)
+        function corrected_mutating_assembler_runner(
+                inputs::Mycelia.Rhizomorph._CorrectedPairedShortLong,
+                outdir::AbstractString,
+        )::NamedTuple
+            corrected_assembler_calls[] += 1
+            corrected_r1_records = multi_input_collect_fastq([
+                inputs.short_r1.path,
+            ])
+            corrected_r1_records[1] = multi_input_fastq_record(
+                String(FASTX.identifier(corrected_r1_records[1])),
+                "CCCCCCCC",
+            )
+            chmod(inputs.short_r1.path, 0o600)
+            multi_input_write_fastq(
+                inputs.short_r1.path,
+                corrected_r1_records,
+            )
+            return multi_input_fake_assembler_result(outdir)
+        end
+        test_throws_message(
+            ErrorException,
+            "corrected short_r1 FASTQ content changed during combined-input assembly",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    corrected_mutation_calls,
+                ),
+                assembler_runner = corrected_mutating_assembler_runner,
+            )
+        end
+        Test.@test length(corrected_mutation_calls) == 3
+        Test.@test corrected_assembler_calls[] == 1
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            corrected_mutation_calls,
+        )
+    end
+
+    Test.@testset "corrected snapshots isolate later output mutation" begin
+        correction_calls = NamedTuple[]
+        assembler_calls = Ref(0)
+        original_corrected_r1 = Ref("")
+        base_runner = multi_input_fake_correction_runner(correction_calls)
+        function restore_evasion_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = base_runner(reads, config)
+            if length(correction_calls) == 1
+                original_corrected_r1[] = read(stage.corrected_fastq, String)
+            elseif length(correction_calls) == 2
+                multi_input_mutate_first_sequence!(
+                    correction_calls[1].corrected_fastq,
+                )
+            elseif length(correction_calls) == 3
+                write(
+                    correction_calls[1].corrected_fastq,
+                    original_corrected_r1[],
+                )
+            end
+            return stage
+        end
+        Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = restore_evasion_runner,
+            assembler_runner = (inputs, outdir) -> begin
+                assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end,
+        )
+        Test.@test length(correction_calls) == 3
+        Test.@test assembler_calls[] == 1
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls,
+        )
+
+        later_stage_calls = NamedTuple[]
+        later_stage_assembler_calls = Ref(0)
+        later_stage_base_runner =
+            multi_input_fake_correction_runner(later_stage_calls)
+        function later_stage_mutation_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = later_stage_base_runner(reads, config)
+            if length(later_stage_calls) == 3
+                multi_input_mutate_first_sequence!(
+                    later_stage_calls[2].corrected_fastq,
+                )
+            end
+            return stage
+        end
+        Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = later_stage_mutation_runner,
+            assembler_runner = (inputs, outdir) -> begin
+                later_stage_assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end,
+        )
+        Test.@test length(later_stage_calls) == 3
+        Test.@test later_stage_assembler_calls[] == 1
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            later_stage_calls,
+        )
+    end
+
+    Test.@testset "semantic validation binds exact source and corrected bytes" begin
+        for role in (:short_r1, :short_r2, :long_reads)
+            mktempdir() do temp_dir
+                source_paths = (
+                    short_r1 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R1.fastq"),
+                        MULTI_INPUT_R1,
+                    ),
+                    short_r2 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R2.fastq"),
+                        MULTI_INPUT_R2,
+                    ),
+                    long_reads = multi_input_write_fastq(
+                        joinpath(temp_dir, "long.fastq"),
+                        MULTI_INPUT_LONG,
+                    ),
+                )
+                correction_calls = NamedTuple[]
+                assembler_calls = Ref(0)
+                function source_assembler_runner(
+                        inputs::Any,
+                        outdir::AbstractString,
+                )::NamedTuple
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end
+                test_throws_message(
+                    ErrorException,
+                    "input $(role) content changed after source semantic preflight",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (source_paths.short_r1, source_paths.short_r2),
+                        source_paths.long_reads,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                        :unicycler;
+                        correction_runner = multi_input_fake_correction_runner(
+                            correction_calls,
+                        ),
+                        assembler_runner = source_assembler_runner,
+                        after_source_semantic_validation_hook =
+                            (short_r1, short_r2, long_reads) -> begin
+                                multi_input_mutate_first_sequence!(
+                                    getproperty(source_paths, role),
+                                )
+                            end,
+                    )
+                end
+                Test.@test isempty(correction_calls)
+                Test.@test assembler_calls[] == 0
+            end
+        end
+
+        mktempdir() do temp_dir
+            source_paths = (
+                short_r1 = multi_input_write_fastq(
+                    joinpath(temp_dir, "R1.fastq"),
+                    MULTI_INPUT_R1,
+                ),
+                short_r2 = multi_input_write_fastq(
+                    joinpath(temp_dir, "R2.fastq"),
+                    MULTI_INPUT_R2,
+                ),
+                long_reads = multi_input_write_fastq(
+                    joinpath(temp_dir, "long.fastq"),
+                    MULTI_INPUT_LONG,
+                ),
+            )
+            correction_calls = NamedTuple[]
+            assembler_calls = Ref(0)
+            base_runner = multi_input_fake_correction_runner(correction_calls)
+            original_r2 = read(source_paths.short_r2, String)
+            function cross_stage_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                result = base_runner(reads, config)
+                if length(correction_calls) == 1
+                    multi_input_mutate_first_sequence!(source_paths.short_r2)
+                elseif length(correction_calls) == 3
+                    write(source_paths.short_r2, original_r2)
+                end
+                return result
+            end
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (source_paths.short_r1, source_paths.short_r2),
+                source_paths.long_reads,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = cross_stage_runner,
+                assembler_runner = (inputs, outdir) -> begin
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+            )
+            Test.@test length(correction_calls) == 3
+            Test.@test assembler_calls[] == 1
+        end
+
+        stage_indices = Dict(
+            :short_r1 => 1,
+            :short_r2 => 2,
+            :long_reads => 3,
+        )
+        for role in (:short_r1, :short_r2, :long_reads)
+            mktempdir() do temp_dir
+                source_paths = (
+                    short_r1 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R1.fastq"),
+                        MULTI_INPUT_R1,
+                    ),
+                    short_r2 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R2.fastq"),
+                        MULTI_INPUT_R2,
+                    ),
+                    long_reads = multi_input_write_fastq(
+                        joinpath(temp_dir, "long.fastq"),
+                        MULTI_INPUT_LONG,
+                    ),
+                )
+                correction_calls = NamedTuple[]
+                assembler_calls = Ref(0)
+                base_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                )
+                function after_stage_mutation_runner(
+                        reads::Any,
+                        config::Mycelia.Rhizomorph.AssemblyConfig,
+                )::NamedTuple
+                    result = base_runner(reads, config)
+                    if length(correction_calls) == stage_indices[role]
+                        multi_input_mutate_first_sequence!(
+                            getproperty(source_paths, role),
+                        )
+                    end
+                    return result
+                end
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (source_paths.short_r1, source_paths.short_r2),
+                    source_paths.long_reads,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = after_stage_mutation_runner,
+                    assembler_runner = (inputs, outdir) -> begin
+                        assembler_calls[] += 1
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+                Test.@test length(correction_calls) == 3
+                Test.@test assembler_calls[] == 1
+            end
+        end
+
+        for role in (:short_r1, :short_r2, :long_reads)
+            correction_calls = NamedTuple[]
+            assembler_calls = Ref(0)
+            function corrected_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end
+            test_throws_message(
+                ErrorException,
+                "corrected $(role) FASTQ content changed after " *
+                "corrected-read semantic validation",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        correction_calls,
+                    ),
+                    assembler_runner = corrected_assembler_runner,
+                    after_corrected_semantic_validation_hook = inputs -> begin
+                        selected_reads = getproperty(inputs, role)
+                        chmod(selected_reads.path, 0o600)
+                        multi_input_mutate_first_sequence!(selected_reads.path)
+                    end,
+                )
+            end
+            Test.@test length(correction_calls) == 3
+            Test.@test assembler_calls[] == 0
+            Test.@test all(
+                call -> !isfile(call.corrected_fastq),
+                correction_calls,
+            )
+        end
+    end
+
+    Test.@testset "snapshot budgets, integrity, and fail-closed cleanup" begin
+        Test.@testset "snapshot writer cleanup precedence" begin
+            mktempdir() do temp_dir
+                source = multi_input_write_fastq(
+                    joinpath(temp_dir, "source.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+
+                ordinary_success_destination = joinpath(
+                    temp_dir,
+                    "ordinary-success.fastq",
+                )
+                ordinary_success_calls = Ref(0)
+                ordinary_success_error = Test.@test_logs (
+                    :warn,
+                    r"encountered an additional cleanup failure",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                            source,
+                            ordinary_success_destination,
+                            "ordinary success cleanup",
+                            Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                                temp_dir,
+                                BigInt(typemax(Int)),
+                                BigInt(0),
+                                root -> typemax(Int),
+                            );
+                            descriptor_closer = resource -> begin
+                                ordinary_success_calls[] += 1
+                                close(resource)
+                                error("synthetic ordinary descriptor close")
+                            end,
+                        )
+                    end
+                end
+                Test.@test ordinary_success_calls[] == 2
+                Test.@test ordinary_success_error isa ErrorException
+                Test.@test occursin(
+                    "synthetic ordinary descriptor close",
+                    sprint(showerror, ordinary_success_error),
+                )
+                Test.@test !ispath(ordinary_success_destination)
+
+                interrupt_success_destination = joinpath(
+                    temp_dir,
+                    "interrupt-success.fastq",
+                )
+                success_close_interrupt = InterruptException()
+                interrupt_success_calls = Ref(0)
+                interrupt_success_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                        source,
+                        interrupt_success_destination,
+                        "interrupt success cleanup",
+                        Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                            temp_dir,
+                            BigInt(typemax(Int)),
+                            BigInt(0),
+                            root -> typemax(Int),
+                        );
+                        descriptor_closer = resource -> begin
+                            interrupt_success_calls[] += 1
+                            close(resource)
+                            interrupt_success_calls[] == 1 &&
+                                throw(success_close_interrupt)
+                            return nothing
+                        end,
+                    )
+                end
+                Test.@test interrupt_success_calls[] == 2
+                Test.@test interrupt_success_error === success_close_interrupt
+                Test.@test !ispath(interrupt_success_destination)
+
+                ordinary_primary_destination = joinpath(
+                    temp_dir,
+                    "ordinary-primary.fastq",
+                )
+                ordinary_primary_calls = Ref(0)
+                ordinary_primary_error = Test.@test_logs (
+                    :warn,
+                    r"descriptor cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                            source,
+                            ordinary_primary_destination,
+                            "ordinary primary cleanup",
+                            Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                                temp_dir,
+                                BigInt(typemax(Int)),
+                                BigInt(0),
+                                root -> typemax(Int),
+                            );
+                            after_destination_open_hook =
+                                (label, source, destination) ->
+                                    error("synthetic primary copy failure"),
+                            descriptor_closer = resource -> begin
+                                ordinary_primary_calls[] += 1
+                                close(resource)
+                                error("synthetic cleanup close failure")
+                            end,
+                        )
+                    end
+                end
+                Test.@test ordinary_primary_calls[] == 2
+                Test.@test ordinary_primary_error isa ErrorException
+                Test.@test occursin(
+                    "synthetic primary copy failure",
+                    sprint(showerror, ordinary_primary_error),
+                )
+                Test.@test !occursin(
+                    "synthetic cleanup close failure",
+                    sprint(showerror, ordinary_primary_error),
+                )
+                Test.@test !ispath(ordinary_primary_destination)
+
+                interrupt_primary_destination = joinpath(
+                    temp_dir,
+                    "interrupt-primary.fastq",
+                )
+                primary_interrupt = InterruptException()
+                interrupt_primary_close_calls = Ref(0)
+                interrupt_primary_removals = Ref(0)
+                interrupt_primary_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                        source,
+                        interrupt_primary_destination,
+                        "interrupt primary cleanup",
+                        Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                            temp_dir,
+                            BigInt(typemax(Int)),
+                            BigInt(0),
+                            root -> typemax(Int),
+                        );
+                        after_destination_open_hook =
+                            (label, source, destination) ->
+                                throw(primary_interrupt),
+                        descriptor_closer = resource -> begin
+                            interrupt_primary_close_calls[] += 1
+                            close(resource)
+                            return nothing
+                        end,
+                        exact_file_remover = (path, identity) -> begin
+                            interrupt_primary_removals[] += 1
+                            Mycelia._remove_exact_metamdbg_durable_file!(
+                                path,
+                                identity,
+                            )
+                        end,
+                    )
+                end
+                Test.@test interrupt_primary_close_calls[] == 2
+                Test.@test interrupt_primary_removals[] == 1
+                Test.@test interrupt_primary_error === primary_interrupt
+                Test.@test !ispath(interrupt_primary_destination)
+
+                retained_destination = joinpath(
+                    temp_dir,
+                    "retained-cleanup-evidence.fastq",
+                )
+                retained_error = Test.@test_logs (
+                    :warn,
+                    r"exact partial-snapshot cleanup failed",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                            source,
+                            retained_destination,
+                            "retained cleanup evidence",
+                            Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                                temp_dir,
+                                BigInt(typemax(Int)),
+                                BigInt(0),
+                                root -> typemax(Int),
+                            );
+                            after_destination_open_hook =
+                                (label, source, destination) ->
+                                    error("synthetic retained primary failure"),
+                            exact_file_remover = (path, identity) ->
+                                error("synthetic ordinary removal failure"),
+                        )
+                    end
+                end
+                Test.@test retained_error isa ErrorException
+                Test.@test occursin(
+                    "synthetic retained primary failure",
+                    sprint(showerror, retained_error),
+                )
+                Test.@test !occursin(
+                    "synthetic ordinary removal failure",
+                    sprint(showerror, retained_error),
+                )
+                Test.@test isfile(retained_destination)
+                rm(retained_destination)
+
+                removal_interrupt_destination = joinpath(
+                    temp_dir,
+                    "removal-interrupt-evidence.fastq",
+                )
+                removal_interrupt = InterruptException()
+                removal_interrupt_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                        source,
+                        removal_interrupt_destination,
+                        "removal interrupt evidence",
+                        Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                            temp_dir,
+                            BigInt(typemax(Int)),
+                            BigInt(0),
+                            root -> typemax(Int),
+                        );
+                        after_destination_open_hook =
+                            (label, source, destination) ->
+                                error("synthetic ordinary primary failure"),
+                        exact_file_remover = (path, identity) ->
+                            throw(removal_interrupt),
+                    )
+                end
+                Test.@test removal_interrupt_error === removal_interrupt
+                Test.@test isfile(removal_interrupt_destination)
+                rm(removal_interrupt_destination)
+
+                shared_interrupt_destination = joinpath(
+                    temp_dir,
+                    "shared-interrupt-evidence.fastq",
+                )
+                shared_primary_interrupt = InterruptException()
+                shared_cleanup_interrupt = InterruptException()
+                shared_interrupt_error = Test.@test_logs (
+                    :warn,
+                    r"exact partial-snapshot cleanup failed",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._multi_input_stable_path_snapshot!(
+                            source,
+                            shared_interrupt_destination,
+                            "shared interrupt evidence",
+                            Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                                temp_dir,
+                                BigInt(typemax(Int)),
+                                BigInt(0),
+                                root -> typemax(Int),
+                            );
+                            after_destination_open_hook =
+                                (label, source, destination) ->
+                                    throw(shared_primary_interrupt),
+                            exact_file_remover = (path, identity) ->
+                                throw(shared_cleanup_interrupt),
+                        )
+                    end
+                end
+                Test.@test shared_interrupt_error === shared_primary_interrupt
+                Test.@test isfile(shared_interrupt_destination)
+                rm(shared_interrupt_destination)
+
+                for (failure_kind, cleanup_error) in (
+                        (:ordinary, ErrorException(
+                            "synthetic in-memory writer close failure",
+                        )),
+                        (:interrupt, InterruptException()),
+                )
+                    workflow_root = joinpath(
+                        temp_dir,
+                        "in-memory-$(failure_kind)",
+                    )
+                    mkdir(workflow_root)
+                    in_memory_close_calls = Ref(0)
+                    in_memory_error = multi_input_capture_error() do
+                        Mycelia.Rhizomorph._materialize_multi_input_source_snapshot(
+                            MULTI_INPUT_LONG,
+                            "long_reads",
+                            workflow_root,
+                            Mycelia.Rhizomorph._MultiInputSnapshotBudget(
+                                workflow_root,
+                                BigInt(typemax(Int)),
+                                BigInt(0),
+                                root -> typemax(Int),
+                            );
+                            descriptor_closer = resource -> begin
+                                in_memory_close_calls[] += 1
+                                if in_memory_close_calls[] == 1
+                                    throw(cleanup_error)
+                                end
+                                close(resource)
+                                return nothing
+                            end,
+                        )
+                    end
+                    Test.@test in_memory_close_calls[] == 2
+                    Test.@test in_memory_error === cleanup_error
+                    snapshot_path = joinpath(
+                        workflow_root,
+                        "stable_inputs",
+                        "long_reads",
+                        "input.fastq",
+                    )
+                    Test.@test !ispath(snapshot_path)
+                    rm(workflow_root; recursive = true)
+                end
+            end
+        end
+
+        for budget_case in (:ceiling, :free_space)
+            correction_calls = NamedTuple[]
+            assembler_calls = Ref(0)
+            config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                input_snapshot_byte_ceiling =
+                    budget_case == :ceiling ? 1 : typemax(Int),
+            )
+            error_message = budget_case == :ceiling ?
+                            "exceeding the configured ceiling" :
+                            "only 0 bytes are available"
+            test_throws_message(ArgumentError, error_message) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    config,
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        correction_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        assembler_calls[] += 1
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                    snapshot_available_bytes_reader =
+                        budget_case == :free_space ? root -> 0 :
+                        root -> typemax(Int),
+                )
+            end
+            Test.@test isempty(correction_calls)
+            Test.@test assembler_calls[] == 0
+        end
+
+        enospc_destination = Ref("")
+        enospc_calls = NamedTuple[]
+        enospc_assembler_calls = Ref(0)
+        enospc_error = try
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    enospc_calls,
+                ),
+                assembler_runner = (inputs, outdir) -> begin
+                    enospc_assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+                after_snapshot_destination_open_hook =
+                    (label, source, destination) -> begin
+                        enospc_destination[] = String(destination)
+                        throw(SystemError("synthetic ENOSPC", 28))
+                    end,
+            )
+            nothing
+        catch caught
+            caught
+        end
+        Test.@test enospc_error isa SystemError
+        Test.@test occursin("ENOSPC", sprint(showerror, enospc_error))
+        Test.@test !isempty(enospc_destination[])
+        Test.@test !ispath(enospc_destination[])
+        enospc_root = dirname(dirname(dirname(enospc_destination[])))
+        Test.@test !ispath(enospc_root)
+        Test.@test isempty(enospc_calls)
+        Test.@test enospc_assembler_calls[] == 0
+
+        in_memory_calls = NamedTuple[]
+        in_memory_assembler_calls = Ref(0)
+        in_memory_mutated = Ref(false)
+        test_throws_message(
+            ErrorException,
+            "in-memory source content changed while its stable consumed " *
+            "snapshot was materialized",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    in_memory_calls,
+                ),
+                assembler_runner = (inputs, outdir) -> begin
+                    in_memory_assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+                after_in_memory_snapshot_preflight_hook =
+                    (label, records) -> begin
+                        if label == "short_r1" && !in_memory_mutated[]
+                            records[1] = multi_input_fastq_record(
+                                "pair_a/1",
+                                "GCGTGCGT",
+                            )
+                            in_memory_mutated[] = true
+                        end
+                    end,
+            )
+        end
+        Test.@test in_memory_mutated[]
+        Test.@test isempty(in_memory_calls)
+        Test.@test in_memory_assembler_calls[] == 0
+
+        corrected_copy_calls = NamedTuple[]
+        corrected_copy_assembler_calls = Ref(0)
+        corrected_copy_original = Ref("")
+        corrected_copy_destination = Ref("")
+        test_throws_message(
+            ErrorException,
+            "source bytes changed while its stable snapshot was copied",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    corrected_copy_calls,
+                ),
+                assembler_runner = (inputs, outdir) -> begin
+                    corrected_copy_assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+                after_snapshot_destination_open_hook =
+                    (label, source, destination) -> begin
+                        if label == "corrected short_r1 FASTQ"
+                            corrected_copy_original[] = read(source, String)
+                            corrected_copy_destination[] = String(destination)
+                            multi_input_mutate_first_sequence!(source)
+                        end
+                    end,
+                after_snapshot_stream_copy_hook =
+                    (label, source, destination) -> begin
+                        if label == "corrected short_r1 FASTQ"
+                            write(source, corrected_copy_original[])
+                        end
+                    end,
+            )
+        end
+        Test.@test length(corrected_copy_calls) == 1
+        Test.@test corrected_copy_assembler_calls[] == 0
+        Test.@test !isempty(corrected_copy_destination[])
+        Test.@test !ispath(corrected_copy_destination[])
+        Test.@test all(
+            call -> !ispath(call.corrected_fastq),
+            corrected_copy_calls,
+        )
+
+        for preplant_kind in (:symlink, :hardlink)
+            mktempdir() do temp_dir
+                external_target = multi_input_write_fastq(
+                    joinpath(temp_dir, "$(preplant_kind)-external.fastq"),
+                    [multi_input_fastq_record("external")],
+                )
+                external_contents = read(external_target)
+                correction_calls = NamedTuple[]
+                assembler_calls = Ref(0)
+                planted_destination = Ref("")
+                base_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                )
+                function preplant_runner(
+                        reads::Any,
+                        config::Mycelia.Rhizomorph.AssemblyConfig,
+                )::NamedTuple
+                    stage = base_runner(reads, config)
+                    if length(correction_calls) == 1
+                        workflow_root = dirname(
+                            dirname(something(config.output_dir)),
+                        )
+                        snapshot_root = joinpath(
+                            workflow_root,
+                            "stable_corrected",
+                        )
+                        mkpath(snapshot_root)
+                        planted_destination[] = joinpath(
+                            snapshot_root,
+                            "short_r1.fastq",
+                        )
+                        if preplant_kind == :symlink
+                            symlink(external_target, planted_destination[])
+                        else
+                            Base.hardlink(
+                                external_target,
+                                planted_destination[],
+                            )
+                        end
+                    end
+                    return stage
+                end
+                preplant_error = try
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                        :unicycler;
+                        correction_runner = preplant_runner,
+                        assembler_runner = (inputs, outdir) -> begin
+                            assembler_calls[] += 1
+                            return multi_input_fake_assembler_result(outdir)
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+                Test.@test preplant_error isa Exception
+                Test.@test length(correction_calls) == 1
+                Test.@test assembler_calls[] == 0
+                Test.@test read(external_target) == external_contents
+                Test.@test !isempty(planted_destination[])
+                Test.@test !ispath(planted_destination[])
+            end
+        end
+    end
+
+    Test.@testset "effective per-read-set correction provenance" begin
+        correction_calls = NamedTuple[]
+        config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+            short_read_tech = :illumina,
+            long_read_tech = :nanopore,
+            correction_options = (; k = 17, strategy = :scalable),
+        )
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            config,
+            :unicycler;
+            correction_runner = multi_input_reported_correction_runner(
+                correction_calls,
+            ),
+            assembler_runner = (inputs, outdir) ->
+                multi_input_fake_assembler_result(outdir),
+        )
+        provenance = result.assembly_stats["correction_provenance"]
+        Test.@test all(
+            read_set -> read_set["status"] == "reported",
+            values(provenance),
+        )
+        Test.@test all(
+            read_set -> all(values(read_set["availability"])),
+            values(provenance),
+        )
+        Test.@test provenance["short_r1"]["knobs"] == Dict(
+            "strategy" => "scalable",
+            "skip_solid" => true,
+        )
+        Test.@test provenance["short_r2"]["max_k"] == 17
+        Test.@test provenance["short_r1"]["indel_params"] === nothing
+        Test.@test provenance["long_reads"]["technology"] == "nanopore"
+        Test.@test provenance["long_reads"]["knobs"]["skip_solid"] == false
+        Test.@test provenance["long_reads"]["substitution_error_rate"] === nothing
+        Test.@test provenance["long_reads"]["indel_params"] == Dict(
+            "base_error_rate" => 0.1,
+            "insertion_fraction" => 0.4,
+            "deletion_fraction" => 0.4,
+            "insertion_extend_probability" => 0.2,
+            "deletion_extend_probability" => 0.2,
+            "deletion_max_run" => 3,
+            "max_insertion_run" => 4,
+            "band_width" => 64,
+        )
+        serialized_provenance = Mycelia.JSON.json(provenance)
+        parsed_provenance = Mycelia.JSON.parse(serialized_provenance)
+        Test.@test parsed_provenance["long_reads"]["indel_params"]["band_width"] == 64
+        Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
     end
 
     Test.@testset "sibling adapters map exact corrected paths" begin
@@ -723,13 +4830,17 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         unicycler_kwargs = Ref{Any}()
         unicycler_runner = function (; kwargs...)
             unicycler_kwargs[] = (; kwargs...)
-            return (; assembly = "assembly.fasta", graph = "assembly.gfa")
+            return (;
+                assembly = "assembly.fasta",
+                graph = "assembly.gfa",
+                toolchain = multi_input_fake_unicycler_toolchain(),
+            )
         end
         unicycler_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
             assembler_options = (; kmers = "21,33"),
             threads = 6,
         )
-        Mycelia.Rhizomorph._run_multi_input_assembler(
+        unicycler_result = Mycelia.Rhizomorph._run_multi_input_assembler(
             Val(:unicycler),
             inputs,
             "/workflow/unicycler",
@@ -744,6 +4855,66 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             outdir = "/workflow/unicycler",
             threads = 6,
         )
+        Test.@test unicycler_result.toolchain ==
+                   multi_input_fake_unicycler_toolchain()
+
+        test_throws_message(ErrorException, "did not report realized toolchain") do
+            Mycelia.Rhizomorph._run_multi_input_assembler(
+                Val(:unicycler),
+                inputs,
+                "/workflow/unicycler-unreported",
+                unicycler_config;
+                runner = (; kwargs...) -> (;
+                    assembly = "assembly.fasta",
+                    graph = "assembly.gfa",
+                ),
+            )
+        end
+
+        package_records = Any[
+            Dict(
+                "name" => "unicycler",
+                "version" => "0.5.1",
+                "build_string" => "pyhdfd78af_0",
+                "channel" => "bioconda",
+            ),
+            Dict(
+                "name" => "spades",
+                "version" => "4.2.0",
+                "build_string" => "h5ca1c30_1",
+                "channel" => "bioconda",
+            ),
+        ]
+        normalized_packages =
+            Mycelia._normalize_unicycler_package_inventory(
+                package_records,
+            )
+        Test.@test [package.name for package in normalized_packages] ==
+                   ["spades", "unicycler"]
+        original_inventory_digest =
+            Mycelia._unicycler_package_inventory_sha256(
+                normalized_packages,
+            )
+        reversed_inventory_digest =
+            Mycelia._unicycler_package_inventory_sha256(
+                reverse(package_records),
+            )
+        Test.@test reversed_inventory_digest == original_inventory_digest
+        Test.@test Mycelia._unicycler_toolchain_provenance(
+            inventory_reader = () -> reverse(normalized_packages),
+        ) == Mycelia._unicycler_toolchain_provenance(
+            inventory_reader = () -> normalized_packages,
+        )
+        changed_build_records = deepcopy(package_records)
+        changed_build_records[1]["build_string"] = "pyhdfd78af_1"
+        changed_inventory_digest =
+            Mycelia._unicycler_package_inventory_sha256(
+                Mycelia._normalize_unicycler_package_inventory(
+                    changed_build_records,
+                ),
+            )
+        Test.@test original_inventory_digest != changed_inventory_digest
+        Test.@test occursin(r"^[0-9a-f]{64}$", original_inventory_digest)
 
         autocycler_kwargs = Ref{Any}()
         autocycler_runner = function (; kwargs...)
@@ -752,6 +4923,9 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         end
         autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
             autocycler_read_type = :ont_r9,
+            assembler_options = (;
+                environment_prefix = "/scratch/autocycler-environment",
+            ),
             threads = 8,
             jobs = 2,
             polypolish_careful = false,
@@ -764,6 +4938,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             runner = autocycler_runner,
         )
         Test.@test autocycler_kwargs[] == (
+            environment_prefix = "/scratch/autocycler-environment",
             long_reads = "/corrected/long.fastq",
             short_reads_1 = "/corrected/r1.fastq",
             short_reads_2 = "/corrected/r2.fastq",
@@ -781,20 +4956,19 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         correction_calls = NamedTuple[]
         correction_runner = multi_input_fake_correction_runner(correction_calls)
         output_dir = mktempdir()
+        requested_threads = Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS + 7
         assembler_runner = function (inputs::Any, outdir::AbstractString)
             Test.@test inputs.long_reads.technology == :pacbio_hifi
             result = multi_input_fake_assembler_result(
                 outdir;
                 include_graph = true,
                 include_polishing_artifacts = true,
+                assembly_records = ["contig_1" => "TGCATGCA"],
             )
             return merge(
                 result,
                 (;
-                    toolchain = Dict(
-                        "autocycler_script_revision" => "immutable-test-revision",
-                        "packages" => Dict("autocycler" => "0.5.2"),
-                    ),
+                    toolchain = multi_input_fake_autocycler_toolchain(),
                 ),
             )
         end
@@ -802,7 +4976,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             long_read_tech = :pacbio_hifi,
             autocycler_read_type = :pacbio_hifi,
             output_dir,
-            threads = 4,
+            threads = requested_threads,
             jobs = 2,
         )
         result = Mycelia.Rhizomorph._assemble_paired_short_long(
@@ -815,6 +4989,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
         Test.@test [call.technology for call in correction_calls] ==
                    [:illumina, :illumina, :pacbio_hifi]
+        Test.@test result.contigs == ["TGCATGCA"]
         Test.@test result.assembly_stats["workflow"] == "autocycler_polished"
         Test.@test result.assembly_stats["method"] == "HybridAssembly"
         Test.@test result.assembly_stats["assembler"] == "autocycler"
@@ -829,13 +5004,19 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test result.assembly_stats["workflow_settings"] == Dict(
             "workflow" => "autocycler_polished",
             "assembler" => "autocycler",
-            "threads" => 4,
+            "threads" => requested_threads,
+            "autocycler_assembly_threads" =>
+                Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS,
+            "polishing_threads" => requested_threads,
             "jobs" => 2,
             "autocycler_read_type" => "pacbio_hifi",
             "long_read_correction_tech" => "pacbio_hifi",
             "polypolish_careful" => true,
             "pypolca_careful" => true,
             "keep_intermediates" => false,
+            "assembler_options" => Dict{String, Any}(),
+            "input_snapshot_byte_ceiling" =>
+                config.input_snapshot_byte_ceiling,
             "correction_options" => Dict(
                 "k" => 13,
                 "strategy" => "scalable",
@@ -850,11 +5031,33 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             "pypolca_report",
         ])
         Test.@test all(isfile, values(tool_artifacts))
-        Test.@test result.assembly_stats["raw_graph"] == tool_artifacts["raw_graph"]
-        Test.@test result.assembly_stats["toolchain"] == Dict(
-            "autocycler_script_revision" => "immutable-test-revision",
-            "packages" => Dict{String, Any}("autocycler" => "0.5.2"),
+        tool_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(tool_artifact_content)) == Set([
+            "assembly",
+            "graph",
+            "autocycler_assembly",
+            "polypolish_assembly",
+            "pypolca_report",
+            "retained_intermediates",
+        ])
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", artifact["sha256"]) for
+            (label, artifact) in tool_artifact_content if
+            label != "retained_intermediates"
         )
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", hash) for
+            (label, hash) in result.assembly_stats["tool_artifact_hashes"] if
+            label != "retained_intermediates"
+        )
+        Test.@test Set(keys(result.assembly_stats["tool_artifact_hashes"])) ==
+                   Set(vcat(collect(keys(tool_artifacts)), [
+            "retained_intermediates",
+        ]))
+        Test.@test result.assembly_stats["raw_graph"] == tool_artifacts["raw_graph"]
+        Test.@test result.assembly_stats["toolchain"] ==
+                   multi_input_fake_autocycler_toolchain()
         Test.@test isempty(result.assembly_stats["retained_intermediates"])
 
         noncareful_calls = NamedTuple[]
@@ -865,11 +5068,96 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             :autocycler_polished;
             correction_runner = multi_input_fake_correction_runner(noncareful_calls),
             assembler_runner = (inputs, outdir) ->
-                multi_input_fake_assembler_result(outdir),
+                multi_input_fake_assembler_result(
+                    outdir;
+                    include_polishing_artifacts = true,
+                ),
         )
         Test.@test noncareful_result.assembly_stats["polishers"] ==
                    ["polypolish", "pypolca-careful"]
         Test.@test noncareful_result.assembly_stats["tool_artifacts"] === nothing
+    end
+
+    Test.@testset "top-level adapter streams the Autocycler artifact set" begin
+        report_size_bytes = Ref(1024)
+        correction_calls = NamedTuple[]
+        function bounded_memory_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            base_result = multi_input_fake_assembler_result(
+                outdir;
+                include_polishing_artifacts = true,
+            )
+            open(base_result.pypolca_report, "w") do report
+                seek(report, report_size_bytes[] - 1)
+                write(report, UInt8('\n'))
+            end
+            lifecycle_artifact_snapshots =
+                multi_input_fake_autocycler_lifecycle(
+                    outdir,
+                    base_result.assembly,
+                    base_result.graph,
+                    base_result.autocycler_assembly,
+                    base_result.polypolish_assembly,
+                    base_result.pypolca_report,
+                )
+            rebound_result = merge(
+                base_result,
+                (; lifecycle_artifact_snapshots),
+            )
+            child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    rebound_result,
+                    outdir,
+                )
+            return merge(rebound_result, (; child_integrity))
+        end
+        config = Mycelia.Rhizomorph.AutocyclerPolishConfig()
+        warm_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            config,
+            :autocycler_polished;
+            correction_runner = multi_input_fake_correction_runner(
+                correction_calls,
+            ),
+            assembler_runner = bounded_memory_assembler_runner,
+        )
+        Test.@test warm_result.contigs == ["ACGTACGT"]
+
+        baseline_result = Ref{Any}(nothing)
+        GC.gc()
+        baseline_allocated_bytes = @allocated baseline_result[] =
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                config,
+                :autocycler_polished;
+                correction_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                ),
+                assembler_runner = bounded_memory_assembler_runner,
+            )
+        Test.@test baseline_result[].contigs == ["ACGTACGT"]
+
+        report_size_bytes[] = 2 * 1024 * 1024
+        measured_result = Ref{Any}(nothing)
+        GC.gc()
+        allocated_bytes = @allocated measured_result[] =
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                config,
+                :autocycler_polished;
+                correction_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                ),
+                assembler_runner = bounded_memory_assembler_runner,
+            )
+        Test.@test measured_result[].contigs == ["ACGTACGT"]
+        Test.@test allocated_bytes <=
+                   baseline_allocated_bytes + report_size_bytes[] ÷ 4
     end
 
     Test.@testset "cleanup on assembler failure" begin
@@ -921,6 +5209,150 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test !isfile(interrupted_correction_calls[1].corrected_fastq)
     end
 
+    Test.@testset "cleanup Interrupt attempts every stage and root" begin
+        correction_calls = NamedTuple[]
+        workflow_root = Ref("")
+        stage_cleanup_attempts = String[]
+        root_cleanup_attempts = String[]
+        cleanup_interrupt = InterruptException()
+        function assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            workflow_root[] = dirname(String(outdir))
+            return multi_input_fake_assembler_result(outdir)
+        end
+        function interrupt_first_stage_cleanup(
+                path::AbstractString,
+        )::Nothing
+            push!(stage_cleanup_attempts, String(path))
+            length(stage_cleanup_attempts) == 1 && throw(cleanup_interrupt)
+            return nothing
+        end
+        function record_root_cleanup(path::AbstractString)::Nothing
+            push!(root_cleanup_attempts, String(path))
+            return nothing
+        end
+        caught_interrupt = multi_input_capture_error() do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                ),
+                assembler_runner,
+                corrected_fastq_cleanup_hook =
+                    interrupt_first_stage_cleanup,
+                workflow_root_cleanup_hook = record_root_cleanup,
+            )
+        end
+        Test.@test caught_interrupt === cleanup_interrupt
+        Test.@test stage_cleanup_attempts == [
+            call.corrected_fastq for call in correction_calls
+        ]
+        Test.@test root_cleanup_attempts == [workflow_root[]]
+        Test.@test all(
+            call -> !ispath(call.corrected_fastq),
+            correction_calls,
+        )
+        Test.@test !ispath(workflow_root[])
+    end
+
+    Test.@testset "retained cleanup artifacts are recorded" begin
+        correction_calls = NamedTuple[]
+        correction_runner = multi_input_fake_correction_runner(correction_calls)
+        workflow_root = Ref("")
+        reported_intermediate = Ref("")
+        function assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            workflow_root[] = dirname(String(outdir))
+            assembler_result = multi_input_fake_assembler_result(outdir)
+            reported_intermediate[] = joinpath(outdir, "retained.sam")
+            write(reported_intermediate[], "retained\n")
+            return merge(
+                assembler_result,
+                (; intermediates = [reported_intermediate[]]),
+            )
+        end
+        function selective_corrected_cleanup_hook(
+                path::AbstractString,
+        )::Nothing
+            if path == correction_calls[1].corrected_fastq
+                error("synthetic corrected cleanup failure")
+            end
+            return nothing
+        end
+        function failing_root_cleanup_hook(path::AbstractString)::Nothing
+            error("synthetic root cleanup failure: $(path)")
+        end
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner,
+            assembler_runner,
+            corrected_fastq_cleanup_hook =
+                selective_corrected_cleanup_hook,
+            workflow_root_cleanup_hook = failing_root_cleanup_hook,
+        )
+        retained_file = correction_calls[1].corrected_fastq
+        Test.@test result.assembly_stats["retained_cleanup_files"] ==
+                   [retained_file]
+        Test.@test result.assembly_stats["retained_cleanup_roots"] ==
+                   [workflow_root[]]
+        Test.@test result.assembly_stats["retained_intermediates"] ==
+                   [reported_intermediate[]]
+        Test.@test isfile(retained_file)
+        Test.@test isfile(reported_intermediate[])
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls[2:3],
+        )
+        Test.@test isdir(workflow_root[])
+        rm(retained_file; force = true)
+        rm(workflow_root[]; recursive = true, force = true)
+
+        cleaned_correction_calls = NamedTuple[]
+        cleaned_intermediate = Ref("")
+        function cleaned_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            assembler_result = multi_input_fake_assembler_result(outdir)
+            cleaned_intermediate[] = joinpath(outdir, "cleaned.sam")
+            write(cleaned_intermediate[], "cleaned\n")
+            return merge(
+                assembler_result,
+                (; intermediates = [cleaned_intermediate[]]),
+            )
+        end
+        cleaned_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                cleaned_correction_calls,
+            ),
+            assembler_runner = cleaned_assembler_runner,
+        )
+        Test.@test length(cleaned_correction_calls) == 3
+        Test.@test isempty(
+            cleaned_result.assembly_stats["retained_intermediates"],
+        )
+        Test.@test !ispath(cleaned_intermediate[])
+        Test.@test cleaned_result.assembly_stats["input_technologies"] == Dict(
+            "short_r1" => "illumina",
+            "short_r2" => "illumina",
+            "long_reads" => "nanopore",
+        )
+    end
+
     Test.@testset "caller-owned artifacts persist" begin
         output_dir = mktempdir()
         correction_calls = NamedTuple[]
@@ -928,6 +5360,13 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         assembly_path = Ref("")
         graph_path = Ref("")
         assembler_runner = function (inputs::Any, outdir::AbstractString)
+            Test.@test length(correction_calls) == 3
+            chmod(correction_calls[1].corrected_fastq, 0o600)
+            multi_input_mutate_first_sequence!(
+                correction_calls[1].corrected_fastq,
+            )
+            rm(correction_calls[2].corrected_fastq)
+            rm(correction_calls[3].corrected_fastq)
             result = multi_input_fake_assembler_result(
                 outdir;
                 include_graph = true,
@@ -949,12 +5388,54 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
 
         expected_corrected = Dict(
-            "short_r1" => joinpath(output_dir, "corrected", "short_r1", "corrected.fastq"),
-            "short_r2" => joinpath(output_dir, "corrected", "short_r2", "corrected.fastq"),
-            "long_reads" => joinpath(output_dir, "corrected", "long_reads", "corrected.fastq"),
+            "short_r1" => joinpath(
+                output_dir,
+                "stable_corrected",
+                "short_r1.fastq",
+            ),
+            "short_r2" => joinpath(
+                output_dir,
+                "stable_corrected",
+                "short_r2.fastq",
+            ),
+            "long_reads" => joinpath(
+                output_dir,
+                "stable_corrected",
+                "long_reads.fastq",
+            ),
         )
         Test.@test result.assembly_stats["corrected_fastqs"] == expected_corrected
         Test.@test all(isfile, values(expected_corrected))
+        Test.@test isfile(correction_calls[1].corrected_fastq)
+        Test.@test !isfile(correction_calls[2].corrected_fastq)
+        Test.@test !isfile(correction_calls[3].corrected_fastq)
+        corrected_contract = result.assembly_stats["read_content_provenance"][
+            "corrected_fastqs"
+        ]
+        correction_outputs = corrected_contract["correction_outputs"]
+        correction_provenance = result.assembly_stats[
+            "correction_provenance"
+        ]
+        for (label, stable_path) in expected_corrected
+            stable_identity = corrected_contract[label]
+            correction_output = correction_outputs[label]
+            Test.@test stable_identity["path"] == stable_path
+            Test.@test stable_identity["canonical_path"] == realpath(stable_path)
+            Test.@test stable_identity["size_bytes"] == filesize(stable_path)
+            Test.@test stable_identity["sha256"] ==
+                       Mycelia.Rhizomorph._multi_input_file_sha256(stable_path)
+            Test.@test correction_output["path"] ==
+                       correction_provenance[label][
+                "correction_output_content"
+            ]["path"]
+            Test.@test correction_output["size_bytes"] ==
+                       stable_identity["size_bytes"]
+            Test.@test correction_output["sha256"] ==
+                       stable_identity["sha256"]
+            Test.@test correction_provenance[label][
+                "consumed_snapshot_content"
+            ]["path"] == stable_path
+        end
         Test.@test isfile(assembly_path[])
         Test.@test isfile(graph_path[])
         Test.@test result.assembly_stats["raw_graph"] == graph_path[]
@@ -963,6 +5444,13 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             "final_assembly" => assembly_path[],
             "raw_graph" => graph_path[],
         )
+        persistent_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(persistent_artifact_content)) ==
+                   Set(["assembly", "graph", "child_contract"])
+        Test.@test result.assembly_stats["tool_artifact_hashes"][
+            "final_assembly"
+        ] == persistent_artifact_content["assembly"]["sha256"]
 
         stale_dir = mktempdir()
         write(joinpath(stale_dir, "stale.txt"), "stale")
@@ -980,6 +5468,596 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test isfile(joinpath(stale_dir, "stale.txt"))
     end
 
+    Test.@testset "assembler artifacts stay inside their reserved outdir" begin
+        mktempdir() do temp_dir
+            external_fasta = multi_input_write_fasta(
+                joinpath(temp_dir, "external.fasta"),
+            )
+            external_graph = joinpath(temp_dir, "external.gfa")
+            write(
+                external_graph,
+                "H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\n",
+            )
+            external_report = joinpath(temp_dir, "external.report")
+            write(external_report, "corrected_bases\t0\n")
+            external_paths = Dict(
+                :assembly => external_fasta,
+                :graph => external_graph,
+                :autocycler_assembly => external_fasta,
+                :polypolish_assembly => external_fasta,
+                :pypolca_report => external_report,
+            )
+
+            for (case_index, field) in enumerate(keys(external_paths))
+                outdir = joinpath(temp_dir, "external-field-$(case_index)")
+                result = multi_input_fake_assembler_result(
+                    outdir;
+                    include_polishing_artifacts = true,
+                )
+                escaped_result = merge(
+                    result,
+                    NamedTuple{(field,)}((external_paths[field],)),
+                )
+                test_throws_message(
+                    ErrorException,
+                    "outside its exact reserved output directory",
+                ) do
+                    Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                        escaped_result,
+                        :autocycler_polished,
+                        outdir,
+                    )
+                end
+            end
+
+            intermediate_outdir = joinpath(temp_dir, "external-intermediate")
+            intermediate_result = merge(
+                multi_input_fake_assembler_result(
+                    intermediate_outdir;
+                    include_polishing_artifacts = true,
+                ),
+                (; intermediates = [external_fasta]),
+            )
+            test_throws_message(
+                ErrorException,
+                "intermediate 1 is outside its exact reserved output directory",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    intermediate_result,
+                    :autocycler_polished,
+                    intermediate_outdir,
+                )
+            end
+
+            symlink_outdir = joinpath(temp_dir, "symlink-artifact")
+            symlink_result = multi_input_fake_assembler_result(symlink_outdir)
+            symlinked_assembly = joinpath(symlink_outdir, "escaped.fasta")
+            symlink(external_fasta, symlinked_assembly)
+            test_throws_message(ErrorException, "regular, non-symlink file") do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    merge(symlink_result, (; assembly = symlinked_assembly)),
+                    :unicycler,
+                    symlink_outdir,
+                )
+            end
+
+            nested_symlink_outdir = joinpath(temp_dir, "nested-symlink")
+            nested_symlink_result = multi_input_fake_assembler_result(
+                nested_symlink_outdir,
+            )
+            nested_real_dir = joinpath(nested_symlink_outdir, "real")
+            nested_alias_dir = joinpath(nested_symlink_outdir, "alias")
+            mkpath(nested_real_dir)
+            nested_assembly = multi_input_write_fasta(
+                joinpath(nested_real_dir, "assembly.fasta"),
+            )
+            symlink(nested_real_dir, nested_alias_dir)
+            test_throws_message(
+                ErrorException,
+                "resolves through a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    merge(
+                        nested_symlink_result,
+                        (;
+                            assembly = joinpath(
+                                nested_alias_dir,
+                                basename(nested_assembly),
+                            ),
+                        ),
+                    ),
+                    :unicycler,
+                    nested_symlink_outdir,
+                )
+            end
+
+            correction_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "assembly is outside its exact reserved output directory",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        correction_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> merge(
+                        multi_input_fake_assembler_result(outdir),
+                        (; assembly = external_fasta),
+                    ),
+                )
+            end
+            workflow_output = joinpath(temp_dir, "retargeted-assembler-child")
+            external_assembler_dir = joinpath(temp_dir, "external-assembler")
+            mkpath(external_assembler_dir)
+            retargeting_correction_calls = NamedTuple[]
+            base_correction_runner = multi_input_fake_correction_runner(
+                retargeting_correction_calls,
+            )
+            function assembler_retargeting_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                stage = base_correction_runner(reads, config)
+                if length(retargeting_correction_calls) == 3
+                    symlink(
+                        external_assembler_dir,
+                        joinpath(workflow_output, "assembler_unicycler"),
+                    )
+                end
+                return stage
+            end
+            assembler_called = Ref(false)
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = workflow_output,
+                    ),
+                    :unicycler;
+                    correction_runner =
+                        assembler_retargeting_correction_runner,
+                    assembler_runner = (inputs, outdir) -> begin
+                        assembler_called[] = true
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test !assembler_called[]
+            Test.@test isempty(readdir(external_assembler_dir))
+
+            postcheck_workflow = joinpath(
+                temp_dir,
+                "assembler-postcheck-workflow",
+            )
+            postcheck_assembler_dir = joinpath(
+                temp_dir,
+                "assembler-postcheck-external",
+            )
+            mkpath(postcheck_assembler_dir)
+            postcheck_calls = NamedTuple[]
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = postcheck_workflow,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        postcheck_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        symlink(postcheck_assembler_dir, outdir)
+                        assembly = multi_input_write_fasta(
+                            joinpath(outdir, "assembly.fasta"),
+                        )
+                        graph = joinpath(outdir, "assembly.gfa")
+                        write(
+                            graph,
+                            "H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\n",
+                        )
+                        return (;
+                            assembly,
+                            graph,
+                            toolchain = multi_input_fake_unicycler_toolchain(),
+                        )
+                    end,
+                )
+            end
+            Test.@test isfile(joinpath(postcheck_assembler_dir, "assembly.fasta"))
+            Test.@test isfile(joinpath(postcheck_assembler_dir, "assembly.gfa"))
+
+            replaced_workflow = joinpath(temp_dir, "replaced-workflow")
+            replacement_marker = joinpath(
+                replaced_workflow,
+                "replacement-marker.txt",
+            )
+            replacement_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "multi-input workflow root changed filesystem identity",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = replaced_workflow,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        replacement_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        staged_replacement = joinpath(
+                            temp_dir,
+                            "staged-replacement-workflow",
+                        )
+                        mkpath(staged_replacement)
+                        write(
+                            joinpath(
+                                staged_replacement,
+                                basename(replacement_marker),
+                            ),
+                            "preserve replacement\n",
+                        )
+                        rm(replaced_workflow; recursive = true)
+                        mv(staged_replacement, replaced_workflow)
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test read(replacement_marker, String) ==
+                       "preserve replacement\n"
+            Test.@test isfile(external_fasta)
+            Test.@test isfile(external_graph)
+            Test.@test isfile(external_report)
+            Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
+        end
+    end
+
+    Test.@testset "child immutable artifacts survive high-level return" begin
+        mktempdir() do temp_dir
+            for (workflow, config, include_polishing_artifacts) in (
+                    (
+                        :unicycler,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = joinpath(temp_dir, "unicycler"),
+                        ),
+                        false,
+                    ),
+                    (
+                        :autocycler_polished,
+                        Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                            output_dir = joinpath(temp_dir, "autocycler"),
+                        ),
+                        true,
+                    ),
+            )
+                correction_calls = NamedTuple[]
+                test_throws_message(
+                    ErrorException,
+                    "changed after its child wrapper bound an immutable " *
+                    "artifact snapshot",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        config,
+                        workflow;
+                        correction_runner = multi_input_fake_correction_runner(
+                            correction_calls,
+                        ),
+                        assembler_runner = (inputs, outdir) ->
+                            multi_input_fake_assembler_result(
+                                outdir;
+                                include_polishing_artifacts,
+                            ),
+                        after_assembler_return_hook = result -> write(
+                            result.assembly,
+                            ">contig_1\nTGCATGCA\n",
+                        ),
+                    )
+                end
+            end
+
+            mismatched_unicycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "Unicycler assembly FASTA and GFA contain different sequences",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = joinpath(
+                            temp_dir,
+                            "mismatched-unicycler-companions",
+                        ),
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        mismatched_unicycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_fake_assembler_result(
+                            outdir;
+                            assembly_records = [
+                                "contig_1" => "TGCATGCA",
+                            ],
+                        ),
+                )
+            end
+
+            mismatched_autocycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "Autocycler consensus FASTA and GFA contain different " *
+                "sequences",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                        output_dir = joinpath(
+                            temp_dir,
+                            "mismatched-autocycler-companions",
+                        ),
+                    ),
+                    :autocycler_polished;
+                    correction_runner = multi_input_fake_correction_runner(
+                        mismatched_autocycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        base_result = multi_input_fake_assembler_result(
+                            outdir;
+                            include_polishing_artifacts = true,
+                        )
+                        write(
+                            base_result.autocycler_assembly,
+                            ">contig_1\nTGCATGCA\n",
+                        )
+                        lifecycle_artifact_snapshots =
+                            multi_input_fake_autocycler_lifecycle(
+                                outdir,
+                                base_result.assembly,
+                                base_result.graph,
+                                base_result.autocycler_assembly,
+                                base_result.polypolish_assembly,
+                                base_result.pypolca_report,
+                            )
+                        rebound_result = merge(
+                            base_result,
+                            (; lifecycle_artifact_snapshots),
+                        )
+                        child_integrity =
+                            Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                                rebound_result,
+                                outdir,
+                            )
+                        return merge(rebound_result, (; child_integrity))
+                    end,
+                )
+            end
+
+            lifecycle_metadata_outdir = joinpath(
+                temp_dir,
+                "mutated-autocycler-lifecycle-metadata",
+                "assembler_autocycler_polished",
+            )
+            lifecycle_metadata_result = multi_input_fake_assembler_result(
+                lifecycle_metadata_outdir;
+                include_polishing_artifacts = true,
+            )
+            retained_path = joinpath(
+                lifecycle_metadata_outdir,
+                "retained.sam",
+            )
+            write(retained_path, "@HD\tVN:1.6\n")
+            retained_snapshot = Mycelia._autocycler_artifact_snapshot(
+                retained_path,
+                lifecycle_metadata_outdir,
+                "retained alignment",
+            )
+            retained_binding = (;
+                path = retained_path,
+                snapshot = retained_snapshot,
+                label = "original retained alignment",
+            )
+            bound_lifecycle = merge(
+                lifecycle_metadata_result.lifecycle_artifact_snapshots,
+                (;
+                    intermediates = [retained_binding],
+                    planned_intermediates = [retained_path],
+                ),
+            )
+            unbound_metadata_result = merge(
+                lifecycle_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots = bound_lifecycle,
+                    intermediates = [retained_path],
+                ),
+            )
+            duplicate_retained_lifecycle = merge(
+                bound_lifecycle,
+                (; intermediates = [retained_binding, retained_binding]),
+            )
+            duplicate_retained_result = merge(
+                lifecycle_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        duplicate_retained_lifecycle,
+                    intermediates = [retained_path, retained_path],
+                ),
+            )
+            test_throws_message(
+                ErrorException,
+                "retained-intermediate lifecycle binding contains duplicate " *
+                "paths",
+            ) do
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    duplicate_retained_result,
+                    lifecycle_metadata_outdir,
+                )
+            end
+            bound_child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    unbound_metadata_result,
+                    lifecycle_metadata_outdir,
+                )
+            bound_metadata_result = merge(
+                unbound_metadata_result,
+                (; child_integrity = bound_child_integrity),
+            )
+            tampered_lifecycle = merge(
+                bound_lifecycle,
+                (;
+                    intermediates = [
+                        merge(
+                            retained_binding,
+                            (; label = "tampered retained alignment"),
+                        ),
+                    ],
+                ),
+            )
+            tampered_metadata_result = merge(
+                bound_metadata_result,
+                (; lifecycle_artifact_snapshots = tampered_lifecycle),
+            )
+            test_throws_message(
+                ErrorException,
+                "lifecycle artifact snapshots changed after their immutable " *
+                "adapter binding",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    tampered_metadata_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            removed_planned_path = joinpath(
+                lifecycle_metadata_outdir,
+                "removed-planned.sam",
+            )
+            tampered_planned_lifecycle = merge(
+                bound_lifecycle,
+                (;
+                    planned_intermediates = [
+                        retained_path,
+                        removed_planned_path,
+                    ],
+                ),
+            )
+            tampered_planned_result = merge(
+                bound_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        tampered_planned_lifecycle,
+                ),
+            )
+            test_throws_message(
+                ErrorException,
+                "lifecycle artifact snapshots changed after their immutable " *
+                "adapter binding",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    tampered_planned_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            cleanup_unbound_result = merge(
+                unbound_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        tampered_planned_lifecycle,
+                ),
+            )
+            cleanup_child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    cleanup_unbound_result,
+                    lifecycle_metadata_outdir,
+                )
+            cleanup_bound_result = merge(
+                cleanup_unbound_result,
+                (; child_integrity = cleanup_child_integrity),
+            )
+            write(removed_planned_path, "recreated after child cleanup\n")
+            test_throws_message(
+                ErrorException,
+                "polishing intermediate reappeared after its completed child " *
+                "cleanup",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    cleanup_bound_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            missing_unicycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "did not propagate its durable run contract path",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = joinpath(temp_dir, "missing-contract"),
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        missing_unicycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_without_field(
+                            multi_input_fake_assembler_result(outdir),
+                            :contract,
+                        ),
+                )
+            end
+
+            missing_autocycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "did not propagate lifecycle artifact snapshots",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                        output_dir = joinpath(temp_dir, "missing-lifecycle"),
+                    ),
+                    :autocycler_polished;
+                    correction_runner = multi_input_fake_correction_runner(
+                        missing_autocycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_without_field(
+                            multi_input_fake_assembler_result(
+                                outdir;
+                                include_polishing_artifacts = true,
+                            ),
+                            :lifecycle_artifact_snapshots,
+                        ),
+                )
+            end
+        end
+    end
+
     Test.@testset "gzip FASTA wrapping and fail-loud artifacts" begin
         artifact_dir = mktempdir()
         gzip_fasta = multi_input_write_fasta(
@@ -990,9 +6068,22 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         records = Mycelia.Rhizomorph._read_external_fasta(gzip_fasta)
         Test.@test [String(FASTX.identifier(record)) for record in records] ==
                    ["alpha", "beta"]
+        gzip_graph = joinpath(artifact_dir, "assembly.gfa")
+        write(
+            gzip_graph,
+            "H\tVN:Z:1.0\n" *
+            "S\talpha\tACGT\n" *
+            "S\tbeta\tTTAA\n" *
+            "L\talpha\t+\tbeta\t-\t1M\n" *
+            "P\tprimary\talpha+,beta-\t1M\n",
+        )
 
         wrapped = Mycelia.Rhizomorph._wrap_multi_input_assembly(
-            (; contigs = gzip_fasta),
+            (;
+                contigs = gzip_fasta,
+                graph = gzip_graph,
+                toolchain = multi_input_fake_unicycler_toolchain(),
+            ),
             :unicycler;
             input_counts = Dict(
                 "short_r1" => 1,
@@ -1008,6 +6099,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             short_read_tech = :illumina,
             long_read_tech = :nanopore,
             correction_options = (; k = 13),
+            correction_provenance = Dict{String, Any}(),
             output_dir = nothing,
             polishers = String[],
             workflow_settings = Dict{String, Any}(
@@ -1019,9 +6111,26 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "short_r2" => "illumina",
                 "long_reads" => "nanopore",
             ),
+            retained_cleanup_files = String[],
+            retained_cleanup_roots = String[],
         )
         Test.@test wrapped.contig_names == ["alpha", "beta"]
         Test.@test wrapped.contigs == ["ACGT", "TTAA"]
+
+        comma_identifier_graph = joinpath(
+            artifact_dir,
+            "comma-identifier.gfa",
+        )
+        write(
+            comma_identifier_graph,
+            "H\tVN:Z:1.0\n" *
+            "S\tsegment,name\tACGT\n" *
+            "P\tprimary\tsegment,name+\t*\n",
+        )
+        Test.@test Mycelia._require_valid_assembly_gfa(
+            comma_identifier_graph,
+            "comma-name graph",
+        ) == comma_identifier_graph
 
         missing = joinpath(artifact_dir, "missing.fasta")
         test_throws_message(ErrorException, "no non-empty contigs FASTA") do
@@ -1046,6 +6155,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 short_read_tech = :illumina,
                 long_read_tech = :nanopore,
                 correction_options = (;),
+                correction_provenance = Dict{String, Any}(),
                 output_dir = nothing,
                 polishers = ["polypolish", "pypolca-careful"],
                 workflow_settings = Dict{String, Any}(
@@ -1057,7 +6167,569 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                     "short_r2" => "illumina",
                     "long_reads" => "nanopore",
                 ),
+                retained_cleanup_files = String[],
+                retained_cleanup_roots = String[],
             )
+        end
+    end
+
+    Test.@testset "semantic assembler artifacts fail loud" begin
+        mktempdir() do temp_dir
+            Test.@testset "FASTA reader cleanup precedence" begin
+                empty_fasta = joinpath(temp_dir, "empty-reader-cleanup.fasta")
+                write(empty_fasta, "\n")
+                empty_ordinary_close_calls = Ref(0)
+                empty_ordinary_primary = Test.@test_logs (
+                    :warn,
+                    r"FASTA reader cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                            empty_fasta,
+                            "empty ordinary cleanup FASTA";
+                            reader_closer = reader -> begin
+                                empty_ordinary_close_calls[] += 1
+                                close(reader)
+                                error(
+                                    "synthetic empty FASTA close failure",
+                                )
+                            end,
+                        )
+                    end
+                end
+                Test.@test empty_ordinary_close_calls[] == 1
+                Test.@test empty_ordinary_primary isa ErrorException
+                Test.@test occursin(
+                    "contains no FASTA records",
+                    sprint(showerror, empty_ordinary_primary),
+                )
+                Test.@test !occursin(
+                    "synthetic empty FASTA close failure",
+                    sprint(showerror, empty_ordinary_primary),
+                )
+
+                empty_close_interrupt = InterruptException()
+                empty_interrupt_close_calls = Ref(0)
+                empty_interrupt_primary = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                        empty_fasta,
+                        "empty interrupt cleanup FASTA";
+                        reader_closer = reader -> begin
+                            empty_interrupt_close_calls[] += 1
+                            close(reader)
+                            throw(empty_close_interrupt)
+                        end,
+                    )
+                end
+                Test.@test empty_interrupt_close_calls[] == 1
+                Test.@test empty_interrupt_primary === empty_close_interrupt
+
+                invalid_fasta = multi_input_write_fasta(
+                    joinpath(temp_dir, "invalid-reader-cleanup.fasta");
+                    records = ["invalid" => "ACGTZ"],
+                )
+                ordinary_close_calls = Ref(0)
+                ordinary_primary = Test.@test_logs (
+                    :warn,
+                    r"FASTA reader cleanup failed while preserving the primary",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    multi_input_capture_error() do
+                        Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                            invalid_fasta,
+                            "ordinary cleanup FASTA";
+                            reader_closer = reader -> begin
+                                ordinary_close_calls[] += 1
+                                close(reader)
+                                error("synthetic ordinary FASTA close failure")
+                            end,
+                        )
+                    end
+                end
+                Test.@test ordinary_close_calls[] == 1
+                Test.@test ordinary_primary isa ErrorException
+                Test.@test occursin(
+                    "invalid DNA at FASTA record",
+                    sprint(showerror, ordinary_primary),
+                )
+                Test.@test !occursin(
+                    "synthetic ordinary FASTA close failure",
+                    sprint(showerror, ordinary_primary),
+                )
+
+                close_interrupt = InterruptException()
+                interrupt_close_calls = Ref(0)
+                interrupt_primary = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                        invalid_fasta,
+                        "interrupt cleanup FASTA";
+                        reader_closer = reader -> begin
+                            interrupt_close_calls[] += 1
+                            close(reader)
+                            throw(close_interrupt)
+                        end,
+                    )
+                end
+                Test.@test interrupt_close_calls[] == 1
+                Test.@test interrupt_primary === close_interrupt
+
+                valid_fasta = multi_input_write_fasta(
+                    joinpath(temp_dir, "valid-reader-cleanup.fasta"),
+                )
+                successful_close_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                        valid_fasta,
+                        "valid cleanup FASTA";
+                        reader_closer = reader -> begin
+                            close(reader)
+                            error("synthetic successful FASTA close failure")
+                        end,
+                    )
+                end
+                Test.@test successful_close_error isa ErrorException
+                Test.@test occursin(
+                    "synthetic successful FASTA close failure",
+                    sprint(showerror, successful_close_error),
+                )
+
+                successful_close_interrupt = InterruptException()
+                successful_interrupt_error = multi_input_capture_error() do
+                    Mycelia.Rhizomorph._require_valid_multi_input_fasta(
+                        valid_fasta,
+                        "valid interrupt cleanup FASTA";
+                        reader_closer = reader -> begin
+                            close(reader)
+                            throw(successful_close_interrupt)
+                        end,
+                    )
+                end
+                Test.@test successful_interrupt_error ===
+                           successful_close_interrupt
+            end
+
+            function wrap_semantic_result(
+                    result::NamedTuple,
+                    workflow::Symbol,
+            )::Mycelia.Rhizomorph.AssemblyResult
+                assembler = workflow == :autocycler_polished ?
+                            "autocycler" : "unicycler"
+                polishers = workflow == :autocycler_polished ?
+                            ["polypolish-careful", "pypolca-careful"] :
+                            String[]
+                return Mycelia.Rhizomorph._wrap_multi_input_assembly(
+                    result,
+                    workflow;
+                    input_counts = Dict(
+                        "short_r1" => 1,
+                        "short_r2" => 1,
+                        "long_reads" => 1,
+                    ),
+                    corrected_counts = Dict(
+                        "short_r1" => 1,
+                        "short_r2" => 1,
+                        "long_reads" => 1,
+                    ),
+                    corrected_paths = nothing,
+                    short_read_tech = :illumina,
+                    long_read_tech = :nanopore,
+                    correction_options = (; k = 13),
+                    correction_provenance = Dict{String, Any}(),
+                    output_dir = nothing,
+                    polishers,
+                    workflow_settings = Dict{String, Any}(
+                        "workflow" => String(workflow),
+                        "assembler" => assembler,
+                    ),
+                    input_technologies = Dict(
+                        "short_r1" => "illumina",
+                        "short_r2" => "illumina",
+                        "long_reads" => "nanopore",
+                    ),
+                    retained_cleanup_files = String[],
+                    retained_cleanup_roots = String[],
+                )
+            end
+
+            function semantic_result_shape(
+                    workflow::Symbol,
+                    outdir::AbstractString;
+                    assembly_records::Vector{Pair{String, String}} =
+                        ["contig_1" => "ACGT"],
+                    graph_contents::AbstractString =
+                        "H\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                    autocycler_records::Vector{Pair{String, String}} =
+                        ["contig_1" => "ACGT"],
+                    polypolish_records::Vector{Pair{String, String}} =
+                        ["contig_1" => "ACGT"],
+            )::NamedTuple
+                assembly = multi_input_write_fasta(
+                    joinpath(outdir, "assembly.fasta");
+                    records = assembly_records,
+                )
+                graph = joinpath(outdir, "assembly.gfa")
+                write(graph, graph_contents)
+                if workflow == :unicycler
+                    return (;
+                        assembly,
+                        graph,
+                        toolchain = multi_input_fake_unicycler_toolchain(),
+                    )
+                end
+                autocycler_assembly = multi_input_write_fasta(
+                    joinpath(outdir, "autocycler_assembly.fasta");
+                    records = autocycler_records,
+                )
+                polypolish_assembly = multi_input_write_fasta(
+                    joinpath(outdir, "polypolish_assembly.fasta");
+                    records = polypolish_records,
+                )
+                pypolca_report = joinpath(outdir, "pypolca.report")
+                write(pypolca_report, "corrected_bases\t0\n")
+                return (;
+                    assembly,
+                    graph,
+                    autocycler_assembly,
+                    polypolish_assembly,
+                    pypolca_report,
+                    toolchain = multi_input_fake_autocycler_toolchain(),
+                )
+            end
+
+            semantic_cases = (
+                (
+                    message = "empty FASTA identifier",
+                    assembly_records = ["" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                ),
+                (
+                    message = "duplicate FASTA identifier",
+                    assembly_records = [
+                        "duplicate" => "ACGT",
+                        "duplicate" => "TGCA",
+                    ],
+                    graph_contents = "H\tVN:Z:1.0\nS\tduplicate\tACGT\n",
+                ),
+                (
+                    message = "empty FASTA sequence",
+                    assembly_records = ["empty" => ""],
+                    graph_contents = "H\tVN:Z:1.0\nS\tempty\tACGT\n",
+                ),
+                (
+                    message = "invalid DNA at FASTA record",
+                    assembly_records = ["invalid" => "ACGTZ"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tinvalid\tACGT\n",
+                ),
+                (
+                    message = "invalid DNA at FASTA record",
+                    assembly_records = ["gapped" => "ACGT-ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tgapped\tACGT\n",
+                ),
+                (
+                    message = "unknown GFA record type",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "not GFA\nH\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                ),
+                (
+                    message = "malformed GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tbroken\n",
+                ),
+                (
+                    message = "malformed GFA link",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\nS\tcontig_2\tTGCA\n" *
+                        "L\tcontig_1\t+\tcontig_2\t-\n",
+                ),
+                (
+                    message = "dangling GFA link segment reference",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\n" *
+                        "L\tcontig_1\t+\tmissing\t-\t1M\n",
+                ),
+                (
+                    message = "dangling GFA path segment reference",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\n" *
+                        "P\tprimary\tcontig_1+,missing-\t1M\n",
+                ),
+                (
+                    message = "no sequence-bearing GFA segments",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\n",
+                ),
+                (
+                    message = "duplicate GFA segment/path name",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tduplicate\tACGT\nS\tduplicate\tTGCA\n",
+                ),
+                (
+                    message = "invalid DNA for GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tinvalid\tACGTZ\n",
+                ),
+                (
+                    message = "invalid DNA for GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tgapped\tACGT-ACGT\n",
+                ),
+                (
+                    message = "duplicate GFA segment/path name",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tshared_name\tACGT\n" *
+                        "P\tshared_name\tshared_name+\t*\n",
+                ),
+                (
+                    message = "invalid GFA segment optional tag",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tcontig_1\tACGT\tbad-tag\n",
+                ),
+            )
+            for workflow in (:unicycler, :autocycler_polished)
+                for (case_index, semantic_case) in enumerate(semantic_cases)
+                    outdir = joinpath(
+                        temp_dir,
+                        "$(workflow)-semantic-case-$(case_index)",
+                    )
+                    result = semantic_result_shape(
+                        workflow,
+                        outdir;
+                        assembly_records = semantic_case.assembly_records,
+                        graph_contents = semantic_case.graph_contents,
+                    )
+                    test_throws_message(ErrorException, semantic_case.message) do
+                        wrap_semantic_result(result, workflow)
+                    end
+                end
+            end
+
+            unicycler_without_graph = semantic_result_shape(
+                :unicycler,
+                joinpath(temp_dir, "unicycler-without-graph"),
+            )
+            test_throws_message(ErrorException, "field :graph") do
+                wrap_semantic_result(
+                    multi_input_without_field(
+                        unicycler_without_graph,
+                        :graph,
+                    ),
+                    :unicycler,
+                )
+            end
+
+            for field in (
+                    :graph,
+                    :autocycler_assembly,
+                    :polypolish_assembly,
+                    :pypolca_report,
+            )
+                complete_result = semantic_result_shape(
+                    :autocycler_polished,
+                    joinpath(temp_dir, "autocycler-without-$(field)"),
+                )
+                test_throws_message(ErrorException, "field :$(field)") do
+                    wrap_semantic_result(
+                        multi_input_without_field(complete_result, field),
+                        :autocycler_polished,
+                    )
+                end
+            end
+
+            complete_autocycler_result = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "autocycler-toolchain-contract"),
+            )
+            test_throws_message(
+                ErrorException,
+                "did not report realized toolchain provenance",
+            ) do
+                wrap_semantic_result(
+                    multi_input_without_field(
+                        complete_autocycler_result,
+                        :toolchain,
+                    ),
+                    :autocycler_polished,
+                )
+            end
+            malformed_toolchain = copy(complete_autocycler_result.toolchain)
+            malformed_toolchain["toolchain_schema"] = "unsupported-schema"
+            test_throws_message(
+                ErrorException,
+                "incompatible toolchain_schema",
+            ) do
+                wrap_semantic_result(
+                    merge(
+                        complete_autocycler_result,
+                        (; toolchain = malformed_toolchain),
+                    ),
+                    :autocycler_polished,
+                )
+            end
+            build_drift_toolchain = deepcopy(
+                complete_autocycler_result.toolchain,
+            )
+            build_drift_toolchain["packages"][1]["build"] = "drifted-build"
+            test_throws_message(
+                ErrorException,
+                "inventory digest does not match",
+            ) do
+                wrap_semantic_result(
+                    merge(
+                        complete_autocycler_result,
+                        (; toolchain = build_drift_toolchain),
+                    ),
+                    :autocycler_polished,
+                )
+            end
+            alternate_build_toolchain = multi_input_fake_autocycler_toolchain(
+                build_suffix = "alternate",
+            )
+            alternate_build_result = wrap_semantic_result(
+                merge(
+                    complete_autocycler_result,
+                    (; toolchain = alternate_build_toolchain),
+                ),
+                :autocycler_polished,
+            )
+            Test.@test alternate_build_result.assembly_stats["toolchain"] ==
+                       alternate_build_toolchain
+            Test.@test alternate_build_toolchain[
+                "package_inventory_sha256"
+            ] != complete_autocycler_result.toolchain[
+                "package_inventory_sha256"
+            ]
+
+            empty_report_result = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "empty-pypolca-report"),
+            )
+            write(empty_report_result.pypolca_report, "")
+            test_throws_message(ErrorException, "no non-empty Pypolca report") do
+                wrap_semantic_result(
+                    empty_report_result,
+                    :autocycler_polished,
+                )
+            end
+
+            invalid_autocycler = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "invalid-autocycler-intermediate");
+                autocycler_records = ["empty" => ""],
+            )
+            test_throws_message(ErrorException, "empty FASTA sequence") do
+                wrap_semantic_result(invalid_autocycler, :autocycler_polished)
+            end
+            invalid_polypolish = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "invalid-polypolish-intermediate");
+                polypolish_records = ["invalid" => "ACGTZ"],
+            )
+            test_throws_message(ErrorException, "invalid DNA at FASTA record") do
+                wrap_semantic_result(invalid_polypolish, :autocycler_polished)
+            end
+
+            matched_records = [
+                "contig_1" => "ACGT",
+                "contig_2" => "TGCA",
+            ]
+            renamed_autocycler = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "renamed-autocycler-contig");
+                assembly_records = matched_records,
+                graph_contents =
+                    "S\tcontig_1\tACGT\nS\tcontig_2\tTGCA\n",
+                autocycler_records = [
+                    "renamed_contig" => "ACGT",
+                    "contig_2" => "TGCA",
+                ],
+                polypolish_records = matched_records,
+            )
+            test_throws_message(
+                ErrorException,
+                "Autocycler consensus FASTA contig identifier set does not " *
+                "match final assembly",
+            ) do
+                wrap_semantic_result(
+                    renamed_autocycler,
+                    :autocycler_polished,
+                )
+            end
+
+            dropped_polypolish = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "dropped-polypolish-contig");
+                assembly_records = matched_records,
+                graph_contents =
+                    "S\tcontig_1\tACGT\nS\tcontig_2\tTGCA\n",
+                autocycler_records = matched_records,
+                polypolish_records = ["contig_1" => "ACGT"],
+            )
+            test_throws_message(
+                ErrorException,
+                "Polypolish assembly FASTA contig identifier set does not " *
+                "match final assembly",
+            ) do
+                wrap_semantic_result(
+                    dropped_polypolish,
+                    :autocycler_polished,
+                )
+            end
+        end
+    end
+
+    Test.@testset "public hybrid aliases are documented" begin
+        unicycler_binding = Base.Docs.Binding(
+            Mycelia.Rhizomorph,
+            :assemble_unicycler_hybrid,
+        )
+        autocycler_binding = Base.Docs.Binding(
+            Mycelia.Rhizomorph,
+            :assemble_autocycler_polished,
+        )
+        Test.@test Base.Docs.doc(unicycler_binding) !== nothing
+        Test.@test Base.Docs.doc(autocycler_binding) !== nothing
+    end
+
+    Test.@testset "public hybrid aliases enforce R1 R2 long ordering" begin
+        alias_cases = (
+            (
+                name = "Unicycler",
+                runner = Mycelia.Rhizomorph.assemble_unicycler_hybrid,
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            ),
+            (
+                name = "Autocycler",
+                runner = Mycelia.Rhizomorph.assemble_autocycler_polished,
+                config = Mycelia.Rhizomorph.AutocyclerPolishConfig(),
+            ),
+        )
+        for alias_case in alias_cases
+            test_throws_message(
+                ArgumentError,
+                "invalid explicit mate roles",
+            ) do
+                alias_case.runner(
+                    MULTI_INPUT_R2,
+                    MULTI_INPUT_R1,
+                    MULTI_INPUT_LONG;
+                    config = alias_case.config,
+                )
+            end
+            test_throws_message(
+                ArgumentError,
+                "invalid explicit mate roles",
+            ) do
+                alias_case.runner(
+                    MULTI_INPUT_R1,
+                    MULTI_INPUT_LONG,
+                    MULTI_INPUT_R2;
+                    config = alias_case.config,
+                )
+            end
         end
     end
 
@@ -1074,6 +6746,31 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             Mycelia.Rhizomorph.assemble_hybrid(
                 (MULTI_INPUT_R1, MULTI_INPUT_R2),
                 MULTI_INPUT_R1;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
+        shared_pair_record = multi_input_fastq_record("shared_pair")
+        shared_pair_r1 = [shared_pair_record]
+        shared_pair_r2 = copy(shared_pair_r1)
+        test_throws_message(
+            ArgumentError,
+            "share an in-memory FASTQ record object",
+        ) do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (shared_pair_r1, shared_pair_r2),
+                MULTI_INPUT_LONG;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
+        shared_long_r1 = [multi_input_fastq_record("shared_long/1")]
+        shared_long_r2 = [multi_input_fastq_record("shared_long/2")]
+        test_throws_message(
+            ArgumentError,
+            "share an in-memory FASTQ record object",
+        ) do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (shared_long_r1, shared_long_r2),
+                copy(shared_long_r1);
                 config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
             )
         end
@@ -1111,6 +6808,94 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 )
             end
 
+            long_path = multi_input_write_fastq(
+                joinpath(temp_dir, "long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            paired_hardlink = joinpath(temp_dir, "same-physical-hardlink.fastq")
+            Base.hardlink(paired_path, paired_hardlink)
+            distinct_r2_alias = joinpath(temp_dir, "distinct-r2-alias.fastq")
+            symlink(distinct_r2, distinct_r2_alias)
+            long_hardlink = joinpath(temp_dir, "long-hardlink.fastq")
+            Base.hardlink(long_path, long_hardlink)
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function alias_guard_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("correction must not run")
+            end
+            function alias_guard_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("assembler must not run")
+            end
+            alias_cases = (
+                (
+                    message = "sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (path for path in Any[paired_path]),
+                    long_reads = (long_path,),
+                    output_name = "exact-generator-alias",
+                ),
+                (
+                    message = "sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (path for path in (paired_alias,)),
+                    long_reads = (long_path,),
+                    output_name = "symlink-generator-alias",
+                ),
+                (
+                    message = "Long-read input must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (path for path in (paired_hardlink,)),
+                    output_name = "hardlink-generator-alias",
+                ),
+                (
+                    message = "input short_r1 sources must be distinct",
+                    short_r1 = (paired_path, paired_path),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (long_path,),
+                    output_name = "duplicate-within-r1",
+                ),
+                (
+                    message = "input short_r2 sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2, distinct_r2_alias),
+                    long_reads = (long_path,),
+                    output_name = "symlink-alias-within-r2",
+                ),
+                (
+                    message = "input long_reads sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (long_path, long_hardlink),
+                    output_name = "hardlink-alias-within-long",
+                ),
+            )
+            for alias_case in alias_cases
+                output_dir = joinpath(temp_dir, alias_case.output_name)
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, alias_case.message) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (alias_case.short_r1, alias_case.short_r2),
+                        alias_case.long_reads,
+                        config,
+                        :unicycler;
+                        correction_runner = alias_guard_correction_runner,
+                        assembler_runner = alias_guard_assembler_runner,
+                    )
+                end
+                Test.@test !ispath(output_dir)
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+
             excluded_outdir = joinpath(temp_dir, "excluded-mixed-metamdbg")
             test_throws_message(ArgumentError, "exactly one input technology") do
                 Mycelia.run_metamdbg(
@@ -1129,8 +6914,14 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
 
             for (label, keyword_arguments) in (
                     ("hifi_reads", (; hifi_reads = String[])),
-                    ("ont_reads", (; ont_reads = "")),
-                    ("ont_reads", (; ont_reads = [" "])),
+                    (
+                        "ont_reads",
+                        (; ont_reads = "", ont_r10_4_plus = true),
+                    ),
+                    (
+                        "ont_reads",
+                        (; ont_reads = [" "], ont_r10_4_plus = true),
+                    ),
             )
                 empty_outdir = joinpath(temp_dir, "empty-$(label)-$(gensym())")
                 test_throws_message(ArgumentError, "at least one non-empty path") do
@@ -1142,5 +6933,237 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 Test.@test !ispath(empty_outdir)
             end
         end
+    end
+
+    Test.@testset "bounded content passes and per-set mutation gates" begin
+        source_passes = Dict(
+            "short_r1" => 0,
+            "short_r2" => 0,
+            "long_reads" => 0,
+        )
+        corrected_passes = Dict(
+            "short_r1" => 0,
+            "short_r2" => 0,
+            "long_reads" => 0,
+        )
+        function counted_source_identity(
+                reads::Any,
+                label::AbstractString,
+        )::Dict{String, Any}
+            source_passes[String(label)] += 1
+            return Mycelia.Rhizomorph._multi_input_source_content_identity(
+                reads,
+                label,
+            )
+        end
+        function counted_corrected_identity(
+                corrected::Mycelia.Rhizomorph._CorrectedReadSet,
+                label::AbstractString,
+        )::Dict{String, Any}
+            corrected_passes[String(label)] += 1
+            return Mycelia.Rhizomorph._multi_input_corrected_read_set_content_identity(
+                corrected,
+                label,
+            )
+        end
+        correction_calls = NamedTuple[]
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                correction_calls,
+            ),
+            assembler_runner = (inputs, outdir) ->
+                multi_input_fake_assembler_result(outdir),
+            source_content_identity_reader = counted_source_identity,
+            corrected_content_identity_reader = counted_corrected_identity,
+        )
+        Test.@test length(correction_calls) == 3
+        Test.@test result.assembly_stats["input_read_counts"] == Dict(
+            "short_r1" => 2,
+            "short_r2" => 2,
+            "long_reads" => 1,
+        )
+        Test.@test source_passes == Dict(
+            "short_r1" => 5,
+            "short_r2" => 5,
+            "long_reads" => 5,
+        )
+        Test.@test corrected_passes == Dict(
+            "short_r1" => 4,
+            "short_r2" => 4,
+            "long_reads" => 4,
+        )
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls,
+        )
+
+        mutation_calls = NamedTuple[]
+        mutation_base_runner = multi_input_fake_correction_runner(
+            mutation_calls,
+        )
+        assembler_calls = Ref(0)
+        function mutate_consumed_source_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = mutation_base_runner(reads, config)
+            if length(mutation_calls) == 1
+                consumed_path = String(only(reads))
+                chmod(consumed_path, 0o600)
+                multi_input_mutate_first_sequence!(consumed_path)
+            end
+            return stage
+        end
+        test_throws_message(
+            ErrorException,
+            "input short_r1 content changed during short_r1 correction",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = mutate_consumed_source_runner,
+                assembler_runner = (inputs, outdir) -> begin
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+            )
+        end
+        Test.@test length(mutation_calls) == 1
+        Test.@test assembler_calls[] == 0
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            mutation_calls,
+        )
+    end
+end
+
+Test.@testset "cross-wrapper hierarchical output-root reservations" begin
+    mktempdir() do temp_dir
+        shared_root = joinpath(temp_dir, "shared-root")
+        autocycler_lock_path =
+            Mycelia._autocycler_output_lock_path_from_canonical(
+                Mycelia._canonical_autocycler_output_path(shared_root),
+            )
+        Test.@test Mycelia._unicycler_output_lock_path(shared_root) ==
+                   autocycler_lock_path
+        Test.@test autocycler_lock_path ==
+                   Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+            shared_root,
+        )
+
+        Mycelia._with_unicycler_output_lock(shared_root) do _reserved
+            conflict_task = @async begin
+                try
+                    Mycelia._with_autocycler_output_lock(
+                        shared_root,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            conflict = fetch(conflict_task)
+            Test.@test conflict isa ArgumentError
+            Test.@test occursin(
+                "already reserved",
+                sprint(showerror, conflict),
+            )
+        end
+
+        hierarchy_parent = joinpath(temp_dir, "hierarchy-parent")
+        hierarchy_child = joinpath(hierarchy_parent, "child")
+        Mycelia._with_unicycler_output_lock(hierarchy_parent) do _reserved
+            ancestor_task = @async begin
+                try
+                    Mycelia._with_autocycler_output_lock(
+                        hierarchy_child,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            ancestor_conflict = fetch(ancestor_task)
+            Test.@test ancestor_conflict isa ArgumentError
+            Test.@test occursin(
+                "active ancestor output-root reservation",
+                sprint(showerror, ancestor_conflict),
+            )
+        end
+
+        child_hybrid_lock =
+            Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                hierarchy_child,
+            )
+        Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+            child_hybrid_lock,
+        ) do
+            descendant_task = @async begin
+                try
+                    Mycelia._with_unicycler_output_lock(
+                        hierarchy_parent,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            descendant_conflict = fetch(descendant_task)
+            Test.@test descendant_conflict isa ArgumentError
+            Test.@test occursin(
+                "active descendant output-root reservation",
+                sprint(showerror, descendant_conflict),
+            )
+        end
+
+        sibling_a = joinpath(temp_dir, "sibling-a")
+        sibling_b = joinpath(temp_dir, "sibling-b")
+        Mycelia._with_unicycler_output_lock(sibling_a) do _reserved
+            sibling_task = @async begin
+                Mycelia._with_autocycler_output_lock(
+                    sibling_b,
+                ) do _reserved
+                    :sibling_reserved
+                end
+            end
+            sibling_result = fetch(sibling_task)
+            Test.@test sibling_result == :sibling_reserved
+        end
+
+        nested_output = joinpath(temp_dir, "nested-hybrid")
+        nested_calls = NamedTuple[]
+        function nested_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            return Mycelia._with_autocycler_output_lock(outdir) do reserved
+                multi_input_fake_assembler_result(reserved)
+            end
+        end
+        nested_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = nested_output,
+            ),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                nested_calls,
+            ),
+            assembler_runner = nested_assembler_runner,
+        )
+        Test.@test length(nested_calls) == 3
+        Test.@test isfile(
+            nested_result.assembly_stats["tool_artifacts"]["final_assembly"],
+        )
     end
 end

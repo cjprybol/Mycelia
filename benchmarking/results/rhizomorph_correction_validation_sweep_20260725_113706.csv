@@ -1,0 +1,13 @@
+reference,genome_len,error_rate,regime,readlen,tech,target_coverage,effective_coverage,k,arm,ok,n_contigs,total_length,largest_contig,n50,genome_fraction,runtime_s,quast_genome_fraction,quast_nga50,quast_num_misassemblies,quast_duplication_ratio,metric_source,mode,scale_metric_bases,scale_floor_bases
+NC_001416,48502,0.01,short-low-error,150,illumina,30.0,30.0,21,naive,true,31922,1394881,13891,41,2875.9,27.626,84.287,12720.0,0.0,1.524,quast,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.01,short-low-error,150,illumina,30.0,30.0,21,iterative,true,365,61481,31195,31195,126.8,346.929,99.981,31181.0,0.0,1.0,quast,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.01,long-high-error,5000,nanopore,30.0,30.1,21,naive,true,25030,1144510,28529,41,2359.7,40.437,95.709,28529.0,0.0,1.961,quast,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.01,long-high-error,5000,nanopore,30.0,30.1,21,iterative,true,8052,381116,44523,41,785.8,3035.54,91.796,44523.0,0.0,1.0,quast,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.05,short-low-error,150,illumina,30.0,30.0,21,naive,true,64057,3333774,221,58,6873.5,114.864,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.05,short-low-error,150,illumina,30.0,30.0,21,iterative,true,13405,815229,1100,62,1680.8,2087.469,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.05,long-high-error,5000,nanopore,30.0,30.1,21,naive,true,62726,3217881,765,53,6634.5,174.32,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.05,long-high-error,5000,nanopore,30.0,30.1,21,iterative,true,26503,1343770,1939,50,2770.5,1873.976,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.1,short-low-error,150,illumina,30.0,30.0,21,naive,true,35030,3179664,277,136,6555.7,211.867,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.1,short-low-error,150,illumina,30.0,30.0,21,iterative,true,59854,1687164,163,31,3478.5,1134.589,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.1,long-high-error,5000,nanopore,30.0,30.1,21,naive,true,49158,3650572,647,96,7526.6,157.684,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
+NC_001416,48502,0.1,long-high-error,5000,nanopore,30.0,30.1,21,iterative,true,70003,1835947,188,28,3785.3,1421.6,,,,,internal:quast-failed,VERDICT,1.45506e6,1.0e6
