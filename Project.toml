@@ -101,24 +101,66 @@ KernelAbstractions = "0.9"
 UMAP = "0.1.11"
 # TRANSITIVE PIN, not a dependency we use. Mycelia never imports XML; it is
 # declared as a direct dep solely so this bound can constrain the XLSX -> XML
-# resolution.
+# resolution. See the paired stale_deps entry in test/aqua.jl and the test that
+# couples the two, so that suppression cannot outlive this pin.
 #
-# XML 0.4.5 (published 2026-08-13) replaced LazyNode child iteration with a
-# shared mutable cursor. XLSX's _collect_row_nodes retains child LazyNodes
-# across iteration, so under 0.4.5 it raises
-# "XLSXError: No `sheetData` node found in worksheet" from inside XLSX's own
-# @compile_workload -- i.e. XLSX fails to PRECOMPILE, which cascades to
-# FileIOExt and to Mycelia itself. XLSX 0.12.2 is the newest release and
-# declares XML = "0.4.4", which under Julia's caret default admits 0.4.5, so
-# the resolver picks up the breaking change automatically. Upstream states the
-# problem in XML.jl issue #124.
+# SYMPTOM: XLSX fails to PRECOMPILE, raising
+# "XLSXError: No `sheetData` node found in worksheet" from inside its own
+# @compile_workload (XLSX.jl:91 -> read.jl). src/Mycelia.jl imports XLSX
+# unconditionally and XLSX is not a weakdep, so that failure necessarily takes
+# Mycelia with it -- which is why every branch went red at once with no code
+# change, and why even a tag push failed.
 #
-# This must be `=0.4.4`, NOT `~0.4.4`: Julia's tilde means [0.4.4, 0.5.0), which
-# still admits 0.4.5. Measured on Julia 1.10.11 with XLSX pinned to 0.12.2 --
-# XML 0.4.4 precompiles, XML 0.4.5 fails.
+# TRIGGER: XML 0.4.5, published 2026-08-13, hours after the last green run.
+# XLSX 0.12.2 (newest release) declares XML = "0.4.4", and Julia's caret default
+# makes that [0.4.4, 0.5.0), so the resolver takes 0.4.5 on its own. Manifest
+# files are gitignored, so every CI run resolves fresh and every branch picked
+# it up simultaneously.
 #
-# Remove once XLSX ships a release that iterates defensively.
-XML = "=0.4.4"
+# THIS IS A JULIA 1.10 FAULT, NOT A UNIVERSAL ONE. That is the single most
+# useful fact for whoever removes this pin. Upstream JuliaData/XLSX.jl#448
+# reports a matrix with IDENTICAL resolved versions on all three:
+#     1.10.12 -> fails        1.11 -> passes        1.12 -> passes
+# (Linux, JULIA_NUM_THREADS unset, so not a thread-count effect.) We declare
+# julia = "1.10" = [1.10, 2.0), so this bound over-constrains 1.11 and 1.12
+# users for a fault they cannot hit. CI runs only `lts`, so CI structurally
+# cannot observe that 1.11+ is fine.
+#
+# MECHANISM: deliberately NOT asserted. XLSX's maintainer states on #448 that
+# 0.4.5 "may have inadvertently added a breaking change" and that "XML
+# downstream tests don't include julia LTS". Beyond that it is a
+# Julia-1.10-specific compilation difference in XML's token/substring handling,
+# which has NOT been independently isolated here.
+#
+# An earlier revision of this comment claimed the cause was a newly-introduced
+# shared mutable cursor plus a retained-child-node iteration in XLSX's
+# `_collect_row_nodes`, and cited XML.jl#124. All three were wrong, and each was
+# falsifiable in one local command: cursor.jl is BYTE-IDENTICAL between 0.4.4 and
+# 0.4.5 (so the sharing predates it), `_collect_row_nodes` has zero callers and
+# is dead code (so it cannot be the failure site), and #124 is a forward-looking
+# request to restore value semantics at the next BREAKING release, opened before
+# this breakage was reported. Recorded because a confident wrong mechanism in a
+# comment outlives the pin, and no test can contradict it.
+#
+# `=` IS REQUIRED; `~` IS NOT ENOUGH. Julia's tilde on a 0.x version means
+# [0.4.4, 0.5.0), which still admits 0.4.5. Measured on Julia 1.10.11 with XLSX
+# at 0.12.2: 0.4.4 precompiles, 0.4.5 fails, and `~0.4.4` resolves to 0.4.5 and
+# fails.
+#
+# The `0.4.6 - 0.4` half makes this SELF-HEALING: it blocks only the one known
+# bad version rather than freezing at 0.4.4 forever. The trade is deliberate --
+# it trusts a future 0.4.6 to carry the fix, and if it does not, CI goes red
+# loudly and immediately. That is a better failure mode than a bare `=0.4.4`,
+# which fails SILENTLY: it blocks the eventual fix and hard-constrains every
+# downstream consumer of Mycelia, with nothing to surface it. This repo has no
+# CompatHelper and no dependabot config, and an `=` bound is sticky against
+# CompatHelper even if one is added later.
+#
+# REMOVE WHEN: XML ships a release that precompiles XLSX on Julia 1.10, or
+# Mycelia drops Julia 1.10. NOT when XLSX.jl#446 lands -- that is an unrelated,
+# explicitly non-urgent request to make the row stream's resumption explicit,
+# and an earlier revision of this comment wrongly named it as the fix.
+XML = "=0.4.4, 0.4.6 - 0.4"
 julia = "1.10"
 
 [extras]
