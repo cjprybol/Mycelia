@@ -215,18 +215,22 @@ hashes, which is what makes an assembly reconstructible after the fact.
 `input_snapshot_byte_ceiling` bounds the cumulative bytes copied across the
 whole workflow and is checked before the next correction or assembler side
 effect, so a run that would exhaust the budget fails before it starts the stage
-that would have overrun it. Set `config.output_dir = nothing` for ephemeral
-artifacts, or point it at a new, empty persistent directory when you want to
-keep the corrected FASTQs and tool outputs; a non-empty uncontracted output root
-is refused rather than merged into.
+that would have overrun it. Both config types are immutable, so `output_dir` is
+set at construction rather than assigned afterwards: pass `output_dir = nothing`
+for ephemeral artifacts, or give it a new, empty persistent directory when you
+want to keep the corrected FASTQs and tool outputs. Any non-empty output
+directory is refused rather than merged into.
 
 ### 4.3 metaMDBG is single-technology by construction
 
 `Mycelia.run_metamdbg` accepts either one or more HiFi FASTQs *or* one or more
-ONT FASTQs, never both: metaMDBG v1.4 rejects simultaneous `--in-hifi` and
-`--in-ont`, so the wrapper excludes mixed input rather than advertising a
-combined-input contract it cannot deliver. ONT input additionally requires the
-explicit `ont_r10_4_plus = true` attestation that every input came from Nanopore
+ONT FASTQs, never both. The wrapper emits exactly one of `--in-hifi` and
+`--in-ont`, and rejects a call supplying both, because its reuse contract binds a
+single input technology: a mixed invocation has no one technology flag to record,
+so it could never be checked for reuse. Mixed input is therefore excluded rather
+than advertised as a combined-input contract the wrapper cannot deliver. ONT
+input additionally requires the explicit `ont_r10_4_plus = true`
+attestation that every input came from Nanopore
 R10.4-or-later chemistry; generic, R9, and unknown ONT inputs are rejected, and
 the flag must stay `false` for HiFi input. Reuse of an existing output directory
 is bound to input provenance: a completed result is reused without rerunning
