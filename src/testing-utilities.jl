@@ -512,24 +512,35 @@ function prepare_binning_test_inputs(;
     # already exists this branch is skipped entirely, so a previous killed
     # run's chunks would have no remaining code path that could reclaim them.
     #
-    # Gated on the DEFAULT outdir, though. Orphan-ness is not the safety
-    # condition -- a concurrent peer's in-flight chunks are equally unresumable
-    # and equally match the predicate. NON-COLLISION is the condition. The bam
-    # name here is fixed ("contigs.minimap2.sorted.bam"), so two callers
-    # sharing an explicit `outdir` derive one split prefix, and an entry-time
-    # sweep would unlink a live peer's chunks -- the unlink succeeds while
-    # minimap2 holds the fd, so the victim does not error, it silently loses
-    # index parts. Only the `mktempdir()` default rules that out.
-    if outdir === nothing
-        Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)
-    end
+    # Gated on OWNERSHIP, not on the default outdir. NON-COLLISION is the
+    # safety condition -- a concurrent peer's in-flight chunks are equally
+    # unresumable and equally match the predicate. The bam name here is fixed
+    # ("contigs.minimap2.sorted.bam"), so two callers sharing an explicit
+    # `outdir` derive one split prefix, and an unguarded entry-time sweep would
+    # unlink a live peer's chunks -- the unlink succeeds while minimap2 holds
+    # the fd, so the victim does not error, it silently loses index parts.
+    #
+    # The previous `outdir === nothing` gate had the same defect as
+    # `minimap_merge_map_and_split`'s: when it held, `inputs_dir` was a fresh
+    # `mktempdir()` (see above), so the swept directory was empty by
+    # construction; when it did not hold, the sweep was skipped. It could never
+    # reclaim anything. The ownership sidecar answers the collision question
+    # directly, so the sweep can run on both paths.
+    Mycelia.cleanup_minimap_split_temps(mapping.split_prefix; skip_if_owner_live = true)
     if !isfile(mapping.outfile) || filesize(mapping.outfile) == 0
         # See sequence-comparison.jl: cleanup belongs on every exit path, since
         # minimap2 only strands split chunks when it is killed mid-run.
+        #
+        # Tracked before the run because the sweep above trusts the sidecar: a
+        # site that maps WITHOUT tracking leaves chunks a later sweep reads as
+        # `:absent` and reclaims while they are still in flight.
+        Mycelia.register_minimap_split_temp_atexit()
+        Mycelia.track_minimap_split_prefix(mapping.split_prefix)
         try
             run(mapping.cmd)
         finally
             Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)
+            Mycelia.untrack_minimap_split_prefix(mapping.split_prefix)
         end
     end
 

@@ -1349,11 +1349,19 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Mark `split_prefix` as having a minimap2 run in flight, so the exit hook
 reclaims it if the process is terminated.
+
+Also writes the on-disk ownership sidecar. The in-memory registry dies with the
+process, so it cannot tell a LATER process whether these chunks are orphans or
+a live peer's; the sidecar is the part that survives, and a pre-run sweep with
+`skip_if_owner_live = true` reads it. Every call site that runs minimap2 must
+call this before the run — a site that maps without tracking leaves chunks a
+later sweep classifies as `:absent`, i.e. reclaimable while still in flight.
 """
 function track_minimap_split_prefix(split_prefix::AbstractString)
     lock(MINIMAP_SPLIT_PREFIX_LOCK) do
         push!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
     end
+    write_minimap_split_owner(split_prefix)
     return nothing
 end
 
@@ -1366,7 +1374,183 @@ function untrack_minimap_split_prefix(split_prefix::AbstractString)
     lock(MINIMAP_SPLIT_PREFIX_LOCK) do
         delete!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
     end
+    remove_minimap_split_owner(split_prefix)
     return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Path of the ownership sidecar for `split_prefix`.
+
+A run writes this file when it starts and removes it when it finishes, which is
+what lets a later pre-run sweep tell its own abandoned chunks from a live peer's.
+It sits beside the chunks but can never be mistaken for one:
+[`cleanup_minimap_split_temps`](@ref) matches `.NNNN.tmp` only, and `.owner`
+does not match that.
+"""
+function minimap_split_owner_path(split_prefix::AbstractString)
+    return String(split_prefix) * ".owner"
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Report whether `pid` is a live process, erring toward "live".
+
+`kill(pid, 0)` probes for existence without delivering a signal:
+
+- `0` — the process exists and we may signal it → alive
+- `-1` + `ESRCH` — no such process → dead
+- `-1` + anything else — `EPERM` (exists, another user) or an unexpected errno;
+  neither proves it is gone → treated as alive
+
+The asymmetry is deliberate. A false "dead" deletes a live peer's chunks and
+kills it at merge time, because minimap2 reopens every chunk BY NAME when it
+merges. A false "live" only strands disk, which the next attempt reclaims.
+"""
+function minimap_split_owner_pid_alive(pid::Integer)
+    pid <= 0 && return false
+    # Non-Unix has no kill(2); refuse to claim anything is dead there.
+    Sys.isunix() || return true
+    ccall(:kill, Cint, (Cint, Cint), pid, 0) == 0 && return true
+    return Base.Libc.errno() != Base.Libc.ESRCH
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the `pid=`/`host=` fields out of the ownership sidecar at `path`.
+
+Returns `(pid, host)`, where `pid::Union{Int, Nothing}` is `nothing` on any
+read or parse failure and `host::String` is `""` when absent. Shared between
+[`minimap_split_owner_state`](@ref), which turns this into a liveness verdict,
+and [`write_minimap_split_owner`](@ref), which uses it to name the existing
+owner in a collision error.
+"""
+function read_minimap_split_owner_fields(path::AbstractString)
+    fields = Dict{String, String}()
+    try
+        for line in eachline(path)
+            idx = findfirst('=', line)
+            isnothing(idx) && continue
+            fields[String(strip(line[1:(idx - 1)]))] = String(strip(line[(idx + 1):end]))
+        end
+    catch
+        return (nothing, "")
+    end
+    return (tryparse(Int, get(fields, "pid", "")), get(fields, "host", ""))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Record this process as the owner of `split_prefix`'s chunks.
+
+Writes `pid` and `host`. The host is recorded because liveness is only
+checkable on the machine that owns the pid: under a SLURM array the peer
+sharing an explicit `tmpdir` usually sits on a DIFFERENT node, where our pid
+space says nothing about it. [`minimap_split_owner_state`](@ref) reports that
+case as `:unverifiable` and the sweep declines to delete.
+
+Refuses to overwrite an existing sidecar unless [`minimap_split_owner_state`](@ref)
+reports it `:absent` or `:dead`, or the existing sidecar already names this same
+process/host pair. Without this check, a caller starting a NEW run for a
+`split_prefix` a live peer already owns would silently steal that peer's
+sidecar: the peer's own `finally`-block cleanup would then delete both its
+chunks AND the (now-overwritten) sidecar, and a third reader would see
+`:absent` afterward and reclaim chunks that are still in flight. That defeats
+`skip_if_owner_live` entirely rather than merely losing disk, so this case
+raises instead of warning.
+
+I/O failure on the write itself still does not throw: a mapping run must not
+fail because its bookkeeping file could not be written, and a missing sidecar
+degrades to the pre-sidecar behaviour, which loses disk, not data. A collision
+with a live (or unverifiable) foreign owner is a different failure mode and
+DOES throw, deliberately.
+
+!!! note
+    Two genuinely concurrent runs with identical arguments AND the same explicit
+    `tmpdir` derive one `split_prefix`. Before this collision check they would
+    have silently overwritten each other's sidecar and, eventually, each
+    other's chunks; now the second call to reach this function raises the error
+    above instead. That does not make the underlying chunk collision itself
+    safe to run -- it only turns a silent data-loss bug into a loud, immediate
+    failure.
+"""
+function write_minimap_split_owner(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    state = minimap_split_owner_state(split_prefix)
+    if state !== :absent && state !== :dead
+        owner_pid, owner_host = read_minimap_split_owner_fields(path)
+        is_self = owner_pid == Base.Libc.getpid() && owner_host == Base.gethostname()
+        if !is_self
+            error(
+                "refusing to overwrite minimap2 split-temp ownership sidecar " *
+                "at $(path): it already names a $(state) owner " *
+                "(host=$(owner_host), pid=$(owner_pid)). This is a genuine " *
+                "same-prefix collision between two live runs -- failing loudly " *
+                "rather than silently stealing the peer's sidecar and, via its " *
+                "own cleanup, its chunks."
+            )
+        end
+    end
+    try
+        open(path, "w") do io
+            println(io, "pid=", Base.Libc.getpid())
+            println(io, "host=", Base.gethostname())
+        end
+    catch err
+        @warn "could not write minimap2 split-temp ownership sidecar; a later " *
+              "sweep will treat these chunks as unowned" path exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove `split_prefix`'s ownership sidecar. Does not throw, for the same reason
+[`cleanup_minimap_split_temps`](@ref) does not: it runs on `finally` and exit
+paths where a raised exception would replace the real failure.
+"""
+function remove_minimap_split_owner(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    try
+        rm(path; force = true)
+    catch err
+        @warn "could not remove minimap2 split-temp ownership sidecar" path exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Classify who owns `split_prefix`'s chunks:
+
+| State           | Meaning                                                    | Reclaim? |
+|:----------------|:-----------------------------------------------------------|:---------|
+| `:absent`       | no sidecar — a live run always writes one, so these are orphans | yes |
+| `:dead`         | sidecar names a pid that no longer exists on this host      | yes      |
+| `:live`         | sidecar names a running pid on this host                    | no       |
+| `:unverifiable` | sidecar is from another host, or is unreadable/malformed    | no       |
+
+`:absent` is the load-bearing case: it is what makes the sweep reclaim the
+chunks stranded by a SIGKILL, and it is sound only because every path that runs
+minimap2 calls [`track_minimap_split_prefix`](@ref) first.
+"""
+function minimap_split_owner_state(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    Base.isfile(path) || return :absent
+    pid, host = read_minimap_split_owner_fields(path)
+    if isnothing(pid) || isempty(host)
+        @warn "could not parse minimap2 split-temp ownership sidecar; declining " *
+              "to reclaim" path
+        return :unverifiable
+    end
+    host == Base.gethostname() || return :unverifiable
+    return minimap_split_owner_pid_alive(pid) ? :live : :dead
 end
 
 """
@@ -1380,8 +1564,10 @@ multi-part-index run is interrupted.
 names begin with `basename(split_prefix)` are considered; the search is not
 recursive, so it cannot escape the output directory.
 
-Returns `(; removed, bytes)` — the number of files removed and the total bytes
-reclaimed — so callers can log the reclaim rather than deleting silently.
+Returns `(; removed, bytes, skipped)` — the number of files removed, the total
+bytes reclaimed, and whether the sweep declined to act because the chunks are
+not provably unowned — so callers can log the reclaim rather than deleting
+silently.
 
 Safe against the sibling artifacts that share a stem: the output BAM
 `X.sorted.bam` does not start with `X.sorted.bam.tmp`, and samtools' own sort
@@ -1390,6 +1576,12 @@ temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
 # Arguments
 - `split_prefix`: the `--split-prefix` value used for the run.
 - `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
+- `skip_if_owner_live::Bool=false`: consult the ownership sidecar first and do
+  nothing unless the chunks are provably unowned (`:absent` or `:dead`; see
+  [`minimap_split_owner_state`](@ref)). Set this on a PRE-RUN sweep, where the
+  chunks on disk belong to some earlier run that may still be going. Leave it
+  `false` on the `finally` and exit-hook sweeps, where the caller IS the owner
+  and consulting its own sidecar would only ever tell it to skip.
 
 This function does not throw. Every operation that can fail -- `readdir`,
 `filesize`, `rm` -- is caught individually and downgraded to an `@warn`, so it
@@ -1397,7 +1589,16 @@ is safe to call from a `finally` block, where a raised exception would REPLACE
 the one that got you there and hide the real cause of the failure.
 """
 function cleanup_minimap_split_temps(
-        split_prefix::AbstractString; verbose::Bool = true)
+        split_prefix::AbstractString; verbose::Bool = true,
+        skip_if_owner_live::Bool = false)
+    if skip_if_owner_live
+        state = minimap_split_owner_state(split_prefix)
+        if state !== :absent && state !== :dead
+            verbose && @info "declining to reclaim minimap2 split-index temps; " *
+                  "owner is not provably gone" split_prefix state
+            return (; removed = 0, bytes = 0, skipped = true)
+        end
+    end
     dir = dirname(split_prefix)
     isempty(dir) && (dir = ".")
     base = basename(split_prefix)
@@ -1466,7 +1667,12 @@ function cleanup_minimap_split_temps(
         @info "reclaimed minimap2 split-index temps" split_prefix removed gib=round(
             bytes / 1024^3; digits = 2)
     end
-    return (; removed, bytes)
+    # Reaching here means no live owner: either the caller did not ask for the
+    # check (it owns the prefix and is finishing) or the state was `:absent`/
+    # `:dead`. In both cases the sidecar on disk is stale, so drop it rather
+    # than leaving a dead pid to be re-read by every later sweep.
+    remove_minimap_split_owner(split_prefix)
+    return (; removed, bytes, skipped = false)
 end
 
 """
@@ -2040,10 +2246,6 @@ function minimap_merge_map_and_split(;
     if !isempty(minimap_index)
         @assert isfile(minimap_index) "minimap_index supplied but not found: $minimap_index"
     end
-    # Captured BEFORE tmpdir/merged_bam are resolved: once they are concrete
-    # paths there is no way to tell an auto-derived one from a caller override,
-    # and that distinction is what makes the pre-run sweep safe.
-    owns_output_paths = isnothing(tmpdir) && isnothing(merged_bam)
     tmpdir = isnothing(tmpdir) ? mktempdir() : tmpdir
     mkpath(tmpdir)
     @assert read_id_strategy in (:uuid, :prefix)
@@ -2360,33 +2562,38 @@ function minimap_merge_map_and_split(;
         # is never rerun has no next attempt, which is exactly the case an
         # earlier version of this comment wrongly assumed away.
         #
-        # Gated on OWNING the output paths, not done unconditionally.
+        # Gated on OWNERSHIP, established from disk -- not on which arguments
+        # the caller happened to supply.
         #
+        # The predecessor gate was `isnothing(tmpdir) && isnothing(merged_bam)`,
+        # and it was the exact negation of the condition under which this sweep
+        # can find anything. When it held, `tmpdir` had just been assigned
+        # `mktempdir()`, so the directory being swept was milliseconds old and
+        # necessarily empty. When it did not hold, the caller had supplied a
+        # stable path -- the only way chunks survive to be found -- and the
+        # sweep was skipped. Dead code in both directions.
+        #
+        # The underlying conflict is real: finding an orphan needs a
+        # DETERMINISTIC prefix, and not clobbering a peer needs a UNIQUE one.
         # The SHA1 in the default `merged_bam` is a CONTENT hash over the input
-        # FASTQ list, not a uniqueness token: identical arguments produce an
-        # identical path, and `split_prefix` is a pure function of it. The only
-        # thing that actually separates two concurrent runs is `tmpdir`
-        # defaulting to `mktempdir()` -- and a caller can override it.
-        # benchmarking/15_round_trip_benchmark.jl does exactly that at two call
-        # sites, passing a deterministic `map_tmpdir` under `readset_dir`.
+        # FASTQ list, not a uniqueness token, so identical arguments produce an
+        # identical `split_prefix`; only `tmpdir` separates two runs, and
+        # benchmarking/15_round_trip_benchmark.jl deliberately makes it
+        # deterministic (`map_tmpdir`/`truth_tmpdir` under `readset_dir`).
         #
-        # Hoisting the sweep above the branch created a NEW harm for that case:
-        # a run that would previously have been a total no-op (cached
-        # `merged_bam`, `force` unset -> straight to the resume branch) now
-        # unlinks a peer's live chunks first. minimap2 reopens every chunk BY
-        # NAME at merge time and aborts if one is missing, so the victim dies
-        # rather than silently degrading.
+        # Neither the name nor the mtime can resolve that -- a peer that started
+        # earlier has chunks OLDER than this process, so "older than my start"
+        # classifies a live peer as an orphan. What distinguishes them is an
+        # explicit ownership record, which `track_minimap_split_prefix` writes
+        # and `minimap_split_owner_state` reads. Orphan-ness is not the safety
+        # condition; NON-COLLISION is, and this is how it is established.
         #
-        # Same class as the binning sweep's corrected premise: orphan-ness is
-        # not the safety condition, NON-COLLISION is.
-        #
-        # This also covers the resume branch below, which returns the cached
-        # BAM without ever entering the try/finally -- so a run killed after
-        # writing a nonempty merged_bam would otherwise strand its chunks
-        # permanently, with no code path left that would ever reclaim them.
-        if owns_output_paths
-            cleanup_minimap_split_temps(split_prefix)
-        end
+        # Unconditional now, so it also covers the resume branch below, which
+        # returns the cached BAM without ever entering the try/finally -- a run
+        # killed after writing a nonempty merged_bam would otherwise strand its
+        # chunks permanently, with no code path left that would ever reclaim
+        # them.
+        cleanup_minimap_split_temps(split_prefix; skip_if_owner_live = true)
 
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM

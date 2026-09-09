@@ -191,7 +191,7 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         end
     end
 
-    Test.@testset "the delete contract is documented and the gate is real" begin
+    Test.@testset "the delete contract is documented" begin
         # Julia binds a docstring to the NEXT expression and does NOT skip
         # comments. Twelve comment lines and three consts once sat between this
         # docstring and its function, so it was dropped with no warning and
@@ -204,21 +204,211 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test occursin("does not throw", doc)
         Test.@test occursin("split_prefix", doc)
 
-        # The pre-run sweep in minimap_merge_map_and_split must stay gated on
-        # owning the output paths. The SHA1 in the default merged_bam is a
-        # CONTENT hash, so identical arguments give an identical split prefix;
-        # only the mktempdir() default separates concurrent runs, and a caller
-        # can override tmpdir -- benchmarking/15_round_trip_benchmark.jl does.
-        # Ungating this would make a run that was previously a total no-op
-        # unlink a live peer's chunks.
-        src = read(joinpath(dirname(dirname(@__DIR__)), "src",
-                "alignments-and-mapping.jl"), String)
-        Test.@test occursin("owns_output_paths = isnothing(tmpdir) && isnothing(merged_bam)",
-            src)
-        gate = findfirst(
-            "if owns_output_paths\n            cleanup_minimap_split_temps(split_prefix)",
-            src)
-        Test.@test gate !== nothing
+        # The ownership contract is what decides deletions now, so it has to be
+        # written down too.
+        owner_doc = string(Base.Docs.doc(Mycelia.minimap_split_owner_state))
+        Test.@test !occursin("No documentation found", owner_doc)
+        Test.@test occursin("absent", owner_doc)
+    end
+
+    # Behavioural replacement for the source-text assertions that used to live
+    # here. Those greped `src/alignments-and-mapping.jl` for the literal
+    # `owns_output_paths = isnothing(tmpdir) && isnothing(merged_bam)` -- which
+    # tested the codebase's VOCABULARY, not its behaviour, and would have gone
+    # on passing for as long as the string survived. It did survive, and the
+    # gate it described was dead code: when it held, `tmpdir` had just been set
+    # to a fresh `mktempdir()`, so the swept directory was empty by
+    # construction; when it did not hold, the sweep was skipped. A test that
+    # asserts its own literal cannot notice that.
+    Test.@testset "ownership sidecar classifies who owns the chunks" begin
+        mktempdir() do dir
+            prefix = joinpath(dir, "x.sorted.bam.tmp")
+            owner = Mycelia.minimap_split_owner_path(prefix)
+
+            # No sidecar. Every path that runs minimap2 writes one first, so
+            # its absence means no live owner. This is the load-bearing case:
+            # it is what reclaims the chunks a SIGKILL stranded.
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :absent
+
+            # Our own pid on our own host.
+            Mycelia.write_minimap_split_owner(prefix)
+            Test.@test isfile(owner)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+
+            # A pid that existed and no longer does. Captured while the process
+            # is alive because `Base.getpid` throws once it has been reaped.
+            proc = run(`sleep 30`; wait = false)
+            dead_pid = Base.getpid(proc)
+            kill(proc)
+            wait(proc)
+            write(owner, "pid=$(dead_pid)\nhost=$(Base.gethostname())\n")
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :dead
+
+            # Another host: our pid space says nothing about it, and under a
+            # SLURM array sharing one tmpdir that is the COMMON case. Removing
+            # this check is the mutant that deletes a live peer's chunks across
+            # nodes, so it must not be reclaimable.
+            write(owner, "pid=$(Base.Libc.getpid())\nhost=definitely-not-this-host\n")
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :unverifiable
+
+            # Garbage is not evidence of absence.
+            write(owner, "this is not a sidecar\n")
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :unverifiable
+
+            # A pid with no host is equally unusable.
+            write(owner, "pid=1\n")
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :unverifiable
+
+            Mycelia.remove_minimap_split_owner(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :absent
+        end
+    end
+
+    Test.@testset "pre-run sweep reclaims orphans and spares a live peer" begin
+        function seed(dir)
+            prefix = joinpath(dir, "x.sorted.bam.tmp")
+            chunks = [string(prefix, ".", lpad(i, 4, '0'), ".tmp") for i in 0:2]
+            for c in chunks
+                write(c, rand(UInt8, 256))
+            end
+            return prefix, chunks
+        end
+
+        # :absent -> reclaim. Mutating this to "skip" leaves the SIGKILL case
+        # uncovered, which is the entire reason the sweep exists.
+        mktempdir() do dir
+            prefix, chunks = seed(dir)
+            r = Mycelia.cleanup_minimap_split_temps(
+                prefix; skip_if_owner_live = true, verbose = false)
+            Test.@test r.skipped == false
+            Test.@test r.removed == length(chunks)
+            Test.@test all(c -> !isfile(c), chunks)
+        end
+
+        # :live -> skip. This is the mutant that unlinked a live peer's chunks;
+        # minimap2 reopens every chunk by name at merge time, so the victim
+        # aborts rather than silently degrading.
+        mktempdir() do dir
+            prefix, chunks = seed(dir)
+            Mycelia.write_minimap_split_owner(prefix)   # us: alive by construction
+            r = Mycelia.cleanup_minimap_split_temps(
+                prefix; skip_if_owner_live = true, verbose = false)
+            Test.@test r.skipped == true
+            Test.@test r.removed == 0
+            Test.@test all(isfile, chunks)
+            # The sidecar must SURVIVE a skip. If a skip deleted it, the very
+            # next sweep would read `:absent` and delete the chunks this one
+            # just spared -- a two-pass version of the same bug.
+            Test.@test isfile(Mycelia.minimap_split_owner_path(prefix))
+        end
+
+        # :dead -> reclaim, and the stale sidecar goes with it. `removed`
+        # counting the chunks and NOT the sidecar also proves `.owner` is never
+        # matched as a chunk.
+        mktempdir() do dir
+            prefix, chunks = seed(dir)
+            proc = run(`sleep 30`; wait = false)
+            dead_pid = Base.getpid(proc)
+            kill(proc)
+            wait(proc)
+            write(Mycelia.minimap_split_owner_path(prefix),
+                "pid=$(dead_pid)\nhost=$(Base.gethostname())\n")
+            r = Mycelia.cleanup_minimap_split_temps(
+                prefix; skip_if_owner_live = true, verbose = false)
+            Test.@test r.skipped == false
+            Test.@test r.removed == length(chunks)
+            Test.@test !isfile(Mycelia.minimap_split_owner_path(prefix))
+        end
+
+        # Foreign host -> skip.
+        mktempdir() do dir
+            prefix, chunks = seed(dir)
+            write(Mycelia.minimap_split_owner_path(prefix),
+                "pid=$(Base.Libc.getpid())\nhost=some-other-node\n")
+            r = Mycelia.cleanup_minimap_split_temps(
+                prefix; skip_if_owner_live = true, verbose = false)
+            Test.@test r.skipped == true
+            Test.@test all(isfile, chunks)
+        end
+
+        # The DEFAULT (skip_if_owner_live = false) must ignore a live sidecar.
+        # That is the `finally`/atexit path, where the caller IS the owner --
+        # consulting its own record there would strand the chunks it is in the
+        # middle of abandoning.
+        mktempdir() do dir
+            prefix, chunks = seed(dir)
+            Mycelia.write_minimap_split_owner(prefix)
+            r = Mycelia.cleanup_minimap_split_temps(prefix; verbose = false)
+            Test.@test r.skipped == false
+            Test.@test r.removed == length(chunks)
+        end
+    end
+
+    Test.@testset "track writes the sidecar, untrack removes it" begin
+        # The sweep's `:absent -> reclaim` rule is only sound because every
+        # site that runs minimap2 tracks first. If tracking stopped writing the
+        # sidecar, a concurrent peer would read as `:absent` and be reclaimed
+        # mid-flight -- so this pairing is the mechanism's keystone.
+        mktempdir() do dir
+            prefix = joinpath(dir, "y.sorted.bam.tmp")
+            Mycelia.track_minimap_split_prefix(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+            Mycelia.untrack_minimap_split_prefix(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :absent
+        end
+    end
+
+    Test.@testset "write refuses to steal a live peer's sidecar" begin
+        # Without this guard, a NEW run's track_minimap_split_prefix would
+        # silently overwrite a live peer's sidecar with its own pid/host. The
+        # new caller's later `finally`-block cleanup would then delete both
+        # the peer's chunks AND the peer's (now-stolen) sidecar, and a third
+        # reader would see `:absent` and reclaim chunks that are still in
+        # flight -- defeating `skip_if_owner_live` entirely rather than merely
+        # losing disk. This is the mutant that removing the guard reintroduces.
+        mktempdir() do dir
+            prefix = joinpath(dir, "z.sorted.bam.tmp")
+            owner = Mycelia.minimap_split_owner_path(prefix)
+
+            # A foreign PID, alive by construction (our own test process' pid,
+            # but recorded under a different host so the state resolves to
+            # `:unverifiable` -- still not something a write may steal).
+            write(owner, "pid=$(Base.Libc.getpid())\nhost=some-other-node\n")
+            Test.@test_throws Exception Mycelia.write_minimap_split_owner(prefix)
+            # The foreign sidecar must survive the refused write untouched.
+            Test.@test read(owner, String) ==
+                       "pid=$(Base.Libc.getpid())\nhost=some-other-node\n"
+
+            # A genuinely live, same-host, different-pid owner (`:live`).
+            proc = run(`sleep 30`; wait = false)
+            live_pid = Base.getpid(proc)
+            try
+                write(owner, "pid=$(live_pid)\nhost=$(Base.gethostname())\n")
+                Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+                Test.@test_throws Exception Mycelia.write_minimap_split_owner(prefix)
+                Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+            finally
+                kill(proc)
+                wait(proc)
+            end
+
+            # A dead owner is NOT a collision -- overwrite must succeed and
+            # hand ownership to us.
+            write(owner, "pid=$(live_pid)\nhost=$(Base.gethostname())\n")
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :dead
+            Mycelia.write_minimap_split_owner(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+
+            # Re-tracking the SAME process/host (e.g. calling track twice for
+            # one prefix without an intervening untrack) is not a collision.
+            Mycelia.write_minimap_split_owner(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+
+            # No sidecar at all (`:absent`) is the ordinary, non-colliding case.
+            Mycelia.remove_minimap_split_owner(prefix)
+            Mycelia.write_minimap_split_owner(prefix)
+            Test.@test Mycelia.minimap_split_owner_state(prefix) == :live
+        end
     end
 
     Test.@testset "pre-run sweep is wired at every call site" begin
@@ -259,53 +449,90 @@ Test.@testset "minimap2 split-index temp cleanup" begin
             return text[first(idx):end]
         end
 
-        # minimap_merge_map_and_split: swept unconditionally, BEFORE the
-        # resume/caching branch. Order is the whole point -- after the branch
-        # it would never run on the cached path, which is where a run killed
-        # post-output strands its chunks.
+        # minimap_merge_map_and_split: swept BEFORE the resume/caching branch.
+        # Order is the whole point -- after the branch it would never run on
+        # the cached path, which is where a run killed post-output strands its
+        # chunks. The ownership check is what makes running it here safe, so
+        # both facts are asserted together.
         merge_body = body_of("alignments-and-mapping.jl", "\n    if run_mapping\n")
-        sweep = findfirst("cleanup_minimap_split_temps(split_prefix)", merge_body)
+        sweep = findfirst(
+            "cleanup_minimap_split_temps(split_prefix; skip_if_owner_live = true)",
+            merge_body)
         branch = findfirst("if nonempty_file(merged_bam)", merge_body)
         Test.@test sweep !== nothing
         Test.@test branch !== nothing
         Test.@test first(sweep) < first(branch)
 
-        # merge_and_map_single_end_samples is the deliberate ASYMMETRY: its
-        # sweep sits INSIDE the branch, not before it. `outbase` defaults to a
-        # date-only string, so two same-day runs in one CWD share a split
-        # prefix, and an entry-time sweep would delete a live peer's chunks --
-        # trading a recoverable leak for unrecoverable truncated output. If
-        # someone "fixes the inconsistency" by hoisting this call, that is a
-        # correctness regression, and this assertion is what catches it.
+        # merge_and_map_single_end_samples keeps its sweep INSIDE the branch.
+        # `outbase` defaults to a date-only string, so two same-day runs in one
+        # CWD share a split prefix; the ownership check now makes that safe,
+        # but the position is left alone because hoisting it is a behaviour
+        # change this PR does not need. The remaining hole (a run killed AFTER
+        # writing `outfile` keeps its chunks, since the branch is then skipped
+        # forever) is a leak, not a deletion, and is now CLOSEABLE by hoisting
+        # -- tracked separately rather than done here.
         seq_body = body_of("sequence-comparison.jl",
             "    if !isfile(minimap_result.outfile)")
-        seq_sweep = findfirst(
-            "Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)", seq_body)
+        seq_sweep = findfirst("skip_if_owner_live = true", seq_body)
         Test.@test seq_sweep !== nothing
         Test.@test first(seq_sweep) < first(findfirst("run(minimap_result.cmd)", seq_body))
 
-        # prepare_binning_test_inputs: swept only when `outdir` was NOT
-        # supplied. Its bam name is fixed ("contigs.minimap2.sorted.bam"), so
-        # two concurrent calls sharing an explicit outdir derive one split
-        # prefix and an entry-time sweep would unlink a live peer's chunks.
-        # Orphan-ness is NOT the safety condition -- a peer's in-flight chunks
-        # are equally unresumable and equally match the predicate. Non-collision
-        # is the condition, and only the mktempdir() default guarantees it.
+        # prepare_binning_test_inputs: swept on BOTH paths now. Its previous
+        # `outdir === nothing` gate had the same defect as the merge entry
+        # point's -- when it held, `inputs_dir` was a fresh `mktempdir()`, so
+        # the swept directory was empty by construction. Non-collision is still
+        # the safety condition; it is now established from the sidecar rather
+        # than inferred from which arguments the caller passed.
         util = read(joinpath(srcdir, "testing-utilities.jl"), String)
         u_sweep = findfirst(
-            "Mycelia.cleanup_minimap_split_temps(mapping.split_prefix)", util)
+            "Mycelia.cleanup_minimap_split_temps(mapping.split_prefix; skip_if_owner_live = true)",
+            util)
         u_branch = findfirst("if !isfile(mapping.outfile)", util)
         Test.@test u_sweep !== nothing
         Test.@test u_branch !== nothing
         Test.@test first(u_sweep) < first(u_branch)
-        # ...and that it is GATED on the default outdir. Ordering alone would
-        # still hold if someone removed the gate, which is the change that
-        # would let a shared explicit outdir delete a live peer's chunks.
-        u_gate = findfirst("if outdir === nothing\n        Mycelia.cleanup_minimap_split_temps",
+        # The dead gate must be GONE, not merely bypassed. Leaving it in place
+        # would restore the condition under which the sweep can never fire.
+        Test.@test !occursin(
+            "if outdir === nothing\n        Mycelia.cleanup_minimap_split_temps",
             util)
-        Test.@test u_gate !== nothing
     end
 
+    Test.@testset "every site that maps also tracks first" begin
+        # The keystone invariant. `:absent -> reclaim` is sound ONLY because a
+        # live run always has a sidecar on disk, so a call site that invokes
+        # minimap2 without calling `track_minimap_split_prefix` first would
+        # leave its chunks classified as orphans and reclaimable mid-flight by
+        # any concurrent peer. Structural because the alternative needs conda.
+        srcdir = joinpath(dirname(dirname(@__DIR__)), "src")
+        for (path, runcall) in (
+            ("alignments-and-mapping.jl", "run(minimap_cmd)"),
+            ("sequence-comparison.jl", "run(minimap_result.cmd)"),
+            ("testing-utilities.jl", "run(mapping.cmd)")
+        )
+            text = read(joinpath(srcdir, path), String)
+            r = findfirst(runcall, text)
+            Test.@test r !== nothing
+            r === nothing && continue
+            before = text[1:first(r)]
+            track = findlast("track_minimap_split_prefix(", before)
+            Test.@test track !== nothing
+            # ...and it must be the TRACK call, not the UNtrack one that
+            # follows in the `finally`. `findlast` on the prefix would happily
+            # match `untrack_minimap_split_prefix(` otherwise.
+            if track !== nothing
+                # `prevind(before, first(track), 2)`, not `first(track) - 2`:
+                # the source comments around these call sites use em-dashes
+                # (multi-byte UTF-8), so raw byte arithmetic can land mid-
+                # character and throw a StringIndexError. `prevind` steps back
+                # by codepoints and is clamped to `firstindex` when the match
+                # is near the start of `before`.
+                window_start = max(firstindex(before), prevind(before, first(track), 2))
+                Test.@test !occursin("untrack_minimap_split_prefix(",
+                    before[window_start:end])
+            end
+        end
+    end
 
     # Behavioural counterpart to the structural testset above. Gated for the
     # same reason the builder testset is: the entry point needs a command
@@ -355,7 +582,7 @@ Test.@testset "minimap2 split-index temp cleanup" begin
                 # reclaims orphans, it does not invalidate the resume.
                 Test.@test isfile(merged)
                 Test.@test read(merged, String) ==
-                          "nonempty, so the resume branch is taken"
+                           "nonempty, so the resume branch is taken"
             end
         end
     end

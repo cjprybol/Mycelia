@@ -751,13 +751,21 @@ function merge_and_map_single_end_samples(;
     # beyond this PR's scope (same-day reuse of `fastq_out`/`tsv_out` is also
     # wrong under it) and is tracked separately.
     if !isfile(minimap_result.outfile)
-        Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
+        Mycelia.cleanup_minimap_split_temps(
+            minimap_result.split_prefix; skip_if_owner_live = true)
         # `finally`, because minimap2 leaves its --split-prefix chunks behind
         # only when it is killed mid-run; on a clean exit it removes them itself.
+        #
+        # Tracked before the run because the sweep above trusts the ownership
+        # sidecar: a site that maps WITHOUT tracking leaves chunks a later
+        # sweep reads as `:absent` and reclaims while they are still in flight.
+        Mycelia.register_minimap_split_temp_atexit()
+        Mycelia.track_minimap_split_prefix(minimap_result.split_prefix)
         try
             @time run(minimap_result.cmd)
         finally
             Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
+            Mycelia.untrack_minimap_split_prefix(minimap_result.split_prefix)
         end
     end
     results_table_outfiles = [outbase * fmt for fmt in outformats]
