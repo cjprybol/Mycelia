@@ -1280,6 +1280,404 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Build the `--split-prefix` value minimap2 is given for a multi-part index run.
+
+minimap2 writes one intermediate file per index chunk, named `PREFIX.NNNN.tmp`,
+and unlinks them itself on clean exit. They survive only when the process dies
+first (walltime, OOM, cancelled job), at which point they are pure orphans:
+minimap2 cannot resume from them, so nothing can consume them afterwards.
+
+Keeping the derivation in one place means [`cleanup_minimap_split_temps`](@ref)
+and the command builders cannot drift apart in what they consider a temp file.
+"""
+function minimap_split_prefix(outfile::AbstractString)
+    return outfile * ".tmp"
+end
+
+# Split prefixes with a minimap2 run currently in flight, plus the one-time exit
+# hook that sweeps them.
+#
+# Why a registry rather than an `atexit` per call: `Base.atexit` pushes onto a
+# global vector with NO removal API, so a per-call hook accumulates without
+# bound. `benchmarking/15_round_trip_benchmark.jl` calls the mapping entry point
+# from a five-deep loop nest in one long-lived process, which would register
+# hundreds of hooks -- each doing an `isdir` + `readdir` of scratch at exit,
+# every one after the first a guaranteed no-op because the `finally` already
+# swept that prefix. That cost lands inside the very KillWait window the hook
+# exists to exploit, which is self-defeating at exactly the scale the 2026-07
+# incident happened at.
+const MINIMAP_ACTIVE_SPLIT_PREFIXES = Set{String}()
+const MINIMAP_SPLIT_PREFIX_LOCK = ReentrantLock()
+const MINIMAP_ATEXIT_REGISTERED = Ref(false)
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Register the process-wide exit hook that reclaims minimap2 split-index chunks
+for any run still in flight at shutdown. Idempotent; safe to call per mapping.
+
+Julia runs `atexit` hooks on SIGTERM but not on SIGKILL, and SLURM waits
+`KillWait` (30s by default) between the two, so this reclaims in-job during
+that grace window. Without it the only remaining cover is the next attempt --
+which never comes for a one-shot benchmark.
+"""
+function register_minimap_split_temp_atexit()
+    MINIMAP_ATEXIT_REGISTERED[] && return nothing
+    # `atexit` THROWS if the process is already exiting (Base initdefs.jl:
+    # "cannot register new atexit hook; already exiting."). That race is
+    # reachable here precisely because this is the shutdown path the feature
+    # targets, and this call sits outside the caller's try -- so an unguarded
+    # failure would replace the real shutdown cause with a registration error.
+    try
+        atexit() do
+            for prefix in lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+                collect(MINIMAP_ACTIVE_SPLIT_PREFIXES)
+            end
+                cleanup_minimap_split_temps(prefix)
+            end
+        end
+        MINIMAP_ATEXIT_REGISTERED[] = true
+    catch err
+        @warn "could not register minimap2 split-temp exit hook; " *
+              "relying on the pre-run sweep at the next attempt" exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Mark `split_prefix` as having a minimap2 run in flight, so the exit hook
+reclaims it if the process is terminated.
+
+Also writes the on-disk ownership sidecar. The in-memory registry dies with the
+process, so it cannot tell a LATER process whether these chunks are orphans or
+a live peer's; the sidecar is the part that survives, and a pre-run sweep with
+`skip_if_owner_live = true` reads it. Every call site that runs minimap2 must
+call this before the run — a site that maps without tracking leaves chunks a
+later sweep classifies as `:absent`, i.e. reclaimable while still in flight.
+"""
+function track_minimap_split_prefix(split_prefix::AbstractString)
+    lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+        push!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
+    end
+    write_minimap_split_owner(split_prefix)
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Drop `split_prefix` from the in-flight registry once its run has finished.
+"""
+function untrack_minimap_split_prefix(split_prefix::AbstractString)
+    lock(MINIMAP_SPLIT_PREFIX_LOCK) do
+        delete!(MINIMAP_ACTIVE_SPLIT_PREFIXES, String(split_prefix))
+    end
+    remove_minimap_split_owner(split_prefix)
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Path of the ownership sidecar for `split_prefix`.
+
+A run writes this file when it starts and removes it when it finishes, which is
+what lets a later pre-run sweep tell its own abandoned chunks from a live peer's.
+It sits beside the chunks but can never be mistaken for one:
+[`cleanup_minimap_split_temps`](@ref) matches `.NNNN.tmp` only, and `.owner`
+does not match that.
+"""
+function minimap_split_owner_path(split_prefix::AbstractString)
+    return String(split_prefix) * ".owner"
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Report whether `pid` is a live process, erring toward "live".
+
+`kill(pid, 0)` probes for existence without delivering a signal:
+
+- `0` — the process exists and we may signal it → alive
+- `-1` + `ESRCH` — no such process → dead
+- `-1` + anything else — `EPERM` (exists, another user) or an unexpected errno;
+  neither proves it is gone → treated as alive
+
+The asymmetry is deliberate. A false "dead" deletes a live peer's chunks and
+kills it at merge time, because minimap2 reopens every chunk BY NAME when it
+merges. A false "live" only strands disk, which the next attempt reclaims.
+"""
+function minimap_split_owner_pid_alive(pid::Integer)
+    pid <= 0 && return false
+    # Non-Unix has no kill(2); refuse to claim anything is dead there.
+    Sys.isunix() || return true
+    ccall(:kill, Cint, (Cint, Cint), pid, 0) == 0 && return true
+    return Base.Libc.errno() != Base.Libc.ESRCH
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the `pid=`/`host=` fields out of the ownership sidecar at `path`.
+
+Returns `(pid, host)`, where `pid::Union{Int, Nothing}` is `nothing` on any
+read or parse failure and `host::String` is `""` when absent. Shared between
+[`minimap_split_owner_state`](@ref), which turns this into a liveness verdict,
+and [`write_minimap_split_owner`](@ref), which uses it to name the existing
+owner in a collision error.
+"""
+function read_minimap_split_owner_fields(path::AbstractString)
+    fields = Dict{String, String}()
+    try
+        for line in eachline(path)
+            idx = findfirst('=', line)
+            isnothing(idx) && continue
+            fields[String(strip(line[1:(idx - 1)]))] = String(strip(line[(idx + 1):end]))
+        end
+    catch
+        return (nothing, "")
+    end
+    return (tryparse(Int, get(fields, "pid", "")), get(fields, "host", ""))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Record this process as the owner of `split_prefix`'s chunks.
+
+Writes `pid` and `host`. The host is recorded because liveness is only
+checkable on the machine that owns the pid: under a SLURM array the peer
+sharing an explicit `tmpdir` usually sits on a DIFFERENT node, where our pid
+space says nothing about it. [`minimap_split_owner_state`](@ref) reports that
+case as `:unverifiable` and the sweep declines to delete.
+
+Refuses to overwrite an existing sidecar unless [`minimap_split_owner_state`](@ref)
+reports it `:absent` or `:dead`, or the existing sidecar already names this same
+process/host pair. Without this check, a caller starting a NEW run for a
+`split_prefix` a live peer already owns would silently steal that peer's
+sidecar: the peer's own `finally`-block cleanup would then delete both its
+chunks AND the (now-overwritten) sidecar, and a third reader would see
+`:absent` afterward and reclaim chunks that are still in flight. That defeats
+`skip_if_owner_live` entirely rather than merely losing disk, so this case
+raises instead of warning.
+
+I/O failure on the write itself still does not throw: a mapping run must not
+fail because its bookkeeping file could not be written, and a missing sidecar
+degrades to the pre-sidecar behaviour, which loses disk, not data. A collision
+with a live (or unverifiable) foreign owner is a different failure mode and
+DOES throw, deliberately.
+
+!!! note
+    Two genuinely concurrent runs with identical arguments AND the same explicit
+    `tmpdir` derive one `split_prefix`. Before this collision check they would
+    have silently overwritten each other's sidecar and, eventually, each
+    other's chunks; now the second call to reach this function raises the error
+    above instead. That does not make the underlying chunk collision itself
+    safe to run -- it only turns a silent data-loss bug into a loud, immediate
+    failure.
+"""
+function write_minimap_split_owner(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    state = minimap_split_owner_state(split_prefix)
+    if state !== :absent && state !== :dead
+        owner_pid, owner_host = read_minimap_split_owner_fields(path)
+        is_self = owner_pid == Base.Libc.getpid() && owner_host == Base.gethostname()
+        if !is_self
+            error(
+                "refusing to overwrite minimap2 split-temp ownership sidecar " *
+                "at $(path): it already names a $(state) owner " *
+                "(host=$(owner_host), pid=$(owner_pid)). This is a genuine " *
+                "same-prefix collision between two live runs -- failing loudly " *
+                "rather than silently stealing the peer's sidecar and, via its " *
+                "own cleanup, its chunks."
+            )
+        end
+    end
+    try
+        open(path, "w") do io
+            println(io, "pid=", Base.Libc.getpid())
+            println(io, "host=", Base.gethostname())
+        end
+    catch err
+        @warn "could not write minimap2 split-temp ownership sidecar; a later " *
+              "sweep will treat these chunks as unowned" path exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove `split_prefix`'s ownership sidecar. Does not throw, for the same reason
+[`cleanup_minimap_split_temps`](@ref) does not: it runs on `finally` and exit
+paths where a raised exception would replace the real failure.
+"""
+function remove_minimap_split_owner(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    try
+        rm(path; force = true)
+    catch err
+        @warn "could not remove minimap2 split-temp ownership sidecar" path exception = err
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Classify who owns `split_prefix`'s chunks:
+
+| State           | Meaning                                                    | Reclaim? |
+|:----------------|:-----------------------------------------------------------|:---------|
+| `:absent`       | no sidecar — a live run always writes one, so these are orphans | yes |
+| `:dead`         | sidecar names a pid that no longer exists on this host      | yes      |
+| `:live`         | sidecar names a running pid on this host                    | no       |
+| `:unverifiable` | sidecar is from another host, or is unreadable/malformed    | no       |
+
+`:absent` is the load-bearing case: it is what makes the sweep reclaim the
+chunks stranded by a SIGKILL, and it is sound only because every path that runs
+minimap2 calls [`track_minimap_split_prefix`](@ref) first.
+"""
+function minimap_split_owner_state(split_prefix::AbstractString)
+    path = minimap_split_owner_path(split_prefix)
+    Base.isfile(path) || return :absent
+    pid, host = read_minimap_split_owner_fields(path)
+    if isnothing(pid) || isempty(host)
+        @warn "could not parse minimap2 split-temp ownership sidecar; declining " *
+              "to reclaim" path
+        return :unverifiable
+    end
+    host == Base.gethostname() || return :unverifiable
+    return minimap_split_owner_pid_alive(pid) ? :live : :dead
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove the `PREFIX.NNNN.tmp` chunk files minimap2 leaves behind when a
+multi-part-index run is interrupted.
+
+`split_prefix` is the exact value passed to minimap2's `--split-prefix` (see
+[`minimap_split_prefix`](@ref)). Only files in `dirname(split_prefix)` whose
+names begin with `basename(split_prefix)` are considered; the search is not
+recursive, so it cannot escape the output directory.
+
+Returns `(; removed, bytes, skipped)` — the number of files removed, the total
+bytes reclaimed, and whether the sweep declined to act because the chunks are
+not provably unowned — so callers can log the reclaim rather than deleting
+silently.
+
+Safe against the sibling artifacts that share a stem: the output BAM
+`X.sorted.bam` does not start with `X.sorted.bam.tmp`, and samtools' own sort
+temps (`X.sorted.bam.sort.tmp.NNNN.bam`) do not either.
+
+# Arguments
+- `split_prefix`: the `--split-prefix` value used for the run.
+- `verbose::Bool=true`: emit an `@info` summarising what was reclaimed.
+- `skip_if_owner_live::Bool=false`: consult the ownership sidecar first and do
+  nothing unless the chunks are provably unowned (`:absent` or `:dead`; see
+  [`minimap_split_owner_state`](@ref)). Set this on a PRE-RUN sweep, where the
+  chunks on disk belong to some earlier run that may still be going. Leave it
+  `false` on the `finally` and exit-hook sweeps, where the caller IS the owner
+  and consulting its own sidecar would only ever tell it to skip.
+
+This function does not throw. Every operation that can fail -- `readdir`,
+`filesize`, `rm` -- is caught individually and downgraded to an `@warn`, so it
+is safe to call from a `finally` block, where a raised exception would REPLACE
+the one that got you there and hide the real cause of the failure.
+"""
+function cleanup_minimap_split_temps(
+        split_prefix::AbstractString; verbose::Bool = true,
+        skip_if_owner_live::Bool = false)
+    if skip_if_owner_live
+        state = minimap_split_owner_state(split_prefix)
+        if state !== :absent && state !== :dead
+            verbose && @info "declining to reclaim minimap2 split-index temps; " *
+                  "owner is not provably gone" split_prefix state
+            return (; removed = 0, bytes = 0, skipped = true)
+        end
+    end
+    dir = dirname(split_prefix)
+    isempty(dir) && (dir = ".")
+    base = basename(split_prefix)
+    removed = 0
+    bytes = 0
+    # This function is called from `finally` blocks, where a raised exception
+    # REPLACES the one that got us there -- so a cleanup failure would swap a
+    # diagnosable mapping error for a confusing cleanup error. Guarding here
+    # rather than at each call site means no caller has to remember to wrap it.
+    # Reclaiming disk is never worth losing the reason the run failed.
+    #
+    # `isdir` is INSIDE the try. Julia's `stat` re-raises for every errno except
+    # ENOENT/ENOTDIR/EINVAL, so `isdir` throws an IOError on EACCES, EIO, ELOOP
+    # and ENAMETOOLONG -- measured on 1.10.10 against a chmod-000 parent. An
+    # earlier version put it one line above the try while the comment named
+    # EACCES as the case it was guarding, which left the no-throw contract
+    # false in exactly the Lustre/GPFS-went-away scenario most likely to have
+    # caused the mapping failure in the first place. The same call is made from
+    # the atexit hook, where an escaping IOError makes Julia print
+    # `error during exit hooks` and exit nonzero -- turning a successful SLURM
+    # job into a failed one on the shutdown path the hook exists to serve.
+    entries = try
+        Base.isdir(dir) ? readdir(dir; join = true) : String[]
+    catch err
+        @warn "could not list directory for minimap2 split-temp cleanup" dir exception = err
+        String[]
+    end
+    for path in entries
+        name = basename(path)
+        # Anchored on BOTH ends: the split prefix on the left, minimap2's own
+        # `.<n>.tmp` chunk naming on the right. The right-hand anchor is what
+        # makes this safe to run while a SIBLING job is mid-flight -- callers
+        # like the CAMI2 driver run samples as a SLURM array sharing one output
+        # directory, so a bare prefix sweep could delete another task's live
+        # chunks. It also spares the artifacts that share the stem: the output
+        # BAM, its `.bai`, and samtools' own `.sort.tmp.NNNN.bam` sort temps.
+        #
+        # `[0-9]+` rather than `\d{4}` on two counts. Not `{4}`: minimap2
+        # formats the chunk index with %04d, which is four digits only until a
+        # run exceeds 9999 index parts. And `[0-9]` rather than `\d`, because
+        # Julia compiles regexes with PCRE's UCP flag set by default, so `\d`
+        # matches any Unicode decimal digit -- Arabic-Indic `٠٠٠٠` would pass.
+        # Nothing here produces such names, but the predicate should say what
+        # it means.
+        # ncodeunits, not length: `startswith` guarantees the first ncodeunits
+        # BYTES match, and length() counts characters, which would slice at the
+        # wrong offset for a non-ASCII path.
+        startswith(name, base) || continue
+        rest = name[(ncodeunits(base) + 1):end]
+        occursin(r"^\.[0-9]+\.tmp$", rest) || continue
+        Base.isfile(path) || continue
+        sz = try
+            filesize(path)
+        catch
+            0
+        end
+        try
+            rm(path; force = true)
+            removed += 1
+            bytes += sz
+        catch err
+            @warn "could not remove minimap2 split temp" path exception = err
+        end
+    end
+    if verbose && removed > 0
+        @info "reclaimed minimap2 split-index temps" split_prefix removed gib=round(
+            bytes / 1024^3; digits = 2)
+    end
+    # Reaching here means no live owner: either the caller did not ask for the
+    # check (it owns the prefix and is finishing) or the state was `:absent`/
+    # `:dead`. In both cases the sidecar on disk is stale, so drop it rather
+    # than leaving a dead pid to be re-read by every later sweep.
+    remove_minimap_split_owner(split_prefix)
+    return (; removed, bytes, skipped = false)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Map reads using an existing minimap2 index file.
 
 # Arguments
@@ -1295,7 +1693,20 @@ Map reads using an existing minimap2 index file.
 - `require_index::Bool=true`: Validate index exists (set false to build commands without files on disk).
 
 # Returns
-Named tuple `(cmd, outfile)` producing a BAM file from the mapping.
+Named tuple `(cmd, outfile, split_prefix)` producing a BAM file from the mapping.
+
+This function only *builds* the command; the caller runs it. Because minimap2
+leaves `split_prefix.NNNN.tmp` chunks behind when it is killed mid-run, a caller
+that runs `cmd` itself should wrap it so the temps are reclaimed on failure:
+
+```julia
+res = Mycelia.minimap_map_with_index(; index_file, fastq, outfile)
+try
+    run(res.cmd)
+finally
+    Mycelia.cleanup_minimap_split_temps(res.split_prefix)
+end
+```
 """
 function minimap_map_with_index(;
         fasta::Union{Nothing, AbstractString} = nothing,
@@ -1343,6 +1754,7 @@ function minimap_map_with_index(;
         outfile = output_prefix * "." * basename(index_file) * ".minimap2" *
                   (sorted ? ".sorted" : "") * ".bam"
     end
+    split_prefix = minimap_split_prefix(outfile)
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
     if as_string
@@ -1351,12 +1763,12 @@ function minimap_map_with_index(;
         if sorted
             if keep_header
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                       """
             else
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                       """
@@ -1364,12 +1776,12 @@ function minimap_map_with_index(;
         else
             if keep_header
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
                       """
             else
                 cmd = """
-                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(split_prefix) \\
                       | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                       """
             end
@@ -1385,7 +1797,7 @@ function minimap_map_with_index(;
         append!(map_args, minimap_extra_args)
         push!(map_args, index_file)
         append!(map_args, fastq_inputs)
-        push!(map_args, "--split-prefix=$(outfile).tmp")
+        push!(map_args, "--split-prefix=$(split_prefix)")
         map_cmd = Cmd(map_args)
         if sorted
             if keep_header
@@ -1405,7 +1817,7 @@ function minimap_map_with_index(;
             cmd = pipeline(map_cmd, compress)
         end
     end
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -1436,6 +1848,8 @@ followed by SAM compression with pigz. Handles resource allocation and conda env
 Named tuple containing:
 - `cmd`: Shell command (as string or array)
 - `outfile`: Path to compressed output SAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 """
 function minimap_map(;
         fasta,
@@ -1474,6 +1888,7 @@ function minimap_map(;
         end
         outfile = base_name * "." * output_format
     end
+    split_prefix = minimap_split_prefix(outfile)
 
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
@@ -1486,17 +1901,17 @@ function minimap_map(;
                              " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp -o $(outfile)
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) -o $(outfile)
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
@@ -1505,11 +1920,11 @@ function minimap_map(;
             else
                 if quiet
                     cmd = pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`,
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix) -o $(outfile)`,
                         stdout = devnull,
                         stderr = devnull)
                 else
-                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`
+                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix) -o $(outfile)`
                 end
             end
         end
@@ -1521,25 +1936,25 @@ function minimap_map(;
                              " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
                     cmd = pipeline(cmd, stderr = devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, view_cmd)
                 if quiet
@@ -1556,12 +1971,12 @@ function minimap_map(;
             if sorted
                 if keep_header
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                     """
                 else
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                     """
@@ -1569,19 +1984,19 @@ function minimap_map(;
             else
                 if keep_header
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
                     """
                 else
                     cmd = """
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(split_prefix) \\
                     | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                     """
                 end
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 if keep_header
                     sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                     cmd = pipeline(map_cmd, sort_cmd)
@@ -1594,7 +2009,7 @@ function minimap_map(;
                     cmd = pipeline(cmd, stderr = devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(split_prefix)`
                 if keep_header
                     view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -`
                 else
@@ -1608,7 +2023,7 @@ function minimap_map(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -1633,6 +2048,8 @@ Map paired-end reads to a reference sequence using minimap2.
 Named tuple containing:
 - `cmd`: Command(s) to execute (String or Pipeline)
 - `outfile`: Path to output BAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 
 # Notes
 - Requires minimap2, and samtools conda environments
@@ -1680,13 +2097,14 @@ function minimap_map_paired_end_with_index(;
         outfile *= ".sorted"
     end
     outfile *= ".bam"
+    split_prefix = minimap_split_prefix(outfile)
     # only run if we will need to do work
     if !isfile(outfile)
         Mycelia.add_bioconda_env("minimap2")
         Mycelia.add_bioconda_env("samtools")
     end
     if as_string
-        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp"
+        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(split_prefix)"
         if sorted
             if keep_header
                 cmd = """
@@ -1714,7 +2132,7 @@ function minimap_map_paired_end_with_index(;
             end
         end
     else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp`
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(split_prefix)`
         if sorted
             if keep_header
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
@@ -1734,7 +2152,7 @@ function minimap_map_paired_end_with_index(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
@@ -2118,22 +2536,83 @@ function minimap_merge_map_and_split(;
         )
     end
     minimap_cmd = minimap_result.cmd
-    split_prefix = merged_bam * ".tmp"
+    # Consume the builder's own value rather than re-deriving from merged_bam.
+    # The two agree today, but re-deriving reintroduces exactly the drift seam
+    # `minimap_split_prefix` exists to close: if a builder ever normalizes its
+    # outfile (appends an extension, resolves to an absolute path), the sweep
+    # would target a prefix minimap2 was never given and orphan every chunk --
+    # the original bug, re-created. It is also interpolated into the E2BIG
+    # error text below, which would then print a `--split-prefix` that was not
+    # the one used.
+    split_prefix = minimap_result.split_prefix
 
     if run_mapping
+        # Swept BEFORE the run, not only after. A `finally` cannot cover the
+        # abort that actually caused the 2026-07 incident: SLURM sends the job
+        # step SIGTERM then SIGKILL at walltime, and Julia runs no `finally` on
+        # either -- it dies in the signal handler.
+        #
+        # It DOES run `atexit` on SIGTERM, though, and SLURM waits KillWait --
+        # 30s by default -- before escalating. Measured on 1.10.10:
+        #     SIGTERM -> atexit ran, finally did not
+        #     SIGKILL -> neither ran
+        # So the hook registered below reclaims in-job during that grace
+        # window, and this pre-run sweep covers the remaining SIGKILL/OOM-kill
+        # case on the next attempt. Both are needed: a one-shot benchmark that
+        # is never rerun has no next attempt, which is exactly the case an
+        # earlier version of this comment wrongly assumed away.
+        #
+        # Gated on OWNERSHIP, established from disk -- not on which arguments
+        # the caller happened to supply.
+        #
+        # The predecessor gate was `isnothing(tmpdir) && isnothing(merged_bam)`,
+        # and it was the exact negation of the condition under which this sweep
+        # can find anything. When it held, `tmpdir` had just been assigned
+        # `mktempdir()`, so the directory being swept was milliseconds old and
+        # necessarily empty. When it did not hold, the caller had supplied a
+        # stable path -- the only way chunks survive to be found -- and the
+        # sweep was skipped. Dead code in both directions.
+        #
+        # The underlying conflict is real: finding an orphan needs a
+        # DETERMINISTIC prefix, and not clobbering a peer needs a UNIQUE one.
+        # The SHA1 in the default `merged_bam` is a CONTENT hash over the input
+        # FASTQ list, not a uniqueness token, so identical arguments produce an
+        # identical `split_prefix`; only `tmpdir` separates two runs, and
+        # benchmarking/15_round_trip_benchmark.jl deliberately makes it
+        # deterministic (`map_tmpdir`/`truth_tmpdir` under `readset_dir`).
+        #
+        # Neither the name nor the mtime can resolve that -- a peer that started
+        # earlier has chunks OLDER than this process, so "older than my start"
+        # classifies a live peer as an orphan. What distinguishes them is an
+        # explicit ownership record, which `track_minimap_split_prefix` writes
+        # and `minimap_split_owner_state` reads. Orphan-ness is not the safety
+        # condition; NON-COLLISION is, and this is how it is established.
+        #
+        # Unconditional now, so it also covers the resume branch below, which
+        # returns the cached BAM without ever entering the try/finally -- a run
+        # killed after writing a nonempty merged_bam would otherwise strand its
+        # chunks permanently, with no code path left that would ever reclaim
+        # them.
+        cleanup_minimap_split_temps(split_prefix; skip_if_owner_live = true)
+
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
+            # Tracked before the run so a SIGTERM at walltime reclaims in-job,
+            # inside SLURM's KillWait grace window, instead of deferring to a
+            # next attempt that may never happen. The hook is registered once
+            # per process and sweeps whatever is in flight; see the registry
+            # above for why this is not an `atexit` per call.
+            #
+            # Not silenced: on the pre-run and `finally` paths `removed` is
+            # normally 0, because minimap2 unlinks its own chunks on a clean
+            # exit, so those log nothing in practice. The exit hook is the only
+            # one that reclaims on the SIGTERM path -- the case that frees
+            # hundreds of GiB -- and an operator needs a record that it fired.
+            register_minimap_split_temp_atexit()
+            track_minimap_split_prefix(split_prefix)
             try
                 run(minimap_cmd)
-                # Best-effort cleanup of minimap2 split-prefix temp files.
-                try
-                    split_base = basename(split_prefix)
-                    for path in readdir(tmpdir; join = true)
-                        startswith(basename(path), split_base) && rm(path; force = true)
-                    end
-                catch
-                end
             catch err
                 msg = sprint(showerror, err)
                 if occursin("E2BIG", msg) ||
@@ -2160,6 +2639,20 @@ function minimap_merge_map_and_split(;
                     )
                 end
                 rethrow()
+            finally
+                # Reclaim minimap2's split-index chunks on EVERY exit path.
+                # minimap2 already unlinks them when it exits cleanly, so the
+                # only path this actually recovers is the interrupted one
+                # (walltime, OOM, scancel) — which is exactly where they used
+                # to survive. Previously this ran inside the `try` after a
+                # successful `run`, i.e. only on the path that needed no help;
+                # a 2026-07 CAMI_I_LOW abort stranded 783 GiB as a result.
+                # No wrapper here: cleanup_minimap_split_temps guards every
+                # throwing operation internally and documents that it cannot
+                # throw. Wrapping it at one of three call sites would imply the
+                # opposite and invite someone to weaken those internal guards.
+                cleanup_minimap_split_temps(split_prefix)
+                untrack_minimap_split_prefix(split_prefix)
             end
         end
     end
@@ -2276,6 +2769,8 @@ Map paired-end reads directly to a reference FASTA using minimap2 (indexes on-th
 Named tuple containing:
 - `cmd`: Command(s) to execute (String or Pipeline)
 - `outfile`: Path to output BAM file
+- `split_prefix`: minimap2 `--split-prefix` value; pass to
+  [`cleanup_minimap_split_temps`](@ref) in a `finally` after running `cmd`.
 
 # Notes
 - Requires minimap2 and samtools conda environments.
@@ -2306,6 +2801,7 @@ function minimap_map_paired_end(;
         outfile *= ".sorted"
     end
     outfile *= ".bam"
+    split_prefix = minimap_split_prefix(outfile)
 
     if !isfile(outfile)
         Mycelia.add_bioconda_env("minimap2")
@@ -2313,7 +2809,7 @@ function minimap_map_paired_end(;
     end
 
     if as_string
-        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(outfile).tmp"
+        map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(split_prefix)"
         if sorted
             if keep_header
                 cmd = """
@@ -2341,7 +2837,7 @@ function minimap_map_paired_end(;
             end
         end
     else
-        map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(outfile).tmp`
+        map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(forward) $(reverse) --split-prefix=$(split_prefix)`
         if sorted
             if keep_header
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
@@ -2361,7 +2857,7 @@ function minimap_map_paired_end(;
         end
     end
 
-    return (; cmd, outfile)
+    return (; cmd, outfile, split_prefix)
 end
 
 """
