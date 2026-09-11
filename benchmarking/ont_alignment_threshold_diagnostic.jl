@@ -64,7 +64,12 @@ import DataFrames
 import Dates
 import JSON
 
-include(joinpath(@__DIR__, "ont_k_sweep.jl"))  # parse_quast_metrics, cell_id_for
+# parse_quast_metrics, cell_id_for, arg_value, ORGANISMS, write_table_guarded.
+# Also ALLOW_SHRINK — which ont_k_sweep.jl computes from ARGS at include time,
+# i.e. from THIS script's ARGS. That is what makes --allow-shrink work here, and
+# it is invisible at the call site, so do not assume this include is only
+# pulling in pure helpers.
+include(joinpath(@__DIR__, "ont_k_sweep.jl"))
 
 const SWEEP_DIR = something(arg_value("--sweep-dir"),
     joinpath(@__DIR__, "results", "ont_k_sweep"))
@@ -216,6 +221,31 @@ const INTERPRETABLE_RESCORE_STATUSES = ("ok", "nonzero_with_report")
 # What identifies a row in the committed diagnostic table: one row per
 # (cell, identity threshold).
 const THRESHOLD_KEYCOLS = (:cell_id, :min_identity)
+const THRESHOLD_TABLE_NAME = "alignment_threshold_diagnostic.tsv"
+
+"""
+    preflight_threshold_table(out_dir, selected, identities)
+
+Refuse an unpublishable run BEFORE spending any QUAST time on it.
+
+The output key set is exactly `selected x identities`, and both are known before
+the rescoring loop starts — so whether the result could be published is knowable
+in advance. Without this check the refusal lands at the END: a full default run
+over the committed cell set is 152 QUAST invocations, all of which complete,
+after which the rows are discarded in memory and nothing is written. This script
+has no per-cell checkpoints, so that compute is simply lost.
+
+The cheap check up front costs one table read.
+"""
+function preflight_threshold_table(out_dir, selected, identities)
+    path = joinpath(out_dir, THRESHOLD_TABLE_NAME)
+    (ALLOW_SHRINK || !isfile(path) || isempty(selected)) && return nothing
+    prospective = DataFrames.DataFrame(
+        cell_id = [c["cell_id"] for c in selected for _ in identities],
+        min_identity = [i for _ in selected for i in identities])
+    check_no_keys_lost(path, prospective, THRESHOLD_KEYCOLS)
+    return nothing
+end
 
 """
     write_threshold_table(out_dir, rows) -> Union{Nothing, DataFrame}
@@ -237,6 +267,10 @@ trees rather than small checkpoints, and they are gitignored for the same reason
 the sweep's are. Refusing is therefore the whole protection, not a backstop to
 one.
 
+`preflight_threshold_table` should already have refused an unpublishable run
+before any QUAST work happened; this is the backstop for the case where the
+selected set shrank mid-loop (a cell skipped for missing contigs, say).
+
 Returns `nothing` without writing when `rows` is empty — an empty run is
 already non-truncating, and emitting a headerless file over a populated table
 would be its own data loss.
@@ -245,8 +279,8 @@ function write_threshold_table(out_dir, rows)
     isempty(rows) && return nothing
     df = DataFrames.DataFrame(rows)
     sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
-    write_table_guarded(joinpath(out_dir, "alignment_threshold_diagnostic.tsv"),
-        df, THRESHOLD_KEYCOLS)
+    write_table_guarded(joinpath(out_dir, THRESHOLD_TABLE_NAME), df,
+        THRESHOLD_KEYCOLS)
     return df
 end
 
@@ -281,6 +315,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("Cells available: $(length(all_cells)); selected for rescoring: $(length(selected))")
     isempty(selected) &&
         println("  (nothing to do — no censored cells in this sweep tree)")
+
+    # Refuse an unpublishable run now, not after every QUAST invocation has
+    # completed and the rows are about to be discarded.
+    preflight_threshold_table(OUT_DIR, selected, IDENTITIES)
 
     rows = NamedTuple[]
     for cell in selected
@@ -324,7 +362,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     df = write_threshold_table(OUT_DIR, rows)
     if df !== nothing
-        println("\nWrote $(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"))")
+        println("\nWrote $(joinpath(OUT_DIR, THRESHOLD_TABLE_NAME))")
 
         # State the interpretable/uninterpretable split at the point of use. An
         # uninterpretable row is all-missing and therefore reads, to the naked

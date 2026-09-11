@@ -65,31 +65,47 @@ commit that switched hosts shows `per_read_identity.tsv` and
 
 The tables in this directory are tracked; the `cells/` checkpoints they are
 aggregated from are not. So on a fresh clone the sweep's checkpoint union has
-nothing to union against, and any invocation narrower than the full 240-cell
-grid — which includes the driver's own defaults, every shard, and `--smoke` —
-would replace these tables with its own smaller result.
+nothing to union against, and any invocation narrower than the committed grid —
+which includes the driver's own defaults, the shard driver's serial pre-warm,
+every shard, and `--smoke` — would replace these tables with its own smaller
+result.
 
 That write is now refused rather than performed (`td-4blm`). A narrowed run
-against this directory stops at its first refused write with an error naming the
-dropped cells. In the ordinary case — a narrowed grid — that first refusal is
-`ont_k_sweep_results.tsv`, so all three tables are left intact.
-
-The one case where it is not: the three tables are written in sequence (results
-→ summary → verdict stats) with no rollback, and the summary can shrink while
-the results table does not, because the summary counts only `status=ok` cells. A
-re-run that turns previously-ok cells into errors therefore rewrites
-`ont_k_sweep_results.tsv` and then refuses the summary, leaving the directory
-internally inconsistent until the run is repeated or the files are restored from
-git. Two ways forward:
+against this directory stops at the **first** aggregate write, with an error
+naming the dropped cells, and all three tables are left intact. Two ways
+forward:
 
 - pass `--output-dir` pointing at a scratch tree, which is the right answer for
   anything exploratory;
 - pass `--allow-shrink`, which is the right answer only when replacing these
   tables with a narrower measurement is what you actually mean.
 
+**"Re-run the committed grid" is not a single command.** The grid is ragged —
+Lambda carries `k ∈ {11,13,15,17,19,21,31}` and T4 only `{11,15,21,31}`, and T4
+skips 100x — so the 240 cells are the union of several runs, not one rectangle.
+The nearest single superset is
+`--organisms Lambda,T4 --ks 11,13,15,17,19,21,31 --coverages 10,30,50,100`,
+which is 336 cells, i.e. 40% more work than the table represents. Reproducing
+the exact grid means running Lambda and T4 as separate invocations against the
+same `--output-dir`.
+
+**Only `ont_k_sweep_results.tsv` is guarded.** `ont_k_sweep_summary.tsv` and
+`verdict_stats.tsv` are pure derivatives of it — every row is a groupby or a
+statistic over rows the results table already holds, and `--aggregate-only`
+rebuilds both from `cells/` at any time. Guarding them caught nothing real,
+because a narrowed grid is refused at the results table and the run aborts
+before either is reached. What it did catch was false positives: `verdict_stats`
+emits three of its statistics (`max_cell_NGA50`, `nga50_cv_median`,
+`nga50_cv_max`) only when NGA50 is measurable, so an unchanged 240-cell grid
+re-measured with NGA50 no longer computable dropped three keys and was refused —
+after the results table had already been rewritten. Leaving them unguarded keeps
+the whole sequence consistent: one guarded table, one decision, no partial
+state.
+
 The same guard covers `benchmarking/ont_alignment_threshold_diagnostic.jl`,
 where `--cells` and a shortened `--identities` ladder narrow the table the same
-way.
+way. There it runs as a pre-flight check before any QUAST work, so an
+unpublishable run fails in seconds rather than after rescoring every cell.
 
 ## Measured read identity
 
