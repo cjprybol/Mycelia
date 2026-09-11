@@ -45,6 +45,13 @@
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl --identities 95,90,85,80
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl --cells Lambda__ont__k31__30x__seed42
+#
+# NOTE both --cells and a shortened --identities ladder NARROW the output table,
+# and --output-dir defaults to the git-tracked results directory. A narrowed run
+# against that directory is refused rather than allowed to overwrite the
+# committed table (td-4blm). Point --output-dir at a scratch directory for an
+# exploratory rescore, or pass --allow-shrink when replacing the committed table
+# with a smaller one is deliberate.
 
 import Pkg
 if isinteractive()
@@ -206,6 +213,43 @@ end
 # these may be read as evidence about the assembly.
 const INTERPRETABLE_RESCORE_STATUSES = ("ok", "nonzero_with_report")
 
+# What identifies a row in the committed diagnostic table: one row per
+# (cell, identity threshold).
+const THRESHOLD_KEYCOLS = (:cell_id, :min_identity)
+
+"""
+    write_threshold_table(out_dir, rows) -> Union{Nothing, DataFrame}
+
+Write `alignment_threshold_diagnostic.tsv`, refusing to drop rows the committed
+table already has (td-4blm).
+
+This script had the sweep's truncation defect in a worse form: no union at all,
+writing only the rows the current invocation computed, into a default
+`--output-dir` that IS the git-tracked results directory. Both narrowing flags
+reach it — `--cells <one-id>` (this script's own documented usage line) emits 4
+rows over the committed 152, and a shorter `--identities` ladder scales the
+table down by the same ratio. Rescoring is expensive enough that narrowing is
+the normal way to run it, so the truncating shape was the common one.
+
+`write_table_guarded` supplies the refusal; the union is deliberately NOT
+reproduced here, because this script's per-cell artifacts are full QUAST output
+trees rather than small checkpoints, and they are gitignored for the same reason
+the sweep's are. Refusing is therefore the whole protection, not a backstop to
+one.
+
+Returns `nothing` without writing when `rows` is empty — an empty run is
+already non-truncating, and emitting a headerless file over a populated table
+would be its own data loss.
+"""
+function write_threshold_table(out_dir, rows)
+    isempty(rows) && return nothing
+    df = DataFrames.DataFrame(rows)
+    sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
+    write_table_guarded(joinpath(out_dir, "alignment_threshold_diagnostic.tsv"),
+        df, THRESHOLD_KEYCOLS)
+    return df
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     println("=== ONT alignment-threshold diagnostic (td-4e19d.28) ===")
     println("Start: $(Dates.now())")
@@ -278,11 +322,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
     end
 
-    if !isempty(rows)
-        df = DataFrames.DataFrame(rows)
-        sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
-        CSV.write(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"), df;
-            delim = '\t', missingstring = "NA")
+    df = write_threshold_table(OUT_DIR, rows)
+    if df !== nothing
         println("\nWrote $(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"))")
 
         # State the interpretable/uninterpretable split at the point of use. An

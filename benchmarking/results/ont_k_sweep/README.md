@@ -76,6 +76,27 @@ and the all-reads ladder columns derived from the aligned base fraction. This
 reproduces the 0.4.1/0.4.2 equivalence above on a third host and toolchain (the
 same version pair, in an independent environment).
 
+### Re-running this grid without destroying it
+
+The tables in this directory are tracked; the `cells/` checkpoints they are
+aggregated from are not. So on a fresh clone the sweep's checkpoint union has
+nothing to union against, and any invocation narrower than the full 240-cell
+grid — which includes the driver's own defaults, every shard, and `--smoke` —
+would replace these tables with its own smaller result.
+
+That write is now refused rather than performed (`td-4blm`). A narrowed run
+against this directory stops at its first aggregate write with an error naming
+the dropped cells, and the committed tables are left intact. Two ways forward:
+
+- pass `--output-dir` pointing at a scratch tree, which is the right answer for
+  anything exploratory;
+- pass `--allow-shrink`, which is the right answer only when replacing these
+  tables with a narrower measurement is what you actually mean.
+
+The same guard covers `benchmarking/ont_alignment_threshold_diagnostic.jl`,
+where `--cells` and a shortened `--identities` ladder narrow the table the same
+way.
+
 ## Measured read identity
 
 Reads were mapped back with `minimap2 -ax map-ont` and identity recomputed from

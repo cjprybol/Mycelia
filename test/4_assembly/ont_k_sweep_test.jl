@@ -28,6 +28,12 @@ include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_k_sweep.jl"))
 const LAMBDA = genome_size_for("Lambda")
 const T4 = genome_size_for("T4")
 
+# Read a table back the way the harness wrote it, so an assertion about row
+# count is an assertion about the FILE rather than about the DataFrame the
+# writer happened to return.
+read_tsv(path) = CSV.read(path, DataFrames.DataFrame;
+    delim = '\t', missingstring = "NA")
+
 Test.@testset "ONT k-sweep helpers" begin
     Test.@testset "contig_stats is independent of QUAST" begin
         # The low-k regime: many contigs, none long enough for QUAST to score.
@@ -204,11 +210,186 @@ Test.@testset "ONT k-sweep helpers" begin
 
             # An unreadable checkpoint must not take the whole aggregation down
             # — one truncated kilobyte would otherwise destroy a long run's
-            # authoritative table.
+            # authoritative table. The READER skips it and keeps going...
             write(
                 joinpath(cells, "Lambda__ont__k15__30x__seed42",
                     "cell_result.json"), "{ truncated")
-            Test.@test DataFrames.nrow(write_aggregate(dir, NamedTuple[])) == 2
+            Test.@test length(load_all_checkpoints(dir)) == 2
+
+            # ...and the WRITER refuses to publish the resulting 2-row view over
+            # the 3-row table already on disk (td-4blm). Seed 42 was genuinely
+            # measured; losing its checkpoint is not grounds to delete its row,
+            # and cells/ is gitignored so the TSV is the only surviving copy.
+            # The table is left intact, which is the property the comment above
+            # is actually about — what the refusal costs is that the run stops.
+            err = try
+                write_aggregate(dir, NamedTuple[])
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ErrorException
+            Test.@test occursin("refusing to shrink", err.msg)
+            Test.@test occursin("Lambda / ont / 15 / 30 / 42", err.msg)
+            Test.@test DataFrames.nrow(read_tsv(
+                joinpath(dir, "ont_k_sweep_results.tsv"))) == 3
+        end
+    end
+
+    Test.@testset "a fresh-clone invocation cannot shrink the committed table" begin
+        # THE td-4blm bug. `write_aggregate`'s union is not sufficient on its
+        # own: it unions against OUTPUT_DIR/cells/, which this harness's
+        # .gitignore deliberately excludes, while the aggregate TSV is tracked.
+        # So on a FRESH CLONE — table present, cells/ absent — the union
+        # degenerates to "whatever this invocation computed" and the default
+        # 96-cell grid overwrote the committed 240-row deliverable, silently,
+        # recoverable only via git checkout.
+        #
+        # Every case below is the fresh-clone shape: a populated table and NO
+        # cells/ directory at all.
+        row(org,
+            tech,
+            k,
+            cov,
+            seed;
+            wall = 1.0) = cell_row(
+            org, "ACC", tech, k, cov, seed;
+            n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+            metrics = merge(empty_metrics(),
+                (; NGA50 = 4000.0, genome_fraction = 99.0, quast_contigs = 1.0)),
+            nga50_status = "measured", outcome = "partial",
+            wall_seconds = wall, status = "ok")
+        full = [row("Lambda", "ont", 15, 30, s) for s in (42, 123, 456)]
+        append!(full, [row("T4", "ont", 15, 30, s) for s in (42, 123, 456)])
+        results_name = "ont_k_sweep_results.tsv"
+
+        seed_table(dir) = write_table_guarded(joinpath(dir, results_name),
+            DataFrames.DataFrame(full), RESULTS_KEYCOLS; allow_shrink = true)
+
+        Test.@testset "a partial grid over a full table is refused" begin
+            mktempdir() do dir
+                seed_table(dir)
+                Test.@test !isdir(joinpath(dir, "cells"))   # fresh-clone shape
+
+                # The default grid's shape: Lambda only, T4 absent.
+                lambda_only = filter(r -> r.organism == "Lambda", full)
+                err = try
+                    write_aggregate(dir, lambda_only)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("refusing to shrink", err.msg)
+                # The count of DROPPED keys, not the count written — a message
+                # quoting the wrong one sends the reader looking for 3 missing
+                # rows in a table that lost 3 different ones.
+                Test.@test occursin("has 3 key(s)", err.msg)
+                Test.@test occursin("--allow-shrink", err.msg)
+                # And the deliverable is untouched.
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 6
+            end
+        end
+
+        Test.@testset "--allow-shrink is a real escape hatch" begin
+            mktempdir() do dir
+                seed_table(dir)
+                lambda_only = DataFrames.DataFrame(
+                    filter(r -> r.organism == "Lambda", full))
+                write_table_guarded(joinpath(dir, results_name), lambda_only,
+                    RESULTS_KEYCOLS; allow_shrink = true)
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 3
+            end
+        end
+
+        Test.@testset "same keys with changed values is not a shrink" begin
+            mktempdir() do dir
+                seed_table(dir)
+                touched = DataFrames.DataFrame(
+                    [merge(r, (; wall_seconds = 999.0)) for r in full])
+                write_table_guarded(joinpath(dir, results_name), touched,
+                    RESULTS_KEYCOLS)
+                back = read_tsv(joinpath(dir, results_name))
+                Test.@test DataFrames.nrow(back) == 6
+                Test.@test all(back.wall_seconds .== 999.0)
+            end
+        end
+
+        Test.@testset "a superset write is not a shrink" begin
+            mktempdir() do dir
+                seed_table(dir)
+                grown = DataFrames.DataFrame(
+                    vcat(full, [row("T4", "ont", 15, 30, 789)]))
+                write_table_guarded(joinpath(dir, results_name), grown,
+                    RESULTS_KEYCOLS)
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 7
+            end
+        end
+
+        Test.@testset "the guard does not fire on the case the union handles" begin
+            # Regression fence around the EXISTING protection: with cells/
+            # populated, a one-row invocation still emits the full table, and
+            # the guard must stay silent. A guard that fired here would have
+            # broken every ordinary resume.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                seed_table(dir)
+                Test.@test DataFrames.nrow(write_aggregate(dir, [full[1]])) == 6
+            end
+        end
+
+        Test.@testset "an unprovable write is refused, not waved through" begin
+            # A table that cannot be read, or that lacks a key column, cannot be
+            # shown to be a superset of what is there. Failing OPEN here would
+            # let the guard be defeated by exactly the corruption it should
+            # catch, so both refuse.
+            mktempdir() do dir
+                target = joinpath(dir, results_name)
+                CSV.write(target,
+                    DataFrames.DataFrame(organism = ["Lambda"], k = [15]);
+                    delim = '\t')
+                err = try
+                    write_table_guarded(target, DataFrames.DataFrame(full),
+                        RESULTS_KEYCOLS)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("could not be read", err.msg)
+                Test.@test occursin("missing key column", err.msg)
+                # Overridable, like every other refusal here.
+                write_table_guarded(target, DataFrames.DataFrame(full),
+                    RESULTS_KEYCOLS; allow_shrink = true)
+                Test.@test DataFrames.nrow(read_tsv(target)) == 6
+            end
+        end
+
+        Test.@testset "a Float64 key round-trips rather than reading as lost" begin
+            # The keys are compared as strings precisely so a value that leaves
+            # as 80.5 and returns through CSV.jl's parser is recognised as the
+            # same key. A typed-tuple comparison would report every threshold
+            # row as lost and refuse every legitimate write.
+            mktempdir() do dir
+                target = joinpath(dir, "threshold.tsv")
+                df = DataFrames.DataFrame(
+                    cell_id = ["a", "a", "b", "b"],
+                    min_identity = [95.0, 80.5, 95.0, 80.5],
+                    value = [1, 2, 3, 4])
+                CSV.write(target, df; delim = '\t', missingstring = "NA")
+                write_table_guarded(target, df, (:cell_id, :min_identity))
+                Test.@test DataFrames.nrow(read_tsv(target)) == 4
+            end
         end
     end
 
