@@ -128,7 +128,7 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             catch e
                 e
             end
-            Test.@test err isa ErrorException
+            Test.@test err isa ShrinkRefusal
             Test.@test occursin("refusing to shrink", err.msg)
             Test.@test occursin("--allow-shrink", err.msg)
             # The committed table survives the attempt intact.
@@ -174,7 +174,7 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             catch e
                 e
             end
-            Test.@test err isa ErrorException
+            Test.@test err isa ShrinkRefusal
             Test.@test occursin("refusing to shrink", err.msg)
 
             # A narrowed --identities ladder is the other narrowing flag, and
@@ -186,7 +186,7 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             catch e
                 e
             end
-            Test.@test err2 isa ErrorException
+            Test.@test err2 isa ShrinkRefusal
             Test.@test occursin("refusing to shrink", err2.msg)
 
             # The full run passes preflight, so the check does not block the

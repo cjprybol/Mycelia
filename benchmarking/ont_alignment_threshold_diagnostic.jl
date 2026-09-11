@@ -357,6 +357,21 @@ if abspath(PROGRAM_FILE) == @__FILE__
     length(rescorable) == length(selected) ||
         println("  rescorable after dropping unusable cells: $(length(rescorable))")
 
+    # Cells were selected and EVERY one was unusable. That is a failure shape,
+    # not a no-op: the sweep tree has censored cells worth rescoring and this
+    # host cannot rescore any of them (contigs pruned, refs/ absent — both
+    # gitignored). Without this the script printed only "End: <timestamp>" and
+    # exited 0, which a shell driver reads as success. Note the asymmetry it
+    # corrects: the isempty(selected) case above already explains itself.
+    if isempty(rescorable) && !isempty(selected)
+        println("  (every selected cell was unusable on this host — nothing " *
+                "was rescored and nothing was written)")
+        @warn "all $(length(selected)) selected cells were skipped; the sweep " *
+              "tree has censored cells but no usable contigs/references here. " *
+              "Re-run the sweep to regenerate them before rescoring." sweep_dir=SWEEP_DIR
+        exit(1)
+    end
+
     # Refuse an unpublishable run now, not after every QUAST invocation has
     # completed and the rows are about to be discarded.
     preflight_threshold_table(OUT_DIR, rescorable, IDENTITIES)
