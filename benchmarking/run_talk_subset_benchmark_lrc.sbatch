@@ -20,17 +20,24 @@ set -uo pipefail
 echo "=== Mycelia talk-subset benchmark (Lawrencium) ==="
 echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
 
-module load julia/1.10.2-11.4
+# julia/1.10.2-11.4 DOWNGRADES to a Julia that cannot load current master's
+# Manifest (extension-trigger KeyError; td-j8bh). Invoke the juliaup launcher
+# DIRECTLY with `+lts` rather than PATH + `command -v` -- the latter silently
+# falls through to whatever julia is already on the inherited PATH if juliaup
+# is missing on a node, and even when it finds the shim, the shim resolves to
+# the host's mutable `juliaup default` -- not necessarily lts. `+lts` is
+# resolved by juliaup itself, pinned regardless of the default (td-j8bh review).
+JULIA="${HOME}/.juliaup/bin/julia"
+JULIA_ARGS=(+lts)
 
-# Resolve the julia binary explicitly and fail LOUDLY if the module did not put
-# julia on PATH — otherwise an empty ${JULIA} would run `--project=.. file.jl` as
-# a command, fail both benchmarks, and still exit green with no results.
-JULIA="$(command -v julia || true)"
-if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
-  echo "ERROR: julia not runnable after 'module load julia/1.10.2-11.4'." >&2
+# Fail LOUDLY if the pinned channel is not runnable — otherwise an empty
+# ${JULIA} would run `--project=.. file.jl` as a command, fail both
+# benchmarks, and still exit green with no results.
+if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
+  echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable (juliaup lts channel missing/broken on this host)." >&2
   exit 1
 fi
-echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
+echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 # Use the group depot (where hpc-setup.sh precompiled the deps); also set by .bashrc.
@@ -45,7 +52,7 @@ run_one () {
   local f="$1"
   echo ""
   echo ">>> RUN ${f}  $(date)"
-  if LD_LIBRARY_PATH="" "${JULIA}" --project=.. "${f}"; then
+  if LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project=.. "${f}"; then
     echo ">>> OK  ${f}"
   else
     echo ">>> FAIL ${f} (continuing)"
