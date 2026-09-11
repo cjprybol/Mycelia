@@ -346,6 +346,10 @@ else
     # These suites are pure-Julia/fake-runner coverage and need no external tools.
     include(joinpath(@__DIR__, "8_tool_integration", "execution_backends_test.jl"))
     include(joinpath(@__DIR__, "8_tool_integration", "autocycler.jl"))
+    # The split-temp cleanup predicate decides which files get DELETED, so it
+    # must be covered on the default CI path rather than only under
+    # MYCELIA_RUN_EXTERNAL. Its two conda-dependent testsets self-gate.
+    include(joinpath(@__DIR__, "8_tool_integration", "minimap_split_temp_cleanup.jl"))
     @info "Skipping remaining tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end
 # for file in (

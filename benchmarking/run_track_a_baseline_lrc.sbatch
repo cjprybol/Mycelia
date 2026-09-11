@@ -30,16 +30,29 @@ set -uo pipefail
 echo "=== Track A baseline benchmark (Lawrencium) ==="
 echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
 
-module load julia/1.10.2-11.4
+# The julia/1.10.2-11.4 module DOWNGRADES to a Julia that cannot load current
+# master's Manifest (extension-trigger KeyError; td-j8bh) -- the group depot's
+# 144 cells that DID succeed under it predate the drift. juliaup's lts channel
+# (1.10.10 at last check, matching NERSC) is already on this host. Invoke the
+# launcher DIRECTLY with `+lts` rather than relying on PATH + `command -v`:
+# the latter silently falls through to whatever julia is already on the
+# inherited PATH if juliaup is missing/misconfigured on a given node, and even
+# when it finds the juliaup shim, the shim resolves to the host's mutable
+# `juliaup default` channel -- not necessarily lts -- so a `juliaup default`
+# change made for an unrelated project on the same shared account would
+# silently flip every one of these jobs onto a different Julia (td-j8bh
+# review). `+lts` bypasses both failure modes: it is resolved by juliaup
+# itself, not PATH order, and it is pinned regardless of the default.
+JULIA="${HOME}/.juliaup/bin/julia"
+JULIA_ARGS=(+lts)
 
-# Resolve julia explicitly and fail LOUDLY if the module did not put it on PATH,
-# otherwise an empty ${JULIA} would run the args as a command and still exit green.
-JULIA="$(command -v julia || true)"
-if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
-  echo "ERROR: julia not runnable after 'module load julia/1.10.2-11.4'." >&2
+# Fail LOUDLY if the pinned channel is not runnable -- otherwise an empty
+# ${JULIA} would run the args as a command and still exit green.
+if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
+  echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable (juliaup lts channel missing/broken on this host)." >&2
   exit 1
 fi
-echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
+echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 # Group depot (where hpc-setup.sh precompiled deps; conda envs install here too).
@@ -51,7 +64,7 @@ cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 
 # shellcheck disable=SC2086  # intentional word-splitting of optional args
 echo ">>> RUN track_a_baseline_benchmark.jl ${TRACK_A_ARGS:-}  $(date)"
-if LD_LIBRARY_PATH="" "${JULIA}" --project=.. track_a_baseline_benchmark.jl ${TRACK_A_ARGS:-}; then
+if LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project=.. track_a_baseline_benchmark.jl ${TRACK_A_ARGS:-}; then
   echo ">>> OK  track_a_baseline_benchmark.jl"
   status=0
 else
