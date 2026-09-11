@@ -1081,17 +1081,48 @@ function write_aggregate(root, rows)
               "memory — nothing to aggregate. Check --output-dir.")
     end
     key(r) = Tuple(getproperty(r, c) for c in RESULTS_KEYCOLS)
-    for r in load_all_checkpoints(root)
-        by_id[key(r)] = r
+    build() = begin
+        d = Dict{Tuple, Any}()
+        for r in load_all_checkpoints(root)
+            d[key(r)] = r
+        end
+        for r in rows          # current run supersedes disk
+            d[key(r)] = r
+        end
+        frame = DataFrames.DataFrame(collect(values(d)))
+        sort!(frame, collect(RESULTS_KEYCOLS))
+        return frame
     end
-    for r in rows          # current run supersedes disk
-        by_id[key(r)] = r
-    end
-    df = DataFrames.DataFrame(collect(values(by_id)))
-    sort!(df, collect(RESULTS_KEYCOLS))
+
+    df = build()
     results_path = joinpath(root, "ont_k_sweep_results.tsv")
     check_results_table_not_missing(root, results_path)
-    write_table_guarded(results_path, df, RESULTS_KEYCOLS)
+    try
+        write_table_guarded(results_path, df, RESULTS_KEYCOLS)
+    catch e
+        # Re-read the checkpoints and try ONCE more before believing a shrink.
+        #
+        # `run_ont_k_sweep_shards.sh` points up to 32 concurrent shards at one
+        # --output-dir, and this function runs after EVERY cell. The sequence is
+        # read cells/ -> read the TSV -> compare -> write, with no lock. So if a
+        # sibling shard publishes a cell between our checkpoint scan and our
+        # guard's read of the table, the table legitimately holds a key we do
+        # not, and the guard refuses a write that shrinks nothing. The window is
+        # the sibling's own scan, which at 240 cells is not short.
+        #
+        # A second scan picks that cell up, because the sibling's checkpoint is
+        # on disk by then — that is what makes the retry a fix rather than a
+        # papering-over. If it still refuses, the missing keys are not explained
+        # by any checkpoint and the refusal is real, so it propagates.
+        #
+        # Note what this deliberately does NOT do: disarm the per-cell write.
+        # Passing allow_shrink there would let cell 1 of a fresh-clone run
+        # truncate the committed table outright — the fail-fast property is the
+        # whole point of guarding this write.
+        (e isa ErrorException && occursin("refusing to shrink", e.msg)) || rethrow()
+        df = build()
+        write_table_guarded(results_path, df, RESULTS_KEYCOLS)
+    end
     return df
 end
 
