@@ -93,6 +93,14 @@
 #
 # Per-cell JSON checkpoints make the run crash-safe and resumable: re-invoking
 # with the same --output-dir skips completed cells.
+#
+# Every invocation above EXCEPT the first covers less than the committed grid,
+# and --output-dir defaults to the git-tracked results directory. Such a run is
+# now refused rather than allowed to overwrite the committed tables with its own
+# narrower result (td-4blm); the checkpoint union alone does not prevent this,
+# because cells/ is gitignored and so is empty on a fresh clone. Use
+# --output-dir to work in a scratch tree, or --allow-shrink when publishing the
+# narrower table is deliberate.
 
 import Pkg
 if isinteractive()
@@ -283,6 +291,25 @@ const SMOKE = "--smoke" in ARGS
 # computed, and can never trigger computing one.
 const AGGREGATE_ONLY = "--aggregate-only" in ARGS
 
+# Permit a write that DROPS keys the table on disk already has (td-4blm).
+#
+# Off by default, because the union in `write_aggregate` does not actually
+# protect a fresh clone: it unions against `OUTPUT_DIR/cells/`, which this
+# harness's own .gitignore deliberately excludes, while the aggregate TSVs are
+# tracked. So on a fresh clone the protective term is EMPTY and the default
+# 96-cell grid would overwrite the committed 240-row deliverable, losing every
+# T4 row and every Lambda k in {13,17,19} row — 144 of 240 — recoverable only
+# via `git checkout`. (Conditional, not past tense: git history shows the
+# committed tables only ever grew, so nothing establishes that the loss actually
+# occurred. The reproduction is that it would.)
+#
+# `write_table_guarded` therefore refuses such a write unless this flag is set.
+# Set it when the shrink is what you mean — a deliberately re-scoped grid, or a
+# schema change — and prefer pointing `--output-dir` at a scratch directory when
+# it is not. Note it disables the guard for the WHOLE process, so on the shard
+# driver it covers the pre-warm and all shards, not one invocation.
+const ALLOW_SHRINK = "--allow-shrink" in ARGS
+
 # Cached rows with these statuses are RECOMPUTED rather than reused. Both are
 # infrastructure failures that produce a well-formed, degenerate-looking row;
 # caching either would freeze a transient fault into the grid permanently.
@@ -328,6 +355,12 @@ else
     _f !== nothing && (seeds = parse.(Int, _f))
 end
 
+# NOTE the default is the GIT-TRACKED results directory, which is why the
+# results table written under it goes through `write_table_guarded` (see
+# ALLOW_SHRINK). The summary and verdict-stats tables deliberately do NOT —
+# they are pure derivatives of the results table and the reasoning is at their
+# definitions. Point this at a scratch directory for any run that is not meant
+# to update the committed deliverable.
 const OUTPUT_DIR = let v = arg_value("--output-dir")
     v === nothing ? joinpath(@__DIR__, "results", "ont_k_sweep") : v
 end
@@ -707,6 +740,379 @@ end
 
 # === Aggregation ===
 
+# Separator used to fold a key tuple into one comparable string.
+#
+# NOT because \x1f is excluded from a TSV field — it is not. CSV.jl writes the
+# byte raw and reads it back intact; TSV forbids tab and newline, not C0
+# controls generally. The property that actually holds is narrower: every key
+# column here is a controlled vocabulary — an organism name, a technology name,
+# a generated cell_id, a generated statistic name, or a small number — and none
+# of them can contain this byte. Picking a byte outside that vocabulary is what
+# makes concatenation unambiguous, not a guarantee from the format.
+const _KEY_SEP = '\x1f'
+
+"""
+    ShrinkRefusal(msg)
+
+The one refusal a re-scan can legitimately resolve: the write would drop keys
+the on-disk table has.
+
+A distinct TYPE rather than a distinguishable message, because `write_aggregate`
+retries on exactly this refusal and on no other. Matching
+`occursin("refusing to shrink", e.msg)` against a message defined a hundred
+lines away is a coupling nothing enforces — mutation testing confirmed that
+rewording either side silently changes which refusals get retried, in either
+direction. The type makes the link mechanical.
+
+Carries `msg` and prints it verbatim, so every existing `occursin` on the text
+still works and operators see no difference.
+"""
+struct ShrinkRefusal <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::ShrinkRefusal) = print(io, e.msg)
+
+# What identifies a row in each guarded table. Named once so the in-memory
+# de-duplication key and the on-disk shrink check cannot drift apart — two
+# definitions of "the same cell" is how a guard like this stops guarding.
+#
+# SUMMARY_KEYCOLS is NOT a guard key: the summary table is deliberately
+# unguarded (see write_summary). It is kept because it is the summary's
+# grouping key, and naming it once stops the `groupby` and the `sort` from
+# drifting apart the same way.
+const RESULTS_KEYCOLS = (:organism, :technology, :k, :coverage, :seed)
+const SUMMARY_KEYCOLS = (:organism, :technology, :k, :coverage)
+
+"""
+    table_row_keys(df, keycols; label = "table") -> Set{String}
+
+The key set of `df`, normalised to strings.
+
+Comparing STRINGS rather than typed tuples is a convenience, not a necessity,
+and the distinction matters because someone will eventually want to change it.
+Julia's `Set` compares with `isequal`/`hash`, which are value-based: measured in
+this project's environment, `isequal(Int32(31), Int64(31))` is true with equal
+hashes, `String15("Lambda")` equals `"Lambda"`, and a typed `setdiff` across a
+full `CSV.write`/`CSV.read` round trip of these tables comes back EMPTY — for
+`80.5` and for an Int column whose neighbour acquired a `missing` alike. Typed
+tuples would work.
+
+What the string form buys is independence from CSV.jl's type inference: the
+comparison stops depending on what the reader inferred this time, and `string()`
+is what `CSV.write` itself renders. That is worth having in a guard whose whole
+job is to be trustworthy, and it costs nothing here because every key column is
+a controlled vocabulary of short strings and small numbers.
+
+Two boundaries it does not survive, both failing CLOSED (a phantom loss and a
+refusal, never a silent pass), and neither reachable from the four current key
+columns:
+
+  * a key value whose text is literally the `missingstring` ("NA") writes as
+    `NA`, reads back as `missing`, and normalises to `"missing"`;
+  * a key column whose type differs across the round trip in a way `string()`
+    renders differently — an `Int` 30 on disk against a `Float64` 30.0 in
+    memory gives `"30"` against `"30.0"`. Note this is the one place typed
+    tuples would be more forgiving than strings, since `isequal(30, 30.0)` is
+    true. Keep key columns typed consistently at their source.
+"""
+function table_row_keys(df, keycols; label = "table")
+    missing_cols = [c for c in keycols if !(String(c) in DataFrames.names(df))]
+    isempty(missing_cols) ||
+        throw(ArgumentError("$(label) is missing key column(s): " *
+                            join(missing_cols, ", ")))
+    row_key(row) = join((string(row[c]) for c in keycols), _KEY_SEP)
+    return Set(row_key(row) for row in DataFrames.eachrow(df))
+end
+
+"""
+    write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK) -> DataFrame
+
+`CSV.write`, but refuses to replace an existing table with one that does not
+cover every key the existing table already has (td-4blm).
+
+WHY this exists rather than just the union in `write_aggregate`: that union's
+protective term reads `OUTPUT_DIR/cells/`, which this harness's `.gitignore`
+deliberately excludes, while the aggregate TSVs are tracked. On a fresh clone
+the union therefore degenerates to "whatever this invocation computed", and the
+default 96-cell grid silently overwrites the committed 240-row deliverable. The
+union is still correct and still runs; it is simply not sufficient on its own.
+
+SCOPE — this fires on the WRITE path only. In production it is called from
+`write_aggregate` and from the threshold diagnostic's `write_threshold_table`,
+and from nowhere else (the tests call it directly, which is how its behaviour
+is pinned). No read path (`load_all_checkpoints`, `candidate_cells`,
+`parse_quast_metrics`, the Phase 2 checkpoint reload) passes through it, so
+pre-existing on-disk data is never rejected on the way IN — only a write that
+would destroy it is rejected on the way out.
+
+`write_summary` and `write_verdict_stats` are deliberately NOT guarded; the
+reasoning is at their definitions.
+
+Refuses in three distinct cases, each with its own message and remedy:
+
+  * the on-disk table has keys the new table lacks — the truncation case;
+  * the on-disk table cannot be READ — the write cannot then be proven
+    non-shrinking, and a guard that failed open here would be defeated by
+    exactly the corruption it should catch;
+  * the on-disk table lacks a key column — a schema change, which is a
+    different thing from corruption and gets a different remedy.
+
+`allow_shrink` (CLI: `--allow-shrink`) is the override for all three, and is the
+right answer for a deliberately re-scoped grid or a schema change.
+
+The write is published atomically (write to a sibling temp file, then `mv`).
+Without that, proving the write non-shrinking and then truncating the committed
+file in place would leave a crash mid-write producing exactly the data loss this
+guard exists to prevent — and the resulting partial file would then trip the
+unreadable-table refusal, so recovery would require `--allow-shrink`.
+"""
+function write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK)
+    # Unconditional, and deliberately OUTSIDE both the isfile short-circuit and
+    # the allow_shrink escape. "These columns identify a row" is an invariant of
+    # the table itself, not of the comparison against an older copy: a FIRST
+    # write whose declared key does not distinguish its rows is just as wrong as
+    # a later one, and --allow-shrink is permission to publish a smaller table,
+    # not permission to publish one whose key is a fiction.
+    check_keycols_are_a_key(path, df, keycols)
+    if !allow_shrink && isfile(path)
+        check_no_keys_lost(path, df, keycols)
+    end
+    publish_atomically(path) do tmp
+        CSV.write(tmp, df; delim = '\t', missingstring = "NA")
+    end
+    return df
+end
+
+"""
+    publish_atomically(write!, path)
+
+Run `write!(tmp)` against a sibling temp path, then atomically rename it over
+`path`.
+
+USE `Base.Filesystem.rename`, NOT `mv(...; force = true)`. They are not
+interchangeable, and the difference is the whole point of this function.
+Julia's `mv` calls `checkfor_mv_cp_cptree`, which does
+`rm(dst; recursive = true, force = true)` and only THEN renames (`base/file.jl`).
+So `mv` opens a window in which the committed table has been DELETED and the
+replacement is not yet in place — measured: with an unrenameable source, `mv`
+leaves `isfile(dst) == false`, i.e. the table is gone outright. That is strictly
+worse than the in-place `CSV.write` this function replaced, which at least left
+the leading rows.
+
+What `rename` actually is, because an earlier version of this docstring claimed
+more than Base delivers and the claim matters. `Base.Filesystem.rename` is:
+
+    err = ccall(:jl_fs_rename, ...)
+    if err < 0
+        cp(src, dst; force = force, follow_symlinks = false)
+        rm(src; recursive = true)
+    end
+
+So the SUCCESS path is POSIX `rename(2)` and is genuinely atomic, which is the
+case that matters here. The FAILURE path is a `cp` + `rm` fallback, and the
+errno is discarded.
+
+Two consequences worth knowing rather than rediscovering:
+
+  * The committed table survives a failed publish because `force` defaults to
+    FALSE, so the fallback `cp` refuses when the target exists. That default is
+    load-bearing — passing `force = true` to quiet the confusing message below
+    would turn this back into the rm-then-copy the guard exists to avoid.
+  * Because the errno is dropped, every real cause (EXDEV from a temp on
+    another filesystem, EACCES, EROFS, ENOSPC) reaches the operator as
+    `ArgumentError: '<path>' exists. \`force=true\` is required ...`, which names
+    none of them. The catch below re-raises with that stated, so nobody follows
+    the message toward `force = true`.
+
+The window mattered rather than being theoretical: `write_aggregate` runs once
+per cell, and `run_ont_k_sweep_shards.sh` points up to 32 concurrent processes
+at one `--output-dir`. A shard reading the table during another shard's `rm`
+window would see `isfile(path) == false`, and `write_table_guarded` skips the
+shrink check entirely when the file is absent — so the delete window was also a
+silent fail-open of the guard itself.
+
+The temp file is created in the SAME directory, because `rename` is only atomic
+within one filesystem; a temp under `/tmp` could land on a different device and
+fail with `EXDEV`. The name carries the pid so concurrent shards cannot collide
+on it — single-host only, which is what this driver is.
+"""
+function publish_atomically(write!, path)
+    tmp = "$(path).tmp.$(getpid())"
+    try
+        write!(tmp)
+        Base.Filesystem.rename(tmp, path)
+    catch e
+        isfile(tmp) && rm(tmp; force = true)
+        error("failed to publish $(path) — the existing file is UNCHANGED and " *
+              "the temp has been removed. Note Julia's rename falls back to " *
+              "cp+rm on any rename(2) error and reports \"force=true is " *
+              "required\" for all of them, so the real cause (a temp on another " *
+              "filesystem, permissions, a full disk) is NOT in the message " *
+              "below. Do not pass force=true: the false default is what keeps " *
+              "the fallback from deleting the committed table. " *
+              "$(sprint(showerror, e))")
+    end
+    return path
+end
+
+"""
+    check_keycols_are_a_key(path, df, keycols)
+
+Throw unless `keycols` actually distinguishes the rows of `df`.
+
+A `Set` discards multiplicity, so every other check here is blind to this: a
+write collapsing 6 distinct rows into 3 rows plus 3 duplicates has the same key
+set as the 6 and would sail through. Asserting it promotes "these are the key
+columns" from a comment into a checked invariant.
+"""
+function check_keycols_are_a_key(path, df, keycols)
+    # Wrapped rather than left as a bare ArgumentError, so the message names the
+    # file and a remedy that WORKS.
+    #
+    # Note which remedies do not. This check runs on the IN-MEMORY frame and is
+    # deliberately unconditional, so neither `--allow-shrink` nor a fresh
+    # `--output-dir` changes the outcome — neither alters the frame's columns.
+    # Offering them here (an earlier version did, copied from the symmetric
+    # on-disk branch where they are real) sends the operator round a loop that
+    # cannot terminate. The only fix is to reconcile the declared key columns
+    # with the schema actually being produced.
+    n_keys = try
+        length(table_row_keys(df, keycols; label = "the table being written"))
+    catch e
+        e isa ArgumentError || rethrow()
+        error("refusing to write $(path): $(e.msg). The frame this run built " *
+              "does not carry the columns this table is keyed on, so the write " *
+              "cannot be proven non-shrinking. Neither --allow-shrink nor a " *
+              "different --output-dir helps — both leave the frame unchanged. " *
+              "Reconcile the key columns [$(join(string.(keycols), ", "))] " *
+              "with the schema this run produces.")
+    end
+    DataFrames.nrow(df) == n_keys || error(
+        "refusing to write $(path): [$(join(string.(keycols), ", "))] is not a " *
+        "key for this table — $(DataFrames.nrow(df)) rows collapse to " *
+        "$(n_keys) distinct keys. Writing it would silently drop the " *
+        "duplicates.")
+    return nothing
+end
+
+"""
+    check_no_keys_lost(path, df, keycols)
+
+Throw unless writing `df` over the table at `path` preserves every key it has.
+"""
+function check_no_keys_lost(path, df, keycols)
+    # A zero-byte file is CORRUPTION, not a schema change, and it has to be
+    # discriminated before the read: CSV.read returns a 0x0 frame for it
+    # (measured), so table_row_keys throws ArgumentError and the branch below
+    # would report "that is a schema change rather than corruption" — exactly
+    # backwards for the canonical crash / disk-full / killed-mid-write artifact.
+    if filesize(path) == 0
+        error("refusing to overwrite $(path): it is ZERO BYTES, which is what a " *
+              "crash, a full disk, or a killed write leaves behind — not an " *
+              "empty table. This write cannot be proven non-shrinking against " *
+              "it. Restore the file (git checkout), or pass --allow-shrink to " *
+              "replace it with what this run computed.")
+    end
+
+    # A file that parses but carries NONE of the key columns is a different
+    # file, not a schema tweak — a truncated header, a partial rsync, an
+    # interrupted checkout. The zero-byte branch above catches only the exact
+    # 0-length case; a 3-byte fragment parses into a 1-column frame and used to
+    # land in the schema-change branch, whose first offered remedy is
+    # --allow-shrink. On a fresh clone that destroys the committed deliverable,
+    # which is the outcome this whole guard exists to prevent. Losing SOME key
+    # columns is a genuine schema change and still routes below.
+    present = try
+        old_cols = DataFrames.names(CSV.read(path, DataFrames.DataFrame;
+            delim = '\t', missingstring = "NA", limit = 0))
+        count(c -> String(c) in old_cols, keycols)
+    catch
+        -1   # unreadable; the branch below gives the corruption message
+    end
+    present == 0 && error(
+        "refusing to overwrite $(path): it parses, but carries NONE of the key " *
+        "columns [$(join(string.(keycols), ", "))] — so it is not a version of " *
+        "this table at all. That is corruption (a truncated header, a partial " *
+        "copy), not a schema change. Restore it (git checkout) rather than " *
+        "reaching for --allow-shrink, which would replace the committed table " *
+        "with whatever this run computed.")
+
+    existing_keys = try
+        old = CSV.read(path, DataFrames.DataFrame;
+            delim = '\t', missingstring = "NA")
+        table_row_keys(old, keycols; label = "the table on disk at $(path)")
+    catch e
+        # Discriminate on WHOSE ArgumentError this is, not on the type.
+        #
+        # `table_row_keys` reports a missing key column as an ArgumentError —
+        # that is a genuine schema change. But CSV.jl ALSO throws ArgumentError
+        # on unparseable input ("Symbol name may not contain \\0" for a binary
+        # file, measured), and routing that to the schema branch told an
+        # operator holding a corrupt file to "regenerate from scratch in a fresh
+        # --output-dir", never mentioning `git checkout`. That is the same
+        # misdirection the zero-byte branch above was added to fix, one branch
+        # over. Our own error is the only one carrying this phrase.
+        is_schema_change = e isa ArgumentError &&
+                           occursin("is missing key column(s)", e.msg)
+        is_schema_change && error(
+            "refusing to overwrite $(path): $(e.msg), so this write cannot be " *
+            "proven non-shrinking. That is a schema change rather than " *
+            "corruption — regenerate the table from scratch in a fresh " *
+            "--output-dir, or pass --allow-shrink to replace it in place.")
+        error("refusing to overwrite $(path): its current contents could not " *
+              "be read, so this write cannot be proven non-shrinking " *
+              "($(sprint(showerror, e))). Restore it (git checkout) if it is " *
+              "corrupt, or pass --allow-shrink if replacing it is what you " *
+              "mean. Do NOT simply delete it: an absent results table makes " *
+              "this guard skip the shrink check, and its unguarded derived " *
+              "siblings would then be rewritten from whatever grid this run " *
+              "computed.")
+    end
+
+    # `check_keycols_are_a_key` ran first and already produced a guided error if
+    # the frame lacks a key column, so this cannot throw.
+    new_keys = table_row_keys(df, keycols; label = "the table being written")
+
+    lost = sort(collect(setdiff(existing_keys, new_keys)))
+    isempty(lost) && return nothing
+    shown = join(("  - " * replace(k, _KEY_SEP => " / ")
+        for k in first(lost, 5)), "\n")
+
+    # The remedy DEPENDS on whether cells/ is populated, and getting that wrong
+    # is dangerous rather than merely unhelpful. With cells/ absent this really
+    # is the fresh-clone case and --allow-shrink is a legitimate choice. With
+    # cells/ present it is not: either a checkpoint is unreadable, or a sibling
+    # shard published concurrently — and in both of those the lost keys name
+    # cells that WERE measured, so --allow-shrink deletes real measurements from
+    # their only surviving copy. An earlier version offered --allow-shrink
+    # unconditionally, i.e. the guard's own false positive recommended the exact
+    # loss it exists to prevent.
+    cells_dir = joinpath(dirname(path), "cells")
+    n_cells = isdir(cells_dir) ?
+              count(
+        e -> isfile(joinpath(cells_dir, e, "cell_result.json")),
+        readdir(cells_dir)) : 0
+    remedy = n_cells == 0 ?
+             "cells/ is absent or empty here (it is gitignored), so this is " *
+             "most likely a partial run against a tracked results directory. " *
+             "Either re-run the grid that produced the committed table, pass " *
+             "--output-dir pointing at a scratch directory, or pass " *
+             "--allow-shrink if the smaller table is what you mean." :
+             "cells/ holds $(n_cells) checkpoint(s), so this is NOT the " *
+             "fresh-clone case and --allow-shrink is the wrong tool — the " *
+             "dropped keys name cells that were measured, and it would delete " *
+             "them from their only surviving copy. Check the warnings above " *
+             "for unreadable checkpoints; under concurrent shards this can " *
+             "also be a sibling publishing a cell mid-window, which a re-run " *
+             "resolves."
+    throw(ShrinkRefusal(
+        "refusing to shrink $(path): it currently has " *
+        "$(length(lost)) key(s) that this write would drop " *
+        "(on disk $(length(existing_keys)), writing " *
+        "$(DataFrames.nrow(df)) rows). Keys on " *
+        "[$(join(string.(keycols), ", "))]; first lost:\n$(shown)\n" * remedy))
+end
+
 """
     load_all_checkpoints(root) -> Vector{NamedTuple}
 
@@ -730,11 +1136,21 @@ function load_all_checkpoints(root)
             push!(rows, canonical(JSON.parsefile(ckpt)))
         catch e
             # A checkpoint truncated by a crash mid-write must not take the
-            # whole aggregation down with it — that would make one bad kilobyte
-            # destroy a multi-hour run's authoritative table. Warn and skip; the
-            # cell is then absent from the aggregate and will be recomputed on
-            # the next sweep pass, which is the correct recovery.
-            @warn "unreadable checkpoint; skipping (it will be recomputed)" cell=entry exception=e
+            # READER down with it — that would make one bad kilobyte destroy a
+            # multi-hour run's authoritative table. So warn and skip here.
+            #
+            # What follows is no longer "the cell is absent from the aggregate
+            # and gets recomputed next pass" (td-4blm). That cell WAS measured,
+            # and cells/ is gitignored, so the committed TSV is its only
+            # surviving copy — dropping its row would be the very data loss this
+            # skip was written to avoid, arriving one step later.
+            # `write_table_guarded` therefore refuses to publish the smaller
+            # view, and the run stops. The table survives; what the refusal
+            # costs is the run, not the row. Recovery: delete the bad checkpoint
+            # and re-run that cell, or restore it — NOT --allow-shrink, which
+            # would delete the measurement.
+            @warn "unreadable checkpoint; skipping (the aggregate write will "*
+            "then refuse rather than drop this measured cell)" cell=entry exception=e
         end
     end
     return rows
@@ -751,13 +1167,18 @@ invocation's grid — so a plain write regresses the tracked deliverable to
 whatever subset this process computed, with no merge, no warning, and recovery
 only via `git checkout` (the per-cell checkpoints are gitignored). Unioning
 against the on-disk checkpoints makes a partial run structurally incapable of
-shrinking the table.
+shrinking the table WHENEVER `cells/` IS POPULATED.
+
+That qualifier is the whole of td-4blm, so do not drop it: `cells/` is
+gitignored, so on a fresh clone it is empty, the union degenerates to "whatever
+this invocation computed", and the protection is not there at all. The write
+therefore goes through `write_table_guarded` as well. The union and the guard
+cover different cases and neither is redundant.
 
 In-memory rows win over their on-disk twin so a just-recomputed cell supersedes
 a stale checkpoint within the same run.
 """
 function write_aggregate(root, rows)
-    by_id = Dict{Tuple, Any}()
     # Fail with a sentence rather than a DataFrames column-lookup error. An
     # empty tree means a mistyped --output-dir far more often than it means a
     # genuinely empty run, and the opaque form of this failure sends the reader
@@ -766,17 +1187,115 @@ function write_aggregate(root, rows)
         error("no cells found under $(joinpath(root, "cells")) and no rows in " *
               "memory — nothing to aggregate. Check --output-dir.")
     end
-    key(r) = (r.organism, r.technology, r.k, r.coverage, r.seed)
-    for r in load_all_checkpoints(root)
-        by_id[key(r)] = r
+    key(r) = Tuple(getproperty(r, c) for c in RESULTS_KEYCOLS)
+    build() = begin
+        d = Dict{Tuple, Any}()
+        for r in load_all_checkpoints(root)
+            d[key(r)] = r
+        end
+        for r in rows          # current run supersedes disk
+            d[key(r)] = r
+        end
+        frame = DataFrames.DataFrame(collect(values(d)))
+        sort!(frame, collect(RESULTS_KEYCOLS))
+        return frame
     end
-    for r in rows          # current run supersedes disk
-        by_id[key(r)] = r
+
+    results_path = joinpath(root, "ont_k_sweep_results.tsv")
+    check_results_table_not_missing(root, results_path)
+    return retry_once_on_shrink(build) do frame
+        write_table_guarded(results_path, frame, RESULTS_KEYCOLS)
     end
-    df = DataFrames.DataFrame(collect(values(by_id)))
-    sort!(df, [:organism, :technology, :k, :coverage, :seed])
-    CSV.write(joinpath(root, "ont_k_sweep_results.tsv"), df; delim = '\t', missingstring = "NA")
-    return df
+end
+
+"""
+    retry_once_on_shrink(publish, rebuild) -> frame
+
+`publish(rebuild())`, and on a `ShrinkRefusal` rebuild once and publish again.
+
+Extracted from `write_aggregate` so the behaviour is TESTABLE. In place it was
+not: `rebuild` there is a pure function of the filesystem, so a deterministic
+test gets the same frame twice and removing the retry entirely changes nothing
+observable — mutation confirmed the retry could be deleted with the suite still
+green. As a function taking `rebuild`, a test supplies a closure that returns a
+narrow frame first and a full one second, which is exactly the race this exists
+for, and the claim "a second scan is taken and its result is published" becomes
+something a test can hold.
+
+  * `run_ont_k_sweep_shards.sh` points up to 32 concurrent shards at one
+    `--output-dir`, and the caller runs after EVERY cell. The sequence is read
+    `cells/` -> read the TSV -> compare -> write, with no lock, so a sibling
+    publishing between our scan and the guard's read makes the table hold a key
+    we do not, and the guard refuses a write that shrinks nothing.
+  * This is a PROBABILISTIC MITIGATION, not a proof. `load_all_checkpoints`
+    snapshots the directory with `readdir` at scan start, so a sibling that
+    publishes AFTER the second scan reproduces the refusal with its key
+    perfectly well explained. The retry shortens the window; it does not close
+    it. What makes that acceptable is the failure direction — a surviving
+    refusal aborts rather than writing.
+  * ONE retry, not a loop. An unbounded retry against a shrink it cannot
+    explain is how a real refusal gets ground away. A second failure propagates
+    and the driver's final `--aggregate-only` pass rebuilds the union from
+    `cells/`.
+"""
+function retry_once_on_shrink(publish, rebuild)
+    frame = rebuild()
+    try
+        publish(frame)
+    catch e
+        # Typed, not prose-matched: `occursin("refusing to shrink", e.msg)` was
+        # a coupling to a string defined a hundred lines away that nothing
+        # enforced, and mutation showed a reword on either side silently
+        # changed which refusals were retried.
+        e isa ShrinkRefusal || rethrow()
+        # A silent retry makes a run masking a persistent race look identical
+        # to a clean one, and this is the one place a refusal becomes a write.
+        @warn "aggregate write refused as shrinking; re-reading checkpoints " *
+              "and retrying once (expected under concurrent shards, where a " *
+              "sibling can publish a cell between our scan and our read)" exception=e
+        frame = rebuild()
+        publish(frame)
+    end
+    return frame
+end
+
+
+"""
+    check_results_table_not_missing(root, results_path)
+
+Refuse when the results table is ABSENT while its derived siblings are present.
+
+`write_table_guarded` treats a missing target as "nothing to protect" and skips
+the shrink check — correct on a genuinely fresh tree. But the summary and
+verdict tables are unguarded precisely because the results table is expected to
+refuse first, and that expectation collapses the moment the results table is the
+one that is gone: the run then rewrites both siblings with whatever narrow grid
+it computed, silently.
+
+That state is reachable, and reachable through this harness's OWN advice — the
+unreadable-table refusal used to suggest "move or delete the file", and a
+delete does exactly this. A crash mid-publish could once produce it too, before
+`publish_atomically` switched to a real rename.
+
+The asymmetry is what makes it detectable: a fresh clone has neither the results
+table nor the siblings, so this never fires there. Only a tree where the results
+table alone went missing trips it, which is not a state any legitimate workflow
+produces.
+"""
+function check_results_table_not_missing(root, results_path)
+    isfile(results_path) && return nothing
+    siblings = filter(isfile,
+        [joinpath(root, "ont_k_sweep_summary.tsv"),
+            joinpath(root, "verdict_stats.tsv")])
+    isempty(siblings) && return nothing
+    error("refusing to write $(results_path): it is MISSING while its derived " *
+          "siblings are present ($(join(basename.(siblings), ", "))). Those " *
+          "siblings are unguarded because this table is expected to refuse a " *
+          "shrinking write first — with it absent, this run would rewrite them " *
+          "from whatever grid it computed, silently, and they cannot be rebuilt " *
+          "without cells/. Restore the results table (git checkout) before " *
+          "re-running, or delete the siblings too if starting genuinely fresh " *
+          "is what you mean.")
 end
 
 # The summary table's schema, named once so the empty case can be written with
@@ -817,7 +1336,7 @@ function write_summary(root, df)
     # cells actually contributed, so a thinned stratum is visible.
     df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
-    for g in DataFrames.groupby(df, [:organism, :technology, :k, :coverage])
+    for g in DataFrames.groupby(df, collect(SUMMARY_KEYCOLS))
         measured = g[g.nga50_status .== "measured", :]
         gf = collect(skipmissing(g.genome_fraction))
         push!(summary_rows,
@@ -852,10 +1371,39 @@ function write_summary(root, df)
               "empty_assembly — check the per-cell logs." root
         DataFrames.DataFrame([name => Any[] for name in SUMMARY_KEYS])
     else
-        sort(DataFrames.DataFrame(summary_rows), [:organism, :technology, :k, :coverage])
+        sort(DataFrames.DataFrame(summary_rows), collect(SUMMARY_KEYCOLS))
     end
-    CSV.write(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df;
-        delim = '\t', missingstring = "NA")
+    # NOT guarded by write_table_guarded, deliberately (td-4blm review).
+    #
+    # This table is a pure derivative of the results frame: every row is a
+    # groupby over rows that write_aggregate just published. So it holds no
+    # measurement the guarded results table does not already hold.
+    #
+    # It is NOT, however, freely regenerable, and an earlier version of this
+    # comment wrongly said it was. `write_summary` is only ever fed from
+    # `write_aggregate`'s return value, and `write_aggregate` hard-errors when
+    # cells/ is empty and no rows are in memory — so on a fresh clone, the exact
+    # td-4blm condition, `--aggregate-only` CANNOT rebuild it and recovery is
+    # `git checkout`. What protects it is not regenerability; it is that the
+    # results table refuses first, plus `check_results_table_not_missing` for
+    # the case where the results table itself has gone missing.
+    #
+    # Guarding it also bought nothing, because a narrowed grid is refused at
+    # write_aggregate and the run aborts before reaching here. The only writes
+    # that ever got this far were ones where the results table did NOT shrink —
+    # i.e. cases where this table shrinks for a reason unrelated to scope, such
+    # as cells staying `ok` while their NGA50 stops being measurable. Refusing
+    # those is a false positive, and it would leave the results table rewritten
+    # against a stale summary: an inconsistent directory, produced by the guard
+    # rather than prevented by it.
+    # Unguarded, but still published ATOMICALLY. Un-routing this from the shrink
+    # guard says nothing about crash-truncation: a bare CSV.write opens the
+    # tracked file and truncates it before rewriting, so a crash mid-write
+    # leaves a partial committed table. That is the same loss publish_atomically
+    # exists to prevent, and it applies here whether or not the shrink check does.
+    publish_atomically(joinpath(root, "ont_k_sweep_summary.tsv")) do tmp
+        CSV.write(tmp, summary_df; delim = '\t', missingstring = "NA")
+    end
     return summary_df
 end
 
@@ -880,6 +1428,7 @@ function write_verdict_stats(root, df)
         (statistic = name, value = string(value), note = note))
 
     for org in sort(unique(ok.organism)), tech in sort(unique(ok.technology))
+
         g = ok[(ok.organism .== org) .& (ok.technology .== tech), :]
         DataFrames.nrow(g) == 0 && continue
         push_stat!("$(org)/$(tech)/n_cells", DataFrames.nrow(g), "cells with status=ok")
@@ -888,8 +1437,9 @@ function write_verdict_stats(root, df)
         end
         measured = g[g.nga50_status .== "measured", :]
         nga = collect(skipmissing(measured.NGA50))
-        isempty(nga) || push_stat!("$(org)/$(tech)/max_cell_NGA50", Int(round(maximum(nga))),
-            "single best CELL, not a stratum median")
+        isempty(nga) ||
+            push_stat!("$(org)/$(tech)/max_cell_NGA50", Int(round(maximum(nga))),
+                "single best CELL, not a stratum median")
 
         # NGA50 CV across seeds, per (k, coverage) stratum, only where all
         # three seeds are defined. The denominator is the number of strata that
@@ -932,7 +1482,22 @@ function write_verdict_stats(root, df)
         "cells degenerate BECAUSE of GF_DEGENERATE_MAX rather than censoring")
 
     stats = DataFrames.DataFrame(rows)
-    CSV.write(joinpath(root, "verdict_stats.tsv"), stats; delim = '\t')
+    # NOT guarded, for the same reason as the summary — and more sharply.
+    #
+    # Three of these statistic names are emitted CONDITIONALLY on the values
+    # measured (`max_cell_NGA50` only when some NGA50 exists; the two
+    # `nga50_cv_*` only when a stratum has all seeds defined). So the key set is
+    # a function of the MEASUREMENTS, not of the grid, and an unchanged 240-cell
+    # grid re-measured with NGA50 no longer computable drops three keys. Guarding
+    # that refused a legitimate re-run — after the results and summary tables had
+    # already been rewritten — and told the operator the cause was a partial run,
+    # which it was not. All four strata in the committed table currently carry
+    # all three conditional keys, so the table sits at exactly the shape where
+    # any loss of measurability would have tripped it.
+    # Unguarded, but published atomically — same reasoning as write_summary.
+    publish_atomically(joinpath(root, "verdict_stats.tsv")) do tmp
+        CSV.write(tmp, stats; delim = '\t')
+    end
     return stats
 end
 

@@ -1,8 +1,11 @@
 # ONT k-selection sweep (td-4e19d.28) — artifact policy.
 #
 # COMMITTED (the durable knowledge tier): ont_k_sweep_results.tsv,
-# ont_k_sweep_summary.tsv, README.md. These are small, plain-text, and are the
-# deliverable the pre-registration decision rests on.
+# ont_k_sweep_summary.tsv, verdict_stats.tsv, README.md. These are small,
+# plain-text, and are the deliverable the pre-registration decision rests on.
+# (verdict_stats.tsv was omitted from this list until td-4blm; it has been
+# tracked all along, and this file documents the tracked/untracked split that
+# the shrink guard's whole argument rests on, so the omission mattered.)
 #
 # IGNORED (bulky and deterministically regenerable from the committed script
 # plus its recorded seeds): the downloaded reference, per-cell simulated reads,
@@ -15,3 +18,9 @@
 cells/
 refs/
 shard-logs/
+
+# In-flight temps from publish_atomically. A SIGKILL between the write and the
+# rename leaves `<table>.tsv.tmp.<pid>` behind, untracked, in a TRACKED
+# directory — where `git add -A` would commit it and a reader could mistake it
+# for a backup. It is neither: it is a partial write.
+*.tsv.tmp.*

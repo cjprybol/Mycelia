@@ -45,6 +45,13 @@
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl --identities 95,90,85,80
 #   julia --project=. benchmarking/ont_alignment_threshold_diagnostic.jl --cells Lambda__ont__k31__30x__seed42
+#
+# NOTE both --cells and a shortened --identities ladder NARROW the output table,
+# and --output-dir defaults to the git-tracked results directory. A narrowed run
+# against that directory is refused rather than allowed to overwrite the
+# committed table (td-4blm). Point --output-dir at a scratch directory for an
+# exploratory rescore, or pass --allow-shrink when replacing the committed table
+# with a smaller one is deliberate.
 
 import Pkg
 if isinteractive()
@@ -57,7 +64,12 @@ import DataFrames
 import Dates
 import JSON
 
-include(joinpath(@__DIR__, "ont_k_sweep.jl"))  # parse_quast_metrics, cell_id_for
+# parse_quast_metrics, cell_id_for, arg_value, ORGANISMS, write_table_guarded.
+# Also ALLOW_SHRINK — which ont_k_sweep.jl computes from ARGS at include time,
+# i.e. from THIS script's ARGS. That is what makes --allow-shrink work here, and
+# it is invisible at the call site, so do not assume this include is only
+# pulling in pure helpers.
+include(joinpath(@__DIR__, "ont_k_sweep.jl"))
 
 const SWEEP_DIR = something(arg_value("--sweep-dir"),
     joinpath(@__DIR__, "results", "ont_k_sweep"))
@@ -206,6 +218,87 @@ end
 # these may be read as evidence about the assembly.
 const INTERPRETABLE_RESCORE_STATUSES = ("ok", "nonzero_with_report")
 
+# What identifies a row in the committed diagnostic table: one row per
+# (cell, identity threshold).
+const THRESHOLD_KEYCOLS = (:cell_id, :min_identity)
+const THRESHOLD_TABLE_NAME = "alignment_threshold_diagnostic.tsv"
+
+"""
+    preflight_threshold_table(out_dir, selected, identities)
+
+Refuse an unpublishable run BEFORE spending any QUAST time on it.
+
+The output key set is exactly `selected x identities`, and both are known before
+the rescoring loop starts — so whether the result could be published is knowable
+in advance. Without this check the refusal lands at the END: a full default run
+over the committed cell set is 152 QUAST invocations, all of which complete,
+after which the rows are discarded in memory and nothing is written. This script
+has no per-cell checkpoints, so that compute is simply lost.
+
+The cheap check up front costs one table read.
+"""
+function preflight_threshold_table(out_dir, selected, identities)
+    path = joinpath(out_dir, THRESHOLD_TABLE_NAME)
+    isempty(selected) && return nothing
+    prospective = DataFrames.DataFrame(
+        cell_id = [c["cell_id"] for c in selected for _ in identities],
+        min_identity = [i for _ in selected for i in identities])
+
+    # Mirror write_table_guarded's ORDER and its CONDITIONS, or the pre-flight
+    # passes runs the real write will refuse — which is the whole failure it
+    # exists to prevent.
+    #
+    # Key validity is unconditional there, so it is unconditional here: a
+    # duplicated threshold (`--identities 95,95`) yields duplicate
+    # (cell_id, min_identity) pairs, and check_no_keys_lost alone dedupes them
+    # through a Set and passes. Neither --allow-shrink nor a fresh output dir
+    # makes a duplicated key legitimate.
+    check_keycols_are_a_key(path, prospective, THRESHOLD_KEYCOLS)
+
+    # The shrink check, by contrast, only applies when there is something to
+    # shrink and the operator has not opted out — same gating as the real write.
+    (ALLOW_SHRINK || !isfile(path)) && return nothing
+    check_no_keys_lost(path, prospective, THRESHOLD_KEYCOLS)
+    return nothing
+end
+
+"""
+    write_threshold_table(out_dir, rows) -> Union{Nothing, DataFrame}
+
+Write `alignment_threshold_diagnostic.tsv`, refusing to drop rows the committed
+table already has (td-4blm).
+
+This script had the sweep's truncation defect in a worse form: no union at all,
+writing only the rows the current invocation computed, into a default
+`--output-dir` that IS the git-tracked results directory. Both narrowing flags
+reach it — `--cells <one-id>` (this script's own documented usage line) emits 4
+rows over the committed 152, and a shorter `--identities` ladder scales the
+table down by the same ratio. Rescoring is expensive enough that narrowing is
+the normal way to run it, so the truncating shape was the common one.
+
+`write_table_guarded` supplies the refusal; the union is deliberately NOT
+reproduced here, because this script's per-cell artifacts are full QUAST output
+trees rather than small checkpoints, and they are gitignored for the same reason
+the sweep's are. Refusing is therefore the whole protection, not a backstop to
+one.
+
+`preflight_threshold_table` should already have refused an unpublishable run
+before any QUAST work happened; this is the backstop for the case where the
+selected set shrank mid-loop (a cell skipped for missing contigs, say).
+
+Returns `nothing` without writing when `rows` is empty — an empty run is
+already non-truncating, and emitting a headerless file over a populated table
+would be its own data loss.
+"""
+function write_threshold_table(out_dir, rows)
+    isempty(rows) && return nothing
+    df = DataFrames.DataFrame(rows)
+    sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
+    write_table_guarded(joinpath(out_dir, THRESHOLD_TABLE_NAME), df,
+        THRESHOLD_KEYCOLS)
+    return df
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     println("=== ONT alignment-threshold diagnostic (td-4e19d.28) ===")
     println("Start: $(Dates.now())")
@@ -238,18 +331,55 @@ if abspath(PROGRAM_FILE) == @__FILE__
     isempty(selected) &&
         println("  (nothing to do — no censored cells in this sweep tree)")
 
-    rows = NamedTuple[]
-    for cell in selected
-        contigs = joinpath(cell["cell_dir"], "contigs.fasta")
-        if !isfile(contigs)
+    # Drop the unrescorable cells BEFORE the pre-flight, not inside the loop.
+    #
+    # Both predicates are statically computable here, so filtering first makes
+    # the pre-flight's prospective key set EXACT. Left inside the loop they made
+    # it a strict superset: the pre-flight passed on the full selection, the
+    # loop then skipped some cells, and the real write refused anyway — after
+    # every QUAST invocation had run, which is precisely the burn-then-refuse
+    # the pre-flight exists to prevent. Both skips are reachable on an ordinary
+    # tree: refs/ and the per-cell contig FASTAs are BOTH gitignored, and the
+    # contigs are the bulky ones an operator deletes to reclaim space (the
+    # .gitignore advertises ~149k contigs for ONT/30x/k=11) while keeping the
+    # small JSON checkpoints that put the cell in `selected` in the first place.
+    rescorable = filter(selected) do cell
+        if !isfile(joinpath(cell["cell_dir"], "contigs.fasta"))
             @warn "contigs missing; skipping" cell = cell["cell_id"]
-            continue
+            return false
         end
+        if !haskey(references, cell["organism"])
+            @warn "no reference for organism; skipping cell" organism=cell["organism"] cell=cell["cell_id"]
+            return false
+        end
+        return true
+    end
+    length(rescorable) == length(selected) ||
+        println("  rescorable after dropping unusable cells: $(length(rescorable))")
+
+    # Cells were selected and EVERY one was unusable. That is a failure shape,
+    # not a no-op: the sweep tree has censored cells worth rescoring and this
+    # host cannot rescore any of them (contigs pruned, refs/ absent — both
+    # gitignored). Without this the script printed only "End: <timestamp>" and
+    # exited 0, which a shell driver reads as success. Note the asymmetry it
+    # corrects: the isempty(selected) case above already explains itself.
+    if isempty(rescorable) && !isempty(selected)
+        println("  (every selected cell was unusable on this host — nothing " *
+                "was rescored and nothing was written)")
+        @warn "all $(length(selected)) selected cells were skipped; the sweep " *
+              "tree has censored cells but no usable contigs/references here. " *
+              "Re-run the sweep to regenerate them before rescoring." sweep_dir=SWEEP_DIR
+        exit(1)
+    end
+
+    # Refuse an unpublishable run now, not after every QUAST invocation has
+    # completed and the rows are about to be discarded.
+    preflight_threshold_table(OUT_DIR, rescorable, IDENTITIES)
+
+    rows = NamedTuple[]
+    for cell in rescorable
+        contigs = joinpath(cell["cell_dir"], "contigs.fasta")
         organism = cell["organism"]
-        if !haskey(references, organism)
-            @warn "no reference for organism; skipping cell" organism cell=cell["cell_id"]
-            continue
-        end
         for min_identity in IDENTITIES
             outdir = joinpath(OUT_DIR, cell["cell_id"], "idy$(min_identity)")
             result = rescore(contigs, references[organism], outdir, min_identity)
@@ -278,12 +408,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
     end
 
-    if !isempty(rows)
-        df = DataFrames.DataFrame(rows)
-        sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
-        CSV.write(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"), df;
-            delim = '\t', missingstring = "NA")
-        println("\nWrote $(joinpath(OUT_DIR, "alignment_threshold_diagnostic.tsv"))")
+    df = write_threshold_table(OUT_DIR, rows)
+    if df !== nothing
+        println("\nWrote $(joinpath(OUT_DIR, THRESHOLD_TABLE_NAME))")
 
         # State the interpretable/uninterpretable split at the point of use. An
         # uninterpretable row is all-missing and therefore reads, to the naked

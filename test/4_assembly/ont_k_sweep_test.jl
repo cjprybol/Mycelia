@@ -28,6 +28,24 @@ include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_k_sweep.jl"))
 const LAMBDA = genome_size_for("Lambda")
 const T4 = genome_size_for("T4")
 
+# Read a table back the way the harness wrote it, so an assertion about row
+# count is an assertion about the FILE rather than about the DataFrame the
+# writer happened to return.
+read_tsv(path) = CSV.read(path, DataFrames.DataFrame;
+    delim = '\t', missingstring = "NA")
+
+# A value whose serialisation throws, so a write can be made to fail AFTER the
+# output file has been opened rather than before. Measured: CSV.write opens and
+# truncates the target, then throws before flushing, leaving ZERO bytes — not
+# partial content. Either way the distinction holds and is the point: an
+# in-place write has already destroyed the target by the time this fires, while
+# an atomic one has only destroyed a temp. (The measured zero-byte outcome also
+# corroborates the ZERO BYTES branch's premise about what a killed write
+# leaves behind.)
+struct ExplodingCell end
+Base.show(::IO, ::ExplodingCell) = error("simulated serialisation failure")
+Base.print(::IO, ::ExplodingCell) = error("simulated serialisation failure")
+
 Test.@testset "ONT k-sweep helpers" begin
     Test.@testset "contig_stats is independent of QUAST" begin
         # The low-k regime: many contigs, none long enough for QUAST to score.
@@ -204,11 +222,915 @@ Test.@testset "ONT k-sweep helpers" begin
 
             # An unreadable checkpoint must not take the whole aggregation down
             # — one truncated kilobyte would otherwise destroy a long run's
-            # authoritative table.
+            # authoritative table. The READER skips it and keeps going...
             write(
                 joinpath(cells, "Lambda__ont__k15__30x__seed42",
                     "cell_result.json"), "{ truncated")
-            Test.@test DataFrames.nrow(write_aggregate(dir, NamedTuple[])) == 2
+            Test.@test length(load_all_checkpoints(dir)) == 2
+
+            # ...and the WRITER refuses to publish the resulting 2-row view over
+            # the 3-row table already on disk (td-4blm). Seed 42 was genuinely
+            # measured; losing its checkpoint is not grounds to delete its row,
+            # and cells/ is gitignored so the TSV is the only surviving copy.
+            # The table is left intact, which is the property the comment above
+            # is actually about — what the refusal costs is that the run stops.
+            err = try
+                write_aggregate(dir, NamedTuple[])
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ShrinkRefusal
+            Test.@test occursin("refusing to shrink", err.msg)
+            Test.@test occursin("Lambda / ont / 15 / 30 / 42", err.msg)
+            Test.@test DataFrames.nrow(read_tsv(
+                joinpath(dir, "ont_k_sweep_results.tsv"))) == 3
+        end
+    end
+
+    Test.@testset "a fresh-clone invocation cannot shrink the committed table" begin
+        # THE td-4blm bug. `write_aggregate`'s union is not sufficient on its
+        # own: it unions against OUTPUT_DIR/cells/, which this harness's
+        # .gitignore deliberately excludes, while the aggregate TSV is tracked.
+        # So on a FRESH CLONE — table present, cells/ absent — the union
+        # degenerates to "whatever this invocation computed" and the default
+        # 96-cell grid would overwrite the committed 240-row deliverable,
+        # silently,
+        # recoverable only via git checkout.
+        #
+        # Every case below is the fresh-clone shape: a populated table and NO
+        # cells/ directory at all.
+        row(org,
+            tech,
+            k,
+            cov,
+            seed;
+            wall = 1.0) = cell_row(
+            org, "ACC", tech, k, cov, seed;
+            n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+            metrics = merge(empty_metrics(),
+                (; NGA50 = 4000.0, genome_fraction = 99.0, quast_contigs = 1.0)),
+            nga50_status = "measured", outcome = "partial",
+            wall_seconds = wall, status = "ok")
+        full = [row("Lambda", "ont", 15, 30, s) for s in (42, 123, 456)]
+        append!(full, [row("T4", "ont", 15, 30, s) for s in (42, 123, 456)])
+        results_name = "ont_k_sweep_results.tsv"
+
+        # Seed the fixture with a PLAIN CSV.write, deliberately not through the
+        # guard. The guard is the thing under test, and a fixture that depends
+        # on it cannot run against the pre-change code at all — it fails to
+        # resolve the symbol, which proves nothing about what the old code DID.
+        # Seeding this way keeps "a partial grid over a full table is refused"
+        # a real positive control: against the pre-change write_aggregate it
+        # fails because the table is silently shrunk, not because it won't load.
+        seed_table(dir) = CSV.write(joinpath(dir, results_name),
+            DataFrames.DataFrame(full); delim = '\t', missingstring = "NA")
+
+        Test.@testset "a partial grid over a full table is refused" begin
+            mktempdir() do dir
+                seed_table(dir)
+                Test.@test !isdir(joinpath(dir, "cells"))   # fresh-clone shape
+
+                # The default grid's shape: Lambda only, T4 absent — PLUS one
+                # new T4 seed, so 4 rows are written while 3 keys are lost.
+                #
+                # The asymmetry is load-bearing. Writing plain `lambda_only`
+                # makes lost == 3 and nrow == 3, and an oracle asserting
+                # "has 3 key(s)" then cannot tell the two apart: swapping the
+                # message to interpolate nrow(df) leaves it green. That is
+                # precisely the confusion the message exists to avoid, so the
+                # test must be able to see it.
+                partial = vcat(filter(r -> r.organism == "Lambda", full),
+                    [row("T4", "ont", 15, 30, 789)])
+                err = try
+                    write_aggregate(dir, partial)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ShrinkRefusal
+                Test.@test occursin("refusing to shrink", err.msg)
+                # The count of DROPPED keys...
+                Test.@test occursin("has 3 key(s)", err.msg)
+                # ...and separately the count WRITTEN, which differs from it.
+                Test.@test occursin("writing 4 rows", err.msg)
+                Test.@test occursin("on disk 6", err.msg)
+                Test.@test occursin("--allow-shrink", err.msg)
+                # And the deliverable is untouched.
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 6
+            end
+        end
+
+        Test.@testset "--allow-shrink is a real escape hatch" begin
+            mktempdir() do dir
+                seed_table(dir)
+                lambda_only = DataFrames.DataFrame(
+                    filter(r -> r.organism == "Lambda", full))
+                write_table_guarded(joinpath(dir, results_name), lambda_only,
+                    RESULTS_KEYCOLS; allow_shrink = true)
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 3
+            end
+        end
+
+        Test.@testset "same keys with changed values is not a shrink" begin
+            mktempdir() do dir
+                seed_table(dir)
+                touched = DataFrames.DataFrame(
+                    [merge(r, (; wall_seconds = 999.0)) for r in full])
+                write_table_guarded(joinpath(dir, results_name), touched,
+                    RESULTS_KEYCOLS)
+                back = read_tsv(joinpath(dir, results_name))
+                Test.@test DataFrames.nrow(back) == 6
+                Test.@test all(back.wall_seconds .== 999.0)
+            end
+        end
+
+        Test.@testset "a superset write is not a shrink" begin
+            mktempdir() do dir
+                seed_table(dir)
+                grown = DataFrames.DataFrame(
+                    vcat(full, [row("T4", "ont", 15, 30, 789)]))
+                write_table_guarded(joinpath(dir, results_name), grown,
+                    RESULTS_KEYCOLS)
+                Test.@test DataFrames.nrow(
+                    read_tsv(joinpath(dir, results_name))) == 7
+            end
+        end
+
+        Test.@testset "the guard does not fire on the case the union handles" begin
+            # Regression fence around the EXISTING protection: with cells/
+            # populated, a one-row invocation still emits the full table, and
+            # the guard must stay silent. A guard that fired here would have
+            # broken every ordinary resume.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                seed_table(dir)
+                Test.@test DataFrames.nrow(write_aggregate(dir, [full[1]])) == 6
+            end
+        end
+
+        Test.@testset "an unprovable write is refused, not waved through" begin
+            # A write that cannot be SHOWN to be non-shrinking is refused.
+            # Failing OPEN here would let the guard be defeated by exactly the
+            # corruption it should catch. Three causes, three messages — and
+            # they are asserted separately, because an earlier version of this
+            # testset built one fixture and asserted two phrases against the
+            # single error it produced, which is one assertion wearing two.
+            guarded_error(f) =
+                try
+                    f()
+                    nothing
+                catch e
+                    e
+                end
+
+            Test.@testset "on-disk table lacks a key column (schema change)" begin
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target,
+                        DataFrames.DataFrame(organism = ["Lambda"], k = [15]);
+                        delim = '\t')
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("missing key column", err.msg)
+                    Test.@test occursin("schema change", err.msg)
+                    # WHICH table is the entire remedy content, and both
+                    # "missing key column" and "schema change" also appear in
+                    # check_keycols_are_a_key's error — so without this the
+                    # message could name the wrong table and still pass.
+                    Test.@test occursin("the table on disk at", err.msg)
+                    # Distinct from the corruption message, not a synonym.
+                    Test.@test !occursin("could not be read", err.msg)
+                    # Overridable, like every other refusal here.
+                    write_table_guarded(target, DataFrames.DataFrame(full),
+                        RESULTS_KEYCOLS; allow_shrink = true)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 6
+                end
+            end
+
+            Test.@testset "the frame being WRITTEN lacks a key column" begin
+                # The symmetric case, which used to escape as a bare
+                # ArgumentError with no path and no remedy.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    seed_table(dir)
+                    err = guarded_error(() -> write_table_guarded(
+                        target,
+                        DataFrames.DataFrame(organism = ["Lambda"], k = [15]),
+                        RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("the table being written", err.msg)
+                    # The path, which is what the bare ArgumentError lacked and
+                    # the whole reason this branch wraps it. Mutating the message
+                    # prefix away used to leave the suite green.
+                    Test.@test occursin(target, err.msg)
+                    # This check runs on the in-memory frame, so NEITHER escape
+                    # can change the outcome. Asserting only that "--allow-shrink"
+                    # appears would pass on a message recommending it, which is
+                    # the bug that was here: the message must say it does not help.
+                    Test.@test occursin("Neither --allow-shrink", err.msg)
+                    Test.@test occursin("Reconcile the key columns", err.msg)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 6
+                end
+            end
+
+            Test.@testset "a zero-byte table is corruption, not a schema change" begin
+                # The discrimination used to come out backwards for the canonical
+                # crash artifact: CSV.read returns a 0x0 frame for an empty file
+                # (measured), so table_row_keys threw ArgumentError and the
+                # message said "that is a schema change rather than corruption".
+                # A zero-byte file is exactly what a crash, a full disk, or a
+                # killed write leaves behind.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    write(target, "")
+                    Test.@test filesize(target) == 0
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("ZERO BYTES", err.msg)
+                    Test.@test !occursin("schema change", err.msg)
+                    # Still overridable.
+                    write_table_guarded(target, DataFrames.DataFrame(full),
+                        RESULTS_KEYCOLS; allow_shrink = true)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 6
+                end
+            end
+
+            Test.@testset "a file carrying no key columns is corruption" begin
+                # The zero-byte branch catches only filesize == 0. A truncated
+                # fragment parses into a 1-column frame and used to land in the
+                # SCHEMA-CHANGE branch, whose first offered remedy is
+                # --allow-shrink — which on a fresh clone destroys the committed
+                # deliverable. Losing SOME key columns is a real schema change
+                # and must still route there; losing ALL of them means this is
+                # not a version of the table at all.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    write(target, "abc")
+                    Test.@test filesize(target) > 0
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("NONE of the key columns", err.msg)
+                    Test.@test occursin("corruption", err.msg)
+                    Test.@test occursin("git checkout", err.msg)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 0
+                end
+
+                # Contrast: SOME key columns present is a schema change, and
+                # must NOT be reclassified as corruption by the new branch.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target,
+                        DataFrames.DataFrame(organism = ["Lambda"], k = [15]);
+                        delim = '\t')
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("schema change", err.msg)
+                    Test.@test !occursin("NONE of the key columns", err.msg)
+                end
+            end
+
+            Test.@testset "an on-disk table that is genuinely unreadable" begin
+                # MEASURED, not assumed: CSV.jl throws ArgumentError on this
+                # input ("Symbol name may not contain \\0"). That used to route
+                # it to the SCHEMA-CHANGE branch, whose remedy is "regenerate
+                # from scratch in a fresh --output-dir" with no mention of git
+                # checkout — the same operator misdirection the zero-byte branch
+                # was added to fix, one branch over.
+                #
+                # The earlier assertion here was only `occursin("refusing to
+                # overwrite")`, which BOTH branches satisfy, so it could not see
+                # the misclassification. Discriminate explicitly.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    write(target, UInt8[0x00, 0xff, 0xfe, 0x00, 0x01, 0x02])
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("could not be read", err.msg)
+                    Test.@test occursin("git checkout", err.msg)
+                    # Corruption, NOT a schema change.
+                    Test.@test !occursin("schema change", err.msg)
+                    # The underlying parse error is carried through, which is
+                    # the only thing naming the real cause.
+                    Test.@test occursin("Symbol name", err.msg)
+                    # Assert on the BYTES, not a re-read: the file is
+                    # unparseable by construction, so read_tsv would throw the
+                    # very error under test rather than assert anything.
+                    Test.@test read(target) ==
+                               UInt8[0x00, 0xff, 0xfe, 0x00, 0x01, 0x02]
+                end
+            end
+        end
+
+        Test.@testset "a Float64 key round-trips rather than reading as lost" begin
+            # 80.5 is the value in the real identity ladder most likely to
+            # expose a normalisation bug, so an identical rewrite of a table
+            # keyed on it must not read as a loss.
+            #
+            # Scope note, because an earlier version of this comment overstated
+            # it: this does NOT discriminate string keys from typed-tuple keys.
+            # Julia's Set compares by isequal/hash, which is value-based, and a
+            # typed setdiff across this same round trip was measured empty too.
+            # The test pins the round trip; it is not evidence for the
+            # representation choice. See table_row_keys' docstring for the real
+            # argument.
+            mktempdir() do dir
+                target = joinpath(dir, "threshold.tsv")
+                df = DataFrames.DataFrame(
+                    cell_id = ["a", "a", "b", "b"],
+                    min_identity = [95.0, 80.5, 95.0, 80.5],
+                    value = [1, 2, 3, 4])
+                CSV.write(target, df; delim = '\t', missingstring = "NA")
+                write_table_guarded(target, df, (:cell_id, :min_identity))
+                Test.@test DataFrames.nrow(read_tsv(target)) == 4
+            end
+        end
+
+        Test.@testset "the partial cases, where set bugs actually live" begin
+            # For an invariant over a SET, "all present" and "none present" are
+            # the easy paths. The bugs live in SOME present, and in particular
+            # in shapes where the ROW COUNT does not fall — a guard comparing
+            # sizes rather than membership passes all of these.
+            Test.@testset "simultaneous add and drop at equal row count" begin
+                mktempdir() do dir
+                    seed_table(dir)
+                    swapped = vcat(
+                        filter(r -> r.organism == "Lambda", full),
+                        [row("T4", "ont", 15, 30, s) for s in (777, 888, 999)])
+                    Test.@test length(swapped) == length(full)   # 6 vs 6
+                    err = try
+                        write_table_guarded(joinpath(dir, results_name),
+                            DataFrames.DataFrame(swapped), RESULTS_KEYCOLS)
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err isa ShrinkRefusal
+                    Test.@test occursin("has 3 key(s)", err.msg)
+                    Test.@test occursin("writing 6 rows", err.msg)
+                end
+            end
+
+            Test.@testset "a wholly disjoint key set is refused" begin
+                mktempdir() do dir
+                    seed_table(dir)
+                    disjoint = DataFrames.DataFrame(
+                        [row("T4", "illumina", 31, 100, s) for s in (1, 2, 3)])
+                    err = try
+                        write_table_guarded(joinpath(dir, results_name),
+                            disjoint, RESULTS_KEYCOLS)
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err isa ShrinkRefusal
+                    Test.@test occursin("has 6 key(s)", err.msg)
+                end
+            end
+
+            Test.@testset "a 0-row frame over a populated table is refused" begin
+                # The absent case on the WRITE side — an empty set is a subset
+                # of everything, so a containment check written the wrong way
+                # round waves this through.
+                mktempdir() do dir
+                    seed_table(dir)
+                    empty_df = DataFrames.DataFrame(full)[1:0, :]
+                    err = try
+                        write_table_guarded(joinpath(dir, results_name),
+                            empty_df, RESULTS_KEYCOLS)
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err isa ShrinkRefusal
+                    Test.@test occursin("writing 0 rows", err.msg)
+                    Test.@test DataFrames.nrow(
+                        read_tsv(joinpath(dir, results_name))) == 6
+                end
+            end
+
+            Test.@testset "a header-only table on disk blocks nothing" begin
+                # The absent case on the DISK side. Nothing is lost by writing
+                # over an empty table, so this must NOT refuse — a guard that
+                # fired here would block every first real write.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target, DataFrames.DataFrame(full)[1:0, :];
+                        delim = '\t', missingstring = "NA")
+                    write_table_guarded(target, DataFrames.DataFrame(full),
+                        RESULTS_KEYCOLS)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 6
+                end
+            end
+        end
+
+        Test.@testset "the shrink retry rescues the race, not a real shrink" begin
+            # write_aggregate retries ONCE on a shrink refusal, re-reading
+            # checkpoints first, because 32 concurrent shards share one
+            # --output-dir and a sibling can publish a cell between our scan and
+            # our guard's read of the table.
+            #
+            # A retry around a data-integrity guard is the classic shape for
+            # swallowing real failures, so both halves are pinned here. What
+            # makes it safe is that it cannot invent keys — it can only surface
+            # checkpoints genuinely on disk.
+            #
+            # An earlier version of this comment claimed the retry's success
+            # path was unreachable from a single-threaded test, and wrote off a
+            # surviving mutant (broadening the catch to any ErrorException) as
+            # EQUIVALENT on that basis. Both claims were wrong, and the error
+            # was the seam rather than the reasoning: while the retry lived
+            # inline in write_aggregate its rebuild was a pure function of the
+            # filesystem, so a deterministic test really did get the same frame
+            # twice. Extracting retry_once_on_shrink so `rebuild` is a parameter
+            # makes every one of those properties testable, and all the mutants
+            # now die — including the one written off.
+            #
+            # The lesson worth keeping: "not distinguishable by a deterministic
+            # test" is usually a statement about where the seam is, not about
+            # the behaviour. Move the seam before accepting the gap.
+
+            Test.@testset "a second scan is taken and its result published" begin
+                # The positive path, made testable by extracting
+                # retry_once_on_shrink out of write_aggregate. In place it was
+                # not: `rebuild` there is a pure function of the filesystem, so
+                # a deterministic test got the same frame twice and deleting
+                # the retry outright left the suite green — mutation confirmed
+                # it. With `rebuild` as a parameter, a closure can return the
+                # narrow frame first and the full one second, which is exactly
+                # the race the retry exists for.
+                calls = 0
+                narrow = DataFrames.DataFrame(full)[1:3, :]
+                wide = DataFrames.DataFrame(full)
+                rebuild = () -> (calls += 1; calls == 1 ? narrow : wide)
+                published = DataFrames.DataFrame[]
+                result = retry_once_on_shrink(rebuild) do frame
+                    push!(published, frame)
+                    # Refuse the first (narrow) publish the way the guard would.
+                    length(published) == 1 &&
+                        throw(ShrinkRefusal("refusing to shrink /x: ..."))
+                    return frame
+                end
+                Test.@test calls == 2                      # a SECOND scan happened
+                Test.@test length(published) == 2
+                Test.@test DataFrames.nrow(published[1]) == 3
+                Test.@test DataFrames.nrow(published[2]) == 6   # the wider one landed
+                Test.@test DataFrames.nrow(result) == 6    # and is what we return
+
+                # Exactly ONE retry: a second refusal propagates rather than
+                # looping. An unbounded retry against a shrink it cannot
+                # explain is how a real refusal gets ground away.
+                calls2 = 0
+                err = try
+                    retry_once_on_shrink(() -> (calls2 += 1; narrow)) do _
+                        throw(ShrinkRefusal("refusing to shrink /x: ..."))
+                    end
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ShrinkRefusal
+                Test.@test calls2 == 2
+
+                # A non-shrink error is never retried.
+                calls3 = 0
+                err2 = try
+                    retry_once_on_shrink(() -> (calls3 += 1; narrow)) do _
+                        error("refusing to overwrite /x: ZERO BYTES ...")
+                    end
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err2 isa ErrorException
+                Test.@test !(err2 isa ShrinkRefusal)
+                Test.@test calls3 == 1
+            end
+
+            Test.@testset "a genuine shrink still refuses after the retry" begin
+                # Fresh-clone shape: committed table, NO cells/. The second scan
+                # finds nothing, so the second refusal propagates. If the retry
+                # ever swallowed this, td-4blm would be reintroduced whole.
+                mktempdir() do dir
+                    seed_table(dir)
+                    Test.@test !isdir(joinpath(dir, "cells"))
+                    err = try
+                        write_aggregate(dir,
+                            filter(r -> r.organism == "Lambda", full))
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err isa ShrinkRefusal
+                    Test.@test occursin("refusing to shrink", err.msg)
+                    Test.@test DataFrames.nrow(
+                        read_tsv(joinpath(dir, results_name))) == 6
+                end
+            end
+
+            Test.@testset "only the shrink refusal is retried" begin
+                # Every other refusal must propagate on the first throw. A
+                # broader catch would retry a corrupt or zero-byte table, which
+                # the second attempt cannot fix either — it would just double
+                # the work before failing.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    write(target, "")            # zero bytes
+                    cells = joinpath(dir, "cells")
+                    mkpath(cells)
+                    for r in full
+                        id = cell_id_for(r.organism, r.technology, r.k,
+                            r.coverage, r.seed)
+                        mkpath(joinpath(cells, id))
+                        save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                    end
+                    err = try
+                        write_aggregate(dir, NamedTuple[])
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("ZERO BYTES", err.msg)
+                    Test.@test !occursin("refusing to shrink", err.msg)
+                end
+            end
+        end
+
+        Test.@testset "a missing results table with siblings present is refused" begin
+            # The hole created by unguarding the derived tables. They are
+            # unguarded because the results table refuses first — which stops
+            # being true the moment the results table is the one that is gone.
+            # Reachable through this harness's own former advice ("move or
+            # delete the file"), and the siblings CANNOT be rebuilt without
+            # cells/, so the loss is permanent short of git checkout.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                # Siblings present, results table absent.
+                CSV.write(joinpath(dir, "ont_k_sweep_summary.tsv"),
+                    DataFrames.DataFrame(organism = ["Lambda"],
+                        technology = ["ont"], k = [15], coverage = [30]);
+                    delim = '\t')
+                Test.@test !isfile(joinpath(dir, results_name))
+
+                err = try
+                    write_aggregate(dir, NamedTuple[])
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("MISSING while its derived siblings", err.msg)
+                Test.@test occursin("ont_k_sweep_summary.tsv", err.msg)
+                # The sibling is untouched.
+                Test.@test isfile(joinpath(dir, "ont_k_sweep_summary.tsv"))
+            end
+
+            # A genuinely fresh tree has neither, so this must NOT fire there —
+            # otherwise it would block every first run.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                Test.@test DataFrames.nrow(
+                    write_aggregate(dir, NamedTuple[])) == 6
+            end
+        end
+
+        Test.@testset "the key separator cannot be forged from key values" begin
+            # Pins the choice of _KEY_SEP, which was otherwise unpinned prose:
+            # no key column contains an ordinary punctuation character today,
+            # so swapping the separator for one changed nothing observable.
+            #
+            # A collision fixture only catches the separator it was built
+            # against — an earlier version of this testset used ("a b","c") vs
+            # ("a","b c"), which collides under a space and NOT under "/", so a
+            # mutation to "/" survived it. So carry one colliding pair per
+            # plausible separator: for candidate c, ("x"*c*"y", "z") and
+            # ("x", "y"*c*"z") fold to the same string when c is the separator.
+            #
+            # Why a collision is fatal: two distinct keys become one, the
+            # on-disk key set shrinks to match, and a genuinely shrinking write
+            # then reads as non-shrinking — the guard fails OPEN.
+            candidates = (' ', '/', '-', '_', ',', '|', ':')
+            rows = NamedTuple[]
+            for c in candidates
+                push!(rows, (left = "x$(c)y", right = "z", v = 1))
+                push!(rows, (left = "x", right = "y$(c)z", v = 2))
+            end
+            df = DataFrames.DataFrame(rows)
+            n = DataFrames.nrow(df)
+
+            # Every row must stay distinct. Under any candidate separator the
+            # matching pair collapses, so this drops below n.
+            Test.@test length(table_row_keys(df, (:left, :right))) == n
+
+            mktempdir() do dir
+                target = joinpath(dir, "sep.tsv")
+                # And the write must SUCCEED: check_keycols_are_a_key turns a
+                # separator collision into a loud "is not a key for this table"
+                # refusal, so a bad separator cannot pass quietly here either.
+                write_table_guarded(target, df, (:left, :right))
+                Test.@test DataFrames.nrow(read_tsv(target)) == n
+
+                # Dropping one row must still be refused.
+                err = try
+                    write_table_guarded(target, df[1:(n - 1), :],
+                        (:left, :right))
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ShrinkRefusal
+                Test.@test occursin("refusing to shrink", err.msg)
+                Test.@test DataFrames.nrow(read_tsv(target)) == n
+            end
+        end
+
+        Test.@testset "declared key columns must actually be a key" begin
+            # A Set discards multiplicity, so without this check a write that
+            # collapses distinct rows into duplicates has an unchanged key set
+            # and sails through while silently dropping rows.
+            mktempdir() do dir
+                target = joinpath(dir, "dup.tsv")
+                dup = DataFrames.DataFrame(
+                    organism = ["Lambda", "Lambda"], k = [15, 15], v = [1, 2])
+                err = try
+                    write_table_guarded(target, dup, (:organism, :k))
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("is not a key for this table", err.msg)
+                Test.@test occursin("2 rows collapse to 1", err.msg)
+            end
+
+            # The check is UNCONDITIONAL with respect to --allow-shrink, and the
+            # docstring argues that at length: --allow-shrink is permission to
+            # publish a smaller table, not one whose key is a fiction. Nothing
+            # pinned it — gating the call on allow_shrink left the suite green,
+            # so the argument lived only in prose.
+            mktempdir() do dir
+                target = joinpath(dir, "dup.tsv")
+                dup = DataFrames.DataFrame(
+                    organism = ["Lambda", "Lambda"], k = [15, 15], v = [1, 2])
+                err = try
+                    write_table_guarded(target, dup, (:organism, :k);
+                        allow_shrink = true)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("is not a key for this table", err.msg)
+                Test.@test !isfile(target)
+            end
+        end
+
+        Test.@testset "the published write is atomic" begin
+            # The guard proves a write non-shrinking and then replaces the
+            # committed file. Truncating in place would mean a crash mid-write
+            # produced exactly the loss the guard exists to prevent, so the
+            # write lands via a temp file and an atomic rename.
+            good = DataFrames.DataFrame(organism = ["Lambda", "T4"],
+                k = [15, 21], v = [1, 2])
+
+            Test.@testset "a failure inside write! leaves the original intact" begin
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    err = try
+                        publish_atomically(target) do tmp
+                            write(tmp, "partial")
+                            error("simulated crash mid-write")
+                        end
+                        nothing
+                    catch e
+                        e
+                    end
+                    # Message-validating, per the repo's Dispatch Quality Gates
+                    # ("all @test_throws must validate message content").
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("simulated crash mid-write", err.msg)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 2
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
+                end
+            end
+
+            Test.@testset "the publish step never deletes before it replaces" begin
+                # THIS is the assertion that discriminates the implementation.
+                # The version above passes under `mv(tmp, path; force = true)`
+                # too, because the failure happens before the publish step is
+                # reached — so it could not tell the two apart.
+                #
+                # Julia's `mv` does rm(dst) THEN rename, so a failure in the
+                # publish step itself leaves the committed table DELETED.
+                # Measured: with an unrenameable source, mv leaves
+                # isfile(dst) == false. Base.Filesystem.rename leaves it
+                # byte-for-byte intact. Simulate a publish-step failure by
+                # removing the temp out from under it, which is what a crash
+                # between write and rename looks like from the target's side.
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    before = read(target, String)
+                    threw = false
+                    try
+                        publish_atomically(target) do tmp
+                            write(tmp, "x")
+                            rm(tmp; force = true)   # publish step now must fail
+                        end
+                    catch
+                        threw = true
+                    end
+                    Test.@test threw
+                    # Under `mv(...; force = true)` the file is gone here.
+                    Test.@test isfile(target)
+                    Test.@test read(target, String) == before
+                end
+            end
+
+            Test.@testset "the temp is a same-directory, per-process sibling" begin
+                # Both properties are load-bearing and both were unpinned —
+                # moving the temp to tempdir() and dropping the pid suffix each
+                # left the suite green.
+                #
+                # Same directory: rename is only atomic within one filesystem, so
+                # a temp under /tmp can fail with EXDEV on a machine where the
+                # results tree is a different mount. Per-process: the shard driver
+                # points up to 32 concurrent processes at one --output-dir, and a
+                # shared temp name would let them clobber each other's in-flight
+                # writes.
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    seen = String[]
+                    publish_atomically(target) do tmp
+                        push!(seen, tmp)
+                        CSV.write(tmp, good; delim = '\t', missingstring = "NA")
+                    end
+                    Test.@test length(seen) == 1
+                    Test.@test dirname(seen[1]) == dirname(target)
+                    Test.@test occursin(string(getpid()), basename(seen[1]))
+                    # The NAME SHAPE is a contract with the .gitignore patterns
+                    # (`*.tsv.tmp.*` in both results directories). Asserting
+                    # only ".tmp." and the pid would let a rename to
+                    # ".tmp-<pid>.tsv" keep this green while silently
+                    # un-ignoring the temps inside a tracked directory.
+                    Test.@test occursin(".tsv.tmp.", basename(seen[1]))
+                end
+            end
+
+            Test.@testset "write_table_guarded ITSELF publishes atomically" begin
+                # The helper being pinned is not the same as the production path
+                # using it. Replacing the publish_atomically block inside
+                # write_table_guarded with a direct CSV.write left the suite
+                # green, because every other guard test asserts only final file
+                # CONTENT — which an in-place write satisfies. That is round-1's
+                # C1 (an unexercised routing) recurring on this round's headline
+                # fix.
+                #
+                # Enter through write_table_guarded and make the serialisation
+                # fail partway, so an in-place write would truncate the target
+                # while an atomic one cannot touch it.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target, DataFrames.DataFrame(full);
+                        delim = '\t', missingstring = "NA")
+                    before = read(target, String)
+
+                    # A frame whose serialisation throws: a column of a type
+                    # CSV cannot render without calling our erroring `show`.
+                    struct_free = DataFrames.DataFrame(full)
+                    struct_free.boom = [ExplodingCell() for _ in 1:6]
+                    threw = false
+                    try
+                        write_table_guarded(target, struct_free, RESULTS_KEYCOLS)
+                    catch
+                        threw = true
+                    end
+                    Test.@test threw
+                    # In-place would have truncated it; atomic cannot.
+                    Test.@test read(target, String) == before
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
+                end
+            end
+
+            Test.@testset "SUMMARY_KEYCOLS actually stratifies" begin
+                # The docstring makes a load-bearing correctness claim —
+                # "STRATIFIED BY TECHNOLOGY BY CONSTRUCTION ... no row of this
+                # table ever mixes ONT with Illumina. Those are different error
+                # processes and an aggregate over both would describe neither."
+                # Nothing pinned it: every other write_summary fixture uses a
+                # single (technology, coverage) stratum, so dropping :coverage
+                # OR :technology from SUMMARY_KEYCOLS, or replacing the groupby
+                # key wholesale, all left the suite green. A dropped grouping
+                # column silently averages across strata and emits a
+                # plausible-looking number, which is this file's whole subject.
+                strata = NamedTuple[]
+                for tech in ("ont", "illumina"), cov in (30, 100)
+
+                    for s in (42, 123, 456)
+                        push!(strata, row("Lambda", tech, 15, cov, s))
+                    end
+                end
+                mktempdir() do dir
+                    summary = write_summary(dir, DataFrames.DataFrame(strata))
+                    # 2 technologies x 2 coverages = 4 strata, not 1 or 2.
+                    Test.@test DataFrames.nrow(summary) == 4
+                    Test.@test sort(unique(summary.technology)) ==
+                               ["illumina", "ont"]
+                    Test.@test sort(unique(summary.coverage)) == [30, 100]
+                    # And no row may merge two strata: each covers exactly the
+                    # three seeds of its own cell, never six.
+                    Test.@test all(summary.n_seeds .== 3)
+                end
+            end
+
+            Test.@testset "the DERIVED tables publish atomically too" begin
+                # The same unexercised-routing gap, one more time. Reverting
+                # write_summary and write_verdict_stats to a bare CSV.write left
+                # the suite green, because every assertion about those two
+                # tables checks final CONTENT — which an in-place truncating
+                # write satisfies identically. They are unguarded by the SHRINK
+                # check but still publish atomically, and that routing needs its
+                # own pin.
+                #
+                # Poisoning the input frame does NOT work here — unlike
+                # write_table_guarded, these two build their own output frames
+                # from the results table, so an unserialisable input column
+                # never reaches the write. The discriminator instead BLOCKS the
+                # temp path: put a directory exactly where publish_atomically
+                # would create its sibling temp.
+                #
+                # Atomic routing  -> CSV.write(tmp, ...) fails, target untouched.
+                # In-place routing -> writes straight to the target, which
+                #                     changes and the assertion below fails.
+                for (name, writer) in (
+                    ("ont_k_sweep_summary.tsv", write_summary),
+                    ("verdict_stats.tsv", write_verdict_stats))
+                    mktempdir() do dir
+                        target = joinpath(dir, name)
+                        CSV.write(target, DataFrames.DataFrame(a = [1, 2]);
+                            delim = '\t')
+                        before = read(target, String)
+                        mkpath("$(target).tmp.$(getpid())")   # block the temp
+                        threw = false
+                        try
+                            writer(dir, DataFrames.DataFrame(full))
+                        catch
+                            threw = true
+                        end
+                        Test.@test threw
+                        Test.@test read(target, String) == before
+                    end
+                end
+            end
+
+            Test.@testset "a successful publish replaces the contents" begin
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    bigger = DataFrames.DataFrame(
+                        organism = ["Lambda", "T4", "T4"], k = [15, 21, 31],
+                        v = [1, 2, 3])
+                    publish_atomically(target) do tmp
+                        CSV.write(tmp, bigger; delim = '\t',
+                            missingstring = "NA")
+                    end
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 3
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
+                end
+            end
         end
     end
 

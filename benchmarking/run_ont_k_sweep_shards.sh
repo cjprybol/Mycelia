@@ -26,14 +26,18 @@
 #     locking, so simultaneous `conda create` calls can collide).
 #
 # The aggregate TSVs are rewritten by every shard after each of its cells, so
-# during the run they are mid-write and should not be read. They cannot SHRINK,
-# though: write_aggregate unions the in-memory rows with every checkpoint on
-# disk, so a shard covering 3 cells still emits the whole tree. The final pass
-# below re-emits them from the checkpoints alone.
+# during the run they are mid-write and should not be read. Whether they can
+# SHRINK depends entirely on cells/: write_aggregate unions the in-memory rows
+# with every checkpoint on disk, so a shard covering 3 cells still emits the
+# whole tree WHEN cells/ IS POPULATED. cells/ is gitignored, so on a fresh clone
+# it is empty and the union protects nothing — that is td-4blm, and it is why
+# the write now also goes through a refuse-to-shrink guard. The final pass below
+# re-emits them from the checkpoints alone.
 #
-# Usage:
-#   ./benchmarking/run_ont_k_sweep_shards.sh
+# Usage — prefer a scratch OUTPUT_DIR for anything that is not a full re-run of
+# the committed grid:
 #   OUTPUT_DIR=/scratch/ont_k_sweep ./benchmarking/run_ont_k_sweep_shards.sh
+#   ./benchmarking/run_ont_k_sweep_shards.sh    # writes to the TRACKED results dir
 #
 # Re-running is safe and cheap: completed cells are skipped via their
 # checkpoints, so this doubles as the crash-recovery path.
@@ -41,6 +45,25 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Defaults to the GIT-TRACKED results directory. Every invocation here covers a
+# sub-grid, so on a host where that directory's cells/ is absent — a fresh
+# clone; cells/ is gitignored — an aggregate write would shrink the committed
+# 240-row table. That write is now refused instead (td-4blm).
+#
+# The first thing refused is NOT a shard: it is the serial pre-warm below, which
+# runs a 1-k/1-coverage/1-seed grid against OUTPUT_DIR before any shard starts.
+# So a fresh-clone run dies there — after ONE cell, not instantly. write_aggregate
+# is called inside the Phase 2 cell loop, so the reference download, the conda
+# environment creation, one assembly and one QUAST run all complete first: minutes
+# to tens of minutes. Still far cheaper than the full grid, and cheaper than
+# letting 32 shards start, but do not expect it to fail in seconds.
+#
+# Remedy: set OUTPUT_DIR to a scratch tree (the usage line above). Adding
+# --allow-shrink is NOT a per-invocation fix here — it would disable the guard
+# for the pre-warm and all 32 shards for the whole run, so a run that died
+# midway would leave the committed tables as whatever fragment the last shard
+# happened to emit. Use it only when replacing the committed tables with this
+# run's full result is the deliberate intent.
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/benchmarking/results/ont_k_sweep}"
 LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/shard-logs}"
 
@@ -307,10 +330,18 @@ echo "--- pre-warming reference (serial) ---"
 # Pre-warm BOTH technologies: the illumina cell installs `art` + `quast`, and
 # the ont cell installs `badread`. Warming only illumina left every ONT shard to
 # race on `conda create -n badread`, which has no locking.
-julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
+# Both streams go to the log, so a failure here is otherwise a bare `set -e`
+# abort with nothing on screen. That matters now: this is the narrowest grid in
+# the file and therefore the FIRST thing the td-4blm shrink guard refuses on a
+# fresh clone, and its refusal message is the entire remedy. Surface it.
+if ! julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
     --organisms "$(echo ${ORGANISMS} | tr ' ' ',')" \
     --technologies illumina,ont --ks 31 --coverages 10 --seeds 42 \
-    --output-dir "${OUTPUT_DIR}" > "${LOG_DIR}/prewarm.log" 2>&1
+    --output-dir "${OUTPUT_DIR}" > "${LOG_DIR}/prewarm.log" 2>&1; then
+    echo "pre-warm FAILED — last 30 lines of ${LOG_DIR}/prewarm.log:" >&2
+    tail -30 "${LOG_DIR}/prewarm.log" >&2
+    exit 1
+fi
 echo "references and conda environments ready"
 
 echo "--- launching shards ---"

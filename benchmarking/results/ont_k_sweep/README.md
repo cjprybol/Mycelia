@@ -61,6 +61,52 @@ commit that switched hosts shows `per_read_identity.tsv` and
 `kmer_survival_ladder.tsv` completely unchanged, with only the recorded
 `badread_version` field differing.
 
+### Re-running this grid without destroying it
+
+The tables in this directory are tracked; the `cells/` checkpoints they are
+aggregated from are not. So on a fresh clone the sweep's checkpoint union has
+nothing to union against, and any invocation narrower than the committed grid —
+which includes the driver's own defaults, the shard driver's serial pre-warm,
+every shard, and `--smoke` — would replace these tables with its own smaller
+result.
+
+That write is now refused rather than performed (`td-4blm`). A narrowed run
+against this directory stops at the **first** aggregate write, with an error
+naming the dropped cells, and all three tables are left intact. Two ways
+forward:
+
+- pass `--output-dir` pointing at a scratch tree, which is the right answer for
+  anything exploratory;
+- pass `--allow-shrink`, which is the right answer only when replacing these
+  tables with a narrower measurement is what you actually mean.
+
+**"Re-run the committed grid" is not a single command.** The grid is ragged —
+Lambda carries `k ∈ {11,13,15,17,19,21,31}` and T4 only `{11,15,21,31}`, and T4
+skips 100x — so the 240 cells are the union of several runs, not one rectangle.
+The nearest single superset is
+`--organisms Lambda,T4 --ks 11,13,15,17,19,21,31 --coverages 10,30,50,100`,
+which is 336 cells, i.e. 40% more work than the table represents. Reproducing
+the exact grid means running Lambda and T4 as separate invocations against the
+same `--output-dir`.
+
+**Only `ont_k_sweep_results.tsv` is guarded.** `ont_k_sweep_summary.tsv` and
+`verdict_stats.tsv` are pure derivatives of it — every row is a groupby or a
+statistic over rows the results table already holds, and `--aggregate-only`
+rebuilds both from `cells/` at any time. Guarding them caught nothing real,
+because a narrowed grid is refused at the results table and the run aborts
+before either is reached. What it did catch was false positives: `verdict_stats`
+emits three of its statistics (`max_cell_NGA50`, `nga50_cv_median`,
+`nga50_cv_max`) only when NGA50 is measurable, so an unchanged 240-cell grid
+re-measured with NGA50 no longer computable dropped three keys and was refused —
+after the results table had already been rewritten. Leaving them unguarded keeps
+the whole sequence consistent: one guarded table, one decision, no partial
+state.
+
+The same guard covers `benchmarking/ont_alignment_threshold_diagnostic.jl`,
+where `--cells` and a shortened `--identities` ladder narrow the table the same
+way. There it runs as a pre-flight check before any QUAST work, so an
+unpublishable run fails in seconds rather than after rescoring every cell.
+
 ## Measured read identity
 
 Reads were mapped back with `minimap2 -ax map-ont` and identity recomputed from
@@ -202,9 +248,9 @@ ordering the question turns on is already unambiguous at 30x and 50x.
 - At **10x**, no k reaches even the degenerate/partial boundary. On **Lambda**
   nothing aligns at all at QUAST's default identity (0 of 21 cells). On **T4**,
   8 of 12 cells do align, but recover only 0.4–2.6% of the genome with largest
-  alignments of 508–910 bp. The mechanism is not uniform across that row:
-  k>=13 fails because too few error-free k-mers survive (1.67–4.73x clean
-  coverage at those k), while **k=11 fails for a different reason** — see below.
+  alignments of 508–910 bp. The mechanism is not uniform across that row: k>=13
+  fails because too few error-free k-mers survive (1.67–4.73x clean coverage at
+  those k), while **k=11 fails for a different reason** — see below.
 - On **Lambda**, k=15 is a genuine interior optimum at 30x and 50x: k=13 (35.9%)
   and k=17 (39.3%) are both worse at 30x. At 100x the ordering by genome
   fraction shifts to k=19 (100.0%) while NGA50 still favours k=15 — the two
@@ -249,18 +295,19 @@ among the only ones that move:
 **The threshold effect is specific to k=31, and it replicates across both
 genomes.** Median genome-fraction gain from relaxing the cut 95% → 85%:
 
-| organism | k=13 | k=15 | k=17 | k=19 | k=21 | **k=31** |
-| --- | --- | --- | --- | --- | --- | --- |
-| Lambda | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
-| T4 | — | +0.0 pp | — | — | +0.0 pp | **+25.5 pp** |
+| organism | k=13    | k=15    | k=17    | k=19    | k=21    | **k=31**     |
+| -------- | ------- | ------- | ------- | ------- | ------- | ------------ |
+| Lambda   | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
+| T4       | —       | +0.0 pp | —       | —       | +0.0 pp | **+25.5 pp** |
 
 Every k below 31 is completely insensitive to the identity threshold on both
-organisms — contigs either align well or not at all. At k=31 the gain is
-+25.2 pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda
-(521 / 610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
-considerably stronger evidence than the single-organism version of this finding. Note the 10x rows qualify the "nothing survives at
-10x" statement above: at k=31/10x, 17.9–22.1% of the genome does align once the
-identity cut is relaxed; it simply does not at QUAST's default.
+organisms — contigs either align well or not at all. At k=31 the gain is +25.2
+pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda (521 /
+610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
+considerably stronger evidence than the single-organism version of this finding.
+Note the 10x rows qualify the "nothing survives at 10x" statement above: at
+k=31/10x, 17.9–22.1% of the genome does align once the identity cut is relaxed;
+it simply does not at QUAST's default.
 
 Since these contigs align at 85–90% while the reads measure 94.4%, contigs are
 **less accurate than the reads they are built from** — consistent with chimeric
@@ -277,8 +324,9 @@ seeds have a defined NGA50, stratified by chemistry (Lambda):
 | ONT        | **12 of 28**           | 0.1359     | **0.4443** |
 
 That table is the case for _not_ using NGA50 as the ONT endpoint: at least one
-seed has an undefined NGA50 in 16 of 28 ONT strata. But the obvious replacement does not survive
-its own variance check. **ONT genome-fraction CV, by coverage:**
+seed has an undefined NGA50 in 16 of 28 ONT strata. But the obvious replacement
+does not survive its own variance check. **ONT genome-fraction CV, by
+coverage:**
 
 | organism | 30x               | 50x           | 100x          |
 | -------- | ----------------- | ------------- | ------------- |
@@ -290,7 +338,7 @@ Lambda/k=31 reaches CV 0.486, which is 3.2x the pre-registered 0.15 assumption
 and slightly worse than NGA50's own worst stratum (0.444). The two endpoints are
 therefore comparably unstable at 30x, which is precisely the stratum that
 prompted this investigation. Genome fraction's advantage over NGA50 is that it
-is *defined* where NGA50 is not; that advantage does not extend to being
+is _defined_ where NGA50 is not; that advantage does not extend to being
 low-variance at 30x.
 
 Genome fraction also cannot see fragmentation. Lambda/ONT/k=15/100x has genome
