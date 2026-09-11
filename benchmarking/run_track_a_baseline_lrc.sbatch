@@ -30,13 +30,18 @@ set -uo pipefail
 echo "=== Track A baseline benchmark (Lawrencium) ==="
 echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
 
-module load julia/1.10.2-11.4
+# The julia/1.10.2-11.4 module DOWNGRADES to a Julia that cannot load current
+# master's Manifest (extension-trigger KeyError; td-j8bh) -- the group depot's
+# 144 cells that DID succeed under it predate the drift. juliaup's lts channel
+# (1.10.10, matching NERSC) is already on this host at ~/.juliaup/bin; prepend
+# it instead of module-loading the broken version.
+export PATH="${HOME}/.juliaup/bin:${PATH}"
 
-# Resolve julia explicitly and fail LOUDLY if the module did not put it on PATH,
-# otherwise an empty ${JULIA} would run the args as a command and still exit green.
+# Resolve julia explicitly and fail LOUDLY if it is not on PATH, otherwise an
+# empty ${JULIA} would run the args as a command and still exit green.
 JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
-  echo "ERROR: julia not runnable after 'module load julia/1.10.2-11.4'." >&2
+  echo "ERROR: julia not runnable via juliaup (~/.juliaup/bin on PATH)." >&2
   exit 1
 fi
 echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"

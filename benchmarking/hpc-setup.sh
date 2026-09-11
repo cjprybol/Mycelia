@@ -30,10 +30,14 @@
 #              file path is resolved relative to the current directory, and the
 #              job is submitted from CWD.
 #
-# Prerequisite: a `julia` (1.10.x) must already be on PATH — load the cluster's
-# module first, e.g. `module load julia/1.10.10` (NERSC) or
-# `module load julia/1.10.2-11.4` (Lawrencium). On HPC, LD_LIBRARY_PATH is
-# cleared here to avoid system libstdc++ conflicts.
+# Prerequisite: a `julia` (1.10.x) must already be on PATH. On NERSC, load the
+# cluster module: `module load julia/1.10.10`. On Lawrencium, do NOT
+# `module load julia/1.10.2-11.4` — it downgrades to a Julia that cannot load
+# current master's Manifest (extension-trigger KeyError; td-j8bh). Use
+# juliaup's lts channel instead, already on the host:
+# `export PATH="$HOME/.juliaup/bin:$PATH"` (resolves to 1.10.10, matching
+# NERSC). On HPC, LD_LIBRARY_PATH is cleared here to avoid system libstdc++
+# conflicts.
 #
 # Usage:
 #   benchmarking/hpc-setup.sh                                # full preflight
