@@ -70,8 +70,17 @@ grid — which includes the driver's own defaults, every shard, and `--smoke` �
 would replace these tables with its own smaller result.
 
 That write is now refused rather than performed (`td-4blm`). A narrowed run
-against this directory stops at its first aggregate write with an error naming
-the dropped cells, and the committed tables are left intact. Two ways forward:
+against this directory stops at its first refused write with an error naming the
+dropped cells. In the ordinary case — a narrowed grid — that first refusal is
+`ont_k_sweep_results.tsv`, so all three tables are left intact.
+
+The one case where it is not: the three tables are written in sequence (results
+→ summary → verdict stats) with no rollback, and the summary can shrink while
+the results table does not, because the summary counts only `status=ok` cells. A
+re-run that turns previously-ok cells into errors therefore rewrites
+`ont_k_sweep_results.tsv` and then refuses the summary, leaving the directory
+internally inconsistent until the run is repeated or the files are restored from
+git. Two ways forward:
 
 - pass `--output-dir` pointing at a scratch tree, which is the right answer for
   anything exploratory;

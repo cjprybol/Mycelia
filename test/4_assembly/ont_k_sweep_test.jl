@@ -242,7 +242,8 @@ Test.@testset "ONT k-sweep helpers" begin
         # .gitignore deliberately excludes, while the aggregate TSV is tracked.
         # So on a FRESH CLONE — table present, cells/ absent — the union
         # degenerates to "whatever this invocation computed" and the default
-        # 96-cell grid overwrote the committed 240-row deliverable, silently,
+        # 96-cell grid would overwrite the committed 240-row deliverable,
+        # silently,
         # recoverable only via git checkout.
         #
         # Every case below is the fresh-clone shape: a populated table and NO
@@ -263,8 +264,15 @@ Test.@testset "ONT k-sweep helpers" begin
         append!(full, [row("T4", "ont", 15, 30, s) for s in (42, 123, 456)])
         results_name = "ont_k_sweep_results.tsv"
 
-        seed_table(dir) = write_table_guarded(joinpath(dir, results_name),
-            DataFrames.DataFrame(full), RESULTS_KEYCOLS; allow_shrink = true)
+        # Seed the fixture with a PLAIN CSV.write, deliberately not through the
+        # guard. The guard is the thing under test, and a fixture that depends
+        # on it cannot run against the pre-change code at all — it fails to
+        # resolve the symbol, which proves nothing about what the old code DID.
+        # Seeding this way keeps "a partial grid over a full table is refused"
+        # a real positive control: against the pre-change write_aggregate it
+        # fails because the table is silently shrunk, not because it won't load.
+        seed_table(dir) = CSV.write(joinpath(dir, results_name),
+            DataFrames.DataFrame(full); delim = '\t', missingstring = "NA")
 
         Test.@testset "a partial grid over a full table is refused" begin
             mktempdir() do dir

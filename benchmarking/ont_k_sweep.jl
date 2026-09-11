@@ -993,6 +993,13 @@ function write_summary(root, df)
     # "nothing succeeded" has already been emitted, and the files on disk stay
     # intact rather than being replaced by empty ones. `--allow-shrink` is the
     # override when publishing the empty summary is genuinely what you mean.
+    #
+    # Note the tables are written in sequence with no rollback, and this one can
+    # shrink while the results table does not (it counts only status=ok cells).
+    # A re-run that turns ok cells into errors therefore rewrites the results
+    # table and then refuses here, leaving the directory internally
+    # inconsistent. Documented in this directory's README; the remedy is to
+    # repeat the run or restore from git.
     write_table_guarded(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df,
         SUMMARY_KEYCOLS)
     return summary_df
