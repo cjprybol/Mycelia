@@ -78,10 +78,14 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
         # td-4blm in its worse form. This script had no union at all — it wrote
         # only the rows the current invocation computed — and --output-dir
         # defaults to the git-tracked results directory. Its OWN documented
-        # usage line, `--cells Lambda__ont__k31__30x__seed42`, therefore
-        # replaced the committed 152-row table with 4 rows. Rescoring is
+        # usage line, `--cells Lambda__ont__k31__30x__seed42`, would therefore
+        # have replaced the committed 152-row table with 4 rows. Rescoring is
         # expensive enough that narrowing is the normal way to run it, so the
         # truncating shape was the common one, not the exotic one.
+        #
+        # Conditional, not past tense: git history shows both committed tables
+        # only ever GREW (the diagnostic table 57 -> 153 lines, the sweep table
+        # 97 -> 241). Nothing establishes the loss actually occurred.
         row(cell,
             k,
             seed,
@@ -103,8 +107,17 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
         nrows(dir) = DataFrames.nrow(CSV.read(table_of(dir),
             DataFrames.DataFrame; delim = '\t', missingstring = "NA"))
 
+        # Seed with a plain CSV.write, NOT through write_threshold_table. A
+        # fixture built by the symbol under test cannot run against pre-change
+        # code at all — it fails to resolve the name — so every assertion below
+        # it would be an artifact of symbol resolution rather than a statement
+        # about behaviour. The sweep testset was corrected for exactly this and
+        # this file was missed.
+        seed_table(dir) = CSV.write(table_of(dir), DataFrames.DataFrame(full);
+            delim = '\t', missingstring = "NA")
+
         mktempdir() do dir
-            Test.@test write_threshold_table(dir, full) !== nothing
+            seed_table(dir)
             Test.@test nrows(dir) == 8
 
             # The documented --cells example: one cell, four thresholds.
@@ -130,6 +143,62 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             # full re-run still lands.
             Test.@test write_threshold_table(dir, reverse(full)) !== nothing
             Test.@test nrows(dir) == 8
+        end
+    end
+
+    Test.@testset "preflight refuses before any QUAST work is spent" begin
+        # write_threshold_table is the backstop; this is the check that matters
+        # operationally. The output key set is exactly selected x identities and
+        # both are known before the rescoring loop, so an unpublishable run is
+        # detectable up front. Without this the refusal lands AFTER every QUAST
+        # invocation has completed — 152 of them for the committed cell set —
+        # and the rows are then discarded in memory, with no per-cell
+        # checkpoints to salvage the work.
+        idys = (95.0, 90.0, 85.0, 80.5)
+        a = cell_id_for("Lambda", "ont", 31, 30, 42)
+        b = cell_id_for("Lambda", "ont", 21, 30, 42)
+        committed = DataFrames.DataFrame(
+            cell_id = [c for c in (a, b) for _ in idys],
+            min_identity = [i for _ in (a, b) for i in idys],
+            value = 1:8)
+        cell_of(id) = Dict{String, Any}("cell_id" => id)
+
+        mktempdir() do dir
+            target = joinpath(dir, "alignment_threshold_diagnostic.tsv")
+            CSV.write(target, committed; delim = '\t', missingstring = "NA")
+
+            # The documented --cells invocation: one of the two cells.
+            err = try
+                preflight_threshold_table(dir, [cell_of(a)], idys)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ErrorException
+            Test.@test occursin("refusing to shrink", err.msg)
+
+            # A narrowed --identities ladder is the other narrowing flag, and
+            # reaches the same refusal by dropping half of every cell's rows.
+            err2 = try
+                preflight_threshold_table(dir, [cell_of(a), cell_of(b)],
+                    (95.0, 90.0))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err2 isa ErrorException
+            Test.@test occursin("refusing to shrink", err2.msg)
+
+            # The full run passes preflight, so the check does not block the
+            # invocation it is meant to permit.
+            Test.@test preflight_threshold_table(
+                dir, [cell_of(a), cell_of(b)], idys) === nothing
+
+            # No table yet => nothing to protect => never refuse.
+            mktempdir() do fresh
+                Test.@test preflight_threshold_table(
+                    fresh, [cell_of(a)], idys) === nothing
+            end
         end
     end
 end
