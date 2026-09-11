@@ -93,6 +93,14 @@
 #
 # Per-cell JSON checkpoints make the run crash-safe and resumable: re-invoking
 # with the same --output-dir skips completed cells.
+#
+# Every invocation above EXCEPT the first covers less than the committed grid,
+# and --output-dir defaults to the git-tracked results directory. Such a run is
+# now refused rather than allowed to overwrite the committed tables with its own
+# narrower result (td-4blm); the checkpoint union alone does not prevent this,
+# because cells/ is gitignored and so is empty on a fresh clone. Use
+# --output-dir to work in a scratch tree, or --allow-shrink when publishing the
+# narrower table is deliberate.
 
 import Pkg
 if isinteractive()
@@ -283,6 +291,21 @@ const SMOKE = "--smoke" in ARGS
 # computed, and can never trigger computing one.
 const AGGREGATE_ONLY = "--aggregate-only" in ARGS
 
+# Permit a write that DROPS keys the table on disk already has (td-4blm).
+#
+# Off by default, because the union in `write_aggregate` does not actually
+# protect a fresh clone: it unions against `OUTPUT_DIR/cells/`, which this
+# harness's own .gitignore deliberately excludes, while the aggregate TSVs are
+# tracked. So on a fresh clone the protective term is EMPTY and the default
+# 96-cell grid overwrites the committed 240-row deliverable, losing every T4 row
+# and every Lambda k in {13,17,19} row, recoverable only via `git checkout`.
+#
+# `write_table_guarded` therefore refuses any shrinking write unless this flag
+# is set. Set it when the shrink is what you mean — a deliberately re-scoped
+# grid, or a schema change — and prefer pointing `--output-dir` at a scratch
+# directory when it is not.
+const ALLOW_SHRINK = "--allow-shrink" in ARGS
+
 # Cached rows with these statuses are RECOMPUTED rather than reused. Both are
 # infrastructure failures that produce a well-formed, degenerate-looking row;
 # caching either would freeze a transient fault into the grid permanently.
@@ -328,6 +351,10 @@ else
     _f !== nothing && (seeds = parse.(Int, _f))
 end
 
+# NOTE the default is the GIT-TRACKED results directory, which is why every
+# table written under it goes through `write_table_guarded` (see ALLOW_SHRINK).
+# Point this at a scratch directory for any run that is not meant to update the
+# committed deliverable.
 const OUTPUT_DIR = let v = arg_value("--output-dir")
     v === nothing ? joinpath(@__DIR__, "results", "ont_k_sweep") : v
 end
@@ -707,6 +734,110 @@ end
 
 # === Aggregation ===
 
+# Separator used to fold a key tuple into one comparable string. \x1f (ASCII
+# UNIT SEPARATOR) cannot appear inside a TSV field, so no combination of key
+# values can collide by concatenation.
+const _KEY_SEP = '\x1f'
+
+# What identifies a row in each committed table. Named once so the in-memory
+# de-duplication key and the on-disk shrink check cannot drift apart — two
+# definitions of "the same cell" is how a guard like this stops guarding.
+const RESULTS_KEYCOLS = (:organism, :technology, :k, :coverage, :seed)
+const SUMMARY_KEYCOLS = (:organism, :technology, :k, :coverage)
+const VERDICT_KEYCOLS = (:statistic,)
+
+"""
+    table_row_keys(df, keycols) -> Set{String}
+
+The key set of `df`, normalised to strings.
+
+Comparing STRINGS rather than typed tuples is deliberate. The on-disk table is
+re-read from TSV, so its column types are whatever CSV.jl infers — an `Int64`
+column can come back `Int64`, but a column that acquired a `missing` comes back
+`Union{Missing,Int64}`, and a float written as `80.5` comes back `Float64`
+through a different code path than the one that wrote it. Tuple equality across
+those is fragile in exactly the way that would make this guard silently pass.
+`string()` is what `CSV.write` itself renders, so it round-trips by
+construction.
+"""
+function table_row_keys(df, keycols)
+    missing_cols = [c for c in keycols if !(String(c) in DataFrames.names(df))]
+    isempty(missing_cols) ||
+        throw(ArgumentError("table is missing key column(s): " *
+                            join(missing_cols, ", ")))
+    return Set(join((string(row[c]) for c in keycols), _KEY_SEP)
+    for row in eachrow(df))
+end
+
+"""
+    write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK) -> DataFrame
+
+`CSV.write`, but refuses to replace an existing table with one that does not
+cover every key the existing table already has (td-4blm).
+
+WHY this exists rather than just the union in `write_aggregate`: that union's
+protective term reads `OUTPUT_DIR/cells/`, which this harness's `.gitignore`
+deliberately excludes, while the aggregate TSVs are tracked. On a fresh clone
+the union therefore degenerates to "whatever this invocation computed", and the
+default 96-cell grid silently overwrites the committed 240-row deliverable. The
+union is still correct and still runs; it is simply not sufficient on its own.
+
+SCOPE — this fires on the WRITE path only. It is called from
+`write_aggregate`, `write_summary`, `write_verdict_stats` and the threshold
+diagnostic's `write_threshold_table`, and from nowhere else. No read path
+(`load_all_checkpoints`, `candidate_cells`, `parse_quast_metrics`, the Phase 2
+checkpoint reload) passes through it, so pre-existing on-disk data is never
+rejected on the way IN — only a write that would destroy it is rejected on the
+way out.
+
+Refuses in two distinct cases, with distinct messages:
+
+  * the on-disk table has keys the new table lacks — the truncation case;
+  * the on-disk table cannot be read, or lacks a key column — in which case the
+    write cannot be PROVEN non-shrinking, and a guard that fails open here would
+    be defeated by exactly the corruption it should catch.
+
+`allow_shrink` (CLI: `--allow-shrink`) is the override for both, and is the
+right answer for a deliberately re-scoped grid or a schema change.
+"""
+function write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK)
+    write_it() = CSV.write(path, df; delim = '\t', missingstring = "NA")
+    if allow_shrink || !isfile(path)
+        write_it()
+        return df
+    end
+
+    existing_keys = try
+        old = CSV.read(path, DataFrames.DataFrame;
+            delim = '\t', missingstring = "NA")
+        table_row_keys(old, keycols)
+    catch e
+        error("refusing to overwrite $(path): its current contents could not " *
+              "be read, so this write cannot be proven non-shrinking " *
+              "($(sprint(showerror, e))). Move or delete the file, or pass " *
+              "--allow-shrink if replacing it is what you mean.")
+    end
+
+    lost = sort(collect(setdiff(existing_keys, table_row_keys(df, keycols))))
+    if !isempty(lost)
+        shown = join(("  - " * replace(k, _KEY_SEP => " / ")
+            for k in first(lost, 5)), "\n")
+        error("refusing to shrink $(path): it currently has " *
+              "$(length(lost)) key(s) that this write would drop " *
+              "(on disk $(length(existing_keys)), writing " *
+              "$(DataFrames.nrow(df)) rows). Keys on " *
+              "[$(join(string.(keycols), ", "))]; first lost:\n$(shown)\n" *
+              "This is usually a partial run against a tracked results " *
+              "directory whose cells/ is absent (it is gitignored). Either " *
+              "re-run the full grid, pass --output-dir pointing at a scratch " *
+              "directory, or pass --allow-shrink if the smaller table is " *
+              "what you mean.")
+    end
+
+    write_it()
+    return df
+end
+
 """
     load_all_checkpoints(root) -> Vector{NamedTuple}
 
@@ -766,7 +897,7 @@ function write_aggregate(root, rows)
         error("no cells found under $(joinpath(root, "cells")) and no rows in " *
               "memory — nothing to aggregate. Check --output-dir.")
     end
-    key(r) = (r.organism, r.technology, r.k, r.coverage, r.seed)
+    key(r) = Tuple(getproperty(r, c) for c in RESULTS_KEYCOLS)
     for r in load_all_checkpoints(root)
         by_id[key(r)] = r
     end
@@ -774,8 +905,9 @@ function write_aggregate(root, rows)
         by_id[key(r)] = r
     end
     df = DataFrames.DataFrame(collect(values(by_id)))
-    sort!(df, [:organism, :technology, :k, :coverage, :seed])
-    CSV.write(joinpath(root, "ont_k_sweep_results.tsv"), df; delim = '\t', missingstring = "NA")
+    sort!(df, collect(RESULTS_KEYCOLS))
+    write_table_guarded(joinpath(root, "ont_k_sweep_results.tsv"), df,
+        RESULTS_KEYCOLS)
     return df
 end
 
@@ -854,8 +986,15 @@ function write_summary(root, df)
     else
         sort(DataFrames.DataFrame(summary_rows), [:organism, :technology, :k, :coverage])
     end
-    CSV.write(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df;
-        delim = '\t', missingstring = "NA")
+    # The empty-summary recovery above and the shrink guard below interact, and
+    # the interaction is deliberate: writing a 0-row summary over a committed
+    # 80-row one is data loss of exactly the kind td-4blm is about, so the guard
+    # refuses it. Nothing diagnostic is lost by that — the @warn naming
+    # "nothing succeeded" has already been emitted, and the files on disk stay
+    # intact rather than being replaced by empty ones. `--allow-shrink` is the
+    # override when publishing the empty summary is genuinely what you mean.
+    write_table_guarded(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df,
+        SUMMARY_KEYCOLS)
     return summary_df
 end
 
@@ -880,6 +1019,7 @@ function write_verdict_stats(root, df)
         (statistic = name, value = string(value), note = note))
 
     for org in sort(unique(ok.organism)), tech in sort(unique(ok.technology))
+
         g = ok[(ok.organism .== org) .& (ok.technology .== tech), :]
         DataFrames.nrow(g) == 0 && continue
         push_stat!("$(org)/$(tech)/n_cells", DataFrames.nrow(g), "cells with status=ok")
@@ -888,8 +1028,9 @@ function write_verdict_stats(root, df)
         end
         measured = g[g.nga50_status .== "measured", :]
         nga = collect(skipmissing(measured.NGA50))
-        isempty(nga) || push_stat!("$(org)/$(tech)/max_cell_NGA50", Int(round(maximum(nga))),
-            "single best CELL, not a stratum median")
+        isempty(nga) ||
+            push_stat!("$(org)/$(tech)/max_cell_NGA50", Int(round(maximum(nga))),
+                "single best CELL, not a stratum median")
 
         # NGA50 CV across seeds, per (k, coverage) stratum, only where all
         # three seeds are defined. The denominator is the number of strata that
@@ -932,7 +1073,8 @@ function write_verdict_stats(root, df)
         "cells degenerate BECAUSE of GF_DEGENERATE_MAX rather than censoring")
 
     stats = DataFrames.DataFrame(rows)
-    CSV.write(joinpath(root, "verdict_stats.tsv"), stats; delim = '\t')
+    write_table_guarded(joinpath(root, "verdict_stats.tsv"), stats,
+        VERDICT_KEYCOLS)
     return stats
 end
 

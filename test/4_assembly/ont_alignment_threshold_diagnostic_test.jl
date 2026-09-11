@@ -73,6 +73,65 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             Test.@test found[1]["nga50_status"] == "censored_partial_alignment"
         end
     end
+
+    Test.@testset "write_threshold_table refuses to shrink the committed table" begin
+        # td-4blm in its worse form. This script had no union at all — it wrote
+        # only the rows the current invocation computed — and --output-dir
+        # defaults to the git-tracked results directory. Its OWN documented
+        # usage line, `--cells Lambda__ont__k31__30x__seed42`, therefore
+        # replaced the committed 152-row table with 4 rows. Rescoring is
+        # expensive enough that narrowing is the normal way to run it, so the
+        # truncating shape was the common one, not the exotic one.
+        row(cell,
+            k,
+            seed,
+            idy) = (
+            cell_id = cell, organism = "Lambda", technology = "ont",
+            k = k, coverage = 30, seed = seed, min_identity = idy,
+            asm_contigs_ge_min = 1, asm_max_contig = 600,
+            rescore_status = "ok", genome_fraction = 31.663,
+            NGA50 = missing, NA50 = missing, largest_alignment = 400,
+            unaligned_length = 200, misassemblies = 0)
+        # 80.5 is in the real default ladder and is the float most likely to
+        # expose a key-normalisation bug, so it stays in the fixture.
+        idys = (95.0, 90.0, 85.0, 80.5)
+        a = cell_id_for("Lambda", "ont", 31, 30, 42)
+        b = cell_id_for("Lambda", "ont", 21, 30, 42)
+        full = vcat([row(a, 31, 42, i) for i in idys],
+            [row(b, 21, 42, i) for i in idys])
+        table_of(dir) = joinpath(dir, "alignment_threshold_diagnostic.tsv")
+        nrows(dir) = DataFrames.nrow(CSV.read(table_of(dir),
+            DataFrames.DataFrame; delim = '\t', missingstring = "NA"))
+
+        mktempdir() do dir
+            Test.@test write_threshold_table(dir, full) !== nothing
+            Test.@test nrows(dir) == 8
+
+            # The documented --cells example: one cell, four thresholds.
+            one_cell = filter(r -> r.cell_id == a, full)
+            err = try
+                write_threshold_table(dir, one_cell)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ErrorException
+            Test.@test occursin("refusing to shrink", err.msg)
+            Test.@test occursin("--allow-shrink", err.msg)
+            # The committed table survives the attempt intact.
+            Test.@test nrows(dir) == 8
+
+            # An empty run writes nothing at all rather than a headerless file
+            # over a populated table.
+            Test.@test write_threshold_table(dir, NamedTuple[]) === nothing
+            Test.@test nrows(dir) == 8
+
+            # Rewriting the same key set is not a shrink, so a legitimate
+            # full re-run still lands.
+            Test.@test write_threshold_table(dir, reverse(full)) !== nothing
+            Test.@test nrows(dir) == 8
+        end
+    end
 end
 
 end  # module

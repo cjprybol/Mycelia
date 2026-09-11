@@ -41,6 +41,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Defaults to the GIT-TRACKED results directory. Each shard covers a sub-grid,
+# so on a host where that directory's cells/ is absent — a fresh clone; cells/
+# is gitignored — the first shard's first aggregate write would shrink the
+# committed 240-row table. That write is now refused instead (td-4blm), and the
+# shard fails fast rather than after hours. Two remedies: set OUTPUT_DIR to a
+# scratch tree (the usage line above), or, if replacing the committed tables
+# with this run's narrower result is deliberate, add --allow-shrink to the
+# julia invocations below.
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/benchmarking/results/ont_k_sweep}"
 LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/shard-logs}"
 
