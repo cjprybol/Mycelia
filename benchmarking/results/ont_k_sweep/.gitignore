@@ -18,3 +18,9 @@
 cells/
 refs/
 shard-logs/
+
+# In-flight temps from publish_atomically. A SIGKILL between the write and the
+# rename leaves `<table>.tsv.tmp.<pid>` behind, untracked, in a TRACKED
+# directory — where `git add -A` would commit it and a reader could mistake it
+# for a backup. It is neither: it is a partial write.
+*.tsv.tmp.*

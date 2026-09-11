@@ -865,18 +865,37 @@ end
 """
     publish_atomically(write!, path)
 
-Run `write!(tmp)` against a sibling temp path, then `mv` it over `path`.
+Run `write!(tmp)` against a sibling temp path, then atomically rename it over
+`path`.
 
-The temp file is created in the SAME directory so the `mv` is a rename within
-one filesystem, which is atomic; a temp under `/tmp` could land on a different
-device and degrade to a copy, reintroducing the partial-file window. The name is
-per-process, so concurrent shards writing the same target cannot collide on it.
+USE `Base.Filesystem.rename`, NOT `mv(...; force = true)`. They are not
+interchangeable, and the difference is the whole point of this function.
+Julia's `mv` calls `checkfor_mv_cp_cptree`, which does
+`rm(dst; recursive = true, force = true)` and only THEN renames (`base/file.jl`).
+So `mv` opens a window in which the committed table has been DELETED and the
+replacement is not yet in place — measured: with an unrenameable source, `mv`
+leaves `isfile(dst) == false`, i.e. the table is gone outright. That is strictly
+worse than the in-place `CSV.write` this function replaced, which at least left
+the leading rows. `rename` is POSIX `rename(2)`: it replaces an existing target
+in one step, and on failure leaves the original byte-for-byte intact.
+
+The window mattered rather than being theoretical: `write_aggregate` runs once
+per cell, and `run_ont_k_sweep_shards.sh` points up to 32 concurrent processes
+at one `--output-dir`. A shard reading the table during another shard's `rm`
+window would see `isfile(path) == false`, and `write_table_guarded` skips the
+shrink check entirely when the file is absent — so the delete window was also a
+silent fail-open of the guard itself.
+
+The temp file is created in the SAME directory, because `rename` is only atomic
+within one filesystem; a temp under `/tmp` could land on a different device and
+fail with `EXDEV`. The name carries the pid so concurrent shards cannot collide
+on it — single-host only, which is what this driver is.
 """
 function publish_atomically(write!, path)
     tmp = "$(path).tmp.$(getpid())"
     try
         write!(tmp)
-        mv(tmp, path; force = true)
+        Base.Filesystem.rename(tmp, path)
     catch
         isfile(tmp) && rm(tmp; force = true)
         rethrow()
@@ -895,20 +914,26 @@ set as the 6 and would sail through. Asserting it promotes "these are the key
 columns" from a comment into a checked invariant.
 """
 function check_keycols_are_a_key(path, df, keycols)
-    # Wrapped rather than left as a bare ArgumentError: a key column missing
-    # from the frame being WRITTEN is a schema change — the canonical
-    # --allow-shrink case — and it deserves the same guided message the
-    # symmetric on-disk case gets, rather than an exception naming neither the
-    # file nor a remedy.
+    # Wrapped rather than left as a bare ArgumentError, so the message names the
+    # file and a remedy that WORKS.
+    #
+    # Note which remedies do not. This check runs on the IN-MEMORY frame and is
+    # deliberately unconditional, so neither `--allow-shrink` nor a fresh
+    # `--output-dir` changes the outcome — neither alters the frame's columns.
+    # Offering them here (an earlier version did, copied from the symmetric
+    # on-disk branch where they are real) sends the operator round a loop that
+    # cannot terminate. The only fix is to reconcile the declared key columns
+    # with the schema actually being produced.
     n_keys = try
         length(table_row_keys(df, keycols; label = "the table being written"))
     catch e
         e isa ArgumentError || rethrow()
-        error("refusing to write $(path): $(e.msg). It does not carry the key " *
-              "columns this file is keyed on, so the write cannot be proven " *
-              "non-shrinking — that is a schema change. Write to a fresh " *
-              "--output-dir, or pass --allow-shrink to replace the existing " *
-              "table in place.")
+        error("refusing to write $(path): $(e.msg). The frame this run built " *
+              "does not carry the columns this table is keyed on, so the write " *
+              "cannot be proven non-shrinking. Neither --allow-shrink nor a " *
+              "different --output-dir helps — both leave the frame unchanged. " *
+              "Reconcile the key columns [$(join(string.(keycols), ", "))] " *
+              "with the schema this run produces.")
     end
     DataFrames.nrow(df) == n_keys || error(
         "refusing to write $(path): [$(join(string.(keycols), ", "))] is not a " *
@@ -936,8 +961,12 @@ function check_no_keys_lost(path, df, keycols)
             "--output-dir, or pass --allow-shrink to replace it in place.")
         error("refusing to overwrite $(path): its current contents could not " *
               "be read, so this write cannot be proven non-shrinking " *
-              "($(sprint(showerror, e))). Move or delete the file, or pass " *
-              "--allow-shrink if replacing it is what you mean.")
+              "($(sprint(showerror, e))). Restore it (git checkout) if it is " *
+              "corrupt, or pass --allow-shrink if replacing it is what you " *
+              "mean. Do NOT simply delete it: an absent results table makes " *
+              "this guard skip the shrink check, and its unguarded derived " *
+              "siblings would then be rewritten from whatever grid this run " *
+              "computed.")
     end
 
     # `check_keycols_are_a_key` ran first and already produced a guided error if
@@ -1047,9 +1076,48 @@ function write_aggregate(root, rows)
     end
     df = DataFrames.DataFrame(collect(values(by_id)))
     sort!(df, collect(RESULTS_KEYCOLS))
-    write_table_guarded(joinpath(root, "ont_k_sweep_results.tsv"), df,
-        RESULTS_KEYCOLS)
+    results_path = joinpath(root, "ont_k_sweep_results.tsv")
+    check_results_table_not_missing(root, results_path)
+    write_table_guarded(results_path, df, RESULTS_KEYCOLS)
     return df
+end
+
+"""
+    check_results_table_not_missing(root, results_path)
+
+Refuse when the results table is ABSENT while its derived siblings are present.
+
+`write_table_guarded` treats a missing target as "nothing to protect" and skips
+the shrink check — correct on a genuinely fresh tree. But the summary and
+verdict tables are unguarded precisely because the results table is expected to
+refuse first, and that expectation collapses the moment the results table is the
+one that is gone: the run then rewrites both siblings with whatever narrow grid
+it computed, silently.
+
+That state is reachable, and reachable through this harness's OWN advice — the
+unreadable-table refusal used to suggest "move or delete the file", and a
+delete does exactly this. A crash mid-publish could once produce it too, before
+`publish_atomically` switched to a real rename.
+
+The asymmetry is what makes it detectable: a fresh clone has neither the results
+table nor the siblings, so this never fires there. Only a tree where the results
+table alone went missing trips it, which is not a state any legitimate workflow
+produces.
+"""
+function check_results_table_not_missing(root, results_path)
+    isfile(results_path) && return nothing
+    siblings = filter(isfile,
+        [joinpath(root, "ont_k_sweep_summary.tsv"),
+            joinpath(root, "verdict_stats.tsv")])
+    isempty(siblings) && return nothing
+    error("refusing to write $(results_path): it is MISSING while its derived " *
+          "siblings are present ($(join(basename.(siblings), ", "))). Those " *
+          "siblings are unguarded because this table is expected to refuse a " *
+          "shrinking write first — with it absent, this run would rewrite them " *
+          "from whatever grid it computed, silently, and they cannot be rebuilt " *
+          "without cells/. Restore the results table (git checkout) before " *
+          "re-running, or delete the siblings too if starting genuinely fresh " *
+          "is what you mean.")
 end
 
 # The summary table's schema, named once so the empty case can be written with
@@ -1130,10 +1198,17 @@ function write_summary(root, df)
     # NOT guarded by write_table_guarded, deliberately (td-4blm review).
     #
     # This table is a pure derivative of the results frame: every row is a
-    # groupby over rows that write_aggregate just published, and
-    # `--aggregate-only` rebuilds it from cells/ at any time. So it holds no
-    # measurement that the guarded results table does not already hold, and
-    # losing it costs a re-run rather than data.
+    # groupby over rows that write_aggregate just published. So it holds no
+    # measurement the guarded results table does not already hold.
+    #
+    # It is NOT, however, freely regenerable, and an earlier version of this
+    # comment wrongly said it was. `write_summary` is only ever fed from
+    # `write_aggregate`'s return value, and `write_aggregate` hard-errors when
+    # cells/ is empty and no rows are in memory — so on a fresh clone, the exact
+    # td-4blm condition, `--aggregate-only` CANNOT rebuild it and recovery is
+    # `git checkout`. What protects it is not regenerability; it is that the
+    # results table refuses first, plus `check_results_table_not_missing` for
+    # the case where the results table itself has gone missing.
     #
     # Guarding it also bought nothing, because a narrowed grid is refused at
     # write_aggregate and the run aborts before reaching here. The only writes

@@ -316,22 +316,40 @@ if abspath(PROGRAM_FILE) == @__FILE__
     isempty(selected) &&
         println("  (nothing to do — no censored cells in this sweep tree)")
 
+    # Drop the unrescorable cells BEFORE the pre-flight, not inside the loop.
+    #
+    # Both predicates are statically computable here, so filtering first makes
+    # the pre-flight's prospective key set EXACT. Left inside the loop they made
+    # it a strict superset: the pre-flight passed on the full selection, the
+    # loop then skipped some cells, and the real write refused anyway — after
+    # every QUAST invocation had run, which is precisely the burn-then-refuse
+    # the pre-flight exists to prevent. Both skips are reachable on an ordinary
+    # tree: refs/ and the per-cell contig FASTAs are BOTH gitignored, and the
+    # contigs are the bulky ones an operator deletes to reclaim space (the
+    # .gitignore advertises ~149k contigs for ONT/30x/k=11) while keeping the
+    # small JSON checkpoints that put the cell in `selected` in the first place.
+    rescorable = filter(selected) do cell
+        if !isfile(joinpath(cell["cell_dir"], "contigs.fasta"))
+            @warn "contigs missing; skipping" cell = cell["cell_id"]
+            return false
+        end
+        if !haskey(references, cell["organism"])
+            @warn "no reference for organism; skipping cell" organism=cell["organism"] cell=cell["cell_id"]
+            return false
+        end
+        return true
+    end
+    length(rescorable) == length(selected) ||
+        println("  rescorable after dropping unusable cells: $(length(rescorable))")
+
     # Refuse an unpublishable run now, not after every QUAST invocation has
     # completed and the rows are about to be discarded.
-    preflight_threshold_table(OUT_DIR, selected, IDENTITIES)
+    preflight_threshold_table(OUT_DIR, rescorable, IDENTITIES)
 
     rows = NamedTuple[]
-    for cell in selected
+    for cell in rescorable
         contigs = joinpath(cell["cell_dir"], "contigs.fasta")
-        if !isfile(contigs)
-            @warn "contigs missing; skipping" cell = cell["cell_id"]
-            continue
-        end
         organism = cell["organism"]
-        if !haskey(references, organism)
-            @warn "no reference for organism; skipping cell" organism cell=cell["cell_id"]
-            continue
-        end
         for min_identity in IDENTITIES
             outdir = joinpath(OUT_DIR, cell["cell_id"], "idy$(min_identity)")
             result = rescore(contigs, references[organism], outdir, min_identity)
