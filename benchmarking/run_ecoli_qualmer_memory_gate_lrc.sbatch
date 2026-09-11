@@ -26,15 +26,19 @@ echo "=== E. coli qualmer memory gate (Lawrencium lr6) ==="
 echo "Job ${SLURM_JOB_ID}  Node ${SLURM_NODELIST}  Start $(date)"
 
 # julia/1.10.2-11.4 DOWNGRADES to a Julia that cannot load current master's
-# Manifest (extension-trigger KeyError; td-j8bh). Use juliaup's lts channel
-# (1.10.10, matching NERSC), already on this host at ~/.juliaup/bin.
-export PATH="${HOME}/.juliaup/bin:${PATH}"
-JULIA="$(command -v julia || true)"
-if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
-  echo "ERROR: julia not runnable via juliaup (~/.juliaup/bin on PATH)" >&2
+# Manifest (extension-trigger KeyError; td-j8bh). Invoke the juliaup launcher
+# DIRECTLY with `+lts` rather than PATH + `command -v` -- the latter silently
+# falls through to whatever julia is already on the inherited PATH if juliaup
+# is missing on a node, and even when it finds the shim, the shim resolves to
+# the host's mutable `juliaup default` -- not necessarily lts. `+lts` is
+# resolved by juliaup itself, pinned regardless of the default (td-j8bh review).
+JULIA="${HOME}/.juliaup/bin/julia"
+JULIA_ARGS=(+lts)
+if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
+  echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable (juliaup lts channel missing/broken on this host)" >&2
   exit 1
 fi
-echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
+echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
 
 # Group depot (precompiled deps + Bioconda envs install here).
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
@@ -71,13 +75,13 @@ else
 fi
 
 echo ">>> precompile warmup (import Mycelia recompiles branch source) $(date)"
-if ! LD_LIBRARY_PATH="" "${JULIA}" --project=.. -e 'import Mycelia; println("Mycelia loaded")'; then
+if ! LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project=.. -e 'import Mycelia; println("Mycelia loaded")'; then
   echo ">>> precompile/load FAILED" >&2
   exit 1
 fi
 
 echo ">>> RUN ecoli_qualmer_memory_gate.jl $(date)"
-LD_LIBRARY_PATH="" "${JULIA}" --project=.. ecoli_qualmer_memory_gate.jl
+LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project=.. ecoli_qualmer_memory_gate.jl
 status=$?
 
 echo "=== gate exit=${status} complete $(date) ==="
