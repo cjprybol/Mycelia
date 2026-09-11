@@ -34,6 +34,14 @@ const T4 = genome_size_for("T4")
 read_tsv(path) = CSV.read(path, DataFrames.DataFrame;
     delim = '\t', missingstring = "NA")
 
+# A value whose serialisation throws, so a write can be made to fail PARTWAY
+# through rather than before it starts. That distinction is what separates an
+# atomic publish from an in-place one: an in-place write has already truncated
+# the target by the time this fires.
+struct ExplodingCell end
+Base.show(::IO, ::ExplodingCell) = error("simulated serialisation failure")
+Base.print(::IO, ::ExplodingCell) = error("simulated serialisation failure")
+
 Test.@testset "ONT k-sweep helpers" begin
     Test.@testset "contig_stats is independent of QUAST" begin
         # The low-k regime: many contigs, none long enough for QUAST to score.
@@ -392,6 +400,11 @@ Test.@testset "ONT k-sweep helpers" begin
                     Test.@test err isa ErrorException
                     Test.@test occursin("missing key column", err.msg)
                     Test.@test occursin("schema change", err.msg)
+                    # WHICH table is the entire remedy content, and both
+                    # "missing key column" and "schema change" also appear in
+                    # check_keycols_are_a_key's error — so without this the
+                    # message could name the wrong table and still pass.
+                    Test.@test occursin("the table on disk at", err.msg)
                     # Distinct from the corruption message, not a synonym.
                     Test.@test !occursin("could not be read", err.msg)
                     # Overridable, like every other refusal here.
@@ -690,6 +703,27 @@ Test.@testset "ONT k-sweep helpers" begin
                 Test.@test occursin("is not a key for this table", err.msg)
                 Test.@test occursin("2 rows collapse to 1", err.msg)
             end
+
+            # The check is UNCONDITIONAL with respect to --allow-shrink, and the
+            # docstring argues that at length: --allow-shrink is permission to
+            # publish a smaller table, not one whose key is a fiction. Nothing
+            # pinned it — gating the call on allow_shrink left the suite green,
+            # so the argument lived only in prose.
+            mktempdir() do dir
+                target = joinpath(dir, "dup.tsv")
+                dup = DataFrames.DataFrame(
+                    organism = ["Lambda", "Lambda"], k = [15, 15], v = [1, 2])
+                err = try
+                    write_table_guarded(target, dup, (:organism, :k);
+                        allow_shrink = true)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("is not a key for this table", err.msg)
+                Test.@test !isfile(target)
+            end
         end
 
         Test.@testset "the published write is atomic" begin
@@ -777,6 +811,42 @@ Test.@testset "ONT k-sweep helpers" begin
                     Test.@test length(seen) == 1
                     Test.@test dirname(seen[1]) == dirname(target)
                     Test.@test occursin(string(getpid()), basename(seen[1]))
+                end
+            end
+
+            Test.@testset "write_table_guarded ITSELF publishes atomically" begin
+                # The helper being pinned is not the same as the production path
+                # using it. Replacing the publish_atomically block inside
+                # write_table_guarded with a direct CSV.write left the suite
+                # green, because every other guard test asserts only final file
+                # CONTENT — which an in-place write satisfies. That is round-1's
+                # C1 (an unexercised routing) recurring on this round's headline
+                # fix.
+                #
+                # Enter through write_table_guarded and make the serialisation
+                # fail partway, so an in-place write would truncate the target
+                # while an atomic one cannot touch it.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target, DataFrames.DataFrame(full);
+                        delim = '\t', missingstring = "NA")
+                    before = read(target, String)
+
+                    # A frame whose serialisation throws: a column of a type
+                    # CSV cannot render without calling our erroring `show`.
+                    struct_free = DataFrames.DataFrame(full)
+                    struct_free.boom = [ExplodingCell() for _ in 1:6]
+                    threw = false
+                    try
+                        write_table_guarded(target, struct_free, RESULTS_KEYCOLS)
+                    catch
+                        threw = true
+                    end
+                    Test.@test threw
+                    # In-place would have truncated it; atomic cannot.
+                    Test.@test read(target, String) == before
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
                 end
             end
 
