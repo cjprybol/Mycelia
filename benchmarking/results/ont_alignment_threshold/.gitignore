@@ -9,3 +9,6 @@
 # runs per cell; all of it is regenerable from the committed sweep checkpoints
 # by re-running benchmarking/ont_alignment_threshold_diagnostic.jl.
 Lambda__*/
+
+# In-flight temps from publish_atomically — a partial write, not a backup.
+*.tsv.tmp.*

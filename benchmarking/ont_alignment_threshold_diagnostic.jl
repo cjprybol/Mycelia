@@ -239,10 +239,25 @@ The cheap check up front costs one table read.
 """
 function preflight_threshold_table(out_dir, selected, identities)
     path = joinpath(out_dir, THRESHOLD_TABLE_NAME)
-    (ALLOW_SHRINK || !isfile(path) || isempty(selected)) && return nothing
+    isempty(selected) && return nothing
     prospective = DataFrames.DataFrame(
         cell_id = [c["cell_id"] for c in selected for _ in identities],
         min_identity = [i for _ in selected for i in identities])
+
+    # Mirror write_table_guarded's ORDER and its CONDITIONS, or the pre-flight
+    # passes runs the real write will refuse — which is the whole failure it
+    # exists to prevent.
+    #
+    # Key validity is unconditional there, so it is unconditional here: a
+    # duplicated threshold (`--identities 95,95`) yields duplicate
+    # (cell_id, min_identity) pairs, and check_no_keys_lost alone dedupes them
+    # through a Set and passes. Neither --allow-shrink nor a fresh output dir
+    # makes a duplicated key legitimate.
+    check_keycols_are_a_key(path, prospective, THRESHOLD_KEYCOLS)
+
+    # The shrink check, by contrast, only applies when there is something to
+    # shrink and the operator has not opted out — same gating as the real write.
+    (ALLOW_SHRINK || !isfile(path)) && return nothing
     check_no_keys_lost(path, prospective, THRESHOLD_KEYCOLS)
     return nothing
 end

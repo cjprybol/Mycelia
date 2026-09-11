@@ -413,7 +413,39 @@ Test.@testset "ONT k-sweep helpers" begin
                         RESULTS_KEYCOLS))
                     Test.@test err isa ErrorException
                     Test.@test occursin("the table being written", err.msg)
-                    Test.@test occursin("--allow-shrink", err.msg)
+                    # The path, which is what the bare ArgumentError lacked and
+                    # the whole reason this branch wraps it. Mutating the message
+                    # prefix away used to leave the suite green.
+                    Test.@test occursin(target, err.msg)
+                    # This check runs on the in-memory frame, so NEITHER escape
+                    # can change the outcome. Asserting only that "--allow-shrink"
+                    # appears would pass on a message recommending it, which is
+                    # the bug that was here: the message must say it does not help.
+                    Test.@test occursin("Neither --allow-shrink", err.msg)
+                    Test.@test occursin("Reconcile the key columns", err.msg)
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 6
+                end
+            end
+
+            Test.@testset "a zero-byte table is corruption, not a schema change" begin
+                # The discrimination used to come out backwards for the canonical
+                # crash artifact: CSV.read returns a 0x0 frame for an empty file
+                # (measured), so table_row_keys threw ArgumentError and the
+                # message said "that is a schema change rather than corruption".
+                # A zero-byte file is exactly what a crash, a full disk, or a
+                # killed write leaves behind.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    write(target, "")
+                    Test.@test filesize(target) == 0
+                    err = guarded_error(() -> write_table_guarded(
+                        target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("ZERO BYTES", err.msg)
+                    Test.@test !occursin("schema change", err.msg)
+                    # Still overridable.
+                    write_table_guarded(target, DataFrames.DataFrame(full),
+                        RESULTS_KEYCOLS; allow_shrink = true)
                     Test.@test DataFrames.nrow(read_tsv(target)) == 6
                 end
             end
@@ -672,10 +704,19 @@ Test.@testset "ONT k-sweep helpers" begin
                 mktempdir() do dir
                     target = joinpath(dir, "atomic.tsv")
                     CSV.write(target, good; delim = '\t', missingstring = "NA")
-                    Test.@test_throws ErrorException publish_atomically(target) do tmp
-                        write(tmp, "partial")
-                        error("simulated crash mid-write")
+                    err = try
+                        publish_atomically(target) do tmp
+                            write(tmp, "partial")
+                            error("simulated crash mid-write")
+                        end
+                        nothing
+                    catch e
+                        e
                     end
+                    # Message-validating, per the repo's Dispatch Quality Gates
+                    # ("all @test_throws must validate message content").
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("simulated crash mid-write", err.msg)
                     Test.@test DataFrames.nrow(read_tsv(target)) == 2
                     Test.@test isempty(filter(f -> occursin(".tmp.", f),
                         readdir(dir)))
@@ -712,6 +753,30 @@ Test.@testset "ONT k-sweep helpers" begin
                     # Under `mv(...; force = true)` the file is gone here.
                     Test.@test isfile(target)
                     Test.@test read(target, String) == before
+                end
+            end
+
+            Test.@testset "the temp is a same-directory, per-process sibling" begin
+                # Both properties are load-bearing and both were unpinned —
+                # moving the temp to tempdir() and dropping the pid suffix each
+                # left the suite green.
+                #
+                # Same directory: rename is only atomic within one filesystem, so
+                # a temp under /tmp can fail with EXDEV on a machine where the
+                # results tree is a different mount. Per-process: the shard driver
+                # points up to 32 concurrent processes at one --output-dir, and a
+                # shared temp name would let them clobber each other's in-flight
+                # writes.
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    seen = String[]
+                    publish_atomically(target) do tmp
+                        push!(seen, tmp)
+                        CSV.write(tmp, good; delim = '\t', missingstring = "NA")
+                    end
+                    Test.@test length(seen) == 1
+                    Test.@test dirname(seen[1]) == dirname(target)
+                    Test.@test occursin(string(getpid()), basename(seen[1]))
                 end
             end
 

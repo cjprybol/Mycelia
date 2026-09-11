@@ -52,8 +52,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #
 # The first thing refused is NOT a shard: it is the serial pre-warm below, which
 # runs a 1-k/1-coverage/1-seed grid against OUTPUT_DIR before any shard starts.
-# So a fresh-clone run dies there, in seconds, which is the cheapest possible
-# place to find out.
+# So a fresh-clone run dies there — after ONE cell, not instantly. write_aggregate
+# is called inside the Phase 2 cell loop, so the reference download, the conda
+# environment creation, one assembly and one QUAST run all complete first: minutes
+# to tens of minutes. Still far cheaper than the full grid, and cheaper than
+# letting 32 shards start, but do not expect it to fail in seconds.
 #
 # Remedy: set OUTPUT_DIR to a scratch tree (the usage line above). Adding
 # --allow-shrink is NOT a per-invocation fix here — it would disable the guard

@@ -194,10 +194,35 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             Test.@test preflight_threshold_table(
                 dir, [cell_of(a), cell_of(b)], idys) === nothing
 
-            # No table yet => nothing to protect => never refuse.
+            # A duplicated threshold (--identities 95,95) is refused up front.
+            # check_no_keys_lost ALONE cannot see this: the duplicate pairs
+            # dedupe through a Set, so the shrink check passes and the run
+            # burned every QUAST invocation before dying at the real write.
+            err3 = try
+                preflight_threshold_table(dir, [cell_of(a), cell_of(b)],
+                    (95.0, 95.0, 90.0, 85.0))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err3 isa ErrorException
+            Test.@test occursin("is not a key for this table", err3.msg)
+
+            # No table yet => nothing to SHRINK => never refuse on that ground.
             mktempdir() do fresh
                 Test.@test preflight_threshold_table(
                     fresh, [cell_of(a)], idys) === nothing
+                # ...but key validity is unconditional, exactly as it is in
+                # write_table_guarded, so a duplicated threshold still refuses
+                # even with no committed table present.
+                err4 = try
+                    preflight_threshold_table(fresh, [cell_of(a)], (95.0, 95.0))
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err4 isa ErrorException
+                Test.@test occursin("is not a key for this table", err4.msg)
             end
         end
     end
