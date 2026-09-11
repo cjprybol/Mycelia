@@ -949,6 +949,19 @@ end
 Throw unless writing `df` over the table at `path` preserves every key it has.
 """
 function check_no_keys_lost(path, df, keycols)
+    # A zero-byte file is CORRUPTION, not a schema change, and it has to be
+    # discriminated before the read: CSV.read returns a 0x0 frame for it
+    # (measured), so table_row_keys throws ArgumentError and the branch below
+    # would report "that is a schema change rather than corruption" — exactly
+    # backwards for the canonical crash / disk-full / killed-mid-write artifact.
+    if filesize(path) == 0
+        error("refusing to overwrite $(path): it is ZERO BYTES, which is what a " *
+              "crash, a full disk, or a killed write leaves behind — not an " *
+              "empty table. This write cannot be proven non-shrinking against " *
+              "it. Restore the file (git checkout), or pass --allow-shrink to " *
+              "replace it with what this run computed.")
+    end
+
     existing_keys = try
         old = CSV.read(path, DataFrames.DataFrame;
             delim = '\t', missingstring = "NA")
@@ -1218,8 +1231,14 @@ function write_summary(root, df)
     # those is a false positive, and it would leave the results table rewritten
     # against a stale summary: an inconsistent directory, produced by the guard
     # rather than prevented by it.
-    CSV.write(joinpath(root, "ont_k_sweep_summary.tsv"), summary_df;
-        delim = '\t', missingstring = "NA")
+    # Unguarded, but still published ATOMICALLY. Un-routing this from the shrink
+    # guard says nothing about crash-truncation: a bare CSV.write opens the
+    # tracked file and truncates it before rewriting, so a crash mid-write
+    # leaves a partial committed table. That is the same loss publish_atomically
+    # exists to prevent, and it applies here whether or not the shrink check does.
+    publish_atomically(joinpath(root, "ont_k_sweep_summary.tsv")) do tmp
+        CSV.write(tmp, summary_df; delim = '\t', missingstring = "NA")
+    end
     return summary_df
 end
 
@@ -1310,7 +1329,10 @@ function write_verdict_stats(root, df)
     # which it was not. All four strata in the committed table currently carry
     # all three conditional keys, so the table sits at exactly the shape where
     # any loss of measurability would have tripped it.
-    CSV.write(joinpath(root, "verdict_stats.tsv"), stats; delim = '\t')
+    # Unguarded, but published atomically — same reasoning as write_summary.
+    publish_atomically(joinpath(root, "verdict_stats.tsv")) do tmp
+        CSV.write(tmp, stats; delim = '\t')
+    end
     return stats
 end
 
