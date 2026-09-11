@@ -538,6 +538,58 @@ Test.@testset "ONT k-sweep helpers" begin
             end
         end
 
+        Test.@testset "a missing results table with siblings present is refused" begin
+            # The hole created by unguarding the derived tables. They are
+            # unguarded because the results table refuses first — which stops
+            # being true the moment the results table is the one that is gone.
+            # Reachable through this harness's own former advice ("move or
+            # delete the file"), and the siblings CANNOT be rebuilt without
+            # cells/, so the loss is permanent short of git checkout.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                # Siblings present, results table absent.
+                CSV.write(joinpath(dir, "ont_k_sweep_summary.tsv"),
+                    DataFrames.DataFrame(organism = ["Lambda"],
+                        technology = ["ont"], k = [15], coverage = [30]);
+                    delim = '\t')
+                Test.@test !isfile(joinpath(dir, results_name))
+
+                err = try
+                    write_aggregate(dir, NamedTuple[])
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("MISSING while its derived siblings", err.msg)
+                Test.@test occursin("ont_k_sweep_summary.tsv", err.msg)
+                # The sibling is untouched.
+                Test.@test isfile(joinpath(dir, "ont_k_sweep_summary.tsv"))
+            end
+
+            # A genuinely fresh tree has neither, so this must NOT fire there —
+            # otherwise it would block every first run.
+            mktempdir() do dir
+                cells = joinpath(dir, "cells")
+                mkpath(cells)
+                for r in full
+                    id = cell_id_for(r.organism, r.technology, r.k, r.coverage,
+                        r.seed)
+                    mkpath(joinpath(cells, id))
+                    save_cell_json(joinpath(cells, id, "cell_result.json"), r)
+                end
+                Test.@test DataFrames.nrow(
+                    write_aggregate(dir, NamedTuple[])) == 6
+            end
+        end
+
         Test.@testset "the key separator cannot be forged from key values" begin
             # Pins the choice of _KEY_SEP, which was otherwise unpinned prose:
             # no key column contains an ordinary punctuation character today,
@@ -612,20 +664,72 @@ Test.@testset "ONT k-sweep helpers" begin
             # The guard proves a write non-shrinking and then replaces the
             # committed file. Truncating in place would mean a crash mid-write
             # produced exactly the loss the guard exists to prevent, so the
-            # write lands via a temp file and a rename. A failure partway must
-            # leave the original intact and no temp behind.
-            mktempdir() do dir
-                target = joinpath(dir, "atomic.tsv")
-                good = DataFrames.DataFrame(organism = ["Lambda", "T4"],
-                    k = [15, 21], v = [1, 2])
-                CSV.write(target, good; delim = '\t', missingstring = "NA")
-                Test.@test_throws ErrorException publish_atomically(target) do tmp
-                    write(tmp, "partial")
-                    error("simulated crash mid-write")
+            # write lands via a temp file and an atomic rename.
+            good = DataFrames.DataFrame(organism = ["Lambda", "T4"],
+                k = [15, 21], v = [1, 2])
+
+            Test.@testset "a failure inside write! leaves the original intact" begin
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    Test.@test_throws ErrorException publish_atomically(target) do tmp
+                        write(tmp, "partial")
+                        error("simulated crash mid-write")
+                    end
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 2
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
                 end
-                Test.@test DataFrames.nrow(read_tsv(target)) == 2
-                Test.@test isempty(filter(f -> occursin(".tmp.", f),
-                    readdir(dir)))
+            end
+
+            Test.@testset "the publish step never deletes before it replaces" begin
+                # THIS is the assertion that discriminates the implementation.
+                # The version above passes under `mv(tmp, path; force = true)`
+                # too, because the failure happens before the publish step is
+                # reached — so it could not tell the two apart.
+                #
+                # Julia's `mv` does rm(dst) THEN rename, so a failure in the
+                # publish step itself leaves the committed table DELETED.
+                # Measured: with an unrenameable source, mv leaves
+                # isfile(dst) == false. Base.Filesystem.rename leaves it
+                # byte-for-byte intact. Simulate a publish-step failure by
+                # removing the temp out from under it, which is what a crash
+                # between write and rename looks like from the target's side.
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    before = read(target, String)
+                    threw = false
+                    try
+                        publish_atomically(target) do tmp
+                            write(tmp, "x")
+                            rm(tmp; force = true)   # publish step now must fail
+                        end
+                    catch
+                        threw = true
+                    end
+                    Test.@test threw
+                    # Under `mv(...; force = true)` the file is gone here.
+                    Test.@test isfile(target)
+                    Test.@test read(target, String) == before
+                end
+            end
+
+            Test.@testset "a successful publish replaces the contents" begin
+                mktempdir() do dir
+                    target = joinpath(dir, "atomic.tsv")
+                    CSV.write(target, good; delim = '\t', missingstring = "NA")
+                    bigger = DataFrames.DataFrame(
+                        organism = ["Lambda", "T4", "T4"], k = [15, 21, 31],
+                        v = [1, 2, 3])
+                    publish_atomically(target) do tmp
+                        CSV.write(tmp, bigger; delim = '\t',
+                            missingstring = "NA")
+                    end
+                    Test.@test DataFrames.nrow(read_tsv(target)) == 3
+                    Test.@test isempty(filter(f -> occursin(".tmp.", f),
+                        readdir(dir)))
+                end
             end
         end
     end
