@@ -730,8 +730,43 @@ function merge_and_map_single_end_samples(;
         fastq = fastq_out,
         index_file = minimap_index
     )
+    # NOT swept unconditionally here, unlike minimap_merge_map_and_split.
+    #
+    # `outbase` defaults to `normalized_current_date() * "..."`, which is
+    # DATE-ONLY. Every call on a given day from a given working directory
+    # therefore derives the SAME split prefix regardless of `fastq_list`, and
+    # the default `dirname` is "" -> the process CWD. Two concurrent runs under
+    # that default share a prefix, so an unconditional sweep at function entry
+    # would delete a peer's IN-FLIGHT chunks -- turning a disk-space bug into a
+    # truncated-output bug. The shape anchor cannot help: the peer's chunks
+    # match the left anchor too, because the prefix is genuinely the same.
+    #
+    # Sweeping only when we are about to map keeps the peer's no-op path a
+    # no-op. It does leave one hole: a run killed AFTER writing `outfile` keeps
+    # its chunks, since this branch is then skipped forever. That is a leak,
+    # and a leak is strictly better than deleting a file another process is
+    # still writing.
+    #
+    # The real defect is the colliding default; fixing it is a behaviour change
+    # beyond this PR's scope (same-day reuse of `fastq_out`/`tsv_out` is also
+    # wrong under it) and is tracked separately.
     if !isfile(minimap_result.outfile)
-        @time run(minimap_result.cmd)
+        Mycelia.cleanup_minimap_split_temps(
+            minimap_result.split_prefix; skip_if_owner_live = true)
+        # `finally`, because minimap2 leaves its --split-prefix chunks behind
+        # only when it is killed mid-run; on a clean exit it removes them itself.
+        #
+        # Tracked before the run because the sweep above trusts the ownership
+        # sidecar: a site that maps WITHOUT tracking leaves chunks a later
+        # sweep reads as `:absent` and reclaims while they are still in flight.
+        Mycelia.register_minimap_split_temp_atexit()
+        Mycelia.track_minimap_split_prefix(minimap_result.split_prefix)
+        try
+            @time run(minimap_result.cmd)
+        finally
+            Mycelia.cleanup_minimap_split_temps(minimap_result.split_prefix)
+            Mycelia.untrack_minimap_split_prefix(minimap_result.split_prefix)
+        end
     end
     results_table_outfiles = [outbase * fmt for fmt in outformats]
     # Determine file paths for .tsv.gz and .jld2

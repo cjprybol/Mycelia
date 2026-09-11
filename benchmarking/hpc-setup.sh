@@ -30,10 +30,17 @@
 #              file path is resolved relative to the current directory, and the
 #              job is submitted from CWD.
 #
-# Prerequisite: a `julia` (1.10.x) must already be on PATH — load the cluster's
-# module first, e.g. `module load julia/1.10.10` (NERSC) or
-# `module load julia/1.10.2-11.4` (Lawrencium). On HPC, LD_LIBRARY_PATH is
-# cleared here to avoid system libstdc++ conflicts.
+# Prerequisite: a runnable `julia` (1.10.x). On NERSC, load the cluster
+# module first: `module load julia/1.10.10`. On Lawrencium, do NOT
+# `module load julia/1.10.2-11.4` — it downgrades to a Julia that cannot load
+# current master's Manifest (extension-trigger KeyError; td-j8bh). This
+# script prefers juliaup's `+lts` channel (already on the host at
+# ~/.juliaup/bin, resolving to 1.10.10 at last check) when present, invoked
+# directly rather than via PATH + `command -v` — the latter would silently
+# follow the host's mutable `juliaup default` instead of a pinned channel
+# (td-j8bh round 2). Falls back to whatever `julia` the NERSC module put on
+# PATH when juliaup is absent. On HPC, LD_LIBRARY_PATH is cleared here to
+# avoid system libstdc++ conflicts.
 #
 # Usage:
 #   benchmarking/hpc-setup.sh                                # full preflight
@@ -75,9 +82,25 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(cd "${script_dir}/.." && pwd)"
 
-if ! command -v julia >/dev/null 2>&1; then
-    echo "ERROR: julia not found on PATH. Load the cluster's julia module first," >&2
-    echo "       e.g. 'module load julia/1.10.10'." >&2
+# Prefer juliaup's pinned lts channel when present (Lawrencium): resolving
+# via PATH + `command -v` would silently follow the host's mutable
+# `juliaup default` rather than the version the four Lawrencium sbatch
+# wrappers pin (td-j8bh round 2) -- this preflight prepares the SAME shared
+# depot those jobs consume, so a skewed preflight version reintroduces the
+# same Manifest-incompatibility class one script over. On NERSC there is no
+# juliaup install; fall back to whatever `julia` the cluster's module put on
+# PATH, unchanged from before.
+if [[ -x "${HOME}/.juliaup/bin/julia" ]]; then
+    JULIA="${HOME}/.juliaup/bin/julia"
+    JULIA_ARGS=(+lts)
+else
+    JULIA="$(command -v julia || true)"
+    JULIA_ARGS=()
+fi
+if [[ -z "${JULIA}" ]] || ! LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
+    echo "ERROR: julia not runnable. On NERSC, load the cluster's julia module first," >&2
+    echo "       e.g. 'module load julia/1.10.10'. On Lawrencium, ensure juliaup's lts" >&2
+    echo "       channel is installed (~/.juliaup/bin/julia +lts)." >&2
     exit 1
 fi
 
@@ -88,16 +111,17 @@ else
 fi
 
 echo "=== Mycelia HPC env preflight ==="
-echo "julia:       $(command -v julia) ($(LD_LIBRARY_PATH="" julia --version))"
+echo "julia:       ${JULIA} ${JULIA_ARGS[*]}  ($(LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
 echo "project:     ${project_dir}"
 echo "depot:       ${JULIA_DEPOT_PATH:-<julia default>}"
 echo "mode:        ${mode_desc}"
 echo "start:       $(date)"
 
-# resolve (repair stale/missing manifest) -> instantiate. Cheap and
-# login-node-safe in BOTH modes — this is never the step that trips a
-# login-node CPU watchdog.
-LD_LIBRARY_PATH="" julia --project="${project_dir}" -e '
+# resolve (repair stale/missing manifest) -> instantiate. Login-node-safe in
+# BOTH modes ONLY with auto-precompile disabled: Pkg.instantiate() triggers
+# precompilation by default, which is the step the Lawrencium login-node CPU
+# watchdog SIGKILLs, not resolve/instantiate themselves (td-j8bh round 2).
+JULIA_PKG_PRECOMPILE_AUTO=0 LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project="${project_dir}" -e '
     import Pkg
     Pkg.resolve()
     Pkg.instantiate()
@@ -123,9 +147,9 @@ fi
 
 # --- default: precompile (CPU-heavy) + import sanity --------------------------
 echo "--- precompile ---"
-LD_LIBRARY_PATH="" julia --project="${project_dir}" -e 'import Pkg; Pkg.precompile()'
+LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project="${project_dir}" -e 'import Pkg; Pkg.precompile()'
 
 echo "--- sanity: import Mycelia ---"
-LD_LIBRARY_PATH="" julia --project="${project_dir}" -e 'import Mycelia; println("MYCELIA_IMPORT_OK")'
+LD_LIBRARY_PATH="" "${JULIA}" "${JULIA_ARGS[@]}" --project="${project_dir}" -e 'import Mycelia; println("MYCELIA_IMPORT_OK")'
 
 echo "=== preflight complete: $(date) ==="
