@@ -73,6 +73,252 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             Test.@test found[1]["nga50_status"] == "censored_partial_alignment"
         end
     end
+
+    Test.@testset "write_threshold_table refuses to shrink the committed table" begin
+        # td-4blm in its worse form. This script had no union at all — it wrote
+        # only the rows the current invocation computed — and --output-dir
+        # defaults to the git-tracked results directory. Its OWN documented
+        # usage line, `--cells Lambda__ont__k31__30x__seed42`, would therefore
+        # have replaced the committed 152-row table with 4 rows. Rescoring is
+        # expensive enough that narrowing is the normal way to run it, so the
+        # truncating shape was the common one, not the exotic one.
+        #
+        # Conditional, not past tense: git history shows both committed tables
+        # only ever GREW (the diagnostic table 57 -> 153 lines, the sweep table
+        # 97 -> 241). Nothing establishes the loss actually occurred.
+        row(cell,
+            k,
+            seed,
+            idy) = (
+            cell_id = cell, organism = "Lambda", technology = "ont",
+            k = k, coverage = 30, seed = seed, min_identity = idy,
+            asm_contigs_ge_min = 1, asm_max_contig = 600,
+            rescore_status = "ok", genome_fraction = 31.663,
+            NGA50 = missing, NA50 = missing, largest_alignment = 400,
+            unaligned_length = 200, misassemblies = 0)
+        # 80.5 is in the real default ladder and is the float most likely to
+        # expose a key-normalisation bug, so it stays in the fixture.
+        idys = (95.0, 90.0, 85.0, 80.5)
+        a = cell_id_for("Lambda", "ont", 31, 30, 42)
+        b = cell_id_for("Lambda", "ont", 21, 30, 42)
+        full = vcat([row(a, 31, 42, i) for i in idys],
+            [row(b, 21, 42, i) for i in idys])
+        table_of(dir) = joinpath(dir, "alignment_threshold_diagnostic.tsv")
+        nrows(dir) = DataFrames.nrow(CSV.read(table_of(dir),
+            DataFrames.DataFrame; delim = '\t', missingstring = "NA"))
+
+        # Seed with a plain CSV.write, NOT through write_threshold_table. A
+        # fixture built by the symbol under test cannot run against pre-change
+        # code at all — it fails to resolve the name — so every assertion below
+        # it would be an artifact of symbol resolution rather than a statement
+        # about behaviour. The sweep testset was corrected for exactly this and
+        # this file was missed.
+        seed_table(dir) = CSV.write(table_of(dir), DataFrames.DataFrame(full);
+            delim = '\t', missingstring = "NA")
+
+        mktempdir() do dir
+            seed_table(dir)
+            Test.@test nrows(dir) == 8
+
+            # The documented --cells example: one cell, four thresholds.
+            #
+            # sweep_dir is passed EXPLICITLY, pointing at an empty tree. The
+            # default resolves to the real <repo>/benchmarking/results/
+            # ont_k_sweep/cells, which is gitignored and machine-dependent —
+            # absent here and on CI, but populated on a dev box that has run the
+            # sweep, which would silently flip this case to the other remedy arm.
+            # A test's arm should be chosen, not inherited from the machine.
+            one_cell = filter(r -> r.cell_id == a, full)
+            err = mktempdir() do bare
+                try
+                    write_threshold_table(dir, one_cell; sweep_dir = bare)
+                    nothing
+                catch e
+                    e
+                end
+            end
+            Test.@test err isa ShrinkRefusal
+            Test.@test occursin("refusing to shrink", err.msg)
+            Test.@test occursin("--allow-shrink", err.msg)
+            # The committed table survives the attempt intact.
+            Test.@test nrows(dir) == 8
+
+            # write_threshold_table's OWN cells_dir routing, pinned.
+            #
+            # The delta made cells_dir a parameter and updated both diagnostic
+            # call sites, but only preflight's was tested — deleting the kwarg
+            # here alone left the suite green. The backstop is genuinely
+            # reachable when preflight passed: preflight builds its prospective
+            # keys from selected x identities, while this receives the rows QUAST
+            # actually produced, so a cell that fails QUAST drops keys preflight
+            # never saw. That is exactly the path where the wrong remedy reaches
+            # the operator.
+            mktempdir() do sweep
+                cells = joinpath(sweep, "cells")
+                mkpath(cells)
+                for id in (a, b)
+                    mkpath(joinpath(cells, id))
+                    write(joinpath(cells, id, "cell_result.json"), "{}")
+                end
+                err_w = try
+                    write_threshold_table(dir, one_cell; sweep_dir = sweep)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err_w isa ShrinkRefusal
+                Test.@test occursin("is the wrong tool", err_w.msg)
+                Test.@test occursin("always safe", err_w.msg)
+                Test.@test !occursin("cells/ is absent", err_w.msg)
+                Test.@test nrows(dir) == 8
+            end
+
+            # An empty run writes nothing at all rather than a headerless file
+            # over a populated table.
+            Test.@test write_threshold_table(dir, NamedTuple[]) === nothing
+            Test.@test nrows(dir) == 8
+
+            # Rewriting the same key set is not a shrink, so a legitimate
+            # full re-run still lands.
+            Test.@test write_threshold_table(dir, reverse(full)) !== nothing
+            Test.@test nrows(dir) == 8
+        end
+    end
+
+    Test.@testset "preflight refuses before any QUAST work is spent" begin
+        # write_threshold_table is the backstop; this is the check that matters
+        # operationally. The output key set is exactly selected x identities and
+        # both are known before the rescoring loop, so an unpublishable run is
+        # detectable up front. Without this the refusal lands AFTER every QUAST
+        # invocation has completed — 152 of them for the committed cell set —
+        # and the rows are then discarded in memory, with no per-cell
+        # checkpoints to salvage the work.
+        idys = (95.0, 90.0, 85.0, 80.5)
+        a = cell_id_for("Lambda", "ont", 31, 30, 42)
+        b = cell_id_for("Lambda", "ont", 21, 30, 42)
+        committed = DataFrames.DataFrame(
+            cell_id = [c for c in (a, b) for _ in idys],
+            min_identity = [i for _ in (a, b) for i in idys],
+            value = 1:8)
+        cell_of(id) = Dict{String, Any}("cell_id" => id)
+
+        mktempdir() do dir
+            target = joinpath(dir, "alignment_threshold_diagnostic.tsv")
+            CSV.write(target, committed; delim = '\t', missingstring = "NA")
+
+            # The documented --cells invocation: one of the two cells.
+            err = try
+                preflight_threshold_table(dir, [cell_of(a)], idys)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ShrinkRefusal
+            Test.@test occursin("refusing to shrink", err.msg)
+
+            # A narrowed --identities ladder is the other narrowing flag, and
+            # reaches the same refusal by dropping half of every cell's rows.
+            err2 = try
+                preflight_threshold_table(dir, [cell_of(a), cell_of(b)],
+                    (95.0, 90.0))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err2 isa ShrinkRefusal
+            Test.@test occursin("refusing to shrink", err2.msg)
+
+            # The full run passes preflight, so the check does not block the
+            # invocation it is meant to permit.
+            Test.@test preflight_threshold_table(
+                dir, [cell_of(a), cell_of(b)], idys) === nothing
+
+            # A duplicated threshold (--identities 95,95) is refused up front.
+            # check_no_keys_lost ALONE cannot see this: the duplicate pairs
+            # dedupe through a Set, so the shrink check passes and the run
+            # burned every QUAST invocation before dying at the real write.
+            err3 = try
+                preflight_threshold_table(dir, [cell_of(a), cell_of(b)],
+                    (95.0, 95.0, 90.0, 85.0))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err3 isa ErrorException
+            Test.@test occursin("is not a key for this table", err3.msg)
+
+            # The refusal must read the SWEEP's cells/, not OUT_DIR's.
+            #
+            # This script reads checkpoints from SWEEP_DIR and writes its table
+            # to OUT_DIR, so deriving the checkpoint directory from the table's
+            # own location named a directory that never exists — n_cells was
+            # structurally 0 and the refusal always claimed cells/ was absent
+            # and always offered --allow-shrink. That silently dropped the
+            # "those cells were measured" caveat here, in the script where
+            # --allow-shrink is most reachable (the file header advertises it)
+            # and where a partial prune of the gitignored contigs/refs is how a
+            # run gets narrowed in the first place.
+            mktempdir() do sweep
+                cells = joinpath(sweep, "cells")
+                mkpath(cells)
+                for id in (a, b)
+                    mkpath(joinpath(cells, id))
+                    write(joinpath(cells, id, "cell_result.json"), "{}")
+                end
+                err5 = try
+                    preflight_threshold_table(dir, [cell_of(a)], idys;
+                        sweep_dir = sweep)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err5 isa ShrinkRefusal
+                # The populated-cells/ branch: --allow-shrink is the WRONG tool.
+                Test.@test occursin("checkpoint(s)", err5.msg)
+                Test.@test occursin("is the wrong tool", err5.msg)
+                Test.@test occursin("always safe", err5.msg)
+                Test.@test !occursin("cells/ is absent", err5.msg)
+
+                # And with the sweep tree empty, the fresh-clone branch returns.
+                mktempdir() do bare
+                    err6 = try
+                        preflight_threshold_table(dir, [cell_of(a)], idys;
+                            sweep_dir = bare)
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err6 isa ShrinkRefusal
+                    Test.@test occursin("cells/ is absent", err6.msg)
+                    # Symmetric with err5's pair, so neither arm can drift into
+                    # the other's text unnoticed.
+                    Test.@test !occursin("is the wrong tool", err6.msg)
+                    # The scratch-dir escape is correct in BOTH arms, so
+                    # it must appear in both. Putting a universally-
+                    # applicable remedy inside the conditional is what
+                    # made two successive arm-selection bugs possible.
+                    Test.@test occursin("always safe", err6.msg)
+                end
+            end
+
+            # No table yet => nothing to SHRINK => never refuse on that ground.
+            mktempdir() do fresh
+                Test.@test preflight_threshold_table(
+                    fresh, [cell_of(a)], idys) === nothing
+                # ...but key validity is unconditional, exactly as it is in
+                # write_table_guarded, so a duplicated threshold still refuses
+                # even with no committed table present.
+                err4 = try
+                    preflight_threshold_table(fresh, [cell_of(a)], (95.0, 95.0))
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err4 isa ErrorException
+                Test.@test occursin("is not a key for this table", err4.msg)
+            end
+        end
+    end
 end
 
 end  # module
