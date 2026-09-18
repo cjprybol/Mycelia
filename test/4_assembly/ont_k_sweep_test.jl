@@ -678,12 +678,17 @@ Test.@testset "ONT k-sweep helpers" begin
                 wide = DataFrames.DataFrame(full)
                 rebuild = () -> (calls += 1; calls == 1 ? narrow : wide)
                 published = DataFrames.DataFrame[]
-                result = retry_once_on_shrink(rebuild) do frame
-                    push!(published, frame)
-                    # Refuse the first (narrow) publish the way the guard would.
-                    length(published) == 1 &&
-                        throw(ShrinkRefusal("refusing to shrink /x: ..."))
-                    return frame
+                # The @warn is the ONLY signal distinguishing a run that masked
+                # a persistent race from a clean one, and deleting it left the
+                # suite green. Assert it fires.
+                result = Test.@test_logs (:warn,) match_mode = :any begin
+                    retry_once_on_shrink(rebuild) do frame
+                        push!(published, frame)
+                        # Refuse the first (narrow) publish as the guard would.
+                        length(published) == 1 &&
+                            throw(ShrinkRefusal("refusing to shrink /x: ..."))
+                        return frame
+                    end
                 end
                 Test.@test calls == 2                      # a SECOND scan happened
                 Test.@test length(published) == 2
@@ -728,15 +733,31 @@ Test.@testset "ONT k-sweep helpers" begin
                 mktempdir() do dir
                     seed_table(dir)
                     Test.@test !isdir(joinpath(dir, "cells"))
-                    err = try
-                        write_aggregate(dir,
-                            filter(r -> r.organism == "Lambda", full))
-                        nothing
-                    catch e
-                        e
+                    # Capture logs so this ALSO pins the ROUTING, not just the
+                    # outcome. retry_once_on_shrink is exhaustively tested in
+                    # isolation, but nothing held write_aggregate to calling it:
+                    # swapping the call site for a direct write_table_guarded
+                    # produced the identical refusal and left the suite green.
+                    # That is the unexercised-routing class this PR closes for
+                    # write_table_guarded and for the derived tables, reappearing
+                    # on this round's own fix. The warning is producible ONLY by
+                    # going through the retry, so asserting it binds the two.
+                    logger = Test.TestLogger()
+                    err = Base.CoreLogging.with_logger(logger) do
+                        try
+                            write_aggregate(dir,
+                                filter(r -> r.organism == "Lambda", full))
+                            nothing
+                        catch e
+                            e
+                        end
                     end
                     Test.@test err isa ShrinkRefusal
                     Test.@test occursin("refusing to shrink", err.msg)
+                    Test.@test any(
+                        r -> r.level == Base.CoreLogging.Warn &&
+                             occursin("re-reading checkpoints", r.message),
+                        logger.logs)
                     Test.@test DataFrames.nrow(
                         read_tsv(joinpath(dir, results_name))) == 6
                 end
@@ -963,15 +984,18 @@ Test.@testset "ONT k-sweep helpers" begin
                     CSV.write(target, good; delim = '\t', missingstring = "NA")
                     before = read(target, String)
                     threw = false
+                    caught = nothing
                     try
                         publish_atomically(target) do tmp
                             write(tmp, "x")
                             rm(tmp; force = true)   # publish step now must fail
                         end
-                    catch
+                    catch e
                         threw = true
+                        caught = e
                     end
                     Test.@test threw
+                    Test.@test occursin("failed to publish", caught.msg)
                     # Under `mv(...; force = true)` the file is gone here.
                     Test.@test isfile(target)
                     Test.@test read(target, String) == before
@@ -1031,12 +1055,15 @@ Test.@testset "ONT k-sweep helpers" begin
                     struct_free = DataFrames.DataFrame(full)
                     struct_free.boom = [ExplodingCell() for _ in 1:6]
                     threw = false
+                    caught = nothing
                     try
                         write_table_guarded(target, struct_free, RESULTS_KEYCOLS)
-                    catch
+                    catch e
                         threw = true
+                        caught = e
                     end
                     Test.@test threw
+                    Test.@test occursin("failed to publish", caught.msg)
                     # In-place would have truncated it; atomic cannot.
                     Test.@test read(target, String) == before
                     Test.@test isempty(filter(f -> occursin(".tmp.", f),
@@ -1104,12 +1131,19 @@ Test.@testset "ONT k-sweep helpers" begin
                         before = read(target, String)
                         mkpath("$(target).tmp.$(getpid())")   # block the temp
                         threw = false
+                        caught = nothing
                         try
                             writer(dir, DataFrames.DataFrame(full))
-                        catch
+                        catch e
                             threw = true
+                            caught = e
                         end
                         Test.@test threw
+                    Test.@test occursin("failed to publish", caught.msg)
+                        # Name the failing STEP, not merely that something
+                        # threw: an error raised BEFORE the publish would also
+                        # leave the target unchanged and satisfy a bare `threw`.
+                        Test.@test occursin("failed to publish", caught.msg)
                         Test.@test read(target, String) == before
                     end
                 end

@@ -237,7 +237,8 @@ has no per-cell checkpoints, so that compute is simply lost.
 
 The cheap check up front costs one table read.
 """
-function preflight_threshold_table(out_dir, selected, identities)
+function preflight_threshold_table(out_dir, selected, identities;
+        sweep_dir = SWEEP_DIR)
     path = joinpath(out_dir, THRESHOLD_TABLE_NAME)
     isempty(selected) && return nothing
     prospective = DataFrames.DataFrame(
@@ -258,7 +259,13 @@ function preflight_threshold_table(out_dir, selected, identities)
     # The shrink check, by contrast, only applies when there is something to
     # shrink and the operator has not opted out — same gating as the real write.
     (ALLOW_SHRINK || !isfile(path)) && return nothing
-    check_no_keys_lost(path, prospective, THRESHOLD_KEYCOLS)
+    # cells_dir points at the SWEEP's checkpoints, not OUT_DIR's. This script
+    # reads from SWEEP_DIR and writes to OUT_DIR, so the default
+    # `dirname(path)/cells` would name a directory that never exists — making
+    # the refusal always claim cells/ is absent and always offer --allow-shrink,
+    # even when the dropped rows name cells that were measured.
+    check_no_keys_lost(path, prospective, THRESHOLD_KEYCOLS;
+        cells_dir = joinpath(sweep_dir, "cells"))
     return nothing
 end
 
@@ -290,12 +297,15 @@ Returns `nothing` without writing when `rows` is empty — an empty run is
 already non-truncating, and emitting a headerless file over a populated table
 would be its own data loss.
 """
-function write_threshold_table(out_dir, rows)
+function write_threshold_table(out_dir, rows; sweep_dir = SWEEP_DIR)
     isempty(rows) && return nothing
     df = DataFrames.DataFrame(rows)
     sort!(df, [:technology, :k, :coverage, :seed, :min_identity])
+    # Same reason as in preflight_threshold_table: the checkpoints that decide
+    # whether the dropped rows name MEASURED cells live under the sweep tree,
+    # not beside this table.
     write_table_guarded(joinpath(out_dir, THRESHOLD_TABLE_NAME), df,
-        THRESHOLD_KEYCOLS)
+        THRESHOLD_KEYCOLS; cells_dir = joinpath(sweep_dir, "cells"))
     return df
 end
 
