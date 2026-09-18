@@ -91,16 +91,23 @@ same `--output-dir`.
 
 **Only `ont_k_sweep_results.tsv` is guarded.** `ont_k_sweep_summary.tsv` and
 `verdict_stats.tsv` are pure derivatives of it — every row is a groupby or a
-statistic over rows the results table already holds, and `--aggregate-only`
-rebuilds both from `cells/` at any time. Guarding them caught nothing real,
-because a narrowed grid is refused at the results table and the run aborts
-before either is reached. What it did catch was false positives: `verdict_stats`
-emits three of its statistics (`max_cell_NGA50`, `nga50_cv_median`,
-`nga50_cv_max`) only when NGA50 is measurable, so an unchanged 240-cell grid
-re-measured with NGA50 no longer computable dropped three keys and was refused —
-after the results table had already been rewritten. Leaving them unguarded keeps
-the whole sequence consistent: one guarded table, one decision, no partial
-state.
+statistic over rows the results table already holds. Guarding them caught
+nothing real, because a narrowed grid is refused at the results table and the
+run aborts before either is reached.
+
+They are **not** freely regenerable, though, and an earlier draft of this
+paragraph wrongly said `--aggregate-only` rebuilds them "at any time". It
+rebuilds them from `cells/`, which is gitignored — so on a fresh clone, the
+exact condition this section is about, it cannot, and recovery is
+`git checkout`. What protects them is that the results table refuses first, plus
+a check that refuses when the results table itself has gone missing while a
+derived sibling is still present. What it did catch was false positives:
+`verdict_stats` emits three of its statistics (`max_cell_NGA50`,
+`nga50_cv_median`, `nga50_cv_max`) only when NGA50 is measurable, so an
+unchanged 240-cell grid re-measured with NGA50 no longer computable dropped
+three keys and was refused — after the results table had already been rewritten.
+Leaving them unguarded keeps the whole sequence consistent: one guarded table,
+one decision, no partial state.
 
 The same guard covers `benchmarking/ont_alignment_threshold_diagnostic.jl`,
 where `--cells` and a shortened `--identities` ladder narrow the table the same

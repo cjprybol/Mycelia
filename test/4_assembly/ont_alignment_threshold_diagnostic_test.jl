@@ -208,6 +208,51 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             Test.@test err3 isa ErrorException
             Test.@test occursin("is not a key for this table", err3.msg)
 
+            # The refusal must read the SWEEP's cells/, not OUT_DIR's.
+            #
+            # This script reads checkpoints from SWEEP_DIR and writes its table
+            # to OUT_DIR, so deriving the checkpoint directory from the table's
+            # own location named a directory that never exists — n_cells was
+            # structurally 0 and the refusal always claimed cells/ was absent
+            # and always offered --allow-shrink. That silently dropped the
+            # "those cells were measured" caveat here, in the script where
+            # --allow-shrink is most reachable (the file header advertises it)
+            # and where a partial prune of the gitignored contigs/refs is how a
+            # run gets narrowed in the first place.
+            mktempdir() do sweep
+                cells = joinpath(sweep, "cells")
+                mkpath(cells)
+                for id in (a, b)
+                    mkpath(joinpath(cells, id))
+                    write(joinpath(cells, id, "cell_result.json"), "{}")
+                end
+                err5 = try
+                    preflight_threshold_table(dir, [cell_of(a)], idys;
+                        sweep_dir = sweep)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err5 isa ShrinkRefusal
+                # The populated-cells/ branch: --allow-shrink is the WRONG tool.
+                Test.@test occursin("checkpoint(s)", err5.msg)
+                Test.@test occursin("were measured", err5.msg)
+                Test.@test !occursin("cells/ is absent", err5.msg)
+
+                # And with the sweep tree empty, the fresh-clone branch returns.
+                mktempdir() do bare
+                    err6 = try
+                        preflight_threshold_table(dir, [cell_of(a)], idys;
+                            sweep_dir = bare)
+                        nothing
+                    catch e
+                        e
+                    end
+                    Test.@test err6 isa ShrinkRefusal
+                    Test.@test occursin("cells/ is absent", err6.msg)
+                end
+            end
+
             # No table yet => nothing to SHRINK => never refuse on that ground.
             mktempdir() do fresh
                 Test.@test preflight_threshold_table(

@@ -866,7 +866,8 @@ file in place would leave a crash mid-write producing exactly the data loss this
 guard exists to prevent — and the resulting partial file would then trip the
 unreadable-table refusal, so recovery would require `--allow-shrink`.
 """
-function write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK)
+function write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK,
+        cells_dir = joinpath(dirname(path), "cells"))
     # Unconditional, and deliberately OUTSIDE both the isfile short-circuit and
     # the allow_shrink escape. "These columns identify a row" is an invariant of
     # the table itself, not of the comparison against an older copy: a FIRST
@@ -875,7 +876,7 @@ function write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK)
     # not permission to publish one whose key is a fiction.
     check_keycols_are_a_key(path, df, keycols)
     if !allow_shrink && isfile(path)
-        check_no_keys_lost(path, df, keycols)
+        check_no_keys_lost(path, df, keycols; cells_dir = cells_dir)
     end
     publish_atomically(path) do tmp
         CSV.write(tmp, df; delim = '\t', missingstring = "NA")
@@ -1000,7 +1001,8 @@ end
 
 Throw unless writing `df` over the table at `path` preserves every key it has.
 """
-function check_no_keys_lost(path, df, keycols)
+function check_no_keys_lost(path, df, keycols;
+        cells_dir = joinpath(dirname(path), "cells"))
     # A zero-byte file is CORRUPTION, not a schema change, and it has to be
     # discriminated before the read: CSV.read returns a 0x0 frame for it
     # (measured), so table_row_keys throws ArgumentError and the branch below
@@ -1087,7 +1089,21 @@ function check_no_keys_lost(path, df, keycols)
     # their only surviving copy. An earlier version offered --allow-shrink
     # unconditionally, i.e. the guard's own false positive recommended the exact
     # loss it exists to prevent.
-    cells_dir = joinpath(dirname(path), "cells")
+    # cells_dir is a PARAMETER, not derived from the table's own location.
+    #
+    # Deriving it as `dirname(path)/cells` is right for the sweep, whose table
+    # and checkpoints share a directory, and structurally wrong for the
+    # threshold diagnostic, which READS from SWEEP_DIR/cells and WRITES to
+    # OUT_DIR. There `dirname(path)/cells` names a directory that never exists,
+    # so n_cells was always 0 and the diagnostic could only ever get the
+    # fresh-clone remedy — the one that offers --allow-shrink.
+    #
+    # That mattered because of what it dropped. The previous message carried
+    # BOTH clauses unconditionally, including "those cells were measured, and
+    # --allow-shrink would delete them". Making the remedy conditional improved
+    # the sweep and deleted that caveat for the diagnostic, which is the script
+    # where --allow-shrink is most reachable (its own header advertises it) and
+    # where a partial prune of the gitignored contigs/refs narrows the run.
     n_cells = isdir(cells_dir) ?
               count(
         e -> isfile(joinpath(cells_dir, e, "cell_result.json")),
@@ -1258,7 +1274,6 @@ function retry_once_on_shrink(publish, rebuild)
     end
     return frame
 end
-
 
 """
     check_results_table_not_missing(root, results_path)
