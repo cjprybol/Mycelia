@@ -121,18 +121,57 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             Test.@test nrows(dir) == 8
 
             # The documented --cells example: one cell, four thresholds.
+            #
+            # sweep_dir is passed EXPLICITLY, pointing at an empty tree. The
+            # default resolves to the real <repo>/benchmarking/results/
+            # ont_k_sweep/cells, which is gitignored and machine-dependent —
+            # absent here and on CI, but populated on a dev box that has run the
+            # sweep, which would silently flip this case to the other remedy arm.
+            # A test's arm should be chosen, not inherited from the machine.
             one_cell = filter(r -> r.cell_id == a, full)
-            err = try
-                write_threshold_table(dir, one_cell)
-                nothing
-            catch e
-                e
+            err = mktempdir() do bare
+                try
+                    write_threshold_table(dir, one_cell; sweep_dir = bare)
+                    nothing
+                catch e
+                    e
+                end
             end
             Test.@test err isa ShrinkRefusal
             Test.@test occursin("refusing to shrink", err.msg)
             Test.@test occursin("--allow-shrink", err.msg)
             # The committed table survives the attempt intact.
             Test.@test nrows(dir) == 8
+
+            # write_threshold_table's OWN cells_dir routing, pinned.
+            #
+            # The delta made cells_dir a parameter and updated both diagnostic
+            # call sites, but only preflight's was tested — deleting the kwarg
+            # here alone left the suite green. The backstop is genuinely
+            # reachable when preflight passed: preflight builds its prospective
+            # keys from selected x identities, while this receives the rows QUAST
+            # actually produced, so a cell that fails QUAST drops keys preflight
+            # never saw. That is exactly the path where the wrong remedy reaches
+            # the operator.
+            mktempdir() do sweep
+                cells = joinpath(sweep, "cells")
+                mkpath(cells)
+                for id in (a, b)
+                    mkpath(joinpath(cells, id))
+                    write(joinpath(cells, id, "cell_result.json"), "{}")
+                end
+                err_w = try
+                    write_threshold_table(dir, one_cell; sweep_dir = sweep)
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err_w isa ShrinkRefusal
+                Test.@test occursin("is the wrong tool", err_w.msg)
+                Test.@test occursin("always safe", err_w.msg)
+                Test.@test !occursin("cells/ is absent", err_w.msg)
+                Test.@test nrows(dir) == 8
+            end
 
             # An empty run writes nothing at all rather than a headerless file
             # over a populated table.
@@ -236,7 +275,8 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
                 Test.@test err5 isa ShrinkRefusal
                 # The populated-cells/ branch: --allow-shrink is the WRONG tool.
                 Test.@test occursin("checkpoint(s)", err5.msg)
-                Test.@test occursin("were measured", err5.msg)
+                Test.@test occursin("is the wrong tool", err5.msg)
+                Test.@test occursin("always safe", err5.msg)
                 Test.@test !occursin("cells/ is absent", err5.msg)
 
                 # And with the sweep tree empty, the fresh-clone branch returns.
@@ -250,6 +290,14 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
                     end
                     Test.@test err6 isa ShrinkRefusal
                     Test.@test occursin("cells/ is absent", err6.msg)
+                    # Symmetric with err5's pair, so neither arm can drift into
+                    # the other's text unnoticed.
+                    Test.@test !occursin("is the wrong tool", err6.msg)
+                    # The scratch-dir escape is correct in BOTH arms, so
+                    # it must appear in both. Putting a universally-
+                    # applicable remedy inside the conditional is what
+                    # made two successive arm-selection bugs possible.
+                    Test.@test occursin("always safe", err6.msg)
                 end
             end
 
