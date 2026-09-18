@@ -825,7 +825,8 @@ function table_row_keys(df, keycols; label = "table")
 end
 
 """
-    write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK) -> DataFrame
+    write_table_guarded(path, df, keycols; allow_shrink = ALLOW_SHRINK,
+                        cells_dir = joinpath(dirname(path), "cells")) -> DataFrame
 
 `CSV.write`, but refuses to replace an existing table with one that does not
 cover every key the existing table already has (td-4blm).
@@ -997,7 +998,8 @@ function check_keycols_are_a_key(path, df, keycols)
 end
 
 """
-    check_no_keys_lost(path, df, keycols)
+    check_no_keys_lost(path, df, keycols;
+                       cells_dir = joinpath(dirname(path), "cells"))
 
 Throw unless writing `df` over the table at `path` preserves every key it has.
 """
@@ -1108,19 +1110,37 @@ function check_no_keys_lost(path, df, keycols;
               count(
         e -> isfile(joinpath(cells_dir, e, "cell_result.json")),
         readdir(cells_dir)) : 0
-    remedy = n_cells == 0 ?
-             "cells/ is absent or empty here (it is gitignored), so this is " *
-             "most likely a partial run against a tracked results directory. " *
-             "Either re-run the grid that produced the committed table, pass " *
-             "--output-dir pointing at a scratch directory, or pass " *
-             "--allow-shrink if the smaller table is what you mean." :
-             "cells/ holds $(n_cells) checkpoint(s), so this is NOT the " *
-             "fresh-clone case and --allow-shrink is the wrong tool — the " *
-             "dropped keys name cells that were measured, and it would delete " *
-             "them from their only surviving copy. Check the warnings above " *
-             "for unreadable checkpoints; under concurrent shards this can " *
-             "also be a sibling publishing a cell mid-window, which a re-run " *
-             "resolves."
+    # --output-dir is correct in BOTH arms, so it lives OUTSIDE the conditional.
+    #
+    # Putting a universally-applicable remedy inside an either/or is what made
+    # two successive arm-selection bugs possible: whichever arm the caller could
+    # not reach, it lost that advice. The diagnostic could once only reach the
+    # cells-absent arm (checkpoint dir derived from the wrong root); after that
+    # was fixed it could only reach the cells-present arm, because
+    # `candidate_cells` admits a cell only when its checkpoint exists — the same
+    # predicate n_cells counts — so a non-empty selection forces n_cells >= 1.
+    # The conditional now carries only the part that genuinely differs: whether
+    # --allow-shrink is safe.
+    always = "Pointing --output-dir at a scratch directory is always safe and " *
+             "is the right answer for an exploratory run. "
+    remedy = always * (n_cells == 0 ?
+              "cells/ is absent or empty here (it is gitignored), so this is " *
+              "most likely a partial run against a tracked results directory. " *
+              "Either re-run the grid that produced the committed table, or " *
+              "pass --allow-shrink if the smaller table is what you mean." :
+              "cells/ holds $(n_cells) checkpoint(s), so this is NOT the " *
+              "fresh-clone case and --allow-shrink is the wrong tool — the " *
+              "dropped keys name work that was measured, and it would drop " *
+              "results this tree cannot restore. (For the sweep's own table " *
+              "the checkpoints under cells/ ARE the surviving copy; for a " *
+              "derived table such as the threshold diagnostic they are not, " *
+              "and recovery is git checkout.) If you did NOT narrow this run " *
+              "deliberately, check the warnings above for unreadable " *
+              "checkpoints; under concurrent shards a sibling publishing a " *
+              "cell mid-window produces this too, and THERE a re-run resolves " *
+              "it. If you DID narrow it deliberately, a re-run will not — it " *
+              "re-derives the same keys and refuses again; use the scratch " *
+              "--output-dir above.")
     throw(ShrinkRefusal(
         "refusing to shrink $(path): it currently has " *
         "$(length(lost)) key(s) that this write would drop " *

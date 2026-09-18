@@ -224,7 +224,7 @@ const THRESHOLD_KEYCOLS = (:cell_id, :min_identity)
 const THRESHOLD_TABLE_NAME = "alignment_threshold_diagnostic.tsv"
 
 """
-    preflight_threshold_table(out_dir, selected, identities)
+    preflight_threshold_table(out_dir, selected, identities; sweep_dir = SWEEP_DIR)
 
 Refuse an unpublishable run BEFORE spending any QUAST time on it.
 
@@ -270,7 +270,7 @@ function preflight_threshold_table(out_dir, selected, identities;
 end
 
 """
-    write_threshold_table(out_dir, rows) -> Union{Nothing, DataFrame}
+    write_threshold_table(out_dir, rows; sweep_dir = SWEEP_DIR) -> Union{Nothing, DataFrame}
 
 Write `alignment_threshold_diagnostic.tsv`, refusing to drop rows the committed
 table already has (td-4blm).

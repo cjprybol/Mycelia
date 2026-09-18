@@ -995,7 +995,7 @@ Test.@testset "ONT k-sweep helpers" begin
                         caught = e
                     end
                     Test.@test threw
-                    Test.@test occursin("failed to publish", caught.msg)
+                    Test.@test threw && occursin("failed to publish", caught.msg)
                     # Under `mv(...; force = true)` the file is gone here.
                     Test.@test isfile(target)
                     Test.@test read(target, String) == before
@@ -1063,7 +1063,7 @@ Test.@testset "ONT k-sweep helpers" begin
                         caught = e
                     end
                     Test.@test threw
-                    Test.@test occursin("failed to publish", caught.msg)
+                    Test.@test threw && occursin("failed to publish", caught.msg)
                     # In-place would have truncated it; atomic cannot.
                     Test.@test read(target, String) == before
                     Test.@test isempty(filter(f -> occursin(".tmp.", f),
@@ -1139,11 +1139,10 @@ Test.@testset "ONT k-sweep helpers" begin
                             caught = e
                         end
                         Test.@test threw
-                    Test.@test occursin("failed to publish", caught.msg)
                         # Name the failing STEP, not merely that something
                         # threw: an error raised BEFORE the publish would also
                         # leave the target unchanged and satisfy a bare `threw`.
-                        Test.@test occursin("failed to publish", caught.msg)
+                        Test.@test threw && occursin("failed to publish", caught.msg)
                         Test.@test read(target, String) == before
                     end
                 end
