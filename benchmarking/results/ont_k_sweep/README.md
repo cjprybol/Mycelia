@@ -39,10 +39,11 @@ Three hypotheses were under test:
 
 ## Provenance
 
-Every assembly number below was measured on **one host with one toolchain**; the
-one exception, the read-identity tables, is described after the table. Earlier
-cells computed on a macOS laptop (Badread 0.4.1, QUAST forced to 1 thread by a
-known Python-3.8+ bug) were discarded rather than merged.
+Every assembly and QUAST number below was measured on **one host with one
+toolchain**. The read-identity tables were later regenerated on a different
+host; see the paragraph after the table. Earlier cells computed on a macOS
+laptop (Badread 0.4.1, QUAST forced to 1 thread by a known Python-3.8+ bug) were
+discarded rather than merged.
 
 | component | version                                                        |
 | --------- | -------------------------------------------------------------- |
@@ -86,12 +87,12 @@ CIGAR + NM, rather than inherited from a model name. Lambda, 30x, seed 42.
 | gap-compressed (alignment) | 0.9502     | 0.9528 | 0.9104 | 0.9806 | 136 |
 | Badread-declared (header)  | 0.9461     | 0.9496 | 0.9007 | 0.9796 | 139 |
 
-3 of 139 reads (2.2%) did not align. They are shorter than average (4,682, 7,268
-and 38 bp, against a median of 8,152), so they carry only 11,988 of 1,463,729
-sequenced bases (0.82%): the **aligned base fraction is 0.9918**. `e` is the
-**unweighted** mean of per-read BLAST identities; weighting each read by its
-aligned length gives 0.9456, which moves the ladder below by 1.9% (k=11) to 5.4%
-(k=31) and changes no conclusion.
+3 of 139 reads (2.2%) did not align. All three are shorter than the median read
+(4,682, 7,268 and 38 bp, against a median of 8,152), so they carry only 11,988
+of 1,463,729 sequenced bases (0.82%): the **aligned base fraction is 0.9918**.
+`e` is the **unweighted** mean of per-read BLAST identities; weighting each read
+by its aligned length gives 0.9456, which moves the ladder below by 1.9% (k=11)
+to 5.4% (k=31) and changes no conclusion.
 
 So **e = 0.056**. `e` is defined only over reads that aligned, but raw coverage
 is charged for every read, so error-free coverage is computed over all reads: C
@@ -392,4 +393,6 @@ substituting genome fraction for NGA50.
   host, and `wall_seconds` covers assembly only, not read simulation or QUAST.
 - **Not verifiable from this repo:** the host/QUAST/Julia versions above, and
   the discarded macOS cells. The Badread 0.4.1↔0.4.2 equivalence _is_
-  verifiable, from git history.
+  verifiable, from git history. For the 2026-10-05 read-identity regeneration,
+  the host, commit, and Julia/Badread versions are transcribed from the
+  uncommitted job log in `../ont_read_identity/PROVENANCE.md`.

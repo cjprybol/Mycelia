@@ -405,8 +405,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         mkpath(reads_dir)
         # Same wrapper as the sweep. It now passes the pinned Badread settings
         # (`_badread_nanopore_args`) explicitly; the binary defaults printed above
-        # are recorded as the check that those pins still match the installed
-        # Badread.
+        # are recorded so they can be compared against those pins by eye —
+        # nothing here asserts that they match.
         Mycelia.simulate_nanopore_reads(
             fasta = ref_path, quantity = "$(COVERAGE)x",
             outfile = joinpath(reads_dir, "ont_$(COVERAGE)x_seed$(SEED).fq.gz"),
