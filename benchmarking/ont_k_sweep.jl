@@ -82,7 +82,7 @@
 # blocks that did align.
 #
 # Usage:
-#   julia --project=. benchmarking/ont_k_sweep.jl                     # full 96-cell grid
+#   julia --project=. benchmarking/ont_k_sweep.jl                     # default 96-cell Lambda grid
 #   julia --project=. benchmarking/ont_k_sweep.jl --smoke             # 1 cheap cell
 #   julia --project=. benchmarking/ont_k_sweep.jl --technologies illumina
 #   julia --project=. benchmarking/ont_k_sweep.jl --ks 11,21 --coverages 10,30
@@ -93,8 +93,8 @@
 # Per-cell JSON checkpoints make the run crash-safe and resumable: re-invoking
 # with the same --output-dir skips completed cells.
 #
-# Every invocation above EXCEPT the first covers less than the committed grid,
-# and --output-dir defaults to the git-tracked results directory. Such a run is
+# Every invocation above, including the default, covers less than the committed
+# 240-row grid (Lambda and T4), and --output-dir defaults to the git-tracked results directory. Such a run is
 # now refused rather than allowed to overwrite the committed tables with its own
 # narrower result (td-4blm); the checkpoint union alone does not prevent this,
 # because cells/ is gitignored and so is empty on a fresh clone. Use

@@ -87,8 +87,8 @@ result.
 
 That write is now refused rather than performed (`td-4blm`). A narrowed run
 against this directory stops at the **first** aggregate write, with an error
-naming the dropped cells, and all three tables are left intact. Two ways
-forward:
+naming the dropped cells, and the sweep's committed tables in this directory are
+left intact. Two ways forward:
 
 - pass `--output-dir` pointing at a scratch tree, which is the right answer for
   anything exploratory;
