@@ -60,10 +60,11 @@
 #
 # The committed TSVs under results/ont_read_identity/ were regenerated with the
 # all-reads accounting on Lawrencium (SLURM job 26687382, 2026-10-05) via
-# run_ont_read_identity_lrc.sbatch. Every column carried over from the original
-# Lovelace run is identical, so the read set is unchanged; aligned_base_fraction
-# came out at 0.9918. Re-run this script to refresh them; never edit the TSVs by
-# hand.
+# run_ont_read_identity_lrc.sbatch. Every measured value carried over from the
+# original Lovelace run is identical (only the recorded badread_version differs:
+# 0.4.1 vs 0.4.2), so the read set is unchanged; aligned_base_fraction came out
+# at 0.9918. Job details: results/ont_read_identity/PROVENANCE.md. Re-run this
+# script to refresh them; never edit the TSVs by hand.
 #
 # Usage:
 #   julia --project=. benchmarking/ont_read_identity.jl
@@ -402,8 +403,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     else
         reads_dir = joinpath(OUTPUT_DIR, "reads")
         mkpath(reads_dir)
-        # Same call path as the sweep and the pilot: no model flags, so this
-        # inherits exactly the defaults reported above.
+        # Same wrapper as the sweep. It now passes the pinned Badread settings
+        # (`_badread_nanopore_args`) explicitly; the binary defaults printed above
+        # are recorded as the check that those pins still match the installed
+        # Badread.
         Mycelia.simulate_nanopore_reads(
             fasta = ref_path, quantity = "$(COVERAGE)x",
             outfile = joinpath(reads_dir, "ont_$(COVERAGE)x_seed$(SEED).fq.gz"),

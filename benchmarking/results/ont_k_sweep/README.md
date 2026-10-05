@@ -1,6 +1,6 @@
 # ONT k-selection sweep — is the pilot's ONT degeneracy a k artifact?
 
-Date: 2026-08-05
+Date: 2026-08-05 (read-identity tables regenerated 2026-10-05)
 
 Scripts: `benchmarking/ont_k_sweep.jl`, `benchmarking/ont_read_identity.jl`,
 `benchmarking/ont_alignment_threshold_diagnostic.jl`
@@ -39,7 +39,8 @@ Three hypotheses were under test:
 
 ## Provenance
 
-Every number below was measured on **one host with one toolchain**. Earlier
+Every assembly number below was measured on **one host with one toolchain**; the
+one exception, the read-identity tables, is described after the table. Earlier
 cells computed on a macOS laptop (Badread 0.4.1, QUAST forced to 1 thread by a
 known Python-3.8+ bug) were discarded rather than merged.
 
@@ -62,13 +63,17 @@ commit that switched hosts shows `per_read_identity.tsv` and
 `badread_version` field differing.
 
 **Exception to the one-host rule: `../ont_read_identity/`.** Those three tables
-were regenerated on 2026-10-05 on Lawrencium (SLURM job 26687382, Badread 0.4.1,
-Julia 1.10.10) to add the all-reads k-mer accounting. Every column carried over
-from the Lovelace run — read IDs, mapped status, per-read identities, CIGAR
-counts, and every summary quantile — is identical, so the read set is the same.
-The only new values are the read-length columns and the aligned base fraction
-derived from them. This is a second, independent check of the 0.4.1/0.4.2
-equivalence above.
+were regenerated on 2026-10-05 on Lawrencium to add the all-reads k-mer
+accounting; the job, the code commit it ran, and its Badread and Julia versions
+are recorded from the job log in `../ont_read_identity/PROVENANCE.md`. Every
+measured value carried over from the Lovelace run — read IDs, mapped status,
+per-read identities, CIGAR counts, and every summary quantile — is identical, so
+the read set is the same; the recorded `badread_version` reads 0.4.1 instead of
+0.4.2. The new columns are per-read `read_length`, the summary's base counts and
+`aligned_base_fraction`, two provenance columns (`read_source`, `reads_file`),
+and the all-reads ladder columns derived from the aligned base fraction. This
+reproduces the 0.4.1/0.4.2 equivalence above on a third host and toolchain (the
+same version pair, in an independent environment).
 
 ## Measured read identity
 
@@ -81,8 +86,9 @@ CIGAR + NM, rather than inherited from a model name. Lambda, 30x, seed 42.
 | gap-compressed (alignment) | 0.9502     | 0.9528 | 0.9104 | 0.9806 | 136 |
 | Badread-declared (header)  | 0.9461     | 0.9496 | 0.9007 | 0.9796 | 139 |
 
-3 of 139 reads (2.2%) did not align. They are short, so they carry 11,988 of
-1,463,729 sequenced bases: the **aligned base fraction is 0.9918**. `e` is the
+3 of 139 reads (2.2%) did not align. They are shorter than average (4,682, 7,268
+and 38 bp, against a median of 8,152), so they carry only 11,988 of 1,463,729
+sequenced bases (0.82%): the **aligned base fraction is 0.9918**. `e` is the
 **unweighted** mean of per-read BLAST identities; weighting each read by its
 aligned length gives 0.9456, which moves the ladder below by 1.9% (k=11) to 5.4%
 (k=31) and changes no conclusion.
@@ -219,8 +225,9 @@ ordering the question turns on is already unambiguous at 30x and 50x.
   8 of 12 cells do align, but recover only 0.4–2.6% of the genome with largest
   alignments of 508–910 bp. The mechanism is not uniform across that row: k>=13
   fails because too few error-free k-mers survive (1.66–4.69x clean coverage at
-  those k, over all reads), while **k=11 fails for a different reason** — see
-  below.
+  those k, over all reads; the k=13 bound is computed from the same formula,
+  since the ladder tabulates only k=11/15/21/31), while **k=11 fails for a
+  different reason** — see below.
 - On **Lambda**, k=15 is a genuine interior optimum at 30x and 50x: k=13 (35.9%)
   and k=17 (39.3%) are both worse at 30x. At 100x the ordering by genome
   fraction shifts to k=19 (100.0%) while NGA50 still favours k=15 — the two

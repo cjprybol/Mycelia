@@ -21,16 +21,17 @@
 #
 # Using the MEASURED per-base error rate e = 0.056 (see
 # benchmarking/ont_read_identity.jl — measured, not assumed), P(error-free
-# k-mer) = (1-e)^k = 0.168 for k = 31, so 30x raw coverage still carries ~5.0x
-# error-free 31-mer coverage. Degeneracy is therefore NOT arithmetically forced
+# k-mer) = (1-e)^k = 0.167 for k = 31, so 30x raw coverage still carries ~5.0x
+# (5.02x) error-free 31-mer coverage. Degeneracy is therefore NOT arithmetically forced
 # at 30x, which is what makes the pilot's result worth resolving rather than
 # explaining away.
 #
 # That 5.0x is the MAPPED-ONLY figure: e is measured from alignments and so is
 # defined only over reads that aligned, while raw coverage is charged for every
-# read. Over ALL reads it is 5.0x times the aligned base fraction, which
-# measured 0.9918 (the 3 unalignable reads of 139 are short), giving 4.98x
-# (kmer_survival_ladder.tsv, regenerated 2026-10-05). The argument is unchanged.
+# read. Over ALL reads it is the unrounded 5.02x times the aligned base
+# fraction, 0.9918 (3 of 139 reads, 0.82% of sequenced bases, did not align),
+# giving 4.98x (kmer_survival_ladder.tsv, regenerated 2026-10-05). The argument
+# is unchanged.
 #
 # HYPOTHESES UNDER TEST
 #   H-a  k-selection artifact — k = 31 is simply too long for this error rate,

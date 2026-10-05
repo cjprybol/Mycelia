@@ -7,6 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=02:00:00
+#SBATCH --no-requeue
 #SBATCH --output=ont_read_identity_lrc_%j.out
 #SBATCH --error=ont_read_identity_lrc_%j.err
 
@@ -27,20 +28,31 @@
 # Override the output root:
 #   ONT_IDENTITY_OUT_ROOT=/some/dir sbatch --chdir="$WT" benchmarking/run_ont_read_identity_lrc.sbatch
 # Prereq: deps instantiated once on a login node (JULIA_PKG_PRECOMPILE_AUTO=0).
+#
+# A green exit means all three TSVs exist, are non-empty, and record no
+# "unknown" provenance; julia exiting 0 alone is not treated as success.
+#
+# `-e` is deliberately omitted: every step that matters is guarded explicitly
+# and sets `status`. A new step added below must be guarded the same way.
 set -uo pipefail
 echo "=== ONT read-identity measurement (Lawrencium) ==="
 echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
-echo "Repo: $(pwd)  HEAD: $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_DIRTY="$(git status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
+echo "Repo: $(pwd)  HEAD: ${GIT_HEAD}  tracked files modified: ${GIT_DIRTY}"
 
-# Pinned juliaup lts channel; see run_track_a_baseline_lrc.sbatch for why the
-# julia module and a bare PATH lookup are both avoided (td-j8bh).
+# juliaup lts CHANNEL: this pins the channel, not a fixed Julia version, so the
+# resolved version is echoed below and written to PROVENANCE. See
+# run_track_a_baseline_lrc.sbatch for why the julia module and a bare PATH
+# lookup are both avoided (td-j8bh).
 JULIA="${HOME}/.juliaup/bin/julia"
 JULIA_ARGS=(+lts)
 if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
   echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable (juliaup lts channel missing/broken on this host)." >&2
   exit 1
 fi
-echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
+JULIA_VERSION="$("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1)"
+echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  (${JULIA_VERSION})"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
@@ -54,8 +66,24 @@ fi
 
 OUT_ROOT="${ONT_IDENTITY_OUT_ROOT:-/global/scratch/users/${USER}/ont_read_identity}"
 OUT_DIR="${OUT_ROOT}/${SLURM_JOB_ID}"
+# The script reuses any non-empty reads file and SAM it finds in OUT_DIR, so a
+# directory left by an interrupted attempt would be scored as if it were
+# complete. Refuse a non-empty OUT_DIR rather than resume into it.
+if [[ -d "${OUT_DIR}" ]] && [[ -n "$(ls -A "${OUT_DIR}" 2>/dev/null)" ]]; then
+  echo "ERROR: ${OUT_DIR} already exists and is not empty; refusing to reuse a partial run" >&2
+  exit 1
+fi
 mkdir -p "${OUT_DIR}" || { echo "ERROR: cannot create ${OUT_DIR}" >&2; exit 1; }
 echo "Output: ${OUT_DIR}"
+{
+  echo "slurm_job_id=${SLURM_JOB_ID}"
+  echo "node=${SLURM_NODELIST}"
+  echo "repo=$(pwd)"
+  echo "git_head=${GIT_HEAD}"
+  echo "git_tracked_files_modified=${GIT_DIRTY}"
+  echo "julia=${JULIA_VERSION}"
+  echo "started=$(date)"
+} > "${OUT_DIR}/PROVENANCE" || { echo "ERROR: cannot write ${OUT_DIR}/PROVENANCE" >&2; exit 1; }
 
 # The script records `badread --version` BEFORE it simulates, and simulation is
 # what installs the env. On a cold depot that probe would record "unknown" in
@@ -75,6 +103,24 @@ else
   echo ">>> FAIL ont_read_identity.jl"
   status=1
 fi
+
+# julia exiting 0 does not prove the outputs exist: kmer_survival_ladder.tsv is
+# written only when at least one read aligned, and the Badread version/default
+# probes fall back to "unknown" with at most a warning.
+if [[ "${status}" -eq 0 ]]; then
+  for f in per_read_identity.tsv read_identity_summary.tsv kmer_survival_ladder.tsv; do
+    if [[ ! -s "${OUT_DIR}/${f}" ]]; then
+      echo ">>> FAIL missing or empty: ${OUT_DIR}/${f}" >&2
+      status=1
+    fi
+  done
+  if [[ -s "${OUT_DIR}/read_identity_summary.tsv" ]] &&
+    grep -q -w unknown "${OUT_DIR}/read_identity_summary.tsv"; then
+    echo ">>> FAIL read_identity_summary.tsv records 'unknown' provenance" >&2
+    status=1
+  fi
+fi
+echo "exit_status=${status}" >> "${OUT_DIR}/PROVENANCE"
 
 echo ""
 echo "=== complete: $(date) ==="
