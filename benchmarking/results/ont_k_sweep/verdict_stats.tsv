@@ -1,0 +1,46 @@
+statistic	value	note
+Lambda/illumina/n_cells	84	cells with status=ok
+Lambda/illumina/outcome_degenerate	12	
+Lambda/illumina/outcome_partial	27	
+Lambda/illumina/outcome_substantial	9	
+Lambda/illumina/outcome_near_complete	36	
+Lambda/illumina/max_cell_NGA50	48500	single best CELL, not a stratum median
+Lambda/illumina/nga50_strata_total	28	
+Lambda/illumina/nga50_strata_evaluable	24	all seeds have a defined NGA50
+Lambda/illumina/nga50_strata_with_undefined	4	
+Lambda/illumina/nga50_cv_median	0.0047	
+Lambda/illumina/nga50_cv_max	0.1401	
+Lambda/ont/n_cells	84	cells with status=ok
+Lambda/ont/outcome_degenerate	43	
+Lambda/ont/outcome_partial	37	
+Lambda/ont/outcome_substantial	4	
+Lambda/ont/outcome_near_complete	0	
+Lambda/ont/max_cell_NGA50	8103	single best CELL, not a stratum median
+Lambda/ont/nga50_strata_total	28	
+Lambda/ont/nga50_strata_evaluable	12	all seeds have a defined NGA50
+Lambda/ont/nga50_strata_with_undefined	16	
+Lambda/ont/nga50_cv_median	0.1359	
+Lambda/ont/nga50_cv_max	0.4443	
+T4/illumina/n_cells	36	cells with status=ok
+T4/illumina/outcome_degenerate	9	
+T4/illumina/outcome_partial	15	
+T4/illumina/outcome_substantial	12	
+T4/illumina/outcome_near_complete	0	
+T4/illumina/max_cell_NGA50	52429	single best CELL, not a stratum median
+T4/illumina/nga50_strata_total	12	
+T4/illumina/nga50_strata_evaluable	9	all seeds have a defined NGA50
+T4/illumina/nga50_strata_with_undefined	3	
+T4/illumina/nga50_cv_median	0.0123	
+T4/illumina/nga50_cv_max	0.321	
+T4/ont/n_cells	36	cells with status=ok
+T4/ont/outcome_degenerate	21	
+T4/ont/outcome_partial	15	
+T4/ont/outcome_substantial	0	
+T4/ont/outcome_near_complete	0	
+T4/ont/max_cell_NGA50	2316	single best CELL, not a stratum median
+T4/ont/nga50_strata_total	12	
+T4/ont/nga50_strata_evaluable	5	all seeds have a defined NGA50
+T4/ont/nga50_strata_with_undefined	7	
+T4/ont/nga50_cv_median	0.1135	
+T4/ont/nga50_cv_max	0.2992	
+degenerate_via_gf_floor	0	cells degenerate BECAUSE of GF_DEGENERATE_MAX rather than censoring
