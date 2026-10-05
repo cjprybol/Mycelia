@@ -28,12 +28,9 @@
 #
 # That 5.0x is the MAPPED-ONLY figure: e is measured from alignments and so is
 # defined only over reads that aligned, while raw coverage is charged for every
-# read. `ont_read_identity.jl` now also reports an aligned base fraction, and
-# the all-reads figure is 5.0x times that fraction — strictly lower, and lower
-# by the ~2% of reads that Badread's junk/random defaults make unalignable.
-# The direction of the argument is unchanged (the all-reads figure is still
-# several-fold above 1x at 30x/k=31); the exact multiplier should be read off a
-# refreshed kmer_survival_ladder.tsv rather than from this comment.
+# read. Over ALL reads it is 5.0x times the aligned base fraction, which
+# measured 0.9918 (the 3 unalignable reads of 139 are short), giving 4.98x
+# (kmer_survival_ladder.tsv, regenerated 2026-10-05). The argument is unchanged.
 #
 # HYPOTHESES UNDER TEST
 #   H-a  k-selection artifact — k = 31 is simply too long for this error rate,

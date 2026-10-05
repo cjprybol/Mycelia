@@ -61,6 +61,15 @@ commit that switched hosts shows `per_read_identity.tsv` and
 `kmer_survival_ladder.tsv` completely unchanged, with only the recorded
 `badread_version` field differing.
 
+**Exception to the one-host rule: `../ont_read_identity/`.** Those three tables
+were regenerated on 2026-10-05 on Lawrencium (SLURM job 26687382, Badread 0.4.1,
+Julia 1.10.10) to add the all-reads k-mer accounting. Every column carried over
+from the Lovelace run — read IDs, mapped status, per-read identities, CIGAR
+counts, and every summary quantile — is identical, so the read set is the same.
+The only new values are the read-length columns and the aligned base fraction
+derived from them. This is a second, independent check of the 0.4.1/0.4.2
+equivalence above.
+
 ## Measured read identity
 
 Reads were mapped back with `minimap2 -ax map-ont` and identity recomputed from
@@ -72,22 +81,28 @@ CIGAR + NM, rather than inherited from a model name. Lambda, 30x, seed 42.
 | gap-compressed (alignment) | 0.9502     | 0.9528 | 0.9104 | 0.9806 | 136 |
 | Badread-declared (header)  | 0.9461     | 0.9496 | 0.9007 | 0.9796 | 139 |
 
-3 of 139 reads (2.2%) did not align. `e` is the **unweighted** mean of per-read
-BLAST identities; weighting each read by its aligned length gives 0.9456, which
-moves the ladder below by 1.9% (k=11) to 5.4% (k=31) and changes no conclusion.
+3 of 139 reads (2.2%) did not align. They are short, so they carry 11,988 of
+1,463,729 sequenced bases: the **aligned base fraction is 0.9918**. `e` is the
+**unweighted** mean of per-read BLAST identities; weighting each read by its
+aligned length gives 0.9456, which moves the ladder below by 1.9% (k=11) to 5.4%
+(k=31) and changes no conclusion.
 
-So **e = 0.056**, and P(error-free k-mer) = (1-e)^k:
+So **e = 0.056**. `e` is defined only over reads that aligned, but raw coverage
+is charged for every read, so error-free coverage is computed over all reads: C
+x aligned_base_fraction x (1-e)^k.
 
-| k   | P(clean k-mer) | error-free k-mer coverage at 10x / 30x / 50x / 100x |
-| --- | -------------- | --------------------------------------------------- |
-| 11  | 0.530          | 5.30 / 15.91 / 26.52 / 53.04                        |
-| 15  | 0.421          | 4.21 / 12.64 / 21.06 / 42.12                        |
-| 21  | 0.298          | 2.98 / 8.94 / 14.90 / 29.80                         |
-| 31  | 0.167          | 1.67 / **5.02** / 8.37 / 16.75                      |
+| k   | P(clean \| mapped) | P(clean \| all reads) | error-free k-mer coverage at 10x / 30x / 50x / 100x |
+| --- | ------------------ | --------------------- | --------------------------------------------------- |
+| 11  | 0.530              | 0.526                 | 5.26 / 15.78 / 26.30 / 52.61                        |
+| 15  | 0.421              | 0.418                 | 4.18 / 12.53 / 20.89 / 41.77                        |
+| 21  | 0.298              | 0.296                 | 2.96 / 8.87 / 14.78 / 29.56                         |
+| 31  | 0.167              | 0.166                 | 1.66 / **4.98** / 8.30 / 16.61                      |
 
 At k=31 and 30x there is still ~5x error-free 31-mer coverage, so total
 degeneracy there is **not** arithmetically forced. That is what made the pilot's
-result worth resolving.
+result worth resolving. (An earlier version of this table omitted the aligned
+base fraction and reported 5.02x here; the correction is under 1% and changes no
+conclusion.)
 
 ## Validation against the pilot
 
@@ -202,9 +217,10 @@ ordering the question turns on is already unambiguous at 30x and 50x.
 - At **10x**, no k reaches even the degenerate/partial boundary. On **Lambda**
   nothing aligns at all at QUAST's default identity (0 of 21 cells). On **T4**,
   8 of 12 cells do align, but recover only 0.4–2.6% of the genome with largest
-  alignments of 508–910 bp. The mechanism is not uniform across that row:
-  k>=13 fails because too few error-free k-mers survive (1.67–4.73x clean
-  coverage at those k), while **k=11 fails for a different reason** — see below.
+  alignments of 508–910 bp. The mechanism is not uniform across that row: k>=13
+  fails because too few error-free k-mers survive (1.66–4.69x clean coverage at
+  those k, over all reads), while **k=11 fails for a different reason** — see
+  below.
 - On **Lambda**, k=15 is a genuine interior optimum at 30x and 50x: k=13 (35.9%)
   and k=17 (39.3%) are both worse at 30x. At 100x the ordering by genome
   fraction shifts to k=19 (100.0%) while NGA50 still favours k=15 — the two
@@ -249,18 +265,19 @@ among the only ones that move:
 **The threshold effect is specific to k=31, and it replicates across both
 genomes.** Median genome-fraction gain from relaxing the cut 95% → 85%:
 
-| organism | k=13 | k=15 | k=17 | k=19 | k=21 | **k=31** |
-| --- | --- | --- | --- | --- | --- | --- |
-| Lambda | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
-| T4 | — | +0.0 pp | — | — | +0.0 pp | **+25.5 pp** |
+| organism | k=13    | k=15    | k=17    | k=19    | k=21    | **k=31**     |
+| -------- | ------- | ------- | ------- | ------- | ------- | ------------ |
+| Lambda   | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
+| T4       | —       | +0.0 pp | —       | —       | +0.0 pp | **+25.5 pp** |
 
 Every k below 31 is completely insensitive to the identity threshold on both
-organisms — contigs either align well or not at all. At k=31 the gain is
-+25.2 pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda
-(521 / 610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
-considerably stronger evidence than the single-organism version of this finding. Note the 10x rows qualify the "nothing survives at
-10x" statement above: at k=31/10x, 17.9–22.1% of the genome does align once the
-identity cut is relaxed; it simply does not at QUAST's default.
+organisms — contigs either align well or not at all. At k=31 the gain is +25.2
+pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda (521 /
+610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
+considerably stronger evidence than the single-organism version of this finding.
+Note the 10x rows qualify the "nothing survives at 10x" statement above: at
+k=31/10x, 17.9–22.1% of the genome does align once the identity cut is relaxed;
+it simply does not at QUAST's default.
 
 Since these contigs align at 85–90% while the reads measure 94.4%, contigs are
 **less accurate than the reads they are built from** — consistent with chimeric
@@ -277,8 +294,9 @@ seeds have a defined NGA50, stratified by chemistry (Lambda):
 | ONT        | **12 of 28**           | 0.1359     | **0.4443** |
 
 That table is the case for _not_ using NGA50 as the ONT endpoint: at least one
-seed has an undefined NGA50 in 16 of 28 ONT strata. But the obvious replacement does not survive
-its own variance check. **ONT genome-fraction CV, by coverage:**
+seed has an undefined NGA50 in 16 of 28 ONT strata. But the obvious replacement
+does not survive its own variance check. **ONT genome-fraction CV, by
+coverage:**
 
 | organism | 30x               | 50x           | 100x          |
 | -------- | ----------------- | ------------- | ------------- |
@@ -290,7 +308,7 @@ Lambda/k=31 reaches CV 0.486, which is 3.2x the pre-registered 0.15 assumption
 and slightly worse than NGA50's own worst stratum (0.444). The two endpoints are
 therefore comparably unstable at 30x, which is precisely the stratum that
 prompted this investigation. Genome fraction's advantage over NGA50 is that it
-is *defined* where NGA50 is not; that advantage does not extend to being
+is _defined_ where NGA50 is not; that advantage does not extend to being
 low-variance at 30x.
 
 Genome fraction also cannot see fragmentation. Lambda/ONT/k=15/100x has genome

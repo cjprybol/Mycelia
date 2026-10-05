@@ -58,13 +58,12 @@
 # destroyed by every erroneous base it covers, not by every error EVENT. It is
 # therefore the estimate used for the (1-e)^k table.
 #
-# COMMITTED ARTIFACTS ARE FROM THE PRE-CORRECTION RUN. The TSVs currently under
-# results/ont_read_identity/ were produced before the aligned-base-fraction
-# factor and the read-length columns existed, so they carry the mapped-only
-# quantities and no `aligned_base_fraction`. The identity distributions in them
-# are unaffected — e is measured the same way — but the error-free coverage
-# column is the optimistic one. Re-run this script to refresh them; do not add
-# the missing columns by hand.
+# The committed TSVs under results/ont_read_identity/ were regenerated with the
+# all-reads accounting on Lawrencium (SLURM job 26687382, 2026-10-05) via
+# run_ont_read_identity_lrc.sbatch. Every column carried over from the original
+# Lovelace run is identical, so the read set is unchanged; aligned_base_fraction
+# came out at 0.9918. Re-run this script to refresh them; never edit the TSVs by
+# hand.
 #
 # Usage:
 #   julia --project=. benchmarking/ont_read_identity.jl
