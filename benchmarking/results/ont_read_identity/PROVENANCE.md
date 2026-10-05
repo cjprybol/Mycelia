@@ -22,11 +22,13 @@ JULIA: /global/home/users/cjprybol/.juliaup/bin/julia +lts  (julia version 1.10.
 
 `sacct -j 26687382` reported `COMPLETED`, exit code `0:0`, elapsed `00:02:32`.
 
-The wrapper at `236bffae` did not record working-tree state (later versions
-write it to a `PROVENANCE` file in the job's output directory). The TSVs are
-nonetheless consistent with the committed code: between `236bffae` and the
-commit that added these tables, `benchmarking/ont_read_identity.jl` changed only
-in comments and `src/` did not change.
+The wrapper at `236bffae` did not record working-tree state (later versions echo
+uncommitted tracked changes into the job log). If the tree was clean at run
+time, the code that ran is functionally the committed code: between `236bffae`
+and the commit that added these tables, `benchmarking/ont_read_identity.jl`
+changed only in comments and `src/` did not change. A dirty tree cannot be ruled
+out from the log, but the per-read table matching the Lovelace run row for row
+argues against one.
 
 ## Comparison with the previous (Lovelace, Badread 0.4.2) tables
 

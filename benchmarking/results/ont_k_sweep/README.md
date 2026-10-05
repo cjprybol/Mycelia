@@ -63,7 +63,7 @@ commit that switched hosts shows `per_read_identity.tsv` and
 `kmer_survival_ladder.tsv` completely unchanged, with only the recorded
 `badread_version` field differing.
 
-**Exception to the one-host rule: `../ont_read_identity/`.** Those three tables
+**Regenerated on a different host: `../ont_read_identity/`.** Those three tables
 were regenerated on 2026-10-05 on Lawrencium to add the all-reads k-mer
 accounting; the job, the code commit it ran, and its Badread and Julia versions
 are recorded from the job log in `../ont_read_identity/PROVENANCE.md`. Every
@@ -394,5 +394,6 @@ substituting genome fraction for NGA50.
 - **Not verifiable from this repo:** the host/QUAST/Julia versions above, and
   the discarded macOS cells. The Badread 0.4.1↔0.4.2 equivalence _is_
   verifiable, from git history. For the 2026-10-05 read-identity regeneration,
-  the host, commit, and Julia/Badread versions are transcribed from the
-  uncommitted job log in `../ont_read_identity/PROVENANCE.md`.
+  the host, commit, and Julia version are transcribed in
+  `../ont_read_identity/PROVENANCE.md` from an uncommitted job log; the Badread
+  version is also recorded in the committed summary TSV.

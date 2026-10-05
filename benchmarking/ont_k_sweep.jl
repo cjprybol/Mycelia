@@ -21,8 +21,8 @@
 #
 # Using the MEASURED per-base error rate e = 0.056 (see
 # benchmarking/ont_read_identity.jl — measured, not assumed), P(error-free
-# k-mer) = (1-e)^k = 0.167 for k = 31 (from the unrounded e = 0.0560), so 30x
-# raw coverage still carries ~5.0x
+# k-mer) = (1-e)^k = 0.167 for k = 31 (from the unrounded e = 0.05602; the
+# rounded 0.056 gives 0.168), so 30x raw coverage still carries ~5.0x
 # (5.02x) error-free 31-mer coverage. Degeneracy is therefore NOT arithmetically forced
 # at 30x, which is what makes the pilot's result worth resolving rather than
 # explaining away.
