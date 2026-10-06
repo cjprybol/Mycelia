@@ -76,6 +76,59 @@ and the all-reads ladder columns derived from the aligned base fraction. This
 reproduces the 0.4.1/0.4.2 equivalence above on a third host and toolchain (the
 same version pair, in an independent environment).
 
+### Re-running this grid without destroying it
+
+The tables in this directory are tracked; the `cells/` checkpoints they are
+aggregated from are not. So on a fresh clone the sweep's checkpoint union has
+nothing to union against, and any invocation narrower than the committed grid —
+which includes the driver's own defaults, the shard driver's serial pre-warm,
+every shard, and `--smoke` — would replace these tables with its own smaller
+result.
+
+That write is now refused rather than performed (`td-4blm`). A narrowed run
+against this directory stops at the **first** aggregate write, with an error
+naming the dropped cells, and the sweep's committed tables in this directory are
+left intact. Two ways forward:
+
+- pass `--output-dir` pointing at a scratch tree, which is the right answer for
+  anything exploratory;
+- pass `--allow-shrink`, which is the right answer only when replacing these
+  tables with a narrower measurement is what you actually mean.
+
+**"Re-run the committed grid" is not a single command.** The grid is ragged —
+Lambda carries `k ∈ {11,13,15,17,19,21,31}` and T4 only `{11,15,21,31}`, and T4
+skips 100x — so the 240 cells are the union of several runs, not one rectangle.
+The nearest single superset is
+`--organisms Lambda,T4 --ks 11,13,15,17,19,21,31 --coverages 10,30,50,100`,
+which is 336 cells, i.e. 40% more work than the table represents. Reproducing
+the exact grid means running Lambda and T4 as separate invocations against the
+same `--output-dir`.
+
+**Only `ont_k_sweep_results.tsv` is guarded.** `ont_k_sweep_summary.tsv` and
+`verdict_stats.tsv` are pure derivatives of it — every row is a groupby or a
+statistic over rows the results table already holds. Guarding them caught
+nothing real, because a narrowed grid is refused at the results table and the
+run aborts before either is reached.
+
+They are **not** freely regenerable, though, and an earlier draft of this
+paragraph wrongly said `--aggregate-only` rebuilds them "at any time". It
+rebuilds them from `cells/`, which is gitignored — so on a fresh clone, the
+exact condition this section is about, it cannot, and recovery is
+`git checkout`. What protects them is that the results table refuses first, plus
+a check that refuses when the results table itself has gone missing while a
+derived sibling is still present. What it did catch was false positives:
+`verdict_stats` emits three of its statistics (`max_cell_NGA50`,
+`nga50_cv_median`, `nga50_cv_max`) only when NGA50 is measurable, so an
+unchanged 240-cell grid re-measured with NGA50 no longer computable dropped
+three keys and was refused — after the results table had already been rewritten.
+Leaving them unguarded keeps the whole sequence consistent: one guarded table,
+one decision, no partial state.
+
+The same guard covers `benchmarking/ont_alignment_threshold_diagnostic.jl`,
+where `--cells` and a shortened `--identities` ladder narrow the table the same
+way. There it runs as a pre-flight check before any QUAST work, so an
+unpublishable run fails in seconds rather than after rescoring every cell.
+
 ## Measured read identity
 
 Reads were mapped back with `minimap2 -ax map-ont` and identity recomputed from
