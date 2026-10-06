@@ -194,9 +194,9 @@ unique coverage. The two diverge whenever duplication ratio > 1.
 An earlier version of this document claimed NGA50 was undefined below 50% genome
 fraction. That is false, and this PR's own diagnostic refutes it:
 Lambda/ONT/k=31/30x/seed123 rescored at 90% identity has genome fraction
-**23.762%** and a defined NGA50 of **508**. Six such rows exist. The status
-label was renamed accordingly, because the old name asserted a condition the
-code never tests.
+**23.762%** and a defined NGA50 of **508**. Fifteen such rows exist (6 Lambda, 9
+T4). The status label was renamed accordingly, because the old name asserted a
+condition the code never tests.
 
 Two consequences follow. `misassemblies` is only interpretable where NGA50 was
 measured — where nothing aligned QUAST omits the metric and this sweep records
@@ -324,21 +324,25 @@ among the only ones that move:
 | 15  | 30x      | 123  | 36.6% | 36.6% | 36.6%     | 36.6% |
 
 **The threshold effect is specific to k=31, and it replicates across both
-genomes.** Median genome-fraction gain from relaxing the cut 95% → 85%:
+genomes.** Median genome-fraction gain from relaxing the cut 95% → 85%, over the
+censored cells of each (organism, k), counting a cell with nothing aligned at
+95% as 0% genome fraction:
 
 | organism | k=13    | k=15    | k=17    | k=19    | k=21    | **k=31**     |
 | -------- | ------- | ------- | ------- | ------- | ------- | ------------ |
-| Lambda   | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+25.2 pp** |
-| T4       | —       | +0.0 pp | —       | —       | +0.0 pp | **+25.5 pp** |
+| Lambda   | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | +0.0 pp | **+23.7 pp** |
+| T4       | —       | +0.0 pp | —       | —       | +0.0 pp | **+24.3 pp** |
 
 Every k below 31 is completely insensitive to the identity threshold on both
-organisms — contigs either align well or not at all. At k=31 the gain is +25.2
-pp on Lambda and +25.5 pp on T4, and NGA50 becomes computable on Lambda (521 /
-610 / 697 at 85%). Two independent genomes agreeing to within 0.3 pp is
-considerably stronger evidence than the single-organism version of this finding.
-Note the 10x rows qualify the "nothing survives at 10x" statement above: at
-k=31/10x, 17.9–22.1% of the genome does align once the identity cut is relaxed;
-it simply does not at QUAST's default.
+organisms — contigs either align well or not at all. At k=31 the gain is +23.7
+pp on Lambda and +24.3 pp on T4 (6 cells each; per-cell gains 17.9–39.9 pp and
+11.4–28.0 pp), and NGA50 becomes computable on Lambda (521 / 610 / 697 at 85%).
+(An earlier version reported +25.2 / +25.5 pp, the upper of the two middle
+values rather than the median.) Two independent genomes agreeing to within 0.65
+pp (23.65 vs 24.30 unrounded) is considerably stronger evidence than the
+single-organism version of this finding. Note the 10x rows qualify the "nothing
+survives at 10x" statement above: at k=31/10x, 17.9–22.1% of the genome does
+align once the identity cut is relaxed; it simply does not at QUAST's default.
 
 Since these contigs align at 85–90% while the reads measure 94.4%, contigs are
 **less accurate than the reads they are built from** — consistent with chimeric
