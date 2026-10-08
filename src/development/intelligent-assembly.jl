@@ -54,6 +54,33 @@ end
 # The only behaviour lost here is a `@warn` when `start_k > max_k`; Rhizomorph
 # returns an empty vector silently in that case.
 
+# DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): RETIRED. The rule
+# `k >= 1/error_rate - 1` is NOT registered by the pre-registration and must not
+# be wired into production or cited as the method. Do not delete without
+# checking the decision record first -- it is retained as the historical record
+# of a rule that was proposed for registration and rejected.
+#
+# Five reasons. THREE are properties of this function as written (1-3); reason 4
+# is an upstream integration risk about its INPUT, and reason 5 is a property of
+# the repository's wiring, not of the code below. The distinction matters: 1-3
+# survive any change elsewhere, 4 and 5 do not.
+#  1. It does not return a k. It returns a Vector{Int} -- a prime LADDER up to
+#     max_k (default 101). Any text registering it "as written" as a scalar k
+#     selector misdescribes it.
+#  2. Its ERROR bound produces the degenerate k = 11 that the pre-registration
+#     excludes: at e = 0.10, max(3, floor(1/0.10 - 1)) = 9, already odd,
+#     max(9, log4(L) = 8..9) = 9, nextprime(9) = 11. The genome bound is not
+#     what breaks here, contrary to how this was first diagnosed.
+#  3. Its genome bound is OPTIONAL (applied only `if sequence_length !== nothing`)
+#     and hard-coded to log4, so it cannot be made alphabet-general without a
+#     rewrite. The registered bound is ceil(log_|A|(G/p)).
+#  4. Its error-rate input is measurably biased with depth -- see the
+#     DISPOSITION note on `estimate_residual_error`.
+#  5. It is not loaded: `src/Mycelia.jl` has `# include("intelligent-assembly.jl")`
+#     commented out, pointing at a path that does not exist at that location.
+#
+# Superseded by a MEASURED level set on k-mer survival; see the DISPOSITION note
+# on `select_reassembly_k`.
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

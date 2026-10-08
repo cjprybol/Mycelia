@@ -19,8 +19,20 @@ Assembly method enumeration for unified interface.
 
     # Hybrid approaches
     HybridOLC        # Hybrid OLC + qualmer graph approach
-    MultiK           # Multi-k assembly with merging
+    # DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): NON-PRODUCTION.
+    # Declared here, dispatched nowhere. `_assemble_multi_k` exists but is
+    # unreachable (no caller) and falls back to single-k. Do not treat MultiK as
+    # an available method; if removed, remove the stub too.
+    MultiK           # Multi-k assembly with merging -- NOT IMPLEMENTED
 end
+# NOTE: this enum is documentation, not dispatch. Nothing in src/ dispatches on
+# `AssemblyMethod`. The real routing lives in `assemble_genome`, which branches
+# in order on: `corrector == :iterative`, then `layout == :olc`, then
+# `token_sequences` present, then sequence type, then quality present. The tests
+# assert only `X isa AssemblyMethod`, which cannot fail for any member, so they
+# pin no behaviour beyond the members' existence -- and neither `MultiK` nor
+# `HybridOLC` appears even in those. (`HybridOLC` does have real behavioural
+# coverage elsewhere, via an `assembly_stats["method"]` assertion.)
 
 function _graph_mode_symbol(graph_mode::GraphMode)
     if graph_mode == SingleStrand
@@ -8509,6 +8521,15 @@ function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         assembly_stats = stats, gfa_compatible = false)
 end
 
+# DISPOSITION (DEC-2026-08-09, rhizomorph-paper decisions/): NON-PRODUCTION and
+# UNREACHABLE -- nothing calls this, and `AssemblyMethod`/`MultiK` is not
+# dispatched on anywhere in src/. It is the stub half of the MultiK enum member;
+# remove both together or neither.
+#
+# If multi-k is ever implemented, note it is NOT the retired
+# `error_optimized_k_sequence` ladder by another name: that ladder's start is
+# derived from a biased error estimate. A registered multi-k schedule would need
+# its own decision record.
 """
 Multi-k assembly (placeholder for future implementation).
 """
