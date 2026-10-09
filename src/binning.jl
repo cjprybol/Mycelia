@@ -139,14 +139,14 @@ end
 
 Run VAMB (`vamb bin default`) to bin contigs using sequence composition and coverage.
 VAMB runs in the `mycelia_vamb` conda environment, which is created if missing;
-the latest `vamb` from PyPI (unpinned) is pip-installed whenever `vamb --version`
-does not succeed.
+whenever `vamb --version` does not succeed, pip/setuptools/wheel are upgraded and
+`vamb` is pip-installed from PyPI (unpinned, without `--upgrade`).
 
 # Arguments
 - `contigs_fasta::String`: FASTA file with assembled contigs (passed to `--fasta`)
 - `depth_file::String`: Coverage table. Used as-is as a VAMB abundance TSV when the
-  first header column is `contigname` (case-insensitive) and there is no `contigLen`
-  or `totalAvgDepth` column; otherwise treated as a JGI depth table from
+  first header column is `contigname` and no column is named `contigLen` or
+  `totalAvgDepth` (header comparisons are case-insensitive); otherwise treated as a JGI depth table from
   `jgi_summarize_bam_contig_depths` and converted to `vamb_abundance.tsv` in the
   same directory as `depth_file`. The conversion keeps the contig name column,
   drops columns 2-3 by position, and drops any column whose name contains `var`
