@@ -24,26 +24,6 @@ function _ensure_vamb_installed()
     return env_name
 end
 
-"""
-    run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
-             threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
-
-Run VAMB to bin contigs using sequence composition and coverage.
-Uses `vamb bin default`.
-
-# Arguments
-- `contigs_fasta::String`: FASTA file with assembled contigs
-- `depth_file::String`: JGI depth table or VAMB abundance TSV
-- `outdir::String`: Output directory for VAMB results
-- `minfasta::Int`: Minimum contig length to include (passed to `-m`, default: 2000)
-- `threads::Int`: Number of threads to use (default: all CPUs)
-- `extra_args::Vector{String}`: Additional command-line arguments
-
-# Returns
-Named tuple with:
-- `outdir`: Output directory
-- `clusters_tsv`: Path to the VAMB clusters table (contig → bin), if produced
-"""
 function _vamb_abundance_tsv(depth_file::String; output_dir::Union{Nothing, String} = nothing)
     header = open(depth_file, "r") do io
         readline(io)
@@ -153,6 +133,45 @@ function _find_first_matching_dir(dir::String, patterns::Vector{Regex}; recursiv
     return nothing
 end
 
+"""
+    run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
+             threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+
+Run VAMB (`vamb bin default`) to bin contigs using sequence composition and coverage.
+VAMB runs in the `mycelia_vamb` conda environment, which is created and VAMB
+pip-installed on first use.
+
+# Arguments
+- `contigs_fasta::String`: FASTA file with assembled contigs (passed to `--fasta`)
+- `depth_file::String`: VAMB abundance TSV (first column `contigname`), used as-is,
+  or a JGI depth table from `jgi_summarize_bam_contig_depths`. A JGI table is
+  converted to `vamb_abundance.tsv` in the same directory as `depth_file`, keeping
+  the contig name and the per-sample depth columns (columns whose name contains
+  `var` are dropped). An existing `vamb_abundance.tsv` there is reused, not regenerated.
+- `outdir::String`: Output directory for VAMB results. Must not already exist
+  (VAMB creates it); its parent directory is created if missing.
+- `minfasta::Int`: Minimum contig length; shorter contigs are ignored (passed to
+  VAMB's `-m`, default: 2000). Despite the name, this is not VAMB's `--minfasta`
+  (minimum bin size for FASTA output); pass that through `extra_args` if needed.
+- `threads::Int`: Number of threads, passed to `-p` (default: `get_default_threads()`).
+  Not added if `extra_args` already contains `-p` or an argument starting with `--threads`.
+- `extra_args::Vector{String}`: Additional VAMB arguments, appended after the generated ones
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory
+- `clusters_tsv`: Path to the first file in `outdir` (name-sorted, not recursive)
+  matching `vae_clusters.*\\.tsv\$` or `clusters.*\\.tsv\$`, or `nothing` if none
+  exists. Which VAMB table this selects depends on the files the installed VAMB
+  version writes.
+
+# Throws
+- `ErrorException`: if `contigs_fasta` or `depth_file` does not exist, if `outdir`
+  already exists, if VAMB installation fails, or if a JGI depth table has no
+  sample depth columns
+- `Base.ProcessFailedException`: if a conda/pip setup command or the VAMB run exits
+  with a non-zero status
+"""
 function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
         minfasta::Int = 2000, threads::Int = get_default_threads(),
         extra_args::Vector{String} = String[])
