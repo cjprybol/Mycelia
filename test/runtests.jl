@@ -350,6 +350,8 @@ else
     # must be covered on the default CI path rather than only under
     # MYCELIA_RUN_EXTERNAL. Its two conda-dependent testsets self-gate.
     include(joinpath(@__DIR__, "8_tool_integration", "minimap_split_temp_cleanup.jl"))
+    # Which VAMB table run_vamb/run_taxvamb return is pure file selection.
+    include(joinpath(@__DIR__, "8_tool_integration", "vamb_clusters_selection.jl"))
     @info "Skipping remaining tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end
 # for file in (
