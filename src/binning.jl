@@ -138,16 +138,20 @@ end
              threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run VAMB (`vamb bin default`) to bin contigs using sequence composition and coverage.
-VAMB runs in the `mycelia_vamb` conda environment, which is created and VAMB
-pip-installed on first use.
+VAMB runs in the `mycelia_vamb` conda environment, which is created if missing;
+the latest `vamb` from PyPI (unpinned) is pip-installed whenever `vamb --version`
+does not succeed.
 
 # Arguments
 - `contigs_fasta::String`: FASTA file with assembled contigs (passed to `--fasta`)
-- `depth_file::String`: VAMB abundance TSV (first column `contigname`), used as-is,
-  or a JGI depth table from `jgi_summarize_bam_contig_depths`. A JGI table is
-  converted to `vamb_abundance.tsv` in the same directory as `depth_file`, keeping
-  the contig name and the per-sample depth columns (columns whose name contains
-  `var` are dropped). An existing `vamb_abundance.tsv` there is reused, not regenerated.
+- `depth_file::String`: Coverage table. Used as-is as a VAMB abundance TSV when the
+  first header column is `contigname` (case-insensitive) and there is no `contigLen`
+  or `totalAvgDepth` column; otherwise treated as a JGI depth table from
+  `jgi_summarize_bam_contig_depths` and converted to `vamb_abundance.tsv` in the
+  same directory as `depth_file`. The conversion keeps the contig name column,
+  drops columns 2-3 by position, and drops any column whose name contains `var`
+  (case-insensitive). An existing `vamb_abundance.tsv` in that directory is reused
+  without checking which depth table produced it.
 - `outdir::String`: Output directory for VAMB results. Must not already exist
   (VAMB creates it); its parent directory is created if missing.
 - `minfasta::Int`: Minimum contig length; shorter contigs are ignored (passed to
@@ -162,15 +166,19 @@ Named tuple with:
 - `outdir`: Output directory
 - `clusters_tsv`: Path to the first file in `outdir` (name-sorted, not recursive)
   matching `vae_clusters.*\\.tsv\$` or `clusters.*\\.tsv\$`, or `nothing` if none
-  exists. Which VAMB table this selects depends on the files the installed VAMB
-  version writes.
+  exists. Which table this selects depends on the files the installed VAMB version
+  writes: versions that write `vae_clusters_metadata.tsv` alongside
+  `vae_clusters_split.tsv`/`vae_clusters_unsplit.tsv` resolve to the per-cluster
+  metadata table, not the contig-to-bin assignments.
 
 # Throws
 - `ErrorException`: if `contigs_fasta` or `depth_file` does not exist, if `outdir`
-  already exists, if VAMB installation fails, or if a JGI depth table has no
-  sample depth columns
+  already exists, if `vamb --version` still fails after installation, or if a JGI
+  depth table has no sample depth columns
 - `Base.ProcessFailedException`: if a conda/pip setup command or the VAMB run exits
   with a non-zero status
+- `Base.IOError` / `SystemError`: if the conda runner cannot be spawned, or
+  `vamb_abundance.tsv` cannot be created in the `depth_file` directory
 """
 function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
         minfasta::Int = 2000, threads::Int = get_default_threads(),
