@@ -322,7 +322,20 @@ function run_viterbi_accuracy_benchmark(
     )
 end
 
-function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
+# Errors are injected only into interior observations (`_inject_fixture_errors`
+# skips the first and last k-mer), so a window of length L needs L - k + 1 >= 3
+# k-mers, i.e. k <= L - 2. Past that, no error is injected and the row's
+# actual_error_rate is 0/0. The binding window is the normalized text excerpt
+# (291 chars -> k <= 289), not the 360-nt cap: PSTVd itself is 359 nt.
+function _viterbi_accuracy_require_interior(
+        name::AbstractString, window::AbstractString, k::Int)
+    length(window) - k + 1 >= 3 && return nothing
+    error("k=$(k) is too large for the $(name) fixture: its window is " *
+          "$(length(window)) characters, so k must be <= $(length(window) - 2) " *
+          "to leave an interior observation for error injection.")
+end
+
+function viterbi_accuracy_fixtures(k::Int = VITERBI_ACCURACY_K)::Vector{ViterbiAccuracyFixture}
     pstvd = replace(
         _read_fasta_sequence(joinpath(VITERBI_ACCURACY_FIXTURE_DIR, "pstvd_nc002030.fasta")),
         'T' => 'U'
@@ -333,6 +346,9 @@ function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
     viroid_window = first(pstvd, min(length(pstvd), 360))
     phage_window = first(phix, min(length(phix), 432))
     text_window = _normalized_text_window(text, 432)
+    _viterbi_accuracy_require_interior("pstvd_nc002030", viroid_window, k)
+    _viterbi_accuracy_require_interior("phix174_nc001422", phage_window, k)
+    _viterbi_accuracy_require_interior("austen_pride_prejudice_excerpt", text_window, k)
 
     viroid_record = FASTX.FASTA.Record(
         "pstvd_nc002030", BioSequences.LongRNA{4}(viroid_window)
@@ -348,12 +364,12 @@ function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
             :viroid,
             collect("ACGU"),
             Mycelia.Rhizomorph.build_kmer_graph(
-                [viroid_record], VITERBI_ACCURACY_K;
+                [viroid_record], k;
                 dataset_id = "b8_pstvd_nc002030",
                 mode = :singlestrand,
                 type_hint = :RNA
             ),
-            _sequence_kmers(viroid_window, VITERBI_ACCURACY_K),
+            _sequence_kmers(viroid_window, k),
             "NCBI RefSeq NC_002030.1"
         ),
         ViterbiAccuracyFixture(
@@ -362,11 +378,11 @@ function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
             :phage,
             collect("ACGT"),
             Mycelia.Rhizomorph.build_kmer_graph(
-                [phage_record], VITERBI_ACCURACY_K;
+                [phage_record], k;
                 dataset_id = "b8_phix174_nc001422",
                 mode = :singlestrand
             ),
-            _sequence_kmers(phage_window, VITERBI_ACCURACY_K),
+            _sequence_kmers(phage_window, k),
             "NCBI RefSeq NC_001422.1"
         ),
         ViterbiAccuracyFixture(
@@ -375,9 +391,9 @@ function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
             :text,
             collect("abcdefghijklmnopqrstuvwxyz ,.-"),
             Mycelia.Rhizomorph.build_ngram_graph(
-                [text_window], VITERBI_ACCURACY_K; dataset_id = "b8_austen_text"
+                [text_window], k; dataset_id = "b8_austen_text"
             ),
-            _sequence_kmers(text_window, VITERBI_ACCURACY_K),
+            _sequence_kmers(text_window, k),
             "Public-domain Pride and Prejudice excerpt"
         )
     ]

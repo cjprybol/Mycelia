@@ -13,6 +13,20 @@ import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "viterbi_accuracy_benchmark.jl"))
 
+# Message of the ErrorException `f` throws, or "" if it returns normally. A bare
+# `@test_throws ErrorException` passes for ANY ErrorException -- including one
+# raised by an unrelated bug inside the validator -- so every refusal below
+# asserts the text that names its cause.
+function _b8_error_message(f::Function)::String
+    try
+        f()
+    catch error_value
+        error_value isa ErrorException && return error_value.msg
+        rethrow()
+    end
+    return ""
+end
+
 # AMBIENT-ENVIRONMENT GUARD -- TERMINAL, and deliberately not a `Test.@test`.
 #
 # k is bound at load time from this process's argv/ENV, so an exported
@@ -135,18 +149,22 @@ Test.@testset "k selection is validated, never silently defaulted" begin
 
     # A bare trailing `--k` must ERROR. The realistic trigger is an unquoted
     # `--k $K` with K unset: the empty word disappears and `--k` lands last.
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k"], no_env)
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-        ["--output-dir", "/tmp/b8", "--skip-plots", "--k"], no_env)
+    k_error(args, env = no_env) = _b8_error_message(() -> _viterbi_accuracy_k_at_load(args, env))
+    Test.@test occursin("--k requires a value", k_error(["--k"]))
+    Test.@test occursin("--k requires a value",
+        k_error(["--output-dir", "/tmp/b8", "--skip-plots", "--k"]))
 
     # Non-integer and out-of-range values error rather than defaulting.
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "abc"], no_env)
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "0"], no_env)
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "-3"], no_env)
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k=abc"], no_env)
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k=0"], no_env)
-    # `--k` followed by the NEXT flag is a missing value, not a value of "--skip-plots".
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(["--k", "--skip-plots"], no_env)
+    Test.@test occursin("--k expects an integer", k_error(["--k", "abc"]))
+    Test.@test occursin("--k must be >= 1, got 0", k_error(["--k", "0"]))
+    Test.@test occursin("--k must be >= 1, got -3", k_error(["--k", "-3"]))
+    Test.@test occursin("--k= expects an integer", k_error(["--k=abc"]))
+    Test.@test occursin("--k= must be >= 1, got 0", k_error(["--k=0"]))
+    # `--k` followed by the NEXT flag is a missing value, not a value of
+    # "--skip-plots": it is refused as a non-integer, and the message names the
+    # flag it swallowed.
+    Test.@test occursin("--k expects an integer, got \"--skip-plots\"",
+        k_error(["--k", "--skip-plots"]))
 
     # No selection at all is the only path to the default.
     Test.@test _viterbi_accuracy_k_at_load(String[], no_env) == 11
@@ -161,15 +179,14 @@ Test.@testset "k selection is validated, never silently defaulted" begin
         ["--k", "13"], Dict("VITERBI_ACCURACY_K" => "9")) == 13
     # SET BUT EMPTY is an explicit selection of "", not the default path — the
     # form an unset shell variable produces under `VITERBI_ACCURACY_K="$K"`.
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-        String[], Dict("VITERBI_ACCURACY_K" => ""))
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-        String[], Dict("VITERBI_ACCURACY_K" => "abc"))
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-        String[], Dict("VITERBI_ACCURACY_K" => "0"))
+    Test.@test occursin("VITERBI_ACCURACY_K expects an integer, got \"\"",
+        k_error(String[], Dict("VITERBI_ACCURACY_K" => "")))
+    Test.@test occursin("VITERBI_ACCURACY_K expects an integer",
+        k_error(String[], Dict("VITERBI_ACCURACY_K" => "abc")))
+    Test.@test occursin("VITERBI_ACCURACY_K must be >= 1",
+        k_error(String[], Dict("VITERBI_ACCURACY_K" => "0")))
     # Empty INLINE form -- what unquoted `--k=$K` produces with K unset.
-    Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-        ["--k="], Dict{String, String}())
+    Test.@test occursin("--k= expects an integer, got \"\"", k_error(["--k="]))
     # A REPEATED --k must error rather than resolve. Left unguarded this is
     # first-wins, so a wrapper appending --k to a command that already carries
     # one would silently discard the caller's value and then record a
@@ -181,8 +198,7 @@ Test.@testset "k selection is validated, never silently defaulted" begin
         ["--k=9", "--k=13"],
         ["--k=9", "--k", "13"],
         ["--k", "13", "--k=9"])
-        Test.@test_throws ErrorException _viterbi_accuracy_k_at_load(
-            duplicate, Dict{String, String}())
+        Test.@test occursin("--k was given 2 times", k_error(duplicate))
     end
 end
 
@@ -193,14 +209,16 @@ Test.@testset "value-taking flags are validated, never silently defaulted" begin
     # resolved through abspath("") to the CWD (the repository root for the
     # documented invocation), and a following flag was consumed as the path
     # while itself being dropped.
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--skip-plots", "--output-dir"], "--output-dir", "/tmp/fallback")
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--output-dir", ""], "--output-dir", "/tmp/fallback")
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--output-dir", "   "], "--output-dir", "/tmp/fallback")
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--output-dir", "--skip-plots"], "--output-dir", "/tmp/fallback")
+    dir_error(args) = _b8_error_message(
+        () -> _viterbi_accuracy_arg_value(args, "--output-dir", "/tmp/fallback"))
+    Test.@test occursin("--output-dir requires a value",
+        dir_error(["--skip-plots", "--output-dir"]))
+    Test.@test occursin("--output-dir was given an empty value",
+        dir_error(["--output-dir", ""]))
+    Test.@test occursin("--output-dir was given an empty value",
+        dir_error(["--output-dir", "   "]))
+    Test.@test occursin("which is another flag", dir_error([
+        "--output-dir", "--skip-plots"]))
     # Absent flag still yields the default; a real value is returned verbatim.
     Test.@test _viterbi_accuracy_arg_value(
         ["--skip-plots"], "--output-dir", "/tmp/fallback") == "/tmp/fallback"
@@ -211,11 +229,11 @@ Test.@testset "value-taking flags are validated, never silently defaulted" begin
     # value-taking flag rather than the one it was written for. Before this,
     # a repeated --output-dir was silently first-wins: the wrapper-append shape
     # below dropped the caller's directory and wrote to the base command's.
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--output-dir", "/a", "--output-dir", "/b"], "--output-dir", "/tmp/fb")
-    Test.@test_throws ErrorException _viterbi_accuracy_arg_value(
-        ["--output-dir", "/repo/results", "--k", "9", "--output-dir", "/scratch/mine"],
-        "--output-dir", "/tmp/fb")
+    Test.@test occursin("--output-dir was given 2 times",
+        dir_error(["--output-dir", "/a", "--output-dir", "/b"]))
+    Test.@test occursin("--output-dir was given 2 times",
+        dir_error(["--output-dir", "/repo/results", "--k", "9",
+            "--output-dir", "/scratch/mine"]))
 end
 
 Test.@testset "unrecognized arguments stop the run" begin
@@ -234,7 +252,11 @@ Test.@testset "unrecognized arguments stop the run" begin
         ["--skip-plots=true"],
         ["--help"],
         ["garbage"])
-        Test.@test_throws ErrorException _viterbi_accuracy_reject_unknown_args(bad)
+        message = _b8_error_message(() -> _viterbi_accuracy_reject_unknown_args(bad))
+        Test.@test occursin("unrecognized argument(s)", message)
+        # The message names the offending token; in every case above the first
+        # token is itself unrecognized.
+        Test.@test occursin(repr(first(bad)), message)
     end
     # Everything the script really accepts must pass, including a value that
     # looks like a flag-ish token but is positionally a consumed value.
@@ -275,11 +297,33 @@ Test.@testset "main() refuses a --k it cannot honour" begin
     # caller-supplied args vector arrives too late. Silently dropping it would
     # return k=11 tables to a caller who asked for 9 while `--output-dir` from
     # the SAME vector was honoured. The check runs before any benchmark work.
-    Test.@test_throws ErrorException main(["--k", "9", "--skip-plots"])
-    Test.@test_throws ErrorException main(["--k=9", "--skip-plots"])
+    main_error(args) = _b8_error_message(() -> main(args))
+    Test.@test occursin("main() received --k 9 but k was already bound to 11",
+        main_error(["--k", "9", "--skip-plots"]))
+    Test.@test occursin("main() received --k= 9 but k was already bound to 11",
+        main_error(["--k=9", "--skip-plots"]))
     # Same validation as at load time, so a bad value cannot slip through here.
-    Test.@test_throws ErrorException main(["--k"])
-    Test.@test_throws ErrorException main(["--k", "abc"])
+    Test.@test occursin("--k requires a value", main_error(["--k"]))
+    Test.@test occursin("--k expects an integer", main_error(["--k", "abc"]))
+end
+
+Test.@testset "k too large for a fixture window is refused" begin
+    # Errors are injected only into interior k-mers, so each window of length L
+    # needs k <= L - 2. The binding window is the normalized text excerpt
+    # (291 chars), so k = 289 is the largest k every fixture supports and 290 is
+    # the smallest that leaves the text fixture with no injectable observation
+    # (actual_error_rate = 0/0). Both sides of the boundary go through the real
+    # fixture builder, not the helper alone. Pinned literally: deriving the
+    # expected bound from the windows would pass if the bound itself regressed.
+    Test.@test length(viterbi_accuracy_fixtures(289)) == 3
+    message = _b8_error_message(() -> viterbi_accuracy_fixtures(290))
+    Test.@test occursin(
+        "k=290 is too large for the austen_pride_prejudice_excerpt fixture",
+        message)
+    Test.@test occursin("k must be <= 289", message)
+    # PSTVd (359 nt, not the 360-nt cap) is the next window to bind.
+    Test.@test occursin("k=358 is too large for the pstvd_nc002030 fixture",
+        _b8_error_message(() -> viterbi_accuracy_fixtures(358)))
 end
 
 Test.@testset "recorded command line reflects how k was selected" begin
