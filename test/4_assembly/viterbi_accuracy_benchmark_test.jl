@@ -311,19 +311,33 @@ Test.@testset "k too large for a fixture window is refused" begin
     # Errors are injected only into interior k-mers, so each window of length L
     # needs k <= L - 2. The binding window is the normalized text excerpt
     # (291 chars), so k = 289 is the largest k every fixture supports and 290 is
-    # the smallest that leaves the text fixture with no injectable observation
-    # (actual_error_rate = 0/0). Both sides of the boundary go through the real
-    # fixture builder, not the helper alone. Pinned literally: deriving the
-    # expected bound from the windows would pass if the bound itself regressed.
-    Test.@test length(viterbi_accuracy_fixtures(289)) == 3
+    # the smallest that leaves the text fixture with no interior observation.
+    # Both sides of the boundary go through the real fixture builder. Pinned
+    # literally: deriving the expected values from the windows would pass if the
+    # bound itself regressed.
+    fixtures = viterbi_accuracy_fixtures(289)
+    # 359 - 289 + 1, 432 - 289 + 1, 291 - 289 + 1: the builder honoured k, and
+    # every window keeps at least one interior k-mer (>= 3 observations).
+    Test.@test [length(fixture.truth) for fixture in fixtures] == [71, 144, 3]
+    Test.@test all(length(first(fixture.truth)) == 289 for fixture in fixtures)
     message = _b8_error_message(() -> viterbi_accuracy_fixtures(290))
     Test.@test occursin(
         "k=290 is too large for the austen_pride_prejudice_excerpt fixture",
         message)
     Test.@test occursin("k must be <= 289", message)
-    # PSTVd (359 nt, not the 360-nt cap) is the next window to bind.
-    Test.@test occursin("k=358 is too large for the pstvd_nc002030 fixture",
-        _b8_error_message(() -> viterbi_accuracy_fixtures(358)))
+
+    # Each window's own bound, independent of which check runs first. The phiX
+    # window (432) never binds while the text window is 291, so it is covered
+    # here rather than through the builder.
+    for (name, window_length) in (("pstvd_nc002030", 359), ("phix174_nc001422", 432))
+        window = repeat("A", window_length)
+        bound = window_length - 2
+        Test.@test _viterbi_accuracy_require_interior(name, window, bound) === nothing
+        refusal = _b8_error_message(
+            () -> _viterbi_accuracy_require_interior(name, window, bound + 1))
+        Test.@test occursin("too large for the $(name) fixture", refusal)
+        Test.@test occursin("k must be <= $(bound)", refusal)
+    end
 end
 
 Test.@testset "recorded command line reflects how k was selected" begin

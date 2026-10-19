@@ -324,9 +324,12 @@ end
 
 # Errors are injected only into interior observations (`_inject_fixture_errors`
 # skips the first and last k-mer), so a window of length L needs L - k + 1 >= 3
-# k-mers, i.e. k <= L - 2. Past that, no error is injected and the row's
-# actual_error_rate is 0/0. The binding window is the normalized text excerpt
-# (291 chars -> k <= 289), not the 360-nt cap: PSTVd itself is 359 nt.
+# k-mers, i.e. k <= L - 2. Past that, `_viterbi_accuracy_row` sums over an
+# empty interior and Julia throws an opaque `MethodError` ("reducing over an
+# empty collection"); this guard replaces that with a refusal naming the
+# fixture and its bound, before any graph is built. The binding window is the
+# normalized text excerpt (291 chars -> k <= 289), not the 360-nt cap: PSTVd
+# itself is 359 nt.
 function _viterbi_accuracy_require_interior(
         name::AbstractString, window::AbstractString, k::Int)
     length(window) - k + 1 >= 3 && return nothing
@@ -335,6 +338,10 @@ function _viterbi_accuracy_require_interior(
           "to leave an interior observation for error injection.")
 end
 
+# `k` is a parameter only so the window bound can be tested at other values.
+# Benchmark rows must be produced at the load-time `VITERBI_ACCURACY_K`:
+# `_convert_observations` and the row/run-id stamping read that constant, so
+# fixtures built at another k are not valid input to `_viterbi_accuracy_row`.
 function viterbi_accuracy_fixtures(k::Int = VITERBI_ACCURACY_K)::Vector{ViterbiAccuracyFixture}
     pstvd = replace(
         _read_fasta_sequence(joinpath(VITERBI_ACCURACY_FIXTURE_DIR, "pstvd_nc002030.fasta")),
