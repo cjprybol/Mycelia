@@ -226,7 +226,13 @@ done
 mkdir -p "$outdir"
 printf '%s\n' "${original_args[*]}" > "$outdir/vamb_args.txt"
 if [[ "${original_args[0]:-}" == "bin" ]]; then
-    printf 'contig\tbin\ncontig1\tbin_1\n' > "$outdir/vae_clusters.tsv"
+    # Current VAMB output names: TaxVAMB uses the vaevae_ prefix, and the
+    # metadata table sorts before the split/unsplit assignment tables.
+    model="vae"
+    [[ "${original_args[1]:-}" == "taxvamb" ]] && model="vaevae"
+    printf 'name\tradius\n' > "$outdir/${model}_clusters_metadata.tsv"
+    printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_unsplit.tsv"
+    printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_split.tsv"
 else
     printf 'taxometer\n' > "$outdir/taxometer_output.txt"
 fi
@@ -350,7 +356,13 @@ done
 mkdir -p "$outdir"
 printf '%s\n' "${original_args[*]}" > "$outdir/vamb_args.txt"
 if [[ "${original_args[0]:-}" == "bin" ]]; then
-    printf 'contig\tbin\ncontig1\tbin_1\n' > "$outdir/vae_clusters.tsv"
+    # Current VAMB output names: TaxVAMB uses the vaevae_ prefix, and the
+    # metadata table sorts before the split/unsplit assignment tables.
+    model="vae"
+    [[ "${original_args[1]:-}" == "taxvamb" ]] && model="vaevae"
+    printf 'name\tradius\n' > "$outdir/${model}_clusters_metadata.tsv"
+    printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_unsplit.tsv"
+    printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_split.tsv"
 else
     printf 'taxometer\n' > "$outdir/taxometer_output.txt"
 fi
@@ -603,7 +615,7 @@ Test.@testset "Binning Tools Integration" begin
                     threads = 7
                 )
                 taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
-                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vaevae_clusters_split.tsv")
                 Test.@test isfile(taxvamb_result.clusters_tsv)
                 Test.@test occursin("taxvamb", taxvamb_args)
                 Test.@test occursin("-p 7", taxvamb_args)
@@ -823,7 +835,7 @@ Test.@testset "Binning Tools Integration" begin
                     minfasta = 1500,
                     threads = 3
                 )
-                Test.@test vamb_result.clusters_tsv == joinpath(vamb_outdir, "vae_clusters.tsv")
+                Test.@test vamb_result.clusters_tsv == joinpath(vamb_outdir, "vae_clusters_split.tsv")
                 Test.@test isfile(vamb_result.clusters_tsv)
                 Test.@test occursin("--abundance_tsv", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
                 Test.@test occursin("-p 3", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
@@ -855,7 +867,7 @@ Test.@testset "Binning Tools Integration" begin
                     extra_args = ["-p", "9"]
                 )
                 taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
-                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vaevae_clusters_split.tsv")
                 Test.@test occursin("taxvamb", taxvamb_args)
                 Test.@test occursin("-p 9", taxvamb_args)
                 Test.@test !occursin("-p 4", taxvamb_args)

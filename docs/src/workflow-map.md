@@ -169,3 +169,82 @@ location until tutorials are added.
 | `ggcat.jl` | `install_ggcat`, `ggcat_build`, `ggcat_query` | GGCAT | Compacted or colored de Bruijn graphs. |
 | `pantools.jl` | `run_pantools`, `pantools_cmd`, `write_pantools_genome_locations_file`, `write_pantools_annotation_locations_file` | PanTools | Pangenome toolkit wrapper via Bioconda. |
 | `prokrustean.jl` | `install_prokrustean`, `prokrustean_build_graph`, `prokrustean_kmer_count`, `prokrustean_unitig_count`, `prokrustean_braycurtis`, `prokrustean_overlap` | Prokrustean | Builds from source; provides k-mer and unitig metrics. |
+
+## 4. Hybrid assembly wrapper contracts
+
+The paired-short-plus-long-read entry points listed in sections 1 and 2 —
+`Mycelia.Rhizomorph.assemble_hybrid`,
+`Mycelia.Rhizomorph.assemble_unicycler_hybrid`,
+`Mycelia.Rhizomorph.assemble_autocycler_polished`, and the single-technology
+`Mycelia.run_metamdbg` — are *fail-closed* wrappers rather than thin
+command-line shims. Each one models the guarantee it can actually honour and
+raises rather than proceeding when an input, an option, or a reusable artifact
+falls outside it. The practical consequence for callers is that a misconfigured
+hybrid workflow stops at configuration time, before any read is copied or any
+external assembler is provisioned, instead of producing an assembly whose
+provenance cannot be reconstructed later.
+
+### 4.1 Typed configs, not keyword arguments
+
+`assemble_hybrid` dispatches on a config object rather than on keyword
+arguments: `UnicyclerHybridConfig` selects independent short- and long-read
+correction followed by a three-FASTQ Unicycler assembly, while
+`AutocyclerPolishConfig` selects a corrected long-read Autocycler consensus
+polished with Polypolish and then careful Pypolca. Both subtype
+`AbstractPairedShortLongAssemblyConfig`, and both do their validation in the
+constructor. `short_read_tech` and `long_read_tech` must name technologies the
+OLC taxonomy recognises; `autocycler_read_type` must be one of `:ont_r9`,
+`:ont_r10`, `:pacbio_clr`, or `:pacbio_hifi` *and* must be compatible with
+`long_read_tech`, so PacBio CLR and HiFi never share a correction model. Options
+the route itself owns — input paths, output directories, thread counts,
+executor handles, and the Autocycler chemistry flag — are rejected outright if
+passed through `correction_options` or `assembler_options`, as is any key
+outside the supported set. `threads` and `input_snapshot_byte_ceiling` must be
+positive. An invalid combination therefore throws an `ArgumentError` from the
+config constructor, which is a much cheaper place to discover the mistake than
+several hours into a long-read assembly.
+
+### 4.2 Snapshot lifecycle and provenance
+
+Every validated source file and every correction output is materialized once as
+a workflow-owned stable FASTQ snapshot. Correction and assembly consume only
+those lifecycle-retained snapshots, never the caller's files directly, so a
+source that is rewritten mid-run cannot silently change the assembled bytes.
+Result provenance retains both the original-source and the consumed-snapshot
+hashes, which is what makes an assembly reconstructible after the fact.
+`input_snapshot_byte_ceiling` bounds the cumulative bytes copied across the
+whole workflow and is checked before the next correction or assembler side
+effect, so a run that would exhaust the budget fails before it starts the stage
+that would have overrun it. Both config types are immutable, so `output_dir` is
+set at construction rather than assigned afterwards: pass `output_dir = nothing`
+for ephemeral artifacts, or give it a new, empty persistent directory when you
+want to keep the corrected FASTQs and tool outputs. Any non-empty output
+directory is refused rather than merged into.
+
+### 4.3 metaMDBG is single-technology by construction
+
+`Mycelia.run_metamdbg` accepts either one or more HiFi FASTQs *or* one or more
+ONT FASTQs, never both. The wrapper emits exactly one of `--in-hifi` and
+`--in-ont`, and rejects a call supplying both, because its reuse contract binds a
+single input technology: a mixed invocation has no one technology flag to record,
+so it could never be checked for reuse. Mixed input is therefore excluded rather
+than advertised as a combined-input contract the wrapper cannot deliver. ONT
+input additionally requires the explicit `ont_r10_4_plus = true`
+attestation that every input came from Nanopore
+R10.4-or-later chemistry; generic, R9, and unknown ONT inputs are rejected, and
+the flag must stay `false` for HiFi input. Reuse of an existing output directory
+is bound to input provenance: a completed result is reused without rerunning
+metaMDBG only when a durable contract marker matches the normalized input paths,
+the technology flag, the input file sizes and SHA-256 content digests,
+`abundance_min`, metaMDBG 1.4 itself, and the spec-addressed environment name
+and bundled environment-spec checksum. Partial contigs or graphs are never
+resumed, because they carry no realized-stage provenance. One output root owns
+exactly one `graph_k`; request a different graph resolution in a fresh output
+root.
+
+Non-local execution returns `status = :planned` for collected or dry-run jobs
+and `:submitted` for a real scheduler submission, with `expected_artifacts` and
+— for submissions — a cancellation capability. Planned and submitted results
+carry the *expected* environment specification only; the realized package
+inventory is recorded when execution actually completes, so a `:planned` result
+must not be read as a completed assembly.
