@@ -11,9 +11,11 @@ destroys the comparison and leaves one table of unclear provenance.
 
 Two open questions motivated it, and it answers both.
 
-1. **No committed invocation reproduced the 240-cell grid** (`td-7cpm`). The
-   driver's defaults yield 96 cells, not 240 (`td-4blm`), so the committed
-   deliverable could not be regenerated from anything in the repo.
+1. **No committed invocation reproduced the 240-cell grid** (`td-7cpm`). At the
+   time, the driver's defaults yielded 96 cells, not 240 (`td-4blm`), so the
+   committed deliverable could not be regenerated from anything in the repo.
+   `../ont_k_sweep/README.md` now describes reproducing it as separate Lambda
+   and T4 runs into one output directory.
 2. **Whether the measurements are host- and toolchain-stable at all.** The
    project had already discarded a set of laptop-computed cells on the grounds
    that a different Badread and a macOS QUAST made them incomparable. That
@@ -37,12 +39,13 @@ OUTPUT_DIR=<dir> KS="11 15 21 31" COVERAGES="10 30 50" \
 
 Lambda carries a denser k ladder (7 values, adding 13/17/19) and T4 a narrower
 coverage set (no 100x). Neither is expressible through the driver's defaults,
-which is why nothing in the repo reproduced the grid.
+which is why nothing in the repo reproduced the grid at the time.
 
 ## Provenance
 
-The two rows that differ — Badread and Julia — are the whole point of the
-comparison; everything else is held constant.
+Apart from the host, the two rows that differ — Badread and Julia — are the
+whole point of the comparison. QUAST matches; versions not recorded for the
+committed table ("—") are unknown, not shown to be held constant.
 
 | component | this replication                    | committed table (`../ont_k_sweep/`) |
 | --------- | ----------------------------------- | ----------------------------------- |
@@ -54,12 +57,12 @@ comparison; everything else is held constant.
 | commit    | `3479d1fbb5b2`                      | —                                   |
 | SLURM job | `56466504`, COMPLETED 0:0, 2 h 11 m | —                                   |
 
-`3479d1fbb5b2` differs from the head of the branch the replication was run on
-only by a merge of master and an artifact-harvest commit; `ont_k_sweep.jl`, `run_ont_k_sweep_shards.sh` and
-`src/simulation.jl` are byte-identical across that range, so the measurement
-path is the same code.
-That commit is not on master; it is kept on the branch
-`cp/ont-sweep-nersc-replication` so this provenance stays resolvable.
+`3479d1fbb5b2` is the code the replication ran. It is not on master; it is
+kept on the branch `cp/ont-sweep-nersc-replication` so this provenance stays
+resolvable. Between it and that branch's head there are only merges of master
+and the commit adding these results, and `ont_k_sweep.jl`,
+`run_ont_k_sweep_shards.sh` and `src/simulation.jl` are byte-identical across
+that range, so the measurement path is the same code.
 
 ## Result
 
@@ -82,26 +85,25 @@ definition and differs in all 240 rows.
 
 ## What this establishes, and what it does not
 
-**Establishes.** The sweep is deterministic and reproducible across hosts. A
-Badread **minor-version** difference (0.4.1 vs 0.4.2) and a Julia **patch**
-difference (1.10.10 vs 1.10.11) produced zero measurable change across 240
-cells. `../ont_k_sweep/README.md` already asserted Badread 0.4.1/0.4.2
-output-equivalence, but rested it on two small files being unchanged across one
-host switch; this is the same claim tested across the whole grid on a third
-host.
+**Establishes.** Across these two hosts the sweep is deterministic and
+reproducible. Two **patch-level** differences — Badread 0.4.1 vs 0.4.2 and
+Julia 1.10.10 vs 1.10.11 — produced zero measurable change across 240 cells.
+`../ont_k_sweep/README.md` asserts Badread 0.4.1/0.4.2 output-equivalence
+from smaller checks; this tests the same claim across the whole grid on
+another host.
 
 **Does not establish.** This says nothing about the **macOS QUAST** half of the
 rationale for discarding the earlier laptop-computed cells — that build was
 forced to a single thread by a known Python 3.8+ bug, a variable untouched
 here. It is therefore **not** grounds to reinstate those cells. It also does
-not establish toolchain-independence in general: two minor/patch version
-deltas held, which says nothing about a major version, a different aligner, or
-a different simulator.
+not establish toolchain-independence in general: two patch-level version
+deltas held, which says nothing about a minor or major version, a different
+aligner, or a different simulator.
 
 ## Reproducing
 
-Both arms into a fresh output directory, on a SLURM host — never the laptop. Two prerequisites that
-are not obvious and cost a day when missed (`td-j8bh`):
+Both arms into a fresh output directory, on a SLURM host — never the laptop.
+Two prerequisites that are not obvious and cost a day when missed (`td-j8bh`):
 
 - **Instantiate the project against the host's depot first.** The dispatch
   recipe goes straight from `git worktree add` to `sbatch`; a branch carrying
@@ -111,18 +113,14 @@ are not obvious and cost a day when missed (`td-j8bh`):
   module there and it cannot load this Manifest — `import Mycelia` dies with
   `KeyError: "Graphs"` in `insert_extension_triggers`. Use juliaup's 1.10.10.
 
-One driver defect to know when sharding: the serial pre-warm forwards `KS`,
-`COVERAGES` and `ORGANISMS` from the environment but **not** `TECHNOLOGIES`, so
-a run that narrows technologies gets extra default-technology cells written
-into the same tree. A full run passing both technologies is unaffected, because
-the pre-warm's cells are then a subset and dedupe via checkpoint resume.
-
-_Update (2026-10-19):_ the driver on master now pre-warms a fixed cell
-(`--technologies illumina,ont --ks 31 --coverages 10`) and forwards only
-`ORGANISMS`, so the description above is of the driver as it stood when this
-replication ran. The consequence is unchanged: a run that narrows `KS`,
-`COVERAGES` or `TECHNOLOGIES` still gets the pre-warm cell written into the
-same tree.
+One driver behaviour to know when sharding: the serial pre-warm runs a fixed
+cell (`--technologies illumina,ont --ks 31 --coverages 10 --seeds 42`) and
+forwards only `ORGANISMS` from the environment. That is true at
+`3479d1fbb5b2` and on master. It writes up to two cells per organism, one per
+technology, and the final `--aggregate-only` pass reads the whole `cells/`
+tree. So a run whose grid excludes either technology, k = 31, 10x or seed 42
+also reports those pre-warm cells. Both runs above include all four, so their
+pre-warm cells are a subset and dedupe via checkpoint resume.
 
 Raw per-cell checkpoints live on NERSC scratch
 (`$SCRATCH/ont_k_sweep_nersc_repro_20260807`), which auto-purges; only these
