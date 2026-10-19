@@ -94,12 +94,14 @@ demonstrate_retired_error_rate_rule()
 #
 # where `|A|` is the alphabet size, `G` the reference size in symbols, and `p`
 # the tolerated PER-K-MER collision risk: the expected number of other
-# positions that match one given k-mer by chance, about `G / |A|^k`, stays
-# below `p`. This is a SPACE-EXHAUSTION bound. It does NOT make the whole
-# reference collision-free: the expected number of chance-colliding PAIRS is
-# about `G^2 / (2 |A|^k)`, so at the floor up to `G * p / 2` pairs still
-# collide (about 11,600 for a 5 Mb DNA genome at p = 0.01). Bounding that
-# pairwise count below `p` instead needs `k >= ceil(log_|A|(G (G - 1) / (2p)))`:
+# positions that match one given k-mer by chance, about `G / |A|^k` under a
+# uniform random-sequence model, stays below `p`. Uneven composition (GC bias,
+# low-complexity regions) makes the true rate higher. This is a
+# SPACE-EXHAUSTION bound. It does NOT make the whole reference collision-free:
+# the expected number of chance-colliding PAIRS is about `G^2 / (2 |A|^k)`, so
+# at the floor it is at most `G * p / 2` (25,000 for a 5 Mb DNA genome at
+# p = 0.01; about 11,600 at that genome's floor, k = 15). Bounding the pairwise
+# count below `p` instead needs `k >= ceil(log_|A|(G (G - 1) / (2p)))`:
 # k = 26 rather than 15 for the same genome. It is also NOT a repeat-resolution
 # bound and NOT a "divergence point where erroneous k-mers dominate" -- observed
 # optima sit well above it, so the floor is necessary and clearly not sufficient.
@@ -113,10 +115,11 @@ function demonstrate_collision_floor(; p = 0.01)
         println("  |A| = $(lpad(alphabet_size, 3)) ($label): $floors")
     end
     println("  for G = $genome_sizes")
-    println("  p is a per-k-mer risk: at the floor, ~G*p/2 k-mer pairs still collide.")
-    println("  |A| = 4 reaches 13 at ~671 kb, so above that a fixed k_ref of 13 sits")
-    println("  below the per-k-mer floor (bacterial genomes are several Mb). At")
-    println("  |A| = 20 even a 3.1 Gb proteome needs only k ~= 9 by this bound.")
+    println("  p is a per-k-mer risk: at the floor, up to G*p/2 k-mer pairs still collide.")
+    println("  |A| = 4 needs more than 13 above ~671 kb (4^13 * p), so beyond that a")
+    println("  fixed k_ref of 13 sits below the per-k-mer floor (most bacterial genomes")
+    println("  are several Mb). At |A| = 20 a 3.1 Gb proteome needs only k ~= 9 by this")
+    println("  bound, which assumes uniform composition -- optimistic for real proteins.")
 end
 
 demonstrate_collision_floor()
