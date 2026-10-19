@@ -64,8 +64,9 @@ That commit is not on master; it is kept on the branch
 ## Result
 
 The grid matches: 240 cells, 240 complete checkpoints, Lambda 168 / T4 72,
-illumina 120 / ont 120 — and 81-line summary, 46-line verdict stats, the same
-as the committed files.
+illumina 120 / ont 120. The 46-line verdict stats are byte-identical to the
+committed file; the 81-line summary matches it in every column except
+`median_wall_seconds`.
 
 Compared cell-by-cell on the
 `(organism, technology, k, coverage, seed, decoder_arm)` key, the key sets are
