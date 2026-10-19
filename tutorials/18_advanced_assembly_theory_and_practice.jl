@@ -93,11 +93,16 @@ demonstrate_retired_error_rate_rule()
 #     k >= ceil(log_|A|(G / p))
 #
 # where `|A|` is the alphabet size, `G` the reference size in symbols, and `p`
-# the tolerated collision probability. This is a SPACE-EXHAUSTION bound: the
-# k-mer space must be large enough that chance collisions stay below `p`. It is
-# NOT a repeat-resolution bound and NOT a "divergence point where erroneous
-# k-mers dominate" -- observed optima sit well above it, so the floor is
-# necessary and clearly not sufficient.
+# the tolerated PER-K-MER collision risk: the expected number of other
+# positions that match one given k-mer by chance, about `G / |A|^k`, stays
+# below `p`. This is a SPACE-EXHAUSTION bound. It does NOT make the whole
+# reference collision-free: the expected number of chance-colliding PAIRS is
+# about `G^2 / (2 |A|^k)`, so at the floor up to `G * p / 2` pairs still
+# collide (about 11,600 for a 5 Mb DNA genome at p = 0.01). Bounding that
+# pairwise count below `p` instead needs `k >= ceil(log_|A|(G (G - 1) / (2p)))`:
+# k = 26 rather than 15 for the same genome. It is also NOT a repeat-resolution
+# bound and NOT a "divergence point where erroneous k-mers dominate" -- observed
+# optima sit well above it, so the floor is necessary and clearly not sufficient.
 
 function demonstrate_collision_floor(; p = 0.01)
     println("\nAlphabet-parameterised collision floor  k >= ceil(log_|A|(G/p))")
@@ -108,9 +113,10 @@ function demonstrate_collision_floor(; p = 0.01)
         println("  |A| = $(lpad(alphabet_size, 3)) ($label): $floors")
     end
     println("  for G = $genome_sizes")
-    println("  |A| = 4 reaches 13 at ~671 kb -- which is why a k_ref of 13 saturates")
-    println("  at bacterial scale. At |A| = 20 even a 3.1 Gb proteome needs k ~= 9,")
-    println("  so an amino-acid graph cannot saturate.")
+    println("  p is a per-k-mer risk: at the floor, ~G*p/2 k-mer pairs still collide.")
+    println("  |A| = 4 reaches 13 at ~671 kb, so above that a fixed k_ref of 13 sits")
+    println("  below the per-k-mer floor (bacterial genomes are several Mb). At")
+    println("  |A| = 20 even a 3.1 Gb proteome needs only k ~= 9 by this bound.")
 end
 
 demonstrate_collision_floor()
@@ -555,7 +561,7 @@ println("SUMMARY: Theoretical Foundations Integrated into Mycelia")
 println("="^60)
 
 println("\n1. Mathematical K-mer Selection:")
-println("   • Measured survival level set: k* = max{k : S(k) ≥ τ}, k ≥ ceil(log_|A|(G/p))")
+println("   • Measured survival level set: k* = max{k : S(k) ≥ τ}, k ≥ ceil(log_|A|(G/p)), p = per-k-mer chance-collision risk")
 println("   • Alphabet-parameterised collision floor, not log₄")
 println("   • Dynamic prime pattern progression")
 
