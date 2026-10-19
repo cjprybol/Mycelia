@@ -1,0 +1,14 @@
+# Empirical ONT read-identity measurement (td-4e19d.29) — artifact policy.
+#
+# COMMITTED: read_identity_summary.tsv (the distribution summary plus the
+# Badread version and defaults it was measured under), kmer_survival_ladder.tsv
+# (the (1-e)^k table computed from the MEASURED e), and per_read_identity.tsv
+# (the per-read raw measurement — small, and it is the evidence behind the
+# summary).
+#
+# IGNORED: the downloaded reference, the simulated FASTQ, and the SAM. All are
+# regenerable by re-running `benchmarking/ont_read_identity.jl` at the same
+# --coverage/--seed.
+refs/
+reads/
+*.sam

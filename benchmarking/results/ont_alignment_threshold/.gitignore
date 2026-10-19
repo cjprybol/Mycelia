@@ -1,0 +1,19 @@
+# Alignment-threshold diagnostic (td-4e19d.28) — artifact policy.
+#
+# COMMITTED: alignment_threshold_diagnostic.tsv — one row per
+# (cell, min_identity), the table that separates a QUAST scoring-threshold
+# effect from a genuinely non-reconstructing assembly.
+#
+# IGNORED: the per-cell, per-threshold QUAST output trees. Each censored cell is
+# rescored at four identity thresholds, so this directory holds 4 full QUAST
+# runs per cell; all of it is regenerable from the committed sweep checkpoints
+# by re-running benchmarking/ont_alignment_threshold_diagnostic.jl.
+#
+# The glob was `Lambda__*/` only, which left a T4 rescore tree tracked —
+# and the committed table carries 48 T4 rows, so those trees are produced by
+# an ordinary run. Match on the cell-id shape instead of one organism, so a
+# third organism cannot reintroduce the omission.
+*__*x__seed*/
+
+# In-flight temps from publish_atomically — a partial write, not a backup.
+*.tsv.tmp.*

@@ -5,45 +5,25 @@ end
 function _ensure_vamb_installed()
     env_name = _vamb_env_name()
     if !_check_conda_env_exists(env_name)
-        run(`$(Mycelia.CONDA_RUNNER) create -y -n $(env_name) python=3.11 pip`)
+        run(`$(Mycelia._conda_runner()) create -y -n $(env_name) python=3.11 pip`)
     end
 
     vamb_ok = false
     try
-        vamb_ok = success(`$(Mycelia.CONDA_RUNNER) run -n $(env_name) vamb --version`)
+        vamb_ok = success(`$(Mycelia._conda_runner()) run -n $(env_name) vamb --version`)
     catch
         vamb_ok = false
     end
     if !vamb_ok
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) python -m pip install --upgrade pip setuptools wheel`)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) python -m pip install vamb`)
+        run(`$(Mycelia._conda_runner()) run --live-stream -n $(env_name) python -m pip install --upgrade pip setuptools wheel`)
+        run(`$(Mycelia._conda_runner()) run --live-stream -n $(env_name) python -m pip install vamb`)
     end
 
-    vamb_ok = success(`$(Mycelia.CONDA_RUNNER) run -n $(env_name) vamb --version`)
+    vamb_ok = success(`$(Mycelia._conda_runner()) run -n $(env_name) vamb --version`)
     vamb_ok || error("VAMB installation failed in conda env: $(env_name)")
     return env_name
 end
 
-"""
-    run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
-             threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
-
-Run VAMB to bin contigs using sequence composition and coverage.
-Uses `vamb bin default`.
-
-# Arguments
-- `contigs_fasta::String`: FASTA file with assembled contigs
-- `depth_file::String`: JGI depth table or VAMB abundance TSV
-- `outdir::String`: Output directory for VAMB results
-- `minfasta::Int`: Minimum contig length to include (passed to `-m`, default: 2000)
-- `threads::Int`: Number of threads to use (default: all CPUs)
-- `extra_args::Vector{String}`: Additional command-line arguments
-
-# Returns
-Named tuple with:
-- `outdir`: Output directory
-- `clusters_tsv`: Path to the VAMB clusters table (contig → bin), if produced
-"""
 function _vamb_abundance_tsv(depth_file::String; output_dir::Union{Nothing, String} = nothing)
     header = open(depth_file, "r") do io
         readline(io)
@@ -153,6 +133,74 @@ function _find_first_matching_dir(dir::String, patterns::Vector{Regex}; recursiv
     return nothing
 end
 
+# VAMB writes `<prefix>_clusters_unsplit.tsv` and, when binsplitting, the
+# sample-wise `<prefix>_clusters_split.tsv` (both `clustername\tcontigname`), plus
+# `<prefix>_clusters_metadata.tsv` with per-cluster statistics. Return the split
+# assignments if present (they match the FASTA bins when binsplitting ran), else
+# unsplit; never the metadata table. `prefix` is matched exactly: `vae` (default),
+# `vaevae` (TaxVAMB). The last two names are a defensive fallback only: pre-v5 VAMB
+# wrote `vae_clusters.tsv` (v4) or `clusters.tsv` (v3), but the `vamb bin ...`
+# commands these wrappers run exist only from v5.
+function _vamb_clusters_tsv(outdir::String; prefix::String)
+    candidates = [
+        "$(prefix)_clusters_split.tsv",
+        "$(prefix)_clusters_unsplit.tsv",
+        "$(prefix)_clusters.tsv",
+        "clusters.tsv"
+    ]
+    for name in candidates
+        path = joinpath(outdir, name)
+        isfile(path) && return path
+    end
+    return nothing
+end
+
+"""
+    run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
+             threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+
+Run VAMB (`vamb bin default`) to bin contigs using sequence composition and coverage.
+VAMB runs in the `mycelia_vamb` conda environment, which is created if missing;
+whenever `vamb --version` does not succeed, pip/setuptools/wheel are upgraded and
+`vamb` is pip-installed from PyPI (unpinned, without `--upgrade`).
+
+# Arguments
+- `contigs_fasta::String`: FASTA file with assembled contigs (passed to `--fasta`)
+- `depth_file::String`: Coverage table. Used as-is as a VAMB abundance TSV when the
+  first header column is `contigname` and no column is named `contigLen` or
+  `totalAvgDepth` (header comparisons are case-insensitive); otherwise treated as a JGI depth table from
+  `jgi_summarize_bam_contig_depths` and converted to `vamb_abundance.tsv` in the
+  same directory as `depth_file`. The conversion keeps the contig name column,
+  drops columns 2-3 by position, and drops any column whose name contains `var`
+  (case-insensitive). An existing `vamb_abundance.tsv` in that directory is reused
+  without checking which depth table produced it.
+- `outdir::String`: Output directory for VAMB results. Must not already exist
+  (VAMB creates it); its parent directory is created if missing.
+- `minfasta::Int`: Minimum contig length; shorter contigs are ignored (passed to
+  VAMB's `-m`, default: 2000). Despite the name, this is not VAMB's `--minfasta`
+  (minimum bin size for FASTA output); pass that through `extra_args` if needed.
+- `threads::Int`: Number of threads, passed to `-p` (default: `get_default_threads()`).
+  Not added if `extra_args` already contains `-p` or an argument starting with `--threads`.
+- `extra_args::Vector{String}`: Additional VAMB arguments, appended after the generated ones
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory
+- `clusters_tsv`: Path to VAMB's contig-to-bin table (`clustername`, `contigname`)
+  in `outdir`: `vae_clusters_split.tsv` (written when binsplitting; matches the
+  FASTA bins) if present, else `vae_clusters_unsplit.tsv`, else, as a defensive
+  fallback for pre-v5 names, `vae_clusters.tsv` then `clusters.tsv`; `nothing` if
+  none exists. The per-cluster `vae_clusters_metadata.tsv` is never returned.
+
+# Throws
+- `ErrorException`: if `contigs_fasta` or `depth_file` does not exist, if `outdir`
+  already exists, if `vamb --version` still fails after installation, or if a JGI
+  depth table has no sample depth columns
+- `Base.ProcessFailedException`: if a conda/pip setup command or the VAMB run exits
+  with a non-zero status
+- `Base.IOError` / `SystemError`: if the conda runner cannot be spawned, or
+  `vamb_abundance.tsv` cannot be created in the `depth_file` directory
+"""
 function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
         minfasta::Int = 2000, threads::Int = get_default_threads(),
         extra_args::Vector{String} = String[])
@@ -175,10 +223,9 @@ function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    run(`$(Mycelia._conda_runner()) run --live-stream -n $(env_name) $(cmd_args)`)
 
-    clusters_tsv = _find_first_matching_file(outdir, [
-        r"vae_clusters.*\.tsv$", r"clusters.*\.tsv$"])
+    clusters_tsv = _vamb_clusters_tsv(outdir; prefix = "vae")
     return (; outdir, clusters_tsv)
 end
 
@@ -506,7 +553,7 @@ function run_taxometer(; contigs_fasta::String, depth_file::String, taxonomy_fil
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    run(`$(Mycelia._conda_runner()) run --live-stream -n $(env_name) $(cmd_args)`)
     return (; outdir)
 end
 
@@ -524,6 +571,16 @@ Uses `vamb bin taxvamb`.
 - `outdir::String`: Output directory
 - `threads::Int`: Number of threads (default: all CPUs)
 - `extra_args::Vector{String}`: Additional command-line arguments
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory
+- `clusters_tsv`: Path to TaxVAMB's contig-to-bin table in `outdir`:
+  `vaevae_clusters_split.tsv` (written when binsplitting) if present, else
+  `vaevae_clusters_unsplit.tsv`, else `vaevae_clusters.tsv` then `clusters.tsv`
+  (a defensive fallback shared with `run_vamb`; no TaxVAMB release writes these);
+  `nothing` if none exists. The per-cluster `vaevae_clusters_metadata.tsv` is
+  never returned.
 """
 function run_taxvamb(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
         outdir::String, threads::Int = get_default_threads(),
@@ -548,9 +605,8 @@ function run_taxvamb(; contigs_fasta::String, depth_file::String, taxonomy_file:
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
-    clusters_tsv = _find_first_matching_file(outdir, [
-        r"vae_clusters.*\.tsv$", r"clusters.*\.tsv$"])
+    run(`$(Mycelia._conda_runner()) run --live-stream -n $(env_name) $(cmd_args)`)
+    clusters_tsv = _vamb_clusters_tsv(outdir; prefix = "vaevae")
     return (; outdir, clusters_tsv)
 end
 
