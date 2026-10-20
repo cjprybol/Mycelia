@@ -6,9 +6,11 @@ module Td2rxhSbatchGuardTest
 # `git` / `sha256sum` stubs where a test needs them) against a real temp git
 # repository, so "the guard is present" is replaced by "the guard was seen to
 # fire". Covered: row count, stale CSV, modified tracked file, failing rev-parse,
-# failing status, failing sha256sum, missing Manifest, non-zero julia exit,
-# unknown cell set, symlinked TMPDIR. Not covered: the "julia not runnable",
-# "not in benchmarking/" and mkdir-failure branches. Round-1 review reproduced two
+# failing status, failing or garbage sha256sum, missing Manifest, non-zero julia
+# exit, unknown cell set, --seeds/--label passthrough, symlinked TMPDIR base,
+# TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
+# Not covered: the "julia not runnable", "not in benchmarking/" and mktemp-failure
+# branches, and the SIGTERM path. Round-1 review reproduced two
 # of these as fail-open on the first draft (a stale CSV passing the row guard, and
 # a failing git passing the dirty guard).
 

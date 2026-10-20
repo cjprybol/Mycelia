@@ -322,6 +322,14 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         no_reads = synthetic_table()
         no_reads[no_reads.cell .== "6000/1000/20x/e0.01", :n_reads] .= 0
         Test.@test_throws ArgumentError analyse(no_reads)
+        # The nanopore arm alone, in an INCOMPLETE cell (one seed missing), where
+        # the H1' read-count equality check does not run and cannot catch it.
+        ont_only = synthetic_table()
+        cell = ont_only.cell .== "6000/1000/20x/e0.01"
+        ont_only = ont_only[.!(cell .& (ont_only.seed .== 16)), :]
+        cell = ont_only.cell .== "6000/1000/20x/e0.01"
+        ont_only[cell .& (ont_only.arm .== "nanopore"), :n_reads] .= 0
+        Test.@test_throws ArgumentError analyse(ont_only)
     end
 
     Test.@testset "a TREATMENT-NOT-APPLIED cell keeps the verdict INCOMPLETE" begin

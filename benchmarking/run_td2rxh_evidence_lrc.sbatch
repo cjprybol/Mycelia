@@ -102,8 +102,11 @@ if ! tmp_root="$(mktemp -d "${tmp_base}/td2rxh_${SLURM_ARRAY_JOB_ID}_${SLURM_ARR
   echo "ERROR: cannot create a TMPDIR under ${tmp_base}." >&2
   exit 1
 fi
-# Cleanup is armed immediately. The directory is kept when the run itself failed
-# (rc != 0 below), because Mycelia's temp artifacts are the evidence for why.
+# Cleanup is armed immediately. The directory is KEPT only when julia or the row
+# check failed (rc != 0 below), because Mycelia's temp artifacts are the evidence
+# for why. It is REMOVED on a clean run, on an early guard exit, and on a signal
+# (walltime/scancel SIGTERM reaches the trap with rc still 0); a SIGKILL after
+# KillWait skips the trap and leaves it on the node.
 rc=0
 trap 'if [[ "${rc}" == "0" ]]; then rm -rf "${tmp_root}"; else echo "kept TMPDIR ${tmp_root} for debugging" >&2; fi' EXIT
 if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then

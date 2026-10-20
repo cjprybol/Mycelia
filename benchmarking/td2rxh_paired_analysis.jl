@@ -276,7 +276,7 @@ function cell_verdicts(paired::DataFrames.DataFrame;
         no_reads = (Int.(group.n_reads_illumina) .<= 0) .|
                    (Int.(group.n_reads_nanopore) .<= 0)
         any(no_reads) &&
-            throw(ArgumentError("$(cell): seeds $(group.seed[no_reads]) report n_reads == 0"))
+            throw(ArgumentError("$(cell): seeds $(group.seed[no_reads]) report n_reads <= 0"))
         test = n_pairs == 0 ?
                (
             n = 0, n_zero_dropped = 0, statistic = NaN, pvalue = NaN, method = "no pairs") :
