@@ -36,13 +36,24 @@
 #
 # Options:
 #   --seeds a,b,c    replicate seeds            (default 42,43,44)
-#   --cells smoke    restrict to the 2kb cells  (default all three)
+#   --cells SET      cell set: all (default, the three td-4mbg cells), smoke
+#                    (the two 2kb cells) or td2rxh (the td-2rxh 1000bp+ grid)
 #   --out PATH       CSV output path            (default indel_reroute_evidence.csv)
 #   --label NAME     provenance tag written into every row (e.g. "master", "fix")
+#   --warmup BOOL    untimed warm-up of both arms before timing (default true)
+#
+# td-2rxh grid (`--cells td2rxh`): 6 kb genome x read length {1000, 2000} x 20x
+# x error {0.01, 0.02, 0.05}. It asks whether the merged sparse-rung staging
+# (#420) plus the #450 reroute fix deliver the :nanopore > :illumina win at
+# 1000bp+. Its decision rule was pre-registered on bead td-2rxh before any run.
 
 import Pkg
 const _PROJECT = get(ENV, "MYCELIA_PROJECT", dirname(@__DIR__))
-Pkg.activate(_PROJECT; io = devnull)
+# Only re-activate when run as a script: `include`-ing this file from a test must
+# not swap the test environment out from under the test runner.
+if abspath(PROGRAM_FILE) == @__FILE__
+    Pkg.activate(_PROJECT; io = devnull)
+end
 
 import Mycelia
 import FASTX
@@ -50,6 +61,11 @@ import BioSequences
 import Random
 import Statistics
 import Dates
+
+# `indel_bench_best_reference_alignment`: best-contig reference COVERAGE
+# (contiguity) and FIT identity (accuracy). Its docstring explains why the two
+# must be reported together and why neither alone is an accuracy claim.
+include(joinpath(@__DIR__, "indel_benchmark_common.jl"))
 
 """
 One measurement cell. `error_rate` is the per-base error rate handed to
@@ -69,6 +85,21 @@ const ALL_CELLS = [
     EvidenceCell(6000, 1200, 20, 0.01, 31)
 ]
 const SMOKE_CELLS = ALL_CELLS[1:2]
+const TD2RXH_CELLS = [EvidenceCell(6000, read_length, 20, error_rate, 31)
+                      for read_length in (1000, 2000)
+                      for error_rate in (0.01, 0.02, 0.05)]
+
+"""
+Resolve a `--cells` value to its cell set. An unrecognised name throws instead
+of falling back to `ALL_CELLS`: a typo in a launcher must not quietly run a
+different grid than the one the pre-registration names.
+"""
+function select_cells(name::AbstractString)::Vector{EvidenceCell}
+    name == "all" && return ALL_CELLS
+    name == "smoke" && return SMOKE_CELLS
+    name == "td2rxh" && return TD2RXH_CELLS
+    throw(ArgumentError("unknown --cells \"$(name)\"; expected all, smoke or td2rxh"))
+end
 
 cell_id(cell::EvidenceCell)::String = string(
     cell.genome_length, "/", cell.read_length, "/", cell.coverage, "x/e",
@@ -111,9 +142,14 @@ end
 """
 Run one arm. `tech` selects the corrector profile; everything else is held fixed.
 The RNG is reseeded identically per arm so the arms differ only in `tech`.
+
+`wall_seconds_per_read` is END-TO-END wall time over the read count, graph
+construction included. It is not decode time on its own; the indel profile's
+incremental cost is the paired nanopore-minus-illumina difference on the same
+reads. The alignment metrics run after the timer stops, so they do not inflate it.
 """
 function run_arm(reads::Vector{FASTX.FASTQ.Record}, cell::EvidenceCell,
-        tech::Symbol)
+        tech::Symbol, reference::BioSequences.LongDNA{4})
     Random.seed!(1_042)
     wall_seconds = @elapsed assembly = Mycelia.Rhizomorph.assemble_genome(
         deepcopy(reads);
@@ -124,6 +160,8 @@ function run_arm(reads::Vector{FASTX.FASTQ.Record}, cell::EvidenceCell,
     stats = assembly.assembly_stats
     lengths = [length(contig) for contig in assembly.contigs]
     largest = isempty(lengths) ? 0 : maximum(lengths)
+    alignment = indel_bench_best_reference_alignment(
+        String[string(contig) for contig in assembly.contigs], reference)
     return (;
         substitution_length_divergences = get(
             stats, "substitution_length_divergences", missing),
@@ -138,8 +176,18 @@ function run_arm(reads::Vector{FASTX.FASTQ.Record}, cell::EvidenceCell,
         largest_contig = largest,
         largest_ratio = largest / cell.genome_length,
         total_contig_bases = sum(lengths; init = 0),
-        wall_seconds = wall_seconds)
+        wall_seconds = wall_seconds,
+        wall_seconds_per_read = per_read_seconds(wall_seconds, length(reads)),
+        best_contig_reference_coverage = alignment.best_contig_reference_coverage,
+        best_contig_fit_identity = alignment.best_contig_fit_identity)
 end
+
+"""
+Wall seconds per read, or `NaN` for an empty read set. `NaN` keeps a degenerate
+cell visible in the CSV; a `0` here would look like a very fast arm.
+"""
+per_read_seconds(wall_seconds::Real,
+    n_reads::Integer)::Float64 = n_reads == 0 ? NaN : Float64(wall_seconds) / n_reads
 
 function parse_args(args::Vector{String})
     parsed = Dict{String, String}()
@@ -156,10 +204,48 @@ function parse_args(args::Vector{String})
     return parsed
 end
 
+# New columns are APPENDED so CSVs written before td-2rxh keep a prefix-compatible
+# header and still parse positionally.
+const CSV_HEADER = [
+    "label", "cell", "seed", "arm", "n_reads",
+    "substitution_length_divergences", "window_divergences",
+    "window_anchor_rejections", "trace_contract_errors",
+    "indel_engaged", "indel_requested", "reassembly_k",
+    "n_contigs", "largest_contig", "largest_ratio",
+    "total_contig_bases", "wall_seconds",
+    "wall_seconds_per_read", "best_contig_reference_coverage",
+    "best_contig_fit_identity"]
+
+"""
+Format one arm's result as a CSV row in `CSV_HEADER` order. Wall times keep three
+decimals: per-read wall is sub-second, so the one decimal used for whole-arm wall
+would collapse the H1' quantity to a handful of values.
+"""
+function csv_row(label::AbstractString, cell::EvidenceCell, seed::Integer,
+        arm::Symbol, n_reads::Integer, result::NamedTuple)::String
+    return join(
+        string.([
+            label, cell_id(cell), seed, arm, n_reads,
+            result.substitution_length_divergences,
+            result.window_divergences,
+            result.window_anchor_rejections,
+            result.trace_contract_errors,
+            result.indel_engaged, result.indel_requested,
+            result.reassembly_k, result.n_contigs,
+            result.largest_contig,
+            round(result.largest_ratio, digits = 4),
+            result.total_contig_bases,
+            round(result.wall_seconds, digits = 3),
+            round(result.wall_seconds_per_read, digits = 4),
+            round(result.best_contig_reference_coverage, digits = 4),
+            round(result.best_contig_fit_identity, digits = 5)]),
+        ",")
+end
+
 function main(args::Vector{String} = ARGS)::Nothing
     parsed = parse_args(args)
     seeds = [parse(Int, s) for s in split(get(parsed, "seeds", "42,43,44"), ",")]
-    cells = get(parsed, "cells", "all") == "smoke" ? SMOKE_CELLS : ALL_CELLS
+    cells = select_cells(get(parsed, "cells", "all"))
     output_path = get(parsed, "out", "indel_reroute_evidence.csv")
     label = get(parsed, "label", "unlabeled")
 
@@ -169,49 +255,42 @@ function main(args::Vector{String} = ARGS)::Nothing
     println("# started=", string(Dates.now()))
     flush(stdout)
 
-    rows = String[]
-    push!(rows,
-        join(
-            [
-                "label", "cell", "seed", "arm", "n_reads",
-                "substitution_length_divergences", "window_divergences",
-                "window_anchor_rejections", "trace_contract_errors",
-                "indel_engaged", "indel_requested", "reassembly_k",
-                "n_contigs", "largest_contig", "largest_ratio",
-                "total_contig_bases", "wall_seconds"],
-            ","))
+    rows = String[join(CSV_HEADER, ",")]
+
+    # Untimed warm-up of BOTH arms. Without it the first timed illumina arm pays
+    # for JIT compilation of the shared pipeline and the first timed nanopore arm
+    # for the indel-specific code, which biases the paired wall-time difference
+    # (the H1' quantity) in a seed-dependent way. Results are discarded.
+    if get(parsed, "warmup", "true") == "true"
+        warm_cell = SMOKE_CELLS[1]
+        warm_reads, warm_reference = simulate_reads(warm_cell, 0)
+        for arm in (:illumina, :nanopore)
+            warm_seconds = @elapsed run_arm(warm_reads, warm_cell, arm, warm_reference)
+            println("# warmup ", arm, " ", round(warm_seconds, digits = 1), "s (discarded)")
+        end
+        flush(stdout)
+    end
 
     for cell in cells
         for seed in seeds
-            reads, _reference = simulate_reads(cell, seed)
+            reads, reference = simulate_reads(cell, seed)
             for arm in (:illumina, :nanopore)
                 result = try
-                    run_arm(reads, cell, arm)
+                    run_arm(reads, cell, arm, reference)
                 catch exception
                     @warn "arm failed" cell=cell_id(cell) seed arm exception
                     continue
                 end
-                push!(rows,
-                    join(
-                        string.([
-                            label, cell_id(cell), seed, arm, length(reads),
-                            result.substitution_length_divergences,
-                            result.window_divergences,
-                            result.window_anchor_rejections,
-                            result.trace_contract_errors,
-                            result.indel_engaged, result.indel_requested,
-                            result.reassembly_k, result.n_contigs,
-                            result.largest_contig,
-                            round(result.largest_ratio, digits = 4),
-                            result.total_contig_bases,
-                            round(result.wall_seconds, digits = 1)]),
-                        ","))
+                push!(rows, csv_row(label, cell, seed, arm, length(reads), result))
                 println("  ", cell_id(cell), " seed=", seed, " ", arm,
                     " div=", result.substitution_length_divergences,
                     " anchor=", result.window_anchor_rejections,
                     " contigs=", result.n_contigs,
                     " largest=", result.largest_contig,
-                    " (", round(result.largest_ratio, digits = 3), ")")
+                    " (", round(result.largest_ratio, digits = 3), ")",
+                    " cov=", round(result.best_contig_reference_coverage, digits = 3),
+                    " fit_id=", round(result.best_contig_fit_identity, digits = 4),
+                    " s/read=", round(result.wall_seconds_per_read, digits = 3))
                 flush(stdout)
                 open(output_path, "w") do io
                     for row in rows
