@@ -6,7 +6,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --array=1-8
+#SBATCH --exclusive
+#SBATCH --array=1-16
 #SBATCH --time=1-00:00:00
 #SBATCH --output=td2rxh_lrc_%A_%a.out
 #SBATCH --error=td2rxh_lrc_%A_%a.err
@@ -15,19 +16,23 @@
 # indel staging (#420) plus the #450 reroute fix make the :nanopore corrector
 # profile beat :illumina at 1000bp+? Runs
 # indel_reroute_evidence.jl --cells td2rxh (6 kb x {1000,2000} bp x 20x x
-# err {0.01,0.02,0.05}). One array task = one seed over all six cells, so both
-# arms of every pair run back to back on the same node, which keeps the paired
-# wall-time difference (H1') free of node-to-node variation.
+# err {0.01,0.02,0.05}). One array task = one seed (1..16, per pre-registration
+# amendment 1) over all six cells. Both arms of every pair run in the same
+# process on an exclusive node; the harness runs GC before each timed arm and
+# alternates arm order by seed parity.
 #
 # Usage (from benchmarking/ of the checkout to measure):
-#   sbatch run_td2rxh_evidence_lrc.sbatch                    # seeds 1-8
+#   sbatch run_td2rxh_evidence_lrc.sbatch                    # seeds 1-16
 #   sbatch --array=1 --export=ALL,TD2RXH_CELLS=smoke run_td2rxh_evidence_lrc.sbatch  # smoke
-# Then analyse with:
+# Then analyse ONLY after every task exited 0 (see `sacct -j <ARRAY_JOB_ID>`):
 #   julia +lts --project=.. td2rxh_paired_analysis.jl \
 #     --csv "$(ls results/td2rxh/<ARRAY_JOB_ID>/seed*.csv | paste -sd, -)" \
 #     --output-dir results/td2rxh/<ARRAY_JOB_ID>/analysis
+# The analysis itself refuses mixed run labels and lists every missing pair.
 #
 # Prereq (once on a login node, same checkout): benchmarking/hpc-setup.sh.
+# `set -e` is deliberately off so the row-count guard below can report; every
+# command whose failure matters is checked explicitly instead.
 set -uo pipefail
 echo "=== td-2rxh evidence (Lawrencium) ==="
 echo "Job: ${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
@@ -52,38 +57,65 @@ if [[ ! -f indel_reroute_evidence.jl ]]; then
   echo "ERROR: submit from a checkout's benchmarking/ directory (got ${SLURM_SUBMIT_DIR})." >&2
   exit 1
 fi
-commit="$(git -C .. rev-parse HEAD)"
-dirty="$(git -C .. status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
-echo "Checkout: $(cd .. && pwd)  HEAD=${commit}  tracked-dirty-files=${dirty}"
-if [[ "${dirty}" != "0" ]]; then
-  echo "ERROR: tracked files are modified; results would not be attributable to ${commit}." >&2
+# Each git call is checked: a failing git (not a repo, safe.directory refusal)
+# prints nothing, and an unchecked empty status would read as "clean".
+if ! commit="$(git -C .. rev-parse HEAD)" || [[ -z "${commit}" ]]; then
+  echo "ERROR: cannot resolve HEAD of $(cd .. && pwd)." >&2
   exit 1
 fi
+if ! status="$(git -C .. status --porcelain --untracked-files=no)"; then
+  echo "ERROR: git status failed in $(cd .. && pwd)." >&2
+  exit 1
+fi
+if [[ -n "${status}" ]]; then
+  echo "ERROR: tracked files are modified; results would not be attributable to ${commit}:" >&2
+  echo "${status}" >&2
+  exit 1
+fi
+# Manifest.toml is untracked, so dependency versions are not covered by HEAD.
+# Fold its hash into the run label so shards resolved against different
+# dependency sets cannot be pooled (the analysis rejects mixed labels).
+if [[ ! -f ../Manifest.toml ]]; then
+  echo "ERROR: ../Manifest.toml missing; run benchmarking/hpc-setup.sh first." >&2
+  exit 1
+fi
+manifest_sha="$(sha256sum ../Manifest.toml | cut -c1-12)"
+label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
+echo "Checkout: $(cd .. && pwd)  label=${label}"
 
 cells="${TD2RXH_CELLS:-td2rxh}"
+case "${cells}" in
+  td2rxh) expected=12 ;;   # 6 cells x 1 seed x 2 arms
+  smoke)  expected=4 ;;    # 2 cells x 1 seed x 2 arms
+  all)    expected=6 ;;    # 3 cells x 1 seed x 2 arms
+  *) echo "ERROR: unknown TD2RXH_CELLS=${cells}" >&2; exit 1 ;;
+esac
 seed="${SLURM_ARRAY_TASK_ID}"
 outdir="results/td2rxh/${SLURM_ARRAY_JOB_ID}"
-mkdir -p "${outdir}"
+mkdir -p "${outdir}" || exit 1
 out="${outdir}/seed${seed}.csv"
+# A requeued task must not inherit the previous attempt's rows.
+rm -f "${out}"
 
 echo ">>> RUN cells=${cells} seed=${seed} -> ${out}  $(date)"
 if "${JULIA}" "${JULIA_ARGS[@]}" --project=.. indel_reroute_evidence.jl \
-    --cells "${cells}" --seeds "${seed}" --out "${out}" \
-    --label "td2rxh@${commit:0:8}"; then
-  rc=0
+    --cells "${cells}" --seeds "${seed}" --out "${out}" --label "${label}"; then
+  julia_rc=0
 else
-  rc=1
+  julia_rc=$?
 fi
 
-# A green exit with a header-only CSV means every arm threw (each failure is a
-# @warn + skip in the harness). Treat that as a failure, not a result.
+# A green exit with too few rows means some arms threw (each failure is a @warn
+# + skip in the harness). Treat that as a failure, not a result.
 rows=0
 [[ -f "${out}" ]] && rows=$(( $(wc -l < "${out}") - 1 ))
-expected=12
-[[ "${cells}" == "smoke" ]] && expected=4
-echo "rows=${rows} expected=${expected}"
-if [[ "${rows}" -lt "${expected}" ]]; then
-  echo ">>> FAIL: ${out} has ${rows} of ${expected} arm rows (arms threw; see .err)" >&2
+echo "julia_rc=${julia_rc} rows=${rows} expected=${expected}"
+rc=0
+if [[ "${julia_rc}" -ne 0 ]]; then
+  echo ">>> FAIL: julia exited ${julia_rc} (see .err)" >&2
+  rc=1
+elif [[ "${rows}" -lt "${expected}" ]]; then
+  echo ">>> FAIL: ${out} has ${rows} of ${expected} arm rows; some arms threw (see .err)" >&2
   rc=1
 fi
 echo "=== done rc=${rc} $(date) ==="

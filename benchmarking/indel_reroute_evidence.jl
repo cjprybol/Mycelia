@@ -1,5 +1,6 @@
-# td-4mbg evidence harness: does gating complete-span windowing on a read-level
-# indel predicate change end-to-end correction quality?
+# Indel reroute evidence harness. Written for td-4mbg (does gating complete-span
+# windowing on a read-level indel predicate change end-to-end correction
+# quality?) and reused for td-2rxh (does :nanopore beat :illumina at 1000bp+?).
 #
 # WHY THIS FILE EXISTS. The first version of this evidence was produced by an
 # uncommitted scratch script, so nothing in the repo reproduced the numbers that
@@ -40,12 +41,18 @@
 #                    (the two 2kb cells) or td2rxh (the td-2rxh 1000bp+ grid)
 #   --out PATH       CSV output path            (default indel_reroute_evidence.csv)
 #   --label NAME     provenance tag written into every row (e.g. "master", "fix")
-#   --warmup BOOL    untimed warm-up of both arms before timing (default true)
+#   --warmup BOOL    untimed warm-up of both arms before timing: true (default)
+#                    or false; any other value is an error
 #
 # td-2rxh grid (`--cells td2rxh`): 6 kb genome x read length {1000, 2000} x 20x
 # x error {0.01, 0.02, 0.05}. It asks whether the merged sparse-rung staging
 # (#420) plus the #450 reroute fix deliver the :nanopore > :illumina win at
-# 1000bp+. Its decision rule was pre-registered on bead td-2rxh before any run.
+# 1000bp+. Its decision rule (and amendment 1) was pre-registered on bead
+# td-2rxh before any run; benchmarking/td2rxh_paired_analysis.jl applies it.
+#
+# Timing fairness: both arms of a pair run in one process; `GC.gc()` runs before
+# each timed arm so neither inherits the other's garbage, and the arm order
+# alternates with seed parity so a fixed order cannot bias the paired difference.
 
 import Pkg
 const _PROJECT = get(ENV, "MYCELIA_PROJECT", dirname(@__DIR__))
@@ -147,10 +154,16 @@ The RNG is reseeded identically per arm so the arms differ only in `tech`.
 construction included. It is not decode time on its own; the indel profile's
 incremental cost is the paired nanopore-minus-illumina difference on the same
 reads. The alignment metrics run after the timer stops, so they do not inflate it.
+
+An empty assembly reports `best_contig_fit_identity = NaN`: there is no contig
+whose accuracy could be measured, and the alignment helper's `0.0` sentinel would
+otherwise score as a maximally wrong contig. Its reference coverage stays `0.0`,
+which is a real contiguity outcome.
 """
 function run_arm(reads::Vector{FASTX.FASTQ.Record}, cell::EvidenceCell,
         tech::Symbol, reference::BioSequences.LongDNA{4})
     Random.seed!(1_042)
+    GC.gc()
     wall_seconds = @elapsed assembly = Mycelia.Rhizomorph.assemble_genome(
         deepcopy(reads);
         k = cell.kmax,
@@ -179,7 +192,22 @@ function run_arm(reads::Vector{FASTX.FASTQ.Record}, cell::EvidenceCell,
         wall_seconds = wall_seconds,
         wall_seconds_per_read = per_read_seconds(wall_seconds, length(reads)),
         best_contig_reference_coverage = alignment.best_contig_reference_coverage,
-        best_contig_fit_identity = alignment.best_contig_fit_identity)
+        best_contig_fit_identity = isempty(assembly.contigs) ? NaN :
+                                   alignment.best_contig_fit_identity)
+end
+
+"""
+Arm order for one seed: illumina first on odd seeds, nanopore first on even
+seeds, so a fixed order cannot bias the paired wall-time difference.
+"""
+arm_order(seed::Integer)::Tuple{
+    Symbol, Symbol} = iseven(seed) ? (:nanopore, :illumina) : (:illumina, :nanopore)
+
+"""Parse a strict boolean flag value; anything but "true"/"false" is an error."""
+function parse_bool_flag(name::AbstractString, value::AbstractString)::Bool
+    value == "true" && return true
+    value == "false" && return false
+    throw(ArgumentError("--$(name) must be true or false, got \"$(value)\""))
 end
 
 """
@@ -189,17 +217,20 @@ cell visible in the CSV; a `0` here would look like a very fast arm.
 per_read_seconds(wall_seconds::Real,
     n_reads::Integer)::Float64 = n_reads == 0 ? NaN : Float64(wall_seconds) / n_reads
 
-function parse_args(args::Vector{String})
+"""
+Parse `--key value` pairs. Unknown keys and a dangling flag are errors, so a typo
+(`--cell td2rxh`, `--seed 3`) cannot silently run the default grid or seeds.
+"""
+function parse_args(args::Vector{String})::Dict{String, String}
+    allowed = ("seeds", "cells", "out", "label", "warmup")
+    isodd(length(args)) && throw(ArgumentError("expected --key value pairs, got $(args)"))
     parsed = Dict{String, String}()
-    index = 1
-    while index <= length(args)
-        argument = args[index]
-        if startswith(argument, "--") && index < length(args)
-            parsed[argument[3:end]] = args[index + 1]
-            index += 2
-        else
-            index += 1
-        end
+    for index in 1:2:length(args)
+        startswith(args[index], "--") ||
+            throw(ArgumentError("expected a --flag, got \"$(args[index])\""))
+        key = args[index][3:end]
+        key in allowed || throw(ArgumentError("unknown flag --$(key)"))
+        parsed[key] = args[index + 1]
     end
     return parsed
 end
@@ -217,14 +248,18 @@ const CSV_HEADER = [
     "best_contig_fit_identity"]
 
 """
-Format one arm's result as a CSV row in `CSV_HEADER` order. Wall times keep three
-decimals: per-read wall is sub-second, so the one decimal used for whole-arm wall
-would collapse the H1' quantity to a handful of values.
+Format one arm's result as a CSV row in `CSV_HEADER` order.
+
+Precision: whole-arm `wall_seconds` keeps 3 decimals (CSVs written before td-2rxh
+carry 1), `wall_seconds_per_read` 4, and both alignment metrics 6, so the
+td-2rxh analysis can round paired deltas to 1e-6 without the CSV having already
+quantised them. An absent telemetry counter is written as an empty field (CSV
+`missing`), not the literal string "missing".
 """
 function csv_row(label::AbstractString, cell::EvidenceCell, seed::Integer,
         arm::Symbol, n_reads::Integer, result::NamedTuple)::String
     return join(
-        string.([
+        _csv_field.([
             label, cell_id(cell), seed, arm, n_reads,
             result.substitution_length_divergences,
             result.window_divergences,
@@ -237,31 +272,48 @@ function csv_row(label::AbstractString, cell::EvidenceCell, seed::Integer,
             result.total_contig_bases,
             round(result.wall_seconds, digits = 3),
             round(result.wall_seconds_per_read, digits = 4),
-            round(result.best_contig_reference_coverage, digits = 4),
-            round(result.best_contig_fit_identity, digits = 5)]),
+            round(result.best_contig_reference_coverage, digits = 6),
+            round(result.best_contig_fit_identity, digits = 6)]),
         ",")
+end
+
+_csv_field(value) = value === missing ? "" : string(value)
+
+function write_rows(output_path::AbstractString, rows::Vector{String})::Nothing
+    open(output_path, "w") do io
+        for row in rows
+            println(io, row)
+        end
+    end
+    return nothing
 end
 
 function main(args::Vector{String} = ARGS)::Nothing
     parsed = parse_args(args)
     seeds = [parse(Int, s) for s in split(get(parsed, "seeds", "42,43,44"), ",")]
-    cells = select_cells(get(parsed, "cells", "all"))
+    cells_name = get(parsed, "cells", "all")
+    cells = select_cells(cells_name)
     output_path = get(parsed, "out", "indel_reroute_evidence.csv")
     label = get(parsed, "label", "unlabeled")
+    warmup = parse_bool_flag("warmup", get(parsed, "warmup", "true"))
 
-    println("# td-4mbg reroute evidence")
+    println("# indel reroute evidence cells=", cells_name)
     println("# label=", label, " project=", _PROJECT)
-    println("# seeds=", join(seeds, ","), " cells=", length(cells))
+    println("# seeds=", join(seeds, ","), " cells=", length(cells), " warmup=", warmup)
     println("# started=", string(Dates.now()))
     flush(stdout)
 
+    # Write the header immediately: a re-run into an existing path must never
+    # leave the previous run's rows in place if every arm of this run fails.
     rows = String[join(CSV_HEADER, ",")]
+    write_rows(output_path, rows)
 
-    # Untimed warm-up of BOTH arms. Without it the first timed illumina arm pays
-    # for JIT compilation of the shared pipeline and the first timed nanopore arm
-    # for the indel-specific code, which biases the paired wall-time difference
-    # (the H1' quantity) in a seed-dependent way. Results are discarded.
-    if get(parsed, "warmup", "true") == "true"
+    # Untimed warm-up of BOTH arms. Without it, whichever (cell, seed) runs first
+    # in the process -- under the one-seed-per-task sbatch, always the first
+    # td2rxh cell -- pays for JIT compilation, biasing the paired wall-time
+    # difference (the H1' quantity) there. The warm-up uses a small smoke cell; it
+    # is not proven to compile every path a 6 kb cell reaches. Results discarded.
+    if warmup
         warm_cell = SMOKE_CELLS[1]
         warm_reads, warm_reference = simulate_reads(warm_cell, 0)
         for arm in (:illumina, :nanopore)
@@ -274,7 +326,7 @@ function main(args::Vector{String} = ARGS)::Nothing
     for cell in cells
         for seed in seeds
             reads, reference = simulate_reads(cell, seed)
-            for arm in (:illumina, :nanopore)
+            for arm in arm_order(seed)
                 result = try
                     run_arm(reads, cell, arm, reference)
                 catch exception
@@ -292,11 +344,7 @@ function main(args::Vector{String} = ARGS)::Nothing
                     " fit_id=", round(result.best_contig_fit_identity, digits = 4),
                     " s/read=", round(result.wall_seconds_per_read, digits = 3))
                 flush(stdout)
-                open(output_path, "w") do io
-                    for row in rows
-                        println(io, row)
-                    end
-                end
+                write_rows(output_path, rows)
             end
         end
     end

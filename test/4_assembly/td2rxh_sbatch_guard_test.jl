@@ -1,0 +1,136 @@
+module Td2rxhSbatchGuardTest
+
+# Positive controls for the fail-closed guards in
+# benchmarking/run_td2rxh_evidence_lrc.sbatch. Each guard is executed against the
+# bad input it exists to catch, using stub `julia` / `git` / `sha256sum` in a temp
+# git repository, so "the guard is present" is replaced by "the guard was seen to
+# fire". Round-1 review reproduced two of these as fail-open on the first draft
+# (a stale CSV passing the row guard, and a failing git passing the dirty guard).
+
+import Test
+
+const SBATCH = joinpath(
+    @__DIR__, "..", "..", "benchmarking", "run_td2rxh_evidence_lrc.sbatch")
+
+const JULIA_STUB = """
+#!/bin/bash
+if [[ "\${2:-}" == "--version" ]]; then echo "julia version 1.10.0"; exit 0; fi
+out=""
+while [[ \$# -gt 0 ]]; do
+  if [[ "\$1" == "--out" ]]; then out="\$2"; fi
+  shift
+done
+if [[ -n "\${STUB_ROWS:-}" ]]; then
+  echo "header" > "\$out"
+  i=0
+  while [[ \$i -lt \$STUB_ROWS ]]; do echo "row" >> "\$out"; i=\$((i + 1)); done
+fi
+exit "\${STUB_RC:-0}"
+"""
+
+function write_exe(path::AbstractString, body::AbstractString)
+    mkpath(dirname(path))
+    write(path, body)
+    chmod(path, 0o755)
+end
+
+"""Build a clean temp repo + stub HOME; return (repo, home, bindir)."""
+function fixture()
+    root = mktempdir()
+    repo = joinpath(root, "repo")
+    mkpath(joinpath(repo, "benchmarking"))
+    write(joinpath(repo, "benchmarking", "indel_reroute_evidence.jl"), "# stub\n")
+    git(args...) = run(pipeline(`git -C $repo -c user.name=t -c user.email=t@t $args`;
+        stdout = devnull, stderr = devnull))
+    git("init", "-q")
+    git("add", "benchmarking/indel_reroute_evidence.jl")
+    git("commit", "-q", "-m", "init")
+    write(joinpath(repo, "Manifest.toml"), "# untracked manifest\n")
+    home = joinpath(root, "home")
+    write_exe(joinpath(home, ".juliaup", "bin", "julia"), JULIA_STUB)
+    bindir = joinpath(root, "bin")
+    # sha256sum is absent on stock macOS; a stub keeps the test host-independent.
+    write_exe(joinpath(bindir, "sha256sum"), "#!/bin/bash\necho \"abcdef0123456789  \$1\"\n")
+    return repo, home, bindir
+end
+
+"""Run the sbatch script; return (exit code, combined output)."""
+function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
+    env = Dict{String, String}(
+        "PATH" => bindir * ":" * ENV["PATH"], "HOME" => home,
+        "SLURM_SUBMIT_DIR" => joinpath(repo, "benchmarking"),
+        "SLURM_ARRAY_JOB_ID" => "99", "SLURM_ARRAY_TASK_ID" => "1",
+        "SLURM_NODELIST" => "n0", "SLURM_CPUS_PER_TASK" => "2")
+    merge!(env, extra_env)
+    out = IOBuffer()
+    proc = run(pipeline(ignorestatus(Cmd(`bash $SBATCH`; env = env));
+        stdout = out, stderr = out))
+    return proc.exitcode, String(take!(out))
+end
+
+Test.@testset "td2rxh sbatch fail-closed guards" begin
+    if Sys.which("bash") === nothing || Sys.which("git") === nothing
+        Test.@test_skip "bash/git unavailable"
+    else
+        Test.@testset "clean run with the full row count succeeds" begin
+            repo, home, bindir = fixture()
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 0
+            Test.@test occursin("label=td2rxh@", log) &&
+                       occursin("+manifestabcdef012345", log)
+        end
+        Test.@testset "too few rows fails" begin
+            repo, home, bindir = fixture()
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "7"))
+            Test.@test rc == 1 && occursin("7 of 12", log)
+        end
+        Test.@testset "stale CSV from a previous attempt cannot pass" begin
+            repo, home, bindir = fixture()
+            stale = joinpath(repo, "benchmarking", "results", "td2rxh", "99", "seed1.csv")
+            mkpath(dirname(stale))
+            write(stale, join(["header"; fill("row", 12)], "\n") * "\n")
+            rc, _ = run_sbatch(repo, home, bindir)   # stub writes nothing, exits 0
+            Test.@test rc == 1
+            Test.@test !isfile(stale)
+        end
+        Test.@testset "modified tracked file fails" begin
+            repo, home, bindir = fixture()
+            write(joinpath(repo, "benchmarking", "indel_reroute_evidence.jl"), "# edited\n")
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 1 && occursin("tracked files are modified", log)
+        end
+        Test.@testset "failing git fails closed" begin
+            repo, home, bindir = fixture()
+            write_exe(joinpath(bindir, "git"),
+                "#!/bin/bash\necho 'fatal: dubious ownership' >&2\nexit 128\n")
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 1 && occursin("cannot resolve HEAD", log)
+        end
+        Test.@testset "julia non-zero exit fails even with full rows" begin
+            repo, home, bindir = fixture()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "STUB_RC" => "3"))
+            Test.@test rc == 1 && occursin("julia exited 3", log)
+        end
+        Test.@testset "missing Manifest.toml fails" begin
+            repo, home, bindir = fixture()
+            rm(joinpath(repo, "Manifest.toml"))
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 1 && occursin("Manifest.toml missing", log)
+        end
+        Test.@testset "smoke cell set expects 4 rows; unknown set fails" begin
+            repo, home, bindir = fixture()
+            rc,
+            _ = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "4", "TD2RXH_CELLS" => "smoke"))
+            Test.@test rc == 0
+            rc2,
+            _ = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_CELLS" => "td2rhx"))
+            Test.@test rc2 == 1
+        end
+    end
+end
+
+end
