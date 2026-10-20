@@ -95,24 +95,32 @@ echo "Checkout: $(cd .. && pwd)  label=${label}"
 # task gets a private directory on node-local disk, resolved to its physical path,
 # and a network/parallel filesystem is refused up front instead of failing later.
 tmp_base="${TD2RXH_TMP_BASE:-${SLURM_TMPDIR:-/tmp}}"
-tmp_root="${tmp_base}/td2rxh_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
-if ! mkdir -p "${tmp_root}"; then
-  echo "ERROR: cannot create TMPDIR ${tmp_root}." >&2
+# mktemp -d creates a fresh 0700 directory and refuses an existing path, so a
+# requeued task never inherits stale contents and a pre-planted symlink at a
+# predictable name cannot redirect the cleanup below.
+if ! tmp_root="$(mktemp -d "${tmp_base}/td2rxh_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.XXXXXX")"; then
+  echo "ERROR: cannot create a TMPDIR under ${tmp_base}." >&2
   exit 1
 fi
+# Cleanup is armed immediately. The directory is kept when the run itself failed
+# (rc != 0 below), because Mycelia's temp artifacts are the evidence for why.
+rc=0
+trap 'if [[ "${rc}" == "0" ]]; then rm -rf "${tmp_root}"; else echo "kept TMPDIR ${tmp_root} for debugging" >&2; fi' EXIT
 if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then
   echo "ERROR: cannot resolve TMPDIR ${tmp_root}." >&2
   exit 1
 fi
 export TMPDIR
-trap 'rm -rf "${TMPDIR}"' EXIT
 if ! tmp_fs="$(stat -f -c %T "${TMPDIR}")"; then
   echo "ERROR: cannot determine the filesystem type of ${TMPDIR}." >&2
   exit 1
 fi
+# Allowlist, not denylist: an unrecognised type (BeeGFS prints "UNKNOWN (0x...)")
+# must not slip through to fail mid-run.
 case "${tmp_fs}" in
-  lustre|nfs*|gpfs|cifs|smb*|fuse*)
-    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem." >&2
+  ext2/ext3|xfs|tmpfs|btrfs|overlayfs) ;;
+  *)
+    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem (ext/xfs/tmpfs/btrfs/overlayfs)." >&2
     exit 1 ;;
 esac
 echo "TMPDIR=${TMPDIR} (${tmp_fs})"

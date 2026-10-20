@@ -70,7 +70,10 @@ function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
         "PATH" => bindir * ":" * ENV["PATH"], "HOME" => home,
         "SLURM_SUBMIT_DIR" => joinpath(repo, "benchmarking"),
         "SLURM_ARRAY_JOB_ID" => "99", "SLURM_ARRAY_TASK_ID" => "1",
-        "SLURM_NODELIST" => "n0", "SLURM_CPUS_PER_TASK" => "2")
+        "SLURM_NODELIST" => "n0", "SLURM_CPUS_PER_TASK" => "2",
+        # A throwaway base, so failure cases that keep their TMPDIR on purpose do
+        # not leave directories in the host's /tmp.
+        "TD2RXH_TMP_BASE" => mktempdir())
     merge!(env, extra_env)
     out = IOBuffer()
     proc = run(pipeline(ignorestatus(Cmd(`bash $SBATCH`; env = env));
@@ -151,6 +154,11 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             write_exe(joinpath(bindir, "sha256sum"), "#!/bin/bash\nexit 1\n")
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
             Test.@test rc == 1 && occursin("could not hash", log)
+            # The 12-hex half on its own: sha256sum succeeds but prints garbage.
+            write_exe(joinpath(bindir, "sha256sum"), "#!/bin/bash\necho \"garbage  \$1\"\n")
+            rc2,
+            log2 = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc2 == 1 && occursin("could not hash", log2)
         end
         Test.@testset "a per-task TMPDIR is resolved to its physical path and removed" begin
             # Mycelia's Stage-1 corrector rejects a temp root resolving through a
@@ -162,19 +170,38 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             rc,
             log = run_sbatch(repo, home, bindir;
                 extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => linked))
-            task_dir = joinpath(realpath(physical), "td2rxh_99_1")
+            m = match(r"TMPDIR=(\S+) \(ext2/ext3\)\n", log)
             Test.@test rc == 0
-            Test.@test occursin("TMPDIR=$(task_dir) (ext2/ext3)\n", log)
-            Test.@test !isdir(task_dir)   # EXIT trap cleaned it up
+            Test.@test m !== nothing
+            task_dir = m === nothing ? "" : m.captures[1]
+            # Physical path (no symlink component), fresh mktemp name per task.
+            Test.@test startswith(task_dir, joinpath(realpath(physical), "td2rxh_99_1."))
+            Test.@test !isdir(task_dir)   # EXIT trap cleaned it up on success
         end
-        Test.@testset "a parallel/network TMPDIR filesystem is refused" begin
-            # renameat2(RENAME_NOREPLACE) returns EINVAL on Lustre (smoke job 27118360).
+        Test.@testset "a failed run keeps its TMPDIR for debugging" begin
             repo, home, bindir = fixture()
+            base = mktempdir()
             rc,
             log = run_sbatch(repo, home, bindir;
-                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => mktempdir(),
-                    "STUB_FS" => "lustre"))
-            Test.@test rc == 1 && occursin("is on lustre", log)
+                extra_env = Dict("STUB_ROWS" => "12", "STUB_RC" => "3",
+                    "TD2RXH_TMP_BASE" => base))
+            kept = filter(startswith("td2rxh_99_1."), readdir(base))
+            Test.@test rc == 1 && length(kept) == 1
+            Test.@test occursin("kept TMPDIR", log)
+        end
+        Test.@testset "a non-local or unrecognised TMPDIR filesystem is refused" begin
+            # renameat2(RENAME_NOREPLACE) returns EINVAL on Lustre (smoke job 27118360);
+            # the check is an allowlist so an unknown type cannot slip through either.
+            for fs in ("lustre", "nfs", "UNKNOWN (0x19830326)")
+                repo, home, bindir = fixture()
+                base = mktempdir()
+                rc,
+                log = run_sbatch(repo, home, bindir;
+                    extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => base,
+                        "STUB_FS" => fs))
+                Test.@test rc == 1 && occursin("is on $(fs)", log)
+                Test.@test isempty(readdir(base))   # pre-run refusal leaves nothing behind
+            end
         end
         Test.@testset "julia non-zero exit fails even with full rows" begin
             repo, home, bindir = fixture()

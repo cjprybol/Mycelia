@@ -2,7 +2,7 @@ module Td2rxhEvidenceAnalysisTest
 
 # Contract tests for the td-2rxh evidence path: the `--cells td2rxh` grid and CSV
 # schema of benchmarking/indel_reroute_evidence.jl, and the pre-registered
-# decision rule (with amendment 1) in benchmarking/td2rxh_paired_analysis.jl. No
+# decision rule (with amendments 1-3) in benchmarking/td2rxh_paired_analysis.jl. No
 # assembly runs here; the harness runs on HPC.
 #
 # The decision-rule testsets pair a POSITIVE control (a clean win must be
@@ -369,6 +369,11 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         df = synthetic_table()
         df[1, :n_reads] += 1
         Test.@test_throws ArgumentError analyse(df)
+        # A NaN wall time must be an error, not a NaN median read as "exceeds".
+        nan_wall = synthetic_table()
+        nan_wall.wall_seconds = Float64.(nan_wall.wall_seconds)
+        nan_wall[findfirst(==("nanopore"), nan_wall.arm), :wall_seconds] = NaN
+        Test.@test_throws ArgumentError analyse(nan_wall)
     end
 
     Test.@testset "shard integrity errors (review mutant D)" begin
@@ -391,6 +396,16 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         no_label = copy(df)
         no_label.label = Vector{Union{Missing, String}}(missing, DataFrames.nrow(df))
         Test.@test_throws ArgumentError Analysis.validate_shards(no_label)
+        # Every part of td2rxh@<12 hex>+manifest<12 hex> is load-bearing: the manifest
+        # digest is what stops shards built on different dependency sets pooling.
+        for bad in ("td2rxh@0123456789ab", "td2rxh@0123456789ab+manifest",
+            "td2rxh@0123456789abc+manifestabcdef012345",
+            "td2rxh@0123456789ab+manifestabcdef0123456", "unlabeled",
+            "td2rxh@0123456789AB+manifestabcdef012345")
+            relabelled = copy(df)
+            relabelled.label .= bad
+            Test.@test_throws ArgumentError Analysis.validate_shards(relabelled)
+        end
         Test.@test Analysis.validate_shards(df) === nothing
     end
 

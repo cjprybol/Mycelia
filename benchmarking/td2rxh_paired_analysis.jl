@@ -2,8 +2,8 @@
 # ===================================================================================
 #
 # This file implements the decision rule recorded on bead td-2rxh BEFORE any td2rxh
-# run: the original pre-registration plus AMENDMENTS 1 and 2 (also recorded before
-# any data). The bead notes are the authoritative text; this is a condensed
+# run: the original pre-registration plus AMENDMENTS 1-3 (also recorded before any
+# data). The bead notes are the authoritative text; this is a condensed
 # transcription, not a verbatim copy. Summary:
 #
 #   CELLS: 6000 bp genome x read length {1000, 2000} x 20x x err {0.01, 0.02, 0.05};
@@ -39,8 +39,7 @@
 # outside the pre-registered six, seeds outside 1..16, duplicate (cell, seed, arm)
 # rows, and (amendment 3) a pair with no contigs in either arm -- a pipeline
 # failure that would otherwise score as a confident null -- are errors, and every
-# expected (cell, seed) that lacks a
-# pair is listed in the report with a reason.
+# expected (cell, seed) that lacks a pair is listed in the report with a reason.
 #
 # Usage:
 #   julia --project=. benchmarking/td2rxh_paired_analysis.jl \
@@ -274,8 +273,10 @@ function cell_verdicts(paired::DataFrames.DataFrame;
         any(empty_ill .& empty_ont) &&
             throw(ArgumentError("$(cell): seeds $(group.seed[empty_ill .& empty_ont]) " *
                                 "produced no contigs in either arm"))
-        all(>(0), Int.(group.n_reads_illumina)) ||
-            throw(ArgumentError("$(cell): a pair reports n_reads == 0"))
+        no_reads = (Int.(group.n_reads_illumina) .<= 0) .|
+                   (Int.(group.n_reads_nanopore) .<= 0)
+        any(no_reads) &&
+            throw(ArgumentError("$(cell): seeds $(group.seed[no_reads]) report n_reads == 0"))
         test = n_pairs == 0 ?
                (
             n = 0, n_zero_dropped = 0, statistic = NaN, pvalue = NaN, method = "no pairs") :
