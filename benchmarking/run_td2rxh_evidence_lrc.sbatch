@@ -87,18 +87,35 @@ fi
 label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
 echo "Checkout: $(cd .. && pwd)  label=${label}"
 
-# Mycelia's Stage-1 corrector refuses a temp root that resolves through a symlink
-# (src/rhizomorph/assembly.jl, _owned_assembly_artifact_identity). On Lawrencium
-# TMPDIR=$HOME/workspace/tmp and $HOME/workspace is a symlink to scratch, which
-# made the first smoke job fail before any arm ran. Resolve to the physical path.
-tmp_root="${TMPDIR:-/tmp}"
-mkdir -p "${tmp_root}" || exit 1
+# Mycelia's Stage-1 corrector needs a temp root that (a) does not resolve through
+# a symlink (_owned_assembly_artifact_identity) and (b) supports
+# renameat2(RENAME_NOREPLACE) for its fail-closed cleanup. Lawrencium's default
+# TMPDIR fails both: it sits under the symlinked $HOME/workspace on Lustre scratch,
+# where RENAME_NOREPLACE returns EINVAL (smoke jobs 27116288, 27118360). So every
+# task gets a private directory on node-local disk, resolved to its physical path,
+# and a network/parallel filesystem is refused up front instead of failing later.
+tmp_base="${TD2RXH_TMP_BASE:-${SLURM_TMPDIR:-/tmp}}"
+tmp_root="${tmp_base}/td2rxh_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+if ! mkdir -p "${tmp_root}"; then
+  echo "ERROR: cannot create TMPDIR ${tmp_root}." >&2
+  exit 1
+fi
 if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then
   echo "ERROR: cannot resolve TMPDIR ${tmp_root}." >&2
   exit 1
 fi
 export TMPDIR
-echo "TMPDIR=${TMPDIR}"
+trap 'rm -rf "${TMPDIR}"' EXIT
+if ! tmp_fs="$(stat -f -c %T "${TMPDIR}")"; then
+  echo "ERROR: cannot determine the filesystem type of ${TMPDIR}." >&2
+  exit 1
+fi
+case "${tmp_fs}" in
+  lustre|nfs*|gpfs|cifs|smb*|fuse*)
+    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem." >&2
+    exit 1 ;;
+esac
+echo "TMPDIR=${TMPDIR} (${tmp_fs})"
 
 cells="${TD2RXH_CELLS:-td2rxh}"
 case "${cells}" in

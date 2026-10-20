@@ -300,6 +300,30 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test fast.h1 == "HOLDS"
     end
 
+    Test.@testset "no contigs in BOTH arms is a pipeline failure, not a null (amendment 3)" begin
+        # Without this guard, 0.0 vs 0.0 coverage everywhere would score as
+        # all-UNDEFINED and a confident NOT MET (round-3 review).
+        degenerate = synthetic_table(delta = (c, s) -> 0.0)
+        degenerate.best_contig_reference_coverage .= 0.0
+        degenerate.n_contigs .= 0
+        Test.@test_throws ArgumentError analyse(degenerate)
+        # A single doubly-empty pair is enough to refuse the cell.
+        one_pair = synthetic_table()
+        hit = (one_pair.cell .== "6000/2000/20x/e0.05") .& (one_pair.seed .== 9)
+        one_pair[hit, :n_contigs] .= 0
+        Test.@test_throws ArgumentError analyse(one_pair)
+        # ONE empty arm is a real outcome: scored, and counted in the report table.
+        one_arm = synthetic_table()
+        one_arm[hit .& (one_arm.arm .== "illumina"), :n_contigs] .= 0
+        r = analyse(one_arm)
+        row = r.verdicts[r.verdicts.cell .== "6000/2000/20x/e0.05", :]
+        Test.@test only(row.n_empty_illumina) == 1 && only(row.n_empty_nanopore) == 0
+        # n_reads == 0 cannot be divided by.
+        no_reads = synthetic_table()
+        no_reads[no_reads.cell .== "6000/1000/20x/e0.01", :n_reads] .= 0
+        Test.@test_throws ArgumentError analyse(no_reads)
+    end
+
     Test.@testset "a TREATMENT-NOT-APPLIED cell keeps the verdict INCOMPLETE" begin
         loss = analyse(synthetic_table(delta = (c, s) -> -0.001 * s,
             engaged = (c, s) -> c == 1 ? 0 : 5))
@@ -378,6 +402,8 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test_throws ArgumentError Analysis.parse_analysis_args(["--output-dir", "x"])
         Test.@test_throws ArgumentError Analysis.parse_analysis_args([
             "--csv", "--output-dir"])
+        # --output-dir is required: its previous report is removed before reading.
+        Test.@test_throws ArgumentError Analysis.parse_analysis_args(["--csv", "a.csv"])
     end
 
     Test.@testset "end to end: harness csv_row shards -> analysis main" begin
@@ -390,6 +416,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
                  r.arm == "illumina", eachrow(df))
         df.best_contig_fit_identity = Float64.(df.best_contig_fit_identity)
         df[empty_arm, :best_contig_fit_identity] = NaN
+        df[empty_arm, :n_contigs] = 0
         paths = String[]
         for seed in 1:16
             path = joinpath(dir, "seed$(seed).csv")

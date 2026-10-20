@@ -29,14 +29,17 @@
 #       and the median best_contig_fit_identity delta (over pairs where both arms
 #       are finite) is >= 0 in both. NOT MET if none qualifies and every cell is
 #       COMPLETE or UNDEFINED (a measured null: more data cannot change it).
-#       INCOMPLETE only while a MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED cell
-#       could still change the verdict. Fit identity carries no p-value but gates
+#       INCOMPLETE whenever any cell is MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED
+#       (conservative: the amendment-2 list, applied whether or not that cell could
+#       still change the outcome). Fit identity carries no p-value but gates
 #       acceptance; n_contigs and the divergence/anchor counters are written per arm
 #       to td2rxh_paired.csv for inspection and are not tested.
 #
 # Input integrity is enforced, not assumed: malformed or mixed run labels, cells
-# outside the pre-registered six, seeds outside 1..16, and duplicate
-# (cell, seed, arm) rows are errors, and every expected (cell, seed) that lacks a
+# outside the pre-registered six, seeds outside 1..16, duplicate (cell, seed, arm)
+# rows, and (amendment 3) a pair with no contigs in either arm -- a pipeline
+# failure that would otherwise score as a confident null -- are errors, and every
+# expected (cell, seed) that lacks a
 # pair is listed in the report with a reason.
 #
 # Usage:
@@ -263,6 +266,16 @@ function cell_verdicts(paired::DataFrames.DataFrame;
         fit = Float64.(group.best_contig_fit_identity_nanopore) .-
               Float64.(group.best_contig_fit_identity_illumina)
         n_engaged = count(_engaged, group.indel_engaged_nanopore)
+        empty_ill = Int.(group.n_contigs_illumina) .== 0
+        empty_ont = Int.(group.n_contigs_nanopore) .== 0
+        # Amendment 3: a pair with no contigs in EITHER arm is a pipeline failure,
+        # not a measured null; scored as 0.0 vs 0.0 it would make the cell
+        # UNDEFINED and the verdict a confident NOT MET.
+        any(empty_ill .& empty_ont) &&
+            throw(ArgumentError("$(cell): seeds $(group.seed[empty_ill .& empty_ont]) " *
+                                "produced no contigs in either arm"))
+        all(>(0), Int.(group.n_reads_illumina)) ||
+            throw(ArgumentError("$(cell): a pair reports n_reads == 0"))
         test = n_pairs == 0 ?
                (
             n = 0, n_zero_dropped = 0, statistic = NaN, pvalue = NaN, method = "no pairs") :
@@ -285,6 +298,7 @@ function cell_verdicts(paired::DataFrames.DataFrame;
             (cell = cell, read_length = parsed.read_length,
                 error_rate = parsed.error_rate, status = status, n_pairs = n_pairs,
                 n_nanopore_engaged = n_engaged,
+                n_empty_illumina = count(empty_ill), n_empty_nanopore = count(empty_ont),
                 median_incremental_s_per_read = median_incremental,
                 h1_cell = h1_complete ?
                           (median_incremental <=
@@ -330,11 +344,11 @@ const TD2RXH_FINAL_STATUSES = ("COMPLETE", "UNDEFINED")
 """
     acceptance(verdicts) -> NamedTuple
 
-The pre-registered td-2rxh acceptance rule (with amendments 1 and 2). Returns the
+The pre-registered td-2rxh acceptance rule (with amendments 1-3). Returns the
 qualifying error rates and a three-state verdict: "MET"; "NOT MET" (none
-qualifies and every cell is COMPLETE or UNDEFINED, so no further data can change
-it); or "INCOMPLETE" (some MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED cell
-could still change it).
+qualifies and every cell is COMPLETE or UNDEFINED); or "INCOMPLETE" (any cell
+MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED -- conservative, whether or not that
+cell could still change the outcome).
 """
 function acceptance(verdicts::DataFrames.DataFrame)::NamedTuple
     qualifying = Float64[]
@@ -415,6 +429,10 @@ function parse_analysis_args(args::Vector{String})::Dict{String, String}
         parsed[key] = args[i + 1]
     end
     haskey(parsed, "csv") || throw(ArgumentError("--csv is required"))
+    # Required, not defaulted: the output directory's previous report is removed
+    # before reading, so a shared default would let one job's mistaken run delete
+    # another job's report.
+    haskey(parsed, "output-dir") || throw(ArgumentError("--output-dir is required"))
     return parsed
 end
 
@@ -427,13 +445,15 @@ function write_report(io::IO, csv_paths, label, paired, unpaired, verdicts, h1, 
     println(io, "Expected pairs: $(length(TD2RXH_EXPECTED_CELLS) * TD2RXH_N_SEEDS); ",
         "paired: $(DataFrames.nrow(paired)); unpaired: $(DataFrames.nrow(unpaired))\n")
     println(
-        io, "| cell | status | pairs | nanopore engaged | median incr s/read | H1' cell | ",
+        io, "| cell | status | pairs | nanopore engaged | empty asm ill/ont | ",
+        "median incr s/read | H1' cell | ",
         "cov illumina | cov nanopore | median Δcov | nonzero | zeros | p raw | p Holm | H2 | ",
         "median Δfit-id (pairs) |")
-    println(io, "|", repeat("---|", 15))
+    println(io, "|", repeat("---|", 16))
     for r in eachrow(verdicts)
         println(
             io, "| $(r.cell) | $(r.status) | $(r.n_pairs) | $(r.n_nanopore_engaged) | ",
+            "$(r.n_empty_illumina)/$(r.n_empty_nanopore) | ",
             "$(_fmt(r.median_incremental_s_per_read)) | $(r.h1_cell) | ",
             "$(_fmt(r.primary_illumina_median)) | $(_fmt(r.primary_nanopore_median)) | ",
             "$(_fmt(r.median_primary_delta)) | $(r.test_n_nonzero) | $(r.test_zero_dropped) | ",
@@ -453,7 +473,7 @@ end
 
 function td2rxh_analysis_main(args::Vector{String} = ARGS)::Int
     parsed = parse_analysis_args(args)
-    output_dir = get(parsed, "output-dir", "td2rxh-analysis")
+    output_dir = parsed["output-dir"]
     mkpath(output_dir)
     # Remove the previous generation BEFORE reading anything, so any failure --
     # validation, a statistic, or part-way through writing -- leaves no stale

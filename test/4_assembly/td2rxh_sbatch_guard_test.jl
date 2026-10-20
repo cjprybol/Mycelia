@@ -58,6 +58,9 @@ function fixture()
     bindir = joinpath(root, "bin")
     # sha256sum is absent on stock macOS; a stub keeps the test host-independent.
     write_exe(joinpath(bindir, "sha256sum"), "#!/bin/bash\necho \"abcdef0123456789  \$1\"\n")
+    # GNU `stat -f -c %T` (filesystem type) has no macOS equivalent; report a local
+    # filesystem unless a test overrides it via STUB_FS.
+    write_exe(joinpath(bindir, "stat"), "#!/bin/bash\necho \"\${STUB_FS:-ext2/ext3}\"\n")
     return repo, home, bindir
 end
 
@@ -149,7 +152,7 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
             Test.@test rc == 1 && occursin("could not hash", log)
         end
-        Test.@testset "a symlinked TMPDIR is resolved to its physical path" begin
+        Test.@testset "a per-task TMPDIR is resolved to its physical path and removed" begin
             # Mycelia's Stage-1 corrector rejects a temp root resolving through a
             # symlink; on Lawrencium TMPDIR sits under a symlinked $HOME/workspace.
             repo, home, bindir = fixture()
@@ -158,9 +161,20 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             symlink(physical, linked)
             rc,
             log = run_sbatch(repo, home, bindir;
-                extra_env = Dict("STUB_ROWS" => "12", "TMPDIR" => linked))
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => linked))
+            task_dir = joinpath(realpath(physical), "td2rxh_99_1")
             Test.@test rc == 0
-            Test.@test occursin("TMPDIR=$(realpath(physical))\n", log)
+            Test.@test occursin("TMPDIR=$(task_dir) (ext2/ext3)\n", log)
+            Test.@test !isdir(task_dir)   # EXIT trap cleaned it up
+        end
+        Test.@testset "a parallel/network TMPDIR filesystem is refused" begin
+            # renameat2(RENAME_NOREPLACE) returns EINVAL on Lustre (smoke job 27118360).
+            repo, home, bindir = fixture()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => mktempdir(),
+                    "STUB_FS" => "lustre"))
+            Test.@test rc == 1 && occursin("is on lustre", log)
         end
         Test.@testset "julia non-zero exit fails even with full rows" begin
             repo, home, bindir = fixture()
