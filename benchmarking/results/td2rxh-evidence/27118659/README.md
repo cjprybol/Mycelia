@@ -35,15 +35,30 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
 Coverage is the median best-contig reference coverage, a contiguity measure.
 Δ is nanopore minus illumina, paired by seed.
 
-- **H1′ (decode cost ≤ 0.30 s/read): REFUTED.** Every cell is 17–34× over the threshold.
+- **H1′ (decode cost ≤ 0.30 s/read): REFUTED.** Every cell is over the threshold, by 16.6–33.8× (4.99–10.15 s/read).
 - **Acceptance (pre-registered rule): MET.** This is at error 0.05 only: nanopore is better at both read lengths, and the median fit-identity Δ is ≥ 0.
+
+Coverage values are medians across the 16 seeds; individual seeds vary, and nanopore reaches 0.39 at 2000/e0.05 on one seed.
+"Coverage lost" below is the median **paired** Δ.
+At 2000/e0.01 the difference of the arm medians is larger, −0.25.
+In 1000/e0.02, one of 16 nanopore runs (seed 6) did not engage the indel path.
+The rule needs only ≥1 engaged run, so the cell is still COMPLETE.
+`sacct_27118659.txt` is the SLURM accounting dump that backs the "16/16 COMPLETED, exit 0" statement.
 
 ## How to read it
 
-- The only cells where nanopore wins are at 5% error, where both arms are severely fragmented: the best contig covers 7–15% of the genome.
-  The relative gain there is real, but the absolute assemblies are poor in both arms.
-- At 1% error, nanopore is significantly and substantially **worse** than illumina: about 0.43 coverage lost at 1000 bp and about 0.19 at 2000 bp.
-- At 2% error the comparison is null at 2000 bp and non-significant at 1000 bp.
+- The only cells where nanopore wins are at 5% error, where both arms are severely fragmented: the median best contig covers 7–15% of the genome.
+  The gain is in the **single best contig**.
+  At that error rate nanopore produces about twice as many contigs (median about 1,490 → 2,870 at 1000 bp and about 1,550 → 3,260 at 2000 bp) and about half the total contig bases.
+  In both arms the total contig bases are 5–22× the genome length, so this is not a better assembly overall.
+- The fit-identity gate is a median.
+  At 2000/e0.05 the median Δ is +0.0013, but two seeds lose 0.13–0.17 fit identity.
+- At 1% error, nanopore is significantly and substantially **worse** than illumina: the median paired coverage loss is 0.43 at 1000 bp and 0.19 at 2000 bp.
+  That is 16/16 seeds negative at 1000 bp and 15/16 at 2000 bp.
+- At 2% error the comparison is null at 2000 bp (p_Holm 0.89).
+  At 1000 bp it is worse in direction (11/16 seeds negative, raw p 0.034) but not significant after Holm (0.067).
+- Earlier evidence (td-4mbg: 3 seeds, 1200 bp reads, largest-contig ratio) points the same way at 1% error.
+  This run is consistent with it; it is not a replication of the same measurement.
 - In the figure, each `p_Holm` label is two-sided and carries no direction.
   The 0.01 cells have small p-values because nanopore is worse there; the point clouds sit below zero.
 - The indel profile adds 5–10 s of wall time per read relative to illumina on identical reads.
