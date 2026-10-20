@@ -35,6 +35,7 @@ const LEGACY_HEADER = [
     "total_contig_bases", "wall_seconds"]
 const NEW_COLUMNS = [
     "wall_seconds_per_read", "best_contig_reference_coverage", "best_contig_fit_identity"]
+const VALID_LABEL = "td2rxh@0123456789ab+manifestabcdef012345"
 const PREREGISTERED_CELLS = [
     "6000/1000/20x/e0.01", "6000/1000/20x/e0.02", "6000/1000/20x/e0.05",
     "6000/2000/20x/e0.01", "6000/2000/20x/e0.02", "6000/2000/20x/e0.05"]
@@ -46,7 +47,7 @@ deltas are distinct and positive across seeds.
 """
 function synthetic_table(; cells = PREREGISTERED_CELLS, seeds = 1:16,
         delta = (c, s) -> 0.001 * s, fit_delta = (c, s) -> 0.0,
-        extra_seconds_per_read = 0.05, engaged = (c, s) -> 5, label = "td2rxh@test",
+        extra_seconds_per_read = 0.05, engaged = (c, s) -> 5, label = VALID_LABEL,
         rng = StableRNGs.StableRNG(7))
     rows = NamedTuple[]
     for (c, cell) in enumerate(cells), seed in seeds
@@ -102,6 +103,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
                    Dict("cells" => "td2rxh", "seeds" => "3")
         Test.@test_throws ArgumentError Harness.parse_args(["--cell", "td2rxh"])
         Test.@test_throws ArgumentError Harness.parse_args(["--cells"])
+        Test.@test_throws ArgumentError Harness.parse_args(["--cells", "--seeds"])
         Test.@test Harness.parse_bool_flag("warmup", "false") == false
         Test.@test_throws ArgumentError Harness.parse_bool_flag("warmup", "TRUE")
         Test.@test Harness.arm_order(1) == (:illumina, :nanopore)
@@ -143,6 +145,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         noisy = Analysis.signflip_signed_rank_test(
             [0.3333, 0.33329999999999993, 0.33330000000000004, 0.3334])
         Test.@test noisy.n == 4 && noisy.pvalue ≈ 2 / 16
+        # The rounding is load-bearing: a float residue must become an exact zero.
+        # Without it 0.3 - (0.1 + 0.2) = -5.6e-17 would count as a non-zero delta.
+        residue = Analysis.signflip_signed_rank_test([0.3 - (0.1 + 0.2), 1.0, 2.0])
+        Test.@test residue.n == 2 && residue.n_zero_dropped == 1
         zeros_dropped = Analysis.signflip_signed_rank_test([0.0, 0.0, 1.0, 2.0, 3.0])
         Test.@test zeros_dropped.n == 3 && zeros_dropped.n_zero_dropped == 2
         Test.@test zeros_dropped.pvalue ≈ 2 / 8
@@ -153,7 +159,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test Analysis.signflip_signed_rank_test(-collect(1.0:8.0)).pvalue ≈ 2 / 256
     end
 
-    Test.@testset "holm_adjust uses a fixed family; NaN counts as p = 1" begin
+    Test.@testset "holm_adjust uses a fixed family; NaN counts as p = 1 (review mutant E)" begin
         Test.@test Analysis.holm_adjust([0.01, 0.04, 0.03]) ≈ [0.03, 0.06, 0.06]
         # NaN stays IN the family (m = 3), unlike the round-1 code (m = 2).
         Test.@test Analysis.holm_adjust([0.01, NaN, 0.03]) ≈ [0.03, 1.0, 0.06]
@@ -280,8 +286,26 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         row = r.verdicts[1, :]
         Test.@test row.status == "UNDEFINED" && row.p_holm == 1.0
         Test.@test r.verdict.qualifying_error_rates == [0.02, 0.05]
+        # Amendment 2: an UNDEFINED cell is a measured null, so with no qualifying
+        # rate and nothing missing the verdict is final.
         loss = analyse(synthetic_table(delta = (c, s) -> c == 1 ? 0.0 : -0.001 * s))
+        Test.@test loss.verdict.verdict == "NOT MET"
+        # ...and its timing still counts for H1' (it can refute).
+        slow = analyse(synthetic_table(delta = (c, s) -> 0.0, extra_seconds_per_read = 2.5))
+        Test.@test all(slow.verdicts.status .== "UNDEFINED")
+        Test.@test all(slow.verdicts.h1_cell .== "exceeds")
+        Test.@test slow.h1 == "REFUTED"
+        Test.@test slow.verdict.verdict == "NOT MET"
+        fast = analyse(synthetic_table(delta = (c, s) -> 0.0, extra_seconds_per_read = 0.05))
+        Test.@test fast.h1 == "HOLDS"
+    end
+
+    Test.@testset "a TREATMENT-NOT-APPLIED cell keeps the verdict INCOMPLETE" begin
+        loss = analyse(synthetic_table(delta = (c, s) -> -0.001 * s,
+            engaged = (c, s) -> c == 1 ? 0 : 5))
         Test.@test loss.verdict.verdict == "INCOMPLETE"
+        Test.@test loss.verdicts[1, :h1_cell] == "n/a"
+        Test.@test loss.h1 == "INCOMPLETE"
     end
 
     Test.@testset "treatment never engaged -> TREATMENT-NOT-APPLIED" begin
@@ -301,24 +325,49 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test r.verdicts[1, :n_fit_pairs] == 0
         Test.@test isnan(r.verdicts[1, :median_fit_identity_delta])
         Test.@test r.verdict.qualifying_error_rates == [0.02, 0.05]
+        # One NaN pair must be EXCLUDED, not propagated: the finite median over the
+        # other 15 pairs is 0, so the rate still qualifies.
+        one = synthetic_table()
+        one.best_contig_fit_identity = Float64.(one.best_contig_fit_identity)
+        one[findfirst(ill .& (df.seed .== 1)), :best_contig_fit_identity] = NaN
+        r1 = analyse(one)
+        Test.@test r1.verdicts[1, :n_fit_pairs] == 15
+        Test.@test r1.verdicts[1, :median_fit_identity_delta] == 0.0
+        Test.@test r1.verdict.qualifying_error_rates == [0.01, 0.02, 0.05]
     end
 
     Test.@testset "H1' threshold and three states" begin
         Test.@test analyse(synthetic_table(extra_seconds_per_read = 0.29)).h1 == "HOLDS"
         Test.@test analyse(synthetic_table(extra_seconds_per_read = 0.31)).h1 == "REFUTED"
+        # The threshold is inclusive: exactly 0.30 s/read holds.
+        Test.@test analyse(synthetic_table(extra_seconds_per_read = 0.30)).h1 == "HOLDS"
+        # Arms disagreeing on read count cannot be scored.
+        df = synthetic_table()
+        df[1, :n_reads] += 1
+        Test.@test_throws ArgumentError analyse(df)
     end
 
     Test.@testset "shard integrity errors (review mutant D)" begin
         df = synthetic_table()
         Test.@test_throws ArgumentError Analysis.validate_shards(vcat(df, df[1:1, :]))
         mixed = copy(df)
-        mixed[1:2, :label] .= "td2rxh@other"
+        mixed[1:2, :label] .= "td2rxh@ba9876543210+manifestabcdef012345"
         Test.@test_throws ArgumentError Analysis.validate_shards(mixed)
         extra = copy(df)
         extra[1:2, :cell] .= "2000/1200/8x/e0.01"
         Test.@test_throws ArgumentError Analysis.validate_shards(extra)
         Test.@test_throws ArgumentError Analysis.validate_shards(
             DataFrames.select(df, DataFrames.Not(:indel_engaged)))
+        stray_seed = copy(df)
+        stray_seed[1:2, :seed] .= 17
+        Test.@test_throws ArgumentError Analysis.validate_shards(stray_seed)
+        bad_label = copy(df)
+        bad_label.label .= "td2rxh@"
+        Test.@test_throws ArgumentError Analysis.validate_shards(bad_label)
+        no_label = copy(df)
+        no_label.label = Vector{Union{Missing, String}}(missing, DataFrames.nrow(df))
+        Test.@test_throws ArgumentError Analysis.validate_shards(no_label)
+        Test.@test Analysis.validate_shards(df) === nothing
     end
 
     Test.@testset "analysis arguments are strict" begin
@@ -327,11 +376,20 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test_throws ArgumentError Analysis.parse_analysis_args(
             ["--csv", "a.csv", "--output_dir", "x"])
         Test.@test_throws ArgumentError Analysis.parse_analysis_args(["--output-dir", "x"])
+        Test.@test_throws ArgumentError Analysis.parse_analysis_args([
+            "--csv", "--output-dir"])
     end
 
     Test.@testset "end to end: harness csv_row shards -> analysis main" begin
         dir = mktempdir()
         df = synthetic_table()
+        # One empty illumina assembly: its NaN fit identity must survive the
+        # csv_row -> CSV.read round trip and drop out of that cell's fit median (15 pairs), not score 0.
+        empty_arm = findfirst(
+            r -> r.cell == "6000/1000/20x/e0.01" && r.seed == 1 &&
+                 r.arm == "illumina", eachrow(df))
+        df.best_contig_fit_identity = Float64.(df.best_contig_fit_identity)
+        df[empty_arm, :best_contig_fit_identity] = NaN
         paths = String[]
         for seed in 1:16
             path = joinpath(dir, "seed$(seed).csv")
@@ -360,13 +418,18 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         report = read(joinpath(out, "report.md"), String)
         Test.@test occursin("td-2rxh ACCEPTANCE: MET", report)
         Test.@test occursin("H1': HOLDS", report)
+        Test.@test occursin("Qualifying error rates: [0.01, 0.02, 0.05]", report)
         Test.@test isfile(joinpath(out, "td2rxh_paired_deltas.svg"))
         Test.@test isfile(joinpath(out, "td2rxh_paired_deltas.png"))
-        Test.@test DataFrames.nrow(CSV.read(joinpath(out, "td2rxh_cell_verdicts.csv"),
-            DataFrames.DataFrame)) == 6
-        # A duplicated shard is refused through the real entry point.
+        verdict_table = CSV.read(joinpath(out, "td2rxh_cell_verdicts.csv"),
+            DataFrames.DataFrame)
+        Test.@test DataFrames.nrow(verdict_table) == 6
+        Test.@test verdict_table[1, :n_fit_pairs] == 15
+        # A duplicated shard is refused through the real entry point, and the
+        # previous generation is gone, so no stale "MET" report survives the failure.
         Test.@test_throws ArgumentError Analysis.td2rxh_analysis_main(
             ["--csv", join(vcat(paths, paths[1:1]), ","), "--output-dir", out])
+        Test.@test !isfile(joinpath(out, "report.md"))
     end
 end
 

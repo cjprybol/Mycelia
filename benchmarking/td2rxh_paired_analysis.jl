@@ -2,17 +2,19 @@
 # ===================================================================================
 #
 # This file implements the decision rule recorded on bead td-2rxh BEFORE any td2rxh
-# run: the original pre-registration plus AMENDMENT 1 (also recorded before any
-# data). The bead notes are the authoritative text; this is a condensed
+# run: the original pre-registration plus AMENDMENTS 1 and 2 (also recorded before
+# any data). The bead notes are the authoritative text; this is a condensed
 # transcription, not a verbatim copy. Summary:
 #
 #   CELLS: 6000 bp genome x read length {1000, 2000} x 20x x err {0.01, 0.02, 0.05};
 #       16 seeds (1..16); arms differ only in assemble_genome sequencing_tech.
 #   H1' (decode cost): per cell, median over seeds of the PAIRED incremental cost
-#       (wall_nanopore - wall_illumina) / n_reads. HOLDS only if all 6 cells are
-#       complete with median <= 0.30 s/read; REFUTED if any complete cell exceeds
-#       0.30; otherwise INCOMPLETE. The difference includes rerouting/window overhead,
-#       so it is an upper bound on decode cost alone.
+#       (wall_nanopore - wall_illumina) / n_reads. A cell is H1'-complete when it
+#       has 16 pairs and >= 1 engaged nanopore run, whether or not its coverage
+#       deltas are defined. HOLDS only if all 6 cells are H1'-complete with median
+#       <= 0.30 s/read; REFUTED if any H1'-complete cell exceeds 0.30; otherwise
+#       INCOMPLETE. The difference includes rerouting/window overhead, so it is an
+#       upper bound on decode cost alone.
 #   H2 (contiguity): per cell, delta = nanopore - illumina on the PRIMARY metric
 #       best_contig_reference_coverage (a contiguity measure, not sequence
 #       accuracy; see indel_bench_best_reference_alignment), rounded to 1e-6.
@@ -25,14 +27,17 @@
 #       Holm-adjusted p < 0.05.
 #   ACCEPTANCE: MET iff, for at least one error rate, H2 holds at BOTH read lengths
 #       and the median best_contig_fit_identity delta (over pairs where both arms
-#       are finite) is >= 0 in both. NOT MET if all 6 cells are COMPLETE and none
-#       qualifies. Otherwise INCOMPLETE. Fit identity carries no p-value but gates
+#       are finite) is >= 0 in both. NOT MET if none qualifies and every cell is
+#       COMPLETE or UNDEFINED (a measured null: more data cannot change it).
+#       INCOMPLETE only while a MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED cell
+#       could still change the verdict. Fit identity carries no p-value but gates
 #       acceptance; n_contigs and the divergence/anchor counters are written per arm
 #       to td2rxh_paired.csv for inspection and are not tested.
 #
-# Input integrity is enforced, not assumed: mixed run labels, cells outside the
-# pre-registered six, and duplicate (cell, seed, arm) rows are errors, and every
-# expected (cell, seed) that lacks a pair is listed in the report with a reason.
+# Input integrity is enforced, not assumed: malformed or mixed run labels, cells
+# outside the pre-registered six, seeds outside 1..16, and duplicate
+# (cell, seed, arm) rows are errors, and every expected (cell, seed) that lacks a
+# pair is listed in the report with a reason.
 #
 # Usage:
 #   julia --project=. benchmarking/td2rxh_paired_analysis.jl \
@@ -44,9 +49,10 @@ import DataFrames
 import Distributions
 import Statistics
 
-# `average_ranks` (tie-averaged ranks). rgv_paired_wilcoxon.jl's own asymptotic
-# `wilcoxon_signed_rank` is deliberately NOT used: it leaves the exact branch on
-# any tie or zero, and at n = 16 under Holm x6 that branch switch can decide a cell.
+# `average_ranks` (tie-averaged ranks). rgv_paired_wilcoxon.jl's own
+# `wilcoxon_signed_rank` is deliberately NOT used: it is exact only without ties or
+# zeros and otherwise switches to the normal approximation, and at n = 16 under
+# Holm x6 that branch switch can decide a cell.
 include(joinpath(@__DIR__, "rgv_paired_wilcoxon.jl"))
 
 const TD2RXH_EXPECTED_CELLS = [
@@ -63,6 +69,8 @@ const TD2RXH_PAIRED_METRICS = (:best_contig_reference_coverage, :best_contig_fit
     :n_contigs, :largest_contig, :substitution_length_divergences,
     :window_anchor_rejections, :indel_engaged, :wall_seconds, :n_reads)
 const TD2RXH_REQUIRED_COLUMNS = (:label, :cell, :seed, :arm, TD2RXH_PAIRED_METRICS...)
+# The label run_td2rxh_evidence_lrc.sbatch writes: HEAD and Manifest.toml digests.
+const TD2RXH_LABEL_PATTERN = r"^td2rxh@[0-9a-f]{12}\+manifest[0-9a-f]{12}$"
 
 """
     signflip_signed_rank_test(diffs) -> NamedTuple
@@ -74,6 +82,10 @@ cannot create or break ties; zeros are dropped and counted; the statistic is
 fraction of all `2^n` sign assignments with `|T| >= |T_obs|`. Exact under ties,
 unlike the textbook exact-null DP, which assumes untied ranks. With no non-zero
 difference the test is undefined and `pvalue` is `NaN`.
+
+Throws `ArgumentError` on a non-finite difference (coverage is always finite --
+an empty assembly scores 0.0 -- so this signals corrupt input, and the whole
+analysis stops rather than scoring it) and when `n > TD2RXH_MAX_EXACT_N`.
 """
 function signflip_signed_rank_test(diffs::AbstractVector{<:Real})::NamedTuple
     rounded = round.(Float64.(diffs); digits = TD2RXH_DELTA_DIGITS)
@@ -125,24 +137,32 @@ end
 """
     validate_shards(df) -> Nothing
 
-Refuse inputs the pre-registered rule cannot be applied to: missing columns, more
-than one run label (shards from different commits), cells outside the six
-pre-registered ids, or duplicate (cell, seed, arm) rows. Each is an error rather
-than a warning because each would otherwise change the verdict silently: pooled
-commits measure different code, an extra cell enlarges the Holm family, and a
+Refuse inputs the pre-registered rule cannot be applied to: missing columns, a
+run label that is absent or not in the sbatch's `td2rxh@<head>+manifest<hash>`
+form, more than one label (shards from different commits or dependency sets),
+cells outside the six pre-registered ids, seeds outside `1:TD2RXH_N_SEEDS`, or
+duplicate (cell, seed, arm) rows. Each is an error rather than a warning because
+each would otherwise be silent: pooled labels measure different code, an extra
+cell or seed would simply be ignored by the fixed loops in `pair_arms`, and a
 duplicate would have to be resolved by picking one row.
 """
 function validate_shards(df::DataFrames.DataFrame)::Nothing
     missing_cols = [c for c in TD2RXH_REQUIRED_COLUMNS if !(string(c) in names(df))]
     isempty(missing_cols) ||
         throw(ArgumentError("input lacks required columns: $(join(missing_cols, ", "))"))
+    any(ismissing, df.label) && throw(ArgumentError("rows with an empty run label"))
     labels = unique(string.(df.label))
     length(labels) == 1 ||
         throw(ArgumentError("shards carry $(length(labels)) run labels ($(join(labels, ", "))); " *
                             "the analysis requires one commit"))
+    occursin(TD2RXH_LABEL_PATTERN, only(labels)) ||
+        throw(ArgumentError("run label \"$(only(labels))\" is not td2rxh@<12 hex>+manifest<12 hex>"))
     unknown = setdiff(unique(string.(df.cell)), TD2RXH_EXPECTED_CELLS)
     isempty(unknown) ||
         throw(ArgumentError("cells outside the pre-registered six: $(join(unknown, ", "))"))
+    stray = setdiff(unique(Int.(df.seed)), 1:TD2RXH_N_SEEDS)
+    isempty(stray) ||
+        throw(ArgumentError("seeds outside 1:$(TD2RXH_N_SEEDS): $(join(sort(stray), ", "))"))
     keys = [(string(r.cell), Int(r.seed), string(r.arm)) for r in eachrow(df)]
     duplicated = unique(k for k in keys if count(==(k), keys) > 1)
     isempty(duplicated) ||
@@ -251,13 +271,22 @@ function cell_verdicts(paired::DataFrames.DataFrame;
                  n_pairs < n_seeds ? "INCOMPLETE" :
                  n_engaged == 0 ? "TREATMENT-NOT-APPLIED" :
                  test.n == 0 ? "UNDEFINED" : "COMPLETE"
+        # Amendment 2: H1' completeness is about timing data, not about whether the
+        # coverage deltas happen to be defined.
+        h1_complete = n_pairs == n_seeds && n_engaged > 0
         median_incremental = n_pairs == 0 ? NaN : Statistics.median(incremental)
+        if h1_complete
+            Int.(group.n_reads_illumina) == Int.(group.n_reads_nanopore) ||
+                throw(ArgumentError("$(cell): arms report different read counts"))
+            isfinite(median_incremental) ||
+                throw(ArgumentError("$(cell): non-finite incremental cost $(median_incremental)"))
+        end
         push!(rows,
             (cell = cell, read_length = parsed.read_length,
                 error_rate = parsed.error_rate, status = status, n_pairs = n_pairs,
                 n_nanopore_engaged = n_engaged,
                 median_incremental_s_per_read = median_incremental,
-                h1_cell = status == "COMPLETE" ?
+                h1_cell = h1_complete ?
                           (median_incremental <=
                            TD2RXH_H1_MAX_INCREMENTAL_SECONDS_PER_READ ?
                            "holds" : "exceeds") : "n/a",
@@ -284,23 +313,28 @@ end
 """
     h1_verdict(verdicts) -> String
 
-"REFUTED" if any COMPLETE cell's median exceeds the threshold, "HOLDS" only when
-all six cells are COMPLETE and within it, otherwise "INCOMPLETE". A missing cell
-can therefore never be read as H1' holding.
+"REFUTED" if any H1'-complete cell's median exceeds the threshold, "HOLDS" only
+when all six cells are H1'-complete and within it, otherwise "INCOMPLETE". A
+missing cell can therefore never be read as H1' holding, and an UNDEFINED cell's
+timing still counts (amendment 2).
 """
 function h1_verdict(verdicts::DataFrames.DataFrame)::String
     any(verdicts.h1_cell .== "exceeds") && return "REFUTED"
-    all(verdicts.status .== "COMPLETE") && all(verdicts.h1_cell .== "holds") &&
-        return "HOLDS"
+    all(verdicts.h1_cell .== "holds") && return "HOLDS"
     return "INCOMPLETE"
 end
+
+"""Cell states after which no further data can change the cell's contribution."""
+const TD2RXH_FINAL_STATUSES = ("COMPLETE", "UNDEFINED")
 
 """
     acceptance(verdicts) -> NamedTuple
 
-The pre-registered td-2rxh acceptance rule (with amendment 1). Returns the
-qualifying error rates and a three-state verdict: "MET", "NOT MET" (all six cells
-COMPLETE and none qualifies) or "INCOMPLETE".
+The pre-registered td-2rxh acceptance rule (with amendments 1 and 2). Returns the
+qualifying error rates and a three-state verdict: "MET"; "NOT MET" (none
+qualifies and every cell is COMPLETE or UNDEFINED, so no further data can change
+it); or "INCOMPLETE" (some MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED cell
+could still change it).
 """
 function acceptance(verdicts::DataFrames.DataFrame)::NamedTuple
     qualifying = Float64[]
@@ -315,7 +349,7 @@ function acceptance(verdicts::DataFrames.DataFrame)::NamedTuple
         end
     end
     verdict = !isempty(qualifying) ? "MET" :
-              all(verdicts.status .== "COMPLETE") ? "NOT MET" : "INCOMPLETE"
+              all(in(TD2RXH_FINAL_STATUSES), verdicts.status) ? "NOT MET" : "INCOMPLETE"
     return (qualifying_error_rates = qualifying, verdict = verdict)
 end
 
@@ -421,6 +455,13 @@ function td2rxh_analysis_main(args::Vector{String} = ARGS)::Int
     parsed = parse_analysis_args(args)
     output_dir = get(parsed, "output-dir", "td2rxh-analysis")
     mkpath(output_dir)
+    # Remove the previous generation BEFORE reading anything, so any failure --
+    # validation, a statistic, or part-way through writing -- leaves no stale
+    # report that could be read as the current result.
+    for name in ("report.md", "td2rxh_cell_verdicts.csv", "td2rxh_paired.csv",
+        "td2rxh_unpaired.csv", "td2rxh_paired_deltas.png", "td2rxh_paired_deltas.svg")
+        rm(joinpath(output_dir, name); force = true)
+    end
     csv_paths = String.(split(parsed["csv"], ","))
     df = reduce(vcat, [CSV.read(path, DataFrames.DataFrame) for path in csv_paths])
     validate_shards(df)
@@ -428,12 +469,6 @@ function td2rxh_analysis_main(args::Vector{String} = ARGS)::Int
     verdicts = cell_verdicts(paired)
     h1 = h1_verdict(verdicts)
     verdict = acceptance(verdicts)
-    # Remove the previous generation first so a failure part-way through cannot
-    # leave a stale report beside fresh tables.
-    for name in ("report.md", "td2rxh_cell_verdicts.csv", "td2rxh_paired.csv",
-        "td2rxh_unpaired.csv", "td2rxh_paired_deltas.png", "td2rxh_paired_deltas.svg")
-        rm(joinpath(output_dir, name); force = true)
-    end
     CSV.write(joinpath(output_dir, "td2rxh_cell_verdicts.csv"), verdicts)
     CSV.write(joinpath(output_dir, "td2rxh_paired.csv"), paired)
     CSV.write(joinpath(output_dir, "td2rxh_unpaired.csv"), unpaired)

@@ -2,10 +2,15 @@ module Td2rxhSbatchGuardTest
 
 # Positive controls for the fail-closed guards in
 # benchmarking/run_td2rxh_evidence_lrc.sbatch. Each guard is executed against the
-# bad input it exists to catch, using stub `julia` / `git` / `sha256sum` in a temp
-# git repository, so "the guard is present" is replaced by "the guard was seen to
-# fire". Round-1 review reproduced two of these as fail-open on the first draft
-# (a stale CSV passing the row guard, and a failing git passing the dirty guard).
+# bad input it exists to catch, using a stub `julia` and `sha256sum` (plus failing
+# `git` / `sha256sum` stubs where a test needs them) against a real temp git
+# repository, so "the guard is present" is replaced by "the guard was seen to
+# fire". Covered: row count, stale CSV, modified tracked file, failing rev-parse,
+# failing status, failing sha256sum, missing Manifest, non-zero julia exit,
+# unknown cell set, symlinked TMPDIR. Not covered: the "julia not runnable",
+# "not in benchmarking/" and mkdir-failure branches. Round-1 review reproduced two
+# of these as fail-open on the first draft (a stale CSV passing the row guard, and
+# a failing git passing the dirty guard).
 
 import Test
 
@@ -15,6 +20,8 @@ const SBATCH = joinpath(
 const JULIA_STUB = """
 #!/bin/bash
 if [[ "\${2:-}" == "--version" ]]; then echo "julia version 1.10.0"; exit 0; fi
+# Record the run invocation so tests can check the provenance-carrying arguments.
+echo "\$*" > "\$HOME/julia_args.txt"
 out=""
 while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "--out" ]]; then out="\$2"; fi
@@ -79,6 +86,20 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             Test.@test occursin("label=td2rxh@", log) &&
                        occursin("+manifestabcdef012345", log)
         end
+        Test.@testset "seed and provenance label reach the harness" begin
+            # The analysis rejects malformed or mixed labels, but only if the label
+            # is actually passed through; a dropped --label would make every shard
+            # "unlabeled" (review round 2, surviving mutants S1 and S4).
+            repo, home, bindir = fixture()
+            rc,
+            _ = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "SLURM_ARRAY_TASK_ID" => "3"))
+            args = read(joinpath(home, "julia_args.txt"), String)
+            Test.@test rc == 0
+            Test.@test occursin(" --seeds 3 ", args)
+            Test.@test occursin(r"--label td2rxh@[0-9a-f]{12}\+manifestabcdef012345", args)
+            Test.@test occursin("--out results/td2rxh/99/seed3.csv", args)
+        end
         Test.@testset "too few rows fails" begin
             repo, home, bindir = fixture()
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "7"))
@@ -106,6 +127,41 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
             Test.@test rc == 1 && occursin("cannot resolve HEAD", log)
         end
+        Test.@testset "git status failing on its own fails closed" begin
+            # rev-parse succeeds, status fails: reaches the second git check, which
+            # the rev-parse stub above cannot (review round 2, surviving mutant).
+            repo, home, bindir = fixture()
+            real_git = Sys.which("git")
+            write_exe(
+                joinpath(bindir, "git"), """
+      #!/bin/bash
+      for a in "\$@"; do
+        if [[ "\$a" == "status" ]]; then echo 'fatal: dubious ownership' >&2; exit 128; fi
+      done
+      exec "$(real_git)" "\$@"
+      """)
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 1 && occursin("git status failed", log)
+        end
+        Test.@testset "a failing sha256sum cannot yield an empty Manifest hash" begin
+            repo, home, bindir = fixture()
+            write_exe(joinpath(bindir, "sha256sum"), "#!/bin/bash\nexit 1\n")
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
+            Test.@test rc == 1 && occursin("could not hash", log)
+        end
+        Test.@testset "a symlinked TMPDIR is resolved to its physical path" begin
+            # Mycelia's Stage-1 corrector rejects a temp root resolving through a
+            # symlink; on Lawrencium TMPDIR sits under a symlinked $HOME/workspace.
+            repo, home, bindir = fixture()
+            physical = mktempdir()
+            linked = joinpath(mktempdir(), "tmp_link")
+            symlink(physical, linked)
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TMPDIR" => linked))
+            Test.@test rc == 0
+            Test.@test occursin("TMPDIR=$(realpath(physical))\n", log)
+        end
         Test.@testset "julia non-zero exit fails even with full rows" begin
             repo, home, bindir = fixture()
             rc,
@@ -126,9 +182,9 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
                 extra_env = Dict("STUB_ROWS" => "4", "TD2RXH_CELLS" => "smoke"))
             Test.@test rc == 0
             rc2,
-            _ = run_sbatch(repo, home, bindir;
+            log2 = run_sbatch(repo, home, bindir;
                 extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_CELLS" => "td2rhx"))
-            Test.@test rc2 == 1
+            Test.@test rc2 == 1 && occursin("unknown TD2RXH_CELLS=td2rhx", log2)
         end
     end
 end

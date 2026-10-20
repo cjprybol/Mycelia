@@ -79,9 +79,26 @@ if [[ ! -f ../Manifest.toml ]]; then
   echo "ERROR: ../Manifest.toml missing; run benchmarking/hpc-setup.sh first." >&2
   exit 1
 fi
-manifest_sha="$(sha256sum ../Manifest.toml | cut -c1-12)"
+if ! manifest_sha="$(sha256sum ../Manifest.toml | cut -c1-12)" ||
+   [[ ! "${manifest_sha}" =~ ^[0-9a-f]{12}$ ]]; then
+  echo "ERROR: could not hash ../Manifest.toml (got '${manifest_sha:-}')." >&2
+  exit 1
+fi
 label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
 echo "Checkout: $(cd .. && pwd)  label=${label}"
+
+# Mycelia's Stage-1 corrector refuses a temp root that resolves through a symlink
+# (src/rhizomorph/assembly.jl, _owned_assembly_artifact_identity). On Lawrencium
+# TMPDIR=$HOME/workspace/tmp and $HOME/workspace is a symlink to scratch, which
+# made the first smoke job fail before any arm ran. Resolve to the physical path.
+tmp_root="${TMPDIR:-/tmp}"
+mkdir -p "${tmp_root}" || exit 1
+if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then
+  echo "ERROR: cannot resolve TMPDIR ${tmp_root}." >&2
+  exit 1
+fi
+export TMPDIR
+echo "TMPDIR=${TMPDIR}"
 
 cells="${TD2RXH_CELLS:-td2rxh}"
 case "${cells}" in

@@ -52,7 +52,7 @@
 #
 # Timing fairness: both arms of a pair run in one process; `GC.gc()` runs before
 # each timed arm so neither inherits the other's garbage, and the arm order
-# alternates with seed parity so a fixed order cannot bias the paired difference.
+# alternates with seed parity so any order effect is balanced across seeds (8 vs 8).
 
 import Pkg
 const _PROJECT = get(ENV, "MYCELIA_PROJECT", dirname(@__DIR__))
@@ -198,7 +198,7 @@ end
 
 """
 Arm order for one seed: illumina first on odd seeds, nanopore first on even
-seeds, so a fixed order cannot bias the paired wall-time difference.
+seeds, so any order effect on the paired wall-time difference is balanced across seeds.
 """
 arm_order(seed::Integer)::Tuple{
     Symbol, Symbol} = iseven(seed) ? (:nanopore, :illumina) : (:illumina, :nanopore)
@@ -230,6 +230,8 @@ function parse_args(args::Vector{String})::Dict{String, String}
             throw(ArgumentError("expected a --flag, got \"$(args[index])\""))
         key = args[index][3:end]
         key in allowed || throw(ArgumentError("unknown flag --$(key)"))
+        startswith(args[index + 1], "--") &&
+            throw(ArgumentError("--$(key) is missing its value (got $(args[index + 1]))"))
         parsed[key] = args[index + 1]
     end
     return parsed
