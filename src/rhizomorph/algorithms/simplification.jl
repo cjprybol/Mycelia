@@ -661,6 +661,273 @@ function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int = 1)
 end
 
 # ============================================================================
+# Error-only graph cleanup (defragmentation) — td-969e
+# ============================================================================
+#
+# Applied to the corrector's FINAL assembly graph before contig extraction. The
+# residual fragmentation after correction + RC-dedup (td-47di) is caused by
+# persistent error-induced BRANCH POINTS: each error tip / error bubble arm that
+# the read corrector did not fully repair becomes an extra vertex the unitig
+# traversal cannot thread through, so it fragments off as its own spurious short
+# contig (inflating contig count, depressing N50).
+#
+# The cleanup is deliberately CONSERVATIVE and ERROR-ONLY. Its non-negotiable
+# invariant (td-h6w9) is variation preservation: a REAL, data-supported bubble
+# branch (a balanced 15x/15x het, or a skewed-but-supported 20x/10x het/paralog)
+# must NEVER be collapsed. Only UNSUPPORTED (coverage ≤ 1) error structure is
+# removed. The discriminator is per-vertex coverage (`count_evidence`), which is
+# ≫ 1 on any data-supported allele and == 1 on a single-read error, so the two
+# are cleanly separable and the safe subset (coverage-1 dead-end tip clipping)
+# alone can never touch a real variant.
+
+"""
+    _vertex_coverage(graph, label) -> Int
+
+Per-vertex evidence coverage via `count_evidence`, which is defined for BOTH the
+full evidence-bearing vertex types and the reduced (`total_count`) types, so this
+is uniform across every `memory_profile`. Returns `0` for an absent label.
+"""
+function _vertex_coverage(graph::MetaGraphsNext.MetaGraph, label)
+    haskey(graph, label) || return 0
+    return count_evidence(graph[label])
+end
+
+"""
+    clip_low_coverage_tips!(graph; max_coverage::Int=1) -> Int
+
+Remove dead-end TIPS — short unsupported error spurs — from `graph` in place, in
+a single linear-time `O(V+E)` peeling pass. A tip is a vertex with in-degree 0
+OR out-degree 0 whose coverage is ≤ `max_coverage`. Removing a tip can expose a
+new dead-end upstream (its former neighbor), so the peel cascades along the spur
+via a work queue until no low-coverage dead-end remains, and the whole cascade is
+bounded by `O(V+E)` total work (each edge relaxes a neighbor's degree at most
+once; each vertex is finalized once).
+
+Only tips whose coverage is ≤ `max_coverage` are removed. With the default
+`max_coverage=1` this clips exactly the coverage-1 error spurs and can never
+touch a data-supported branch (coverage ≫ 1) — the safe defragmentation subset.
+Interior bubble branches are NOT dead ends (they reconverge), so tip clipping
+never removes a real, balanced/skewed het bubble arm regardless of `max_coverage`.
+
+Returns the number of vertices removed.
+"""
+function clip_low_coverage_tips!(graph::MetaGraphsNext.MetaGraph; max_coverage::Int = 1)
+    labels = collect(MetaGraphsNext.labels(graph))
+    isempty(labels) && return 0
+    T = eltype(labels)
+
+    # Single O(E) pass: build in/out adjacency and degree counters. Local
+    # bookkeeping (not repeated Graphs.indegree calls) is what keeps the cascade
+    # linear rather than O(V·(V+E)).
+    outn = Dict{T, Vector{T}}()
+    inn = Dict{T, Vector{T}}()
+    for v in labels
+        outn[v] = T[]
+        inn[v] = T[]
+    end
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        push!(outn[src], dst)
+        push!(inn[dst], src)
+    end
+    indeg = Dict{T, Int}(v => length(inn[v]) for v in labels)
+    outdeg = Dict{T, Int}(v => length(outn[v]) for v in labels)
+    cov = Dict{T, Int}(v => _vertex_coverage(graph, v) for v in labels)
+
+    removed = Set{T}()
+    is_clippable_tip(v) =
+        !(v in removed) && cov[v] <= max_coverage && (indeg[v] == 0 || outdeg[v] == 0)
+
+    queue = T[v for v in labels if is_clippable_tip(v)]
+    qi = 1
+    while qi <= length(queue)
+        v = queue[qi]
+        qi += 1
+        is_clippable_tip(v) || continue
+        push!(removed, v)
+        # Relax downstream neighbors' in-degree and upstream neighbors' out-degree.
+        for w in outn[v]
+            if !(w in removed)
+                indeg[w] -= 1
+                is_clippable_tip(w) && push!(queue, w)
+            end
+        end
+        for w in inn[v]
+            if !(w in removed)
+                outdeg[w] -= 1
+                is_clippable_tip(w) && push!(queue, w)
+            end
+        end
+    end
+
+    # Batch-delete after the peel. rem_vertex! reassigns integer codes, so
+    # re-resolve each label immediately before its removal.
+    for v in removed
+        idx = MetaGraphsNext.code_for(graph, v)
+        MetaGraphsNext.rem_vertex!(graph, idx)
+    end
+    return length(removed)
+end
+
+"""
+    _min_interior_coverage(graph, interior::Vector) -> Int
+
+Minimum per-vertex coverage over a bubble arm's INTERIOR vertices (the vertices
+unique to that arm — the shared entry/exit are excluded by the caller). The
+minimum, not the sum, is the correct error/real discriminator: a real allele arm
+is supported at EVERY interior vertex (min ≫ 1), whereas a single-read error arm
+is coverage-1 throughout (min == 1). A sum would scale with arm length and could
+rank a long real minority arm below a short error arm. Returns `typemax(Int)` for
+an empty interior so an empty arm is never classified as an error.
+"""
+function _min_interior_coverage(graph::MetaGraphsNext.MetaGraph, interior::Vector)
+    isempty(interior) && return typemax(Int)
+    m = typemax(Int)
+    for v in interior
+        m = min(m, _vertex_coverage(graph, v))
+    end
+    return m
+end
+
+"""
+    collapse_error_bubbles!(graph; error_max_coverage::Int=1, min_supported_coverage::Int=2,
+                            min_bubble_length::Int=1, max_bubble_length::Int=100) -> Int
+
+Collapse UNSUPPORTED error bubble arms in place, with a hard variation-preservation
+guard (td-h6w9). For each bubble detected by `detect_bubbles_next` (linear-time,
+reusing the shared out-adjacency index), an alternative branch is removed ONLY when
+BOTH hold:
+
+  1. its minimum interior coverage ≤ `error_max_coverage` (an unsupported error arm), AND
+  2. the sibling branch's minimum interior coverage ≥ `min_supported_coverage`
+     (the retained allele is clearly data-supported).
+
+A balanced (15x/15x) or skewed-but-supported (20x/10x) bubble has BOTH arms with
+minimum interior coverage well above `error_max_coverage`, so NEITHER arm
+qualifies as an error and the bubble — a real het/paralog — is retained intact.
+A bubble whose two arms share an interior vertex is skipped (removing a shared
+vertex could sever the retained arm). Only the low-coverage arm's edges + its
+now-isolated interior vertices are removed; the shared entry/exit and the
+retained arm are untouched.
+
+Returns the number of bubble arms removed.
+"""
+function collapse_error_bubbles!(graph::MetaGraphsNext.MetaGraph;
+        error_max_coverage::Int = 1,
+        min_supported_coverage::Int = 2,
+        min_bubble_length::Int = 1,
+        max_bubble_length::Int = 100)
+    isempty(collect(MetaGraphsNext.labels(graph))) && return 0
+
+    bubbles = detect_bubbles_next(graph;
+        min_bubble_length = min_bubble_length, max_bubble_length = max_bubble_length)
+
+    # Process bubbles in a canonical, label-derived order so the collapse is a pure
+    # function of the graph's TOPOLOGY + LABELS, independent of internal vertex-code
+    # ordering. Two topologically-identical graphs with identical vertex labels (the
+    # corrector's REUSED final-pass graph vs a from-scratch REBUILD of the corrected
+    # reads — td-04tb) can differ in vertex insertion order; without a stable order,
+    # collapsing interacting/overlapping error bubbles could diverge between them and
+    # break the reuse==rebuild invariant. Sorting by label content makes the two
+    # results byte-identical.
+    sort!(bubbles;
+        by = b -> (string(b.entry_vertex), string(b.exit_vertex),
+            isempty(b.path1) ? "" : string(b.path1[1]),
+            isempty(b.path2) ? "" : string(b.path2[1])))
+    removed_arms = 0
+
+    for bubble in bubbles
+        # A prior collapse in this loop may have already removed this bubble's
+        # boundary; re-validate before touching it.
+        (haskey(graph, bubble.entry_vertex) && haskey(graph, bubble.exit_vertex)) ||
+            continue
+
+        # Interior = arm vertices unique to the branch. The stored paths end at the
+        # shared convergence vertex, so drop that last element.
+        interior1 = bubble.path1[1:(end - 1)]
+        interior2 = bubble.path2[1:(end - 1)]
+        (isempty(interior1) || isempty(interior2)) && continue
+
+        # All interior vertices must still exist (an earlier collapse can invalidate
+        # an overlapping bubble's arm).
+        all(v -> haskey(graph, v), interior1) || continue
+        all(v -> haskey(graph, v), interior2) || continue
+
+        # Never remove a vertex shared between the two arms (would sever the arm we
+        # intend to keep). Complex/overlapping bubbles are left for a later, more
+        # deliberate resolver.
+        isempty(intersect(Set(interior1), Set(interior2))) || continue
+
+        cov1 = _min_interior_coverage(graph, interior1)
+        cov2 = _min_interior_coverage(graph, interior2)
+
+        if cov1 <= error_max_coverage && cov2 >= min_supported_coverage
+            remove_path_from_graph!(graph, bubble.path1, bubble.entry_vertex,
+                bubble.exit_vertex)
+            removed_arms += 1
+        elseif cov2 <= error_max_coverage && cov1 >= min_supported_coverage
+            remove_path_from_graph!(graph, bubble.path2, bubble.entry_vertex,
+                bubble.exit_vertex)
+            removed_arms += 1
+        end
+        # Otherwise: both arms supported (real variation) OR both unsupported
+        # (ambiguous) — leave the bubble untouched.
+    end
+
+    return removed_arms
+end
+
+"""
+    clean_assembly_graph_next!(graph; clip_tips=true, collapse_bubbles=true,
+        tip_max_coverage=1, bubble_error_max_coverage=1, bubble_min_supported_coverage=2,
+        min_bubble_length=1, max_bubble_length=100) -> NamedTuple
+
+Error-only defragmentation cleanup for a corrector's final assembly graph, run in
+place BEFORE contig extraction (td-969e). Removes unsupported error tips and
+unsupported error bubble arms — each of which would otherwise fragment off as a
+spurious contig — while PRESERVING all data-supported variation (td-h6w9): a
+balanced or skewed-but-supported bubble is never collapsed.
+
+Order of operations:
+
+  1. `clip_low_coverage_tips!` — peel coverage-≤`tip_max_coverage` dead-end spurs.
+  2. `collapse_error_bubbles!` — remove coverage-≤`bubble_error_max_coverage` bubble
+     arms whose sibling is ≥ `bubble_min_supported_coverage` (guarded, error-only).
+  3. A second tip pass, only if a bubble arm was collapsed (which can expose a new
+     dead-end at the arm's former boundary).
+
+Returns `(; tips_removed, bubble_arms_removed, vertices_before, vertices_after)`.
+Setting `collapse_bubbles=false` restricts cleanup to the strictly-safe subset
+(pure coverage-1 dead-end tip clipping), which cannot touch any bubble.
+"""
+function clean_assembly_graph_next!(graph::MetaGraphsNext.MetaGraph;
+        clip_tips::Bool = true,
+        collapse_bubbles::Bool = true,
+        tip_max_coverage::Int = 1,
+        bubble_error_max_coverage::Int = 1,
+        bubble_min_supported_coverage::Int = 2,
+        min_bubble_length::Int = 1,
+        max_bubble_length::Int = 100)
+    vertices_before = length(collect(MetaGraphsNext.labels(graph)))
+
+    tips_removed = clip_tips ?
+                   clip_low_coverage_tips!(graph; max_coverage = tip_max_coverage) : 0
+
+    bubble_arms_removed = collapse_bubbles ?
+                          collapse_error_bubbles!(graph;
+        error_max_coverage = bubble_error_max_coverage,
+        min_supported_coverage = bubble_min_supported_coverage,
+        min_bubble_length = min_bubble_length,
+        max_bubble_length = max_bubble_length) : 0
+
+    if clip_tips && bubble_arms_removed > 0
+        tips_removed += clip_low_coverage_tips!(graph; max_coverage = tip_max_coverage)
+    end
+
+    vertices_after = length(collect(MetaGraphsNext.labels(graph)))
+    return (; tips_removed, bubble_arms_removed, vertices_before, vertices_after)
+end
+
+# ============================================================================
 # Graph Simplification
 # ============================================================================
 

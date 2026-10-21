@@ -169,6 +169,15 @@ struct AssemblyConfig
     # (reverse complement is undefined for general string tokens).
     token_sequences::Union{Nothing, Vector{Vector{String}}}
 
+    # Opt-in error-only graph-cleanup (defragmentation) pass applied to the final
+    # qualmer assembly graph BEFORE contig extraction (td-969e). Removes
+    # unsupported error tips + error bubble arms that would otherwise each fragment
+    # off as a spurious contig, while preserving all data-supported variation
+    # (td-h6w9). Defaults OFF for every plain route (byte-for-byte unchanged) and
+    # is set ON only for the iterative corrector's re-assembly, whose branchy
+    # corrected-read graph is exactly the fragmentation source.
+    graph_cleanup::Bool
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -189,7 +198,8 @@ struct AssemblyConfig
             corrector::Symbol = :none,
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
-            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing
+            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing,
+            graph_cleanup::Bool = false
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -329,7 +339,8 @@ struct AssemblyConfig
             corrector,
             effective_skip_solid,
             effective_strategy,
-            token_sequences
+            token_sequences,
+            graph_cleanup
         )
     end
 end
@@ -930,9 +941,16 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # the corrected-read assembly with both-strand twins. Forward the OUTER config's
         # resolved value (default ON for corrector=:iterative) so the corrected re-assembly
         # emits the canonical (deduped) contig set.
+        # graph_cleanup=true (td-969e): the corrected-read graph still carries
+        # residual error-induced branch points (tips/bubble arms the corrector did
+        # not fully repair), each of which fragments off as a spurious contig. Turn
+        # the error-only defrag cleanup ON for the corrector re-assembly. It runs in
+        # _qualmer_graph_to_assembly (shared by BOTH the reuse and rebuild paths
+        # below) and preserves data-supported variation (td-h6w9).
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
-            dedup_revcomp = config.dedup_revcomp)
+            dedup_revcomp = config.dedup_revcomp,
+            graph_cleanup = true)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -1395,6 +1413,25 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
+    # Error-only defragmentation cleanup (td-969e). Runs on the FINAL corrector
+    # graph BEFORE contig extraction so unsupported error tips / error bubble arms
+    # are removed rather than fragmenting off as spurious contigs. Opt-in via
+    # config.graph_cleanup (default OFF, so every plain route is byte-for-byte
+    # unchanged); the iterative corrector's re-assembly sets it ON. The pass is
+    # error-only and preserves all data-supported variation (td-h6w9) — see
+    # clean_assembly_graph_next!.
+    _cleanup_stats = if config.graph_cleanup
+        Rhizomorph.clean_assembly_graph_next!(graph)
+    else
+        nothing
+    end
+    if _cleanup_stats !== nothing
+        _log_info(config,
+            "Graph cleanup: removed $(_cleanup_stats.tips_removed) tip + " *
+            "$(_cleanup_stats.bubble_arms_removed) bubble-arm vertices " *
+            "($(_cleanup_stats.vertices_before) -> $(_cleanup_stats.vertices_after) vertices)")
+    end
+
     # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
     # the k-mer arm. The prior heaviest-path / iterative-Viterbi heuristics found
     # no substantial paths on branchy read graphs and fell to a placeholder walk
@@ -1502,6 +1539,17 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
         "num_input_sequences" => num_input_sequences,
         "assembly_date" => string(Mycelia.Dates.now())
     )
+
+    # Defragmentation-cleanup provenance (td-969e). Records whether the error-only
+    # cleanup ran and how much unsupported error structure it removed, so callers
+    # can attribute a contig-count / N50 change to the cleanup.
+    stats["graph_cleanup_applied"] = _cleanup_stats !== nothing
+    if _cleanup_stats !== nothing
+        stats["graph_cleanup_tips_removed"] = _cleanup_stats.tips_removed
+        stats["graph_cleanup_bubble_arms_removed"] = _cleanup_stats.bubble_arms_removed
+        stats["graph_cleanup_vertices_before"] = _cleanup_stats.vertices_before
+        stats["graph_cleanup_vertices_after"] = _cleanup_stats.vertices_after
+    end
 
     # Add quality-specific statistics
     if !isempty(MetaGraphsNext.labels(graph))

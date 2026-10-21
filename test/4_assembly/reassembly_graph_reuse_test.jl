@@ -119,8 +119,16 @@ Test.@testset "re-assembly graph reuse (td-04tb)" begin
     Test.@testset "end-to-end corrector output == from-scratch rebuild" begin
         # THE invariant that must hold whether or not reuse fired: the corrector's
         # assembled contigs equal a from-scratch rebuild of the corrected reads.
+        #
+        # The corrector re-assembly now runs the error-only defragmentation cleanup
+        # (td-969e, graph_cleanup=true) on the final graph before contig extraction.
+        # An apples-to-apples from-scratch rebuild must therefore enable the SAME
+        # cleanup; a naive rebuild with cleanup OFF keeps the error fragments the
+        # corrector intentionally removes, which is the whole point of the pass.
         asm = R.assemble_genome(reads; k = k, corrector = :iterative, strategy = :scalable)
-        rebuild = R.assemble_genome(corrected; k = k, corrector = :none)
+        rebuild_cfg = R._auto_configure_assembly(corrected; k = k, corrector = :none,
+            graph_cleanup = true)
+        rebuild = R.assemble_genome(corrected, rebuild_cfg)
         Test.@test sort(asm.contigs) == sort(rebuild.contigs)
         Test.@test _n50(length.(asm.contigs)) == _n50(length.(rebuild.contigs))
         # Provenance flag is present and (in this converging regime) true.
