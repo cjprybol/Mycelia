@@ -342,7 +342,7 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test occursin("refusing to overwrite", sprint(showerror, err))
     end
 
-    Test.@testset "I6 gzipped reference decode" begin
+    Test.@testset "I6 gzipped reference decode (per-record, no chimeric join)" begin
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         tmp = mktempdir()
         cp(joinpath(fixture, "graph.gfa"), joinpath(tmp, "graph.gfa"))
@@ -351,9 +351,98 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         open(CodecZlib.GzipCompressorStream, joinpath(refdir, "ref.fasta.gz"), "w") do io
             println(io, ">r1")
             println(io, "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA")
+            println(io, ">r2")
+            println(io, "GCTTAGCTAGGCTTAACCTAGGCTTAGCTAA")
         end
         seqs = Mycelia._gqc_load_reference_sequences(refdir)
-        Test.@test length(seqs) == 1
+        Test.@test length(seqs) == 2
         Test.@test startswith(seqs[1], "ATGCGATCGA")
+        Test.@test startswith(seqs[2], "GCTTAGCTAG")
+        ## Must not concatenate across records
+        Test.@test length(seqs[1]) == 63
+        Test.@test length(seqs[2]) == 31
+    end
+
+    Test.@testset "null_source=:auto uses reference on k-mer-node graphs" begin
+        k = 5
+        ref = "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGA"
+        n_shuffles = 20
+        seed = 20261021
+        ## Canonical k-mer-node GFA: one segment per distinct canonical k-mer (len=k)
+        kmers = String[ref[i:(i + k - 1)] for i in 1:(length(ref) - k + 1)]
+        ckmers = String[Mycelia._gqc_canonical_kmer(km) for km in kmers]
+        uniq = unique(ckmers)
+        id_of = Dict(km => string(i) for (i, km) in enumerate(uniq))
+        root = mktempdir()
+        open(joinpath(root, "graph.gfa"), "w") do io
+            println(io, "H\tVN:Z:1.0")
+            for (i, km) in enumerate(uniq)
+                println(io, "S\t", i, '\t', km, "\tLN:i:", k)
+            end
+            for i in 1:(length(ckmers) - 1)
+                a = id_of[ckmers[i]]; b = id_of[ckmers[i + 1]]
+                a == b && continue
+                println(io, "L\t", a, "\t+\t", b, "\t+\t", k - 1, "M")
+            end
+        end
+        open(joinpath(root, "metadata.json"), "w") do io
+            JSON.print(io, Dict(
+                "graph_id" => "kmer_node_k5",
+                "label" => "kmer_node",
+                "k" => k,
+                "strand_mode" => "canonical",
+                "circular" => false,
+            ), 2)
+        end
+        mkpath(joinpath(root, "reference"))
+        open(joinpath(root, "reference", "genome.fasta"), "w") do io
+            println(io, ">genome")
+            println(io, ref)
+        end
+
+        expected = Mycelia.gqc_repeat_null_stats([ref];
+            k=k, n_shuffles=n_shuffles, shuffle_seed=seed,
+            circular=false, canonical=true, null_kind=:dinucleotide)
+        ## Segment-only nulls: each node is one distinct k-mer → observed repeats 0
+        seg_only = Mycelia.gqc_repeat_null_stats(uniq;
+            k=k, n_shuffles=n_shuffles, shuffle_seed=seed,
+            circular=false, canonical=true, null_kind=:dinucleotide)
+        Test.@test seg_only.observed_repeats == 0
+        Test.@test expected.observed_repeats > 0
+
+        packet = Mycelia.run_gqc(root, mktempdir();
+            ks=[k],
+            n_shuffles=n_shuffles,
+            shuffle_seed=seed,
+            strand_mode=:canonical,
+            null_source=:auto,
+            make_plots=false,
+            write_node_link_json=false,
+            null_kinds=(:dinucleotide,),
+        )
+        rows = JSON.parsefile(joinpath(packet, "summary.json"))
+        row = only(rows)
+        Test.@test row["null_source"] == "reference"
+        Test.@test row["null_applicable"] == true
+        Test.@test row["dinucleotide_observed_repeats"] == expected.observed_repeats
+        Test.@test row["dinucleotide_null_mean"] ≈ expected.null_mean atol=1e-12
+        Test.@test row["dinucleotide_shuffle_p_upper"] ≈ expected.shuffle_p_upper atol=1e-12
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        Test.@test man["params"]["null_source"] == "auto"
+        Test.@test man["params"]["resolved_null_source"] == "reference"
+        Test.@test man["params"]["null_applicable"] == true
+
+        ## Explicit segments on k-mer-node graph → not_applicable (no degenerate p)
+        packet2 = Mycelia.run_gqc(root, mktempdir();
+            ks=[k], n_shuffles=n_shuffles, shuffle_seed=seed,
+            strand_mode=:canonical, null_source=:segments,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide,),
+        )
+        row2 = only(JSON.parsefile(joinpath(packet2, "summary.json")))
+        Test.@test row2["null_source"] == "segments"
+        Test.@test row2["null_applicable"] == false
+        Test.@test row2["dinucleotide_shuffle_p_upper"] === nothing
+        Test.@test row2["dinucleotide_observed_repeats"] === nothing
     end
 end

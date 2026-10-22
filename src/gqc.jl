@@ -23,6 +23,7 @@ const GQC_SUMMARY_COLUMNS = (
     "codon_observed_repeats", "codon_null_mean", "codon_null_std",
     "codon_shuffle_ratio", "codon_z_score", "codon_shuffle_p_upper",
     "codon_null_degenerate",
+    "null_source", "null_applicable",
     "strand_mode", "canonical", "gqc_version",
 )
 
@@ -673,6 +674,12 @@ end
 # Reference concordance
 # =============================================================================
 
+"""
+Load reference FASTA records from `reference_dir`.
+
+Each FASTA record becomes its own sequence (no chimeric joins across records).
+Supports plain and `.gz` files. `U` is mapped to `T`.
+"""
 function _gqc_load_reference_sequences(reference_dir::AbstractString)
     seqs = String[]
     isdir(reference_dir) || return seqs
@@ -682,17 +689,72 @@ function _gqc_load_reference_sequences(reference_dir::AbstractString)
         io = endswith(lowercase(file), ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
         try
             buf = IOBuffer()
-            for line in eachline(io)
-                startswith(line, '>') && continue
-                print(buf, uppercase(strip(line)))
+            in_record = false
+            function flush_record!()
+                s = replace(String(take!(buf)), 'U' => 'T')
+                !isempty(s) && push!(seqs, s)
+                buf = IOBuffer()
+                return nothing
             end
-            s = String(take!(buf))
-            !isempty(s) && push!(seqs, s)
+            for line in eachline(io)
+                if startswith(line, '>')
+                    in_record && flush_record!()
+                    in_record = true
+                else
+                    print(buf, uppercase(strip(line)))
+                end
+            end
+            in_record && flush_record!()
         finally
             close(io)
         end
     end
     return seqs
+end
+
+"""
+True when every segment sequence length equals the graph k (or a sweep k).
+Such graphs are k-mer-node graphs: segment-based repeat nulls are not meaningful.
+"""
+function _gqc_is_kmer_node_graph(seg_seqs::Vector{String};
+                                 graph_k::Int=0,
+                                 ks::AbstractVector{<:Integer}=Int[])
+    isempty(seg_seqs) && return false
+    lens = length.(seg_seqs)
+    all(==(first(lens)), lens) || return false
+    L = first(lens)
+    L > 0 || return false
+    (graph_k > 0 && L == graph_k) && return true
+    return any(L == Int(k) for k in ks)
+end
+
+"""
+Resolve sequences for repeat nulls.
+
+# Arguments
+- `null_source`: `:auto` (reference if present, else segments), `:reference`, or `:segments`
+
+Returns `(source::Symbol, sequences::Vector{String}, applicable::Bool)`.
+When `applicable` is false (segment source on a k-mer-node graph), callers should
+emit `not_applicable` rather than a degenerate p-value.
+"""
+function _gqc_resolve_null_sequences(null_source::Symbol,
+                                     ref_seqs::Vector{String},
+                                     seg_seqs::Vector{String};
+                                     graph_k::Int=0,
+                                     ks::AbstractVector{<:Integer}=Int[])
+    null_source in (:auto, :reference, :segments) || error(
+        "null_source must be :auto, :reference, or :segments; got $null_source"
+    )
+    if null_source === :reference || (null_source === :auto && !isempty(ref_seqs))
+        null_source === :reference && isempty(ref_seqs) && error(
+            "null_source=:reference but no reference/*.fasta records were found"
+        )
+        return (:reference, ref_seqs, true)
+    end
+    ## segments (explicit or :auto with no reference)
+    applicable = !_gqc_is_kmer_node_graph(seg_seqs; graph_k=graph_k, ks=ks)
+    return (:segments, seg_seqs, applicable)
 end
 
 function gqc_reference_concordance(g::GFAGraph, reference_seqs::Vector{String}; k::Int, circular::Bool=false)
@@ -1084,6 +1146,10 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
 - `make_plots`: write plots under `plots/` (default: `true`; set
   `ENV["GKSwstype"]="100"` on HPC)
 - `null_kinds`: `(:dinucleotide, :codon)` by default
+- `null_source`: `:auto` (default; use `reference/*.fasta` records when present,
+  else GFA segments), `:reference`, or `:segments`. K-mer-node graphs with a
+  segment source mark repeat nulls `null_applicable=false` instead of a
+  degenerate p-value.
 
 # Returns
 - Single-graph mode: absolute path to the packet directory `output_root/<graph_id>/`.
@@ -1104,6 +1170,7 @@ function run_gqc(input_dir::AbstractString,
                  write_node_link_json::Bool=true,
                  make_plots::Bool=true,
                  null_kinds::Tuple=(:dinucleotide, :codon),
+                 null_source::Symbol=:auto,
                  gqc_version::String=GQC_VERSION)::String
 
     resolved = resolve_gqc_input_dirs(input_dir)
@@ -1125,6 +1192,7 @@ function run_gqc(input_dir::AbstractString,
             write_node_link_json=write_node_link_json,
             make_plots=make_plots,
             null_kinds=null_kinds,
+            null_source=null_source,
             gqc_version=gqc_version,
         )
         push!(packets, packet)
@@ -1150,6 +1218,7 @@ function _run_gqc_one(input_dir::AbstractString,
                       write_node_link_json::Bool=true,
                       make_plots::Bool=true,
                       null_kinds::Tuple=(:dinucleotide, :codon),
+                      null_source::Symbol=:auto,
                       gqc_version::String=GQC_VERSION)::String
 
     input_dir = abspath(input_dir)
@@ -1194,6 +1263,8 @@ function _run_gqc_one(input_dir::AbstractString,
     ref_seqs = _gqc_load_reference_sequences(ref_dir)
     seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
                 for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
+    resolved_null_source, null_seqs, null_applicable = _gqc_resolve_null_sequences(
+        null_source, ref_seqs, seg_seqs; graph_k=k_meta, ks=k_list)
 
     out_dir = _gqc_packet_dir(output_root, graph_id)
     mkpath(out_dir)
@@ -1276,6 +1347,8 @@ function _run_gqc_one(input_dir::AbstractString,
             "codon_z_score" => missing,
             "codon_shuffle_p_upper" => missing,
             "codon_null_degenerate" => false,
+            "null_source" => string(resolved_null_source),
+            "null_applicable" => null_applicable,
         )
         for cov_key in ("cov_q0", "cov_q25", "cov_q50", "cov_q75", "cov_q100")
             row[cov_key] = get(cov_q, cov_key, missing)
@@ -1287,7 +1360,16 @@ function _run_gqc_one(input_dir::AbstractString,
 
         null_ratio_ci = nothing
         for kind in null_kinds
-            stats = gqc_repeat_null_stats(seg_seqs;
+            prefix = string(kind)
+            if !null_applicable
+                ## K-mer-node graph + segment source: do not emit degenerate p.
+                open(joinpath(out_dir, "nulls", "$(graph_id)__k$(k)__$(prefix).tsv"), "w") do io
+                    println(io, "graph_id\tk\tnull_kind\treplicate\tnull_repeats")
+                    println(io, "# null_applicable=false (k-mer-node graph; provide reference/*.fasta or null_source=:reference)")
+                end
+                continue
+            end
+            stats = gqc_repeat_null_stats(null_seqs;
                                           k=k,
                                           n_shuffles=n_shuffles,
                                           shuffle_seed=shuffle_seed,
@@ -1297,7 +1379,6 @@ function _run_gqc_one(input_dir::AbstractString,
                                           canonical=effective_canonical,
                                           min_shuffle_mean=min_shuffle_mean,
                                           null_kind=kind)
-            prefix = string(kind)
             row["$(prefix)_observed_repeats"] = stats.observed_repeats
             row["$(prefix)_null_mean"] = stats.null_mean
             row["$(prefix)_null_std"] = stats.null_std
@@ -1407,6 +1488,7 @@ function _run_gqc_one(input_dir::AbstractString,
         println(io, "- tips: **$(length(roles.tips))**; bubbles: **$(bubbles)**; tangles: **$(tangles)**")
         println(io, "- unitigs: **$(length(unitig_lengths))**; N50: **$(n50stats.n50)**; L50: **$(n50stats.l50)**")
         println(io, "- strand_mode: `$(strand_mode)` → effective canonical=$(effective_canonical)")
+        println(io, "- null_source: `$(resolved_null_source)` (requested `$(null_source)`); applicable=$(null_applicable)")
         println(io, "- bh_ks (within-graph only): ", join(bh_list, ", "),
                 " — packet q-values are **not** the paper cross-genus FDR")
         println(io, "- k sweep: ", join(k_list, ", "))
@@ -1426,6 +1508,9 @@ function _run_gqc_one(input_dir::AbstractString,
         "canonical" => effective_canonical,
         "strand_mode" => string(strand_mode),
         "null_kinds" => sort(collect(string.(null_kinds))),
+        "null_source" => string(null_source),
+        "resolved_null_source" => string(resolved_null_source),
+        "null_applicable" => null_applicable,
         "write_node_link_json" => write_node_link_json,
         "make_plots" => make_plots,
     )
