@@ -1,0 +1,10 @@
+H	VN:Z:1.0
+S	1	ACGTA	LN:i:5	DP:f:10.0
+S	2	CGTAC	LN:i:5	DP:f:8.0
+S	3	GTACG	LN:i:5	DP:f:12.0
+S	4	TACGT	LN:i:5	DP:f:3.0
+S	5	AAAAA	LN:i:5	DP:f:2.0
+L	1	+	2	+	4M
+L	2	+	3	+	4M
+L	3	+	4	+	4M
+L	2	+	5	+	4M
