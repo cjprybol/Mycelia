@@ -1,0 +1,11 @@
+{
+  "graph_id": "synth_reverse_link",
+  "label": "gqc_reverse_link",
+  "builder": "gqc-test",
+  "commit": "test",
+  "k": 5,
+  "strand_mode": "single",
+  "circular": false,
+  "alphabet": "DNA",
+  "role": "test-mtx-reverse-only-link"
+}

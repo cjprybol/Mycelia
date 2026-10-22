@@ -6,6 +6,25 @@ const GQC_VERSION = "0.1.0"
 const GQC_N_SHUFFLES = 100
 const GQC_SHUFFLE_SEED = 20261021
 const GQC_MIN_SHUFFLE_MEAN = 1.0
+## Default BH family is k=11 only (within-graph). Paper cross-genus FDR is a post-pass.
+const GQC_DEFAULT_BH_KS = [11]
+## Frozen summary.csv column order (every field always emitted).
+const GQC_SUMMARY_COLUMNS = (
+    "graph_id", "k", "n_segments", "n_links", "total_bp", "density",
+    "n_components", "largest_component_fraction", "beta0", "beta1",
+    "n_tips", "n_linear", "n_branch", "n_isolated", "n_sources", "n_sinks",
+    "n_unitigs", "unitig_n50", "unitig_l50", "unitig_max",
+    "n_bubbles", "n_tangles", "n_self_loops",
+    "cov_q0", "cov_q25", "cov_q50", "cov_q75", "cov_q100",
+    "ref_kmer_fraction", "ref_path_fraction", "ref_absent_kmers", "ref_breaks", "ref_walkability",
+    "dinucleotide_observed_repeats", "dinucleotide_null_mean", "dinucleotide_null_std",
+    "dinucleotide_shuffle_ratio", "dinucleotide_z_score", "dinucleotide_shuffle_p_upper",
+    "dinucleotide_null_degenerate", "dinucleotide_bh_q",
+    "codon_observed_repeats", "codon_null_mean", "codon_null_std",
+    "codon_shuffle_ratio", "codon_z_score", "codon_shuffle_p_upper",
+    "codon_null_degenerate",
+    "strand_mode", "canonical", "gqc_version",
+)
 
 # =============================================================================
 # Null / multiple-testing helpers (verbatim from rhizomorph-paper
@@ -16,34 +35,43 @@ const GQC_MIN_SHUFFLE_MEAN = 1.0
     dinucleotide_shuffle(sequence::String, rng::Random.AbstractRNG)::String
 
 Altschul–Erickson dinucleotide shuffle: preserves dinucleotide counts and the
-first/last base. Ported verbatim from rhizomorph-paper `viral-graphs.jl`.
+first/last base. `U` is treated as `T` (RNA). Non-ACGT letters (e.g. `N`) are
+included in the AE alphabet so they do not abort; they are preserved as symbols
+in the Eulerian trail.
 """
 function dinucleotide_shuffle(sequence::String, rng::Random.AbstractRNG)::String
-    chars = collect(sequence)
+    chars = collect(replace(uppercase(sequence), 'U' => 'T'))
     n = length(chars)
-    n <= 2 && return sequence
+    n <= 2 && return String(chars)
+    alphabet = sort(unique(chars))
     final = chars[end]
-    exits = Dict(c => Char[] for c in "ACGT")
+    exits = Dict{Char, Vector{Char}}(c => Char[] for c in alphabet)
     for i in 1:(n - 1)
         push!(exits[chars[i]], chars[i + 1])
     end
-    tree_bases = [c for c in "ACGT" if c != final && !isempty(exits[c])]
+    tree_bases = [c for c in alphabet if c != final && !isempty(exits[c])]
     last_exit = Dict{Char, Char}()
+    max_steps = max(length(alphabet), 4)
     reaches_final(c) = begin
         steps = 0
-        while c != final && steps <= 4
+        while c != final && steps <= max_steps
+            haskey(last_exit, c) || return false
             c = last_exit[c]
             steps += 1
         end
         c == final
     end
+    attempts = 0
     while true
+        attempts += 1
         for c in tree_bases
             last_exit[c] = rand(rng, exits[c])
         end
         all(reaches_final, tree_bases) && break
+        ## Extremely constrained alphabets: fall through with original order
+        attempts > 10_000 && return String(chars)
     end
-    for c in "ACGT"
+    for c in alphabet
         if c in tree_bases
             deleteat!(exits[c], findfirst(==(last_exit[c]), exits[c]))
             Random.shuffle!(rng, exits[c])
@@ -52,7 +80,7 @@ function dinucleotide_shuffle(sequence::String, rng::Random.AbstractRNG)::String
             Random.shuffle!(rng, exits[c])
         end
     end
-    next_exit = Dict(c => 1 for c in "ACGT")
+    next_exit = Dict(c => 1 for c in alphabet)
     shuffled = Vector{Char}(undef, n)
     shuffled[1] = chars[1]
     for i in 2:n
@@ -478,7 +506,6 @@ function gqc_repeat_counts(sequences::Vector{String};
         n < k && continue
         n_pos = circular ? n : (n - k + 1)
         n_pos <= 0 && continue
-        kmer_positions += n_pos
         for i in 1:n_pos
             if circular
                 ## wrap-around kmer
@@ -490,7 +517,9 @@ function gqc_repeat_counts(sequences::Vector{String};
             else
                 raw = seq[i:(i + k - 1)]
             end
+            ## Count positions only for valid ACGT windows (matches reference concordance).
             occursin(r"[^ACGTacgt]", raw) && continue
+            kmer_positions += 1
             raw = uppercase(raw)
             push!(distinct, canonical ? _gqc_canonical_kmer(raw) : raw)
         end
@@ -503,9 +532,11 @@ end
 """
     gqc_checked_dinucleotide_shuffles(sequences, rng; n_shuffles=100)
 
-Shuffle each segment independently `n_shuffles` times. Errors unless every copy
-keeps dinucleotide counts and end bases, and all copies differ from each other
-and from the original (paper `checked_shuffles` contract).
+Shuffle each segment independently `n_shuffles` times. Preserves dinucleotide
+counts and end bases when a shuffle is produced. When no distinct shuffle exists
+(unique Eulerian trail, AT repeats, short motifs), falls back to the original
+sequence and/or allows repeated nulls — never aborts. Returns
+`(shuffles, null_degenerate)`.
 """
 function gqc_checked_dinucleotide_shuffles(sequences::Vector{String},
                                            rng::Random.AbstractRNG;
@@ -519,47 +550,65 @@ function gqc_checked_dinucleotide_shuffles(sequences::Vector{String},
         end
         return c
     end
+    ## Normalize like dinucleotide_shuffle (U→T, uppercase) for comparisons.
+    function normalize_seq(seq::String)
+        return replace(uppercase(seq), 'U' => 'T')
+    end
     ## Homopolymers / length≤2 have no distinct Altschul–Erickson shuffle.
     function shuffleable(seq::String)
-        length(seq) > 2 && length(unique(seq)) > 1
+        s = normalize_seq(seq)
+        length(s) > 2 && length(unique(s)) > 1
     end
     results = Vector{Vector{String}}(undef, n_shuffles)
+    null_degenerate = false
     for t in 1:n_shuffles
         shuffled_segs = String[]
         for seq in sequences
-            s = seq
+            norm = normalize_seq(seq)
+            s = norm
             if shuffleable(seq)
                 found = false
                 for _ in 1:max_attempts_per_seq
                     candidate = dinucleotide_shuffle(seq, rng)
-                    dinuc_counts(candidate) == dinuc_counts(seq) || error("dinucleotide counts not preserved")
-                    candidate[1] == seq[1] || error("first base not preserved")
-                    candidate[end] == seq[end] || error("last base not preserved")
-                    if candidate != seq
+                    dinuc_counts(candidate) == dinuc_counts(norm) || continue
+                    (isempty(candidate) || candidate[1] == norm[1]) || continue
+                    (isempty(candidate) || candidate[end] == norm[end]) || continue
+                    if candidate != norm
                         s = candidate
                         found = true
                         break
                     end
                 end
-                found || error("could not produce a dinucleotide shuffle distinct from original")
+                if !found
+                    ## Unique trail / constrained sequence: keep original (homopolymer path).
+                    s = norm
+                    null_degenerate = true
+                end
             else
                 s = dinucleotide_shuffle(seq, rng)
-                if length(seq) >= 2
-                    dinuc_counts(s) == dinuc_counts(seq) || error("dinucleotide counts not preserved")
-                    s[1] == seq[1] || error("first base not preserved")
-                    s[end] == seq[end] || error("last base not preserved")
+                if length(norm) >= 2
+                    if !(dinuc_counts(s) == dinuc_counts(norm) &&
+                         s[1] == norm[1] && s[end] == norm[end])
+                        s = norm
+                        null_degenerate = true
+                    end
                 end
             end
             push!(shuffled_segs, s)
         end
         results[t] = shuffled_segs
     end
-    ## Prefer distinct genome concatenations when at least one segment is shuffleable
+    ## Allow repeated nulls when the shuffle space is small; mark degenerate.
     if any(shuffleable, sequences)
         joined = [join(segs, '|') for segs in results]
-        length(unique(joined)) == n_shuffles || error("duplicate shuffles detected")
+        if length(unique(joined)) < n_shuffles
+            null_degenerate = true
+        end
+    else
+        ## Entirely non-shuffleable (homopolymers / length≤2): still degenerate.
+        null_degenerate = true
     end
-    return results
+    return results, null_degenerate
 end
 
 """
@@ -568,7 +617,9 @@ end
 Paper formulas:
 - `null_repeats` per shuffle = kmer_positions - distinct_kmers
 - `shuffle_ratio = observed / mean(null)` if mean(null) >= min_shuffle_mean else `missing`
+- `z_score` gated by the same `min_shuffle_mean` floor
 - `shuffle_p_upper = (1 + #{null >= observed}) / (n_shuffles + 1)`
+- `null_degenerate`: true when dinucleotide nulls fell back / had duplicates
 """
 function gqc_repeat_null_stats(sequences::Vector{String};
                                k::Int,
@@ -583,15 +634,16 @@ function gqc_repeat_null_stats(sequences::Vector{String};
     observed = gqc_repeat_counts(sequences; k=k, circular=circular, canonical=canonical)
     rng = Random.Xoshiro(shuffle_seed + 1000 * salt + genus_index)
     null_repeats = Float64[]
+    null_degenerate = false
     if null_kind == :dinucleotide
-        shuffles = gqc_checked_dinucleotide_shuffles(sequences, rng; n_shuffles=n_shuffles)
+        shuffles, null_degenerate = gqc_checked_dinucleotide_shuffles(sequences, rng; n_shuffles=n_shuffles)
         for segs in shuffles
             r = gqc_repeat_counts(segs; k=k, circular=circular, canonical=canonical)
             push!(null_repeats, Float64(r.repeats))
         end
     elseif null_kind == :codon
         for _ in 1:n_shuffles
-            segs = [codon_shuffle(s, rng) for s in sequences]
+            segs = [codon_shuffle(replace(uppercase(s), 'U' => 'T'), rng) for s in sequences]
             r = gqc_repeat_counts(segs; k=k, circular=circular, canonical=canonical)
             push!(null_repeats, Float64(r.repeats))
         end
@@ -601,7 +653,7 @@ function gqc_repeat_null_stats(sequences::Vector{String};
     μ = Statistics.mean(null_repeats)
     σ = length(null_repeats) > 1 ? Statistics.std(null_repeats) : 0.0
     ratio = μ >= min_shuffle_mean ? observed.repeats / μ : missing
-    z = σ > 0 ? (observed.repeats - μ) / σ : missing
+    z = (μ >= min_shuffle_mean && σ > 0) ? (observed.repeats - μ) / σ : missing
     p_upper = (1 + count(>=(observed.repeats), null_repeats)) / (n_shuffles + 1)
     return (;
         observed_repeats=observed.repeats,
@@ -613,6 +665,7 @@ function gqc_repeat_null_stats(sequences::Vector{String};
         z_score=z,
         shuffle_p_upper=p_upper,
         null_repeats=null_repeats,
+        null_degenerate=null_degenerate,
     )
 end
 
@@ -623,10 +676,11 @@ end
 function _gqc_load_reference_sequences(reference_dir::AbstractString)
     seqs = String[]
     isdir(reference_dir) || return seqs
-    for file in readdir(reference_dir; join=true)
+    for file in sort(readdir(reference_dir; join=true))
         occursin(r"\.(fa|fna|fasta)(\.gz)?$"i, file) || continue
-        open(file) do io
-            ## handle plain or gzipped lightly via Transcoding not required; assume plain for v0.1
+        raw_io = open(file)
+        io = endswith(lowercase(file), ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+        try
             buf = IOBuffer()
             for line in eachline(io)
                 startswith(line, '>') && continue
@@ -634,6 +688,8 @@ function _gqc_load_reference_sequences(reference_dir::AbstractString)
             end
             s = String(take!(buf))
             !isempty(s) && push!(seqs, s)
+        finally
+            close(io)
         end
     end
     return seqs
@@ -734,23 +790,26 @@ function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_
                     link.to, '\t', link.to_forward ? "+" : "-", '\t', link.overlap)
         end
     end
-    ## Matrix Market coordinate pattern (undirected, 1-based, row/col order = nodes.tsv)
+    ## Matrix Market coordinate pattern *symmetric* (undirected simple graph).
+    ## Store lower triangle (row >= col), including diagonal self-loops.
+    ## Directed multi-edges remain in edges.tsv / GraphML / node_link.json.
     index = Dict(id => i for (i, id) in enumerate(ids))
     edges_unique = Set{Tuple{Int,Int}}()
     for link in g.links
         haskey(index, link.from) || continue
         haskey(index, link.to) || continue
         u = index[link.from]; v = index[link.to]
-        a, b = minmax(u, v)
-        push!(edges_unique, (a, b))
+        a, b = minmax(u, v)  ## a <= b
+        push!(edges_unique, (b, a))  ## lower triangle: row >= col
     end
     mtx_path = joinpath(formats_dir, "adjacency.mtx")
     open(mtx_path, "w") do io
-        println(io, "%%MatrixMarket matrix coordinate pattern general")
-        println(io, "% row/col order matches nodes.tsv index column (1-based)")
+        println(io, "%%MatrixMarket matrix coordinate pattern symmetric")
+        println(io, "% undirected simple graph; lower triangle (row>=col); 1-based = nodes.tsv index")
+        println(io, "% directed GFA L lines are in edges.tsv / graph.graphml / node_link.json")
         println(io, n, ' ', n, ' ', length(edges_unique))
-        for (a, b) in sort!(collect(edges_unique))
-            println(io, a, ' ', b)
+        for (row, col) in sort!(collect(edges_unique))
+            println(io, row, ' ', col)
         end
     end
     ## GraphML
@@ -823,51 +882,57 @@ end
 function gqc_make_plots(summary_row::Dict, degree_hist, unitig_lengths, coverages,
                         null_ratio_ci, plots_dir::AbstractString, graph_id::String, k::Int;
                         adj=nothing, ids=nothing, g::Union{Nothing,GFAGraph}=nothing)
-    ## degree log-log histogram
-    if !isempty(degree_hist)
-        degs = collect(keys(degree_hist))
-        counts = [degree_hist[d] for d in degs]
-        p = Plots.plot(degs, counts; seriestype=:scatter, xscale=:log10, yscale=:log10,
-                       xlabel="degree", ylabel="count", title="Degree distribution", legend=false)
-        _gqc_save_plot(p, plots_dir, "degree", graph_id, k)
-    end
-    ## unitig cumulative / N50
-    if !isempty(unitig_lengths)
-        sorted = sort(unitig_lengths; rev=true)
-        cum = cumsum(sorted)
-        p = Plots.plot(1:length(cum), cum; xlabel="unitig rank", ylabel="cumulative bp",
-                       title="Cumulative unitig length", legend=false)
-        n50 = summary_row["unitig_n50"]
-        Plots.hline!(p, [sum(sorted) / 2]; label="half total", linestyle=:dash)
-        _gqc_save_plot(p, plots_dir, "unitig_n50", graph_id, k)
-    end
-    ## coverage histogram
-    if !isempty(coverages)
-        p = Plots.histogram(coverages; xlabel="depth", ylabel="count", title="Coverage", legend=false)
-        _gqc_save_plot(p, plots_dir, "coverage", graph_id, k)
-    end
-    ## tip/bubble/branch bars
-    bars = ["tips", "bubbles", "branch", "self_loops", "tangles"]
-    vals = [summary_row[k_] for k_ in ("n_tips", "n_bubbles", "n_branch", "n_self_loops", "n_tangles")]
-    p = Plots.bar(bars, vals; legend=false, title="Structural counts", xrotation=30)
-    _gqc_save_plot(p, plots_dir, "structure", graph_id, k)
-    ## repeat ratio vs null CI (if present)
-    if null_ratio_ci !== nothing
-        ratio, lo, hi = null_ratio_ci
-        p = Plots.scatter([1], [ratio]; yerror=[(ratio - lo, hi - ratio)],
-                          xlabel="", ylabel="repeat ratio", title="Repeat vs null",
-                          xticks=([], []), legend=false, xlim=(0.5, 1.5))
-        Plots.hline!(p, [1.0]; linestyle=:dash)
-        _gqc_save_plot(p, plots_dir, "repeat_null", graph_id, k)
-    end
-    ## compacted small multiple for tiny graphs
-    if g !== nothing && length(g.segments) <= 5000 && adj !== nothing
-        ## simple component-size rank plot doubles as compact overview
-        comps = _gqc_connected_components(adj)
-        sizes = sort([length(c) for c in comps]; rev=true)
-        p = Plots.plot(1:length(sizes), sizes; xlabel="component rank", ylabel="nodes",
-                       title="Component sizes", legend=false)
-        _gqc_save_plot(p, plots_dir, "components", graph_id, k)
+    ## Safe on HPC headless: callers should set ENV["GKSwstype"]="100" (see PR docs).
+    ## Catch plot *creation* errors as well as savefig failures.
+    try
+        if !isempty(degree_hist)
+            degs = collect(keys(degree_hist))
+            counts = [degree_hist[d] for d in degs]
+            ## Isolates have degree 0 — log10(0) aborts; use linear axes then.
+            if any(<=(0), degs) || any(<=(0), counts)
+                p = Plots.plot(degs, counts; seriestype=:scatter,
+                               xlabel="degree", ylabel="count", title="Degree distribution", legend=false)
+            else
+                p = Plots.plot(degs, counts; seriestype=:scatter, xscale=:log10, yscale=:log10,
+                               xlabel="degree", ylabel="count", title="Degree distribution", legend=false)
+            end
+            _gqc_save_plot(p, plots_dir, "degree", graph_id, k)
+        end
+        if !isempty(unitig_lengths)
+            sorted = sort(unitig_lengths; rev=true)
+            cum = cumsum(sorted)
+            p = Plots.plot(1:length(cum), cum; xlabel="unitig rank", ylabel="cumulative bp",
+                           title="Cumulative unitig length", legend=false)
+            Plots.hline!(p, [sum(sorted) / 2]; label="half total", linestyle=:dash)
+            _gqc_save_plot(p, plots_dir, "unitig_n50", graph_id, k)
+        end
+        if !isempty(coverages)
+            p = Plots.histogram(coverages; xlabel="depth", ylabel="count", title="Coverage", legend=false)
+            _gqc_save_plot(p, plots_dir, "coverage", graph_id, k)
+        end
+        bars = ["tips", "bubbles", "branch", "self_loops", "tangles"]
+        vals = [summary_row[k_] for k_ in ("n_tips", "n_bubbles", "n_branch", "n_self_loops", "n_tangles")]
+        p = Plots.bar(bars, vals; legend=false, title="Structural counts", xrotation=30)
+        _gqc_save_plot(p, plots_dir, "structure", graph_id, k)
+        if null_ratio_ci !== nothing
+            ratio, lo, hi = null_ratio_ci
+            if ratio isa Number && lo isa Number && hi isa Number
+                p = Plots.scatter([1], [ratio]; yerror=[(ratio - lo, hi - ratio)],
+                                  xlabel="", ylabel="repeat ratio", title="Repeat vs null",
+                                  xticks=([], []), legend=false, xlim=(0.5, 1.5))
+                Plots.hline!(p, [1.0]; linestyle=:dash)
+                _gqc_save_plot(p, plots_dir, "repeat_null", graph_id, k)
+            end
+        end
+        if g !== nothing && length(g.segments) <= 5000 && adj !== nothing
+            comps = _gqc_connected_components(adj)
+            sizes = sort([length(c) for c in comps]; rev=true)
+            p = Plots.plot(1:length(sizes), sizes; xlabel="component rank", ylabel="nodes",
+                           title="Component sizes", legend=false)
+            _gqc_save_plot(p, plots_dir, "components", graph_id, k)
+        end
+    catch e
+        @warn "gqc_make_plots failed" graph_id k exception=e
     end
     return nothing
 end
@@ -881,9 +946,64 @@ function _gqc_read_metadata(path::AbstractString)
     return JSON.parsefile(path)
 end
 
+"""
+Canonicalize params for hashing: sort keys and sort vector values so that
+`ks` / `bh_ks` / `null_kinds` order does not change `params_hash`.
+"""
+function _gqc_canonicalize_params(params::Dict)
+    out = Dict{String, Any}()
+    for (k, v) in params
+        key = string(k)
+        if v isa AbstractVector
+            out[key] = sort(collect(v); by=string)
+        else
+            out[key] = v
+        end
+    end
+    return out
+end
+
 function _gqc_params_hash(params::Dict)
-    canonical = JSON.json(sort(collect(params); by=first))
-    return SHA.bytes2hex(SHA.sha256(canonical))
+    canonical = _gqc_canonicalize_params(params)
+    payload = JSON.json(sort(collect(canonical); by=first))
+    return SHA.bytes2hex(SHA.sha256(payload))
+end
+
+"""
+Effective k-mer RC folding from `strand_mode` (I3).
+
+- `:single` → `canonical=false` (no RC fold; ssRNA-safe)
+- `:canonical` → `canonical=true`
+- `:double` → honor the explicit `canonical` keyword
+"""
+function _gqc_effective_canonical(strand_mode::Symbol, canonical::Bool)::Bool
+    if strand_mode === :single
+        return false
+    elseif strand_mode === :canonical
+        return true
+    elseif strand_mode === :double
+        return canonical
+    else
+        error("unknown strand_mode=$strand_mode; expected :single, :double, or :canonical")
+    end
+end
+
+"""
+Unique packet directory under `output_root`. Prefers `graph_id`, refuses to
+overwrite a non-empty existing directory (C4).
+"""
+function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString)
+    slug = replace(string(graph_id), r"[^\w.\-]+" => "_")
+    isempty(slug) && error("graph_id is empty; cannot choose packet directory")
+    out_dir = joinpath(abspath(output_root), slug)
+    if isdir(out_dir)
+        entries = filter(name -> !startswith(name, '.'), readdir(out_dir))
+        isempty(entries) || error(
+            "refusing to overwrite existing gqc packet directory: $out_dir " *
+            "(graph_id=$graph_id). Use unique graph_id values."
+        )
+    end
+    return out_dir
 end
 
 function _gqc_git_commit()
@@ -952,17 +1072,22 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
   `Xoshiro(shuffle_seed + 1000*salt + genus_index)`)
 - `salt`, `genus_index`: seeding offsets (paper formula). In graph-set mode,
   graph `i` (1-based, sorted child order) uses `genus_index + i - 1`.
-- `min_shuffle_mean`: minimum null mean for ratio (default: `1.0`)
-- `bh_ks`: k values included in BH correction (default: all `ks`)
-- `circular`, `canonical`: k-mer counting flags
-- `strand_mode`: `:single` (default; recommended until PR #471) or `:double`
+- `min_shuffle_mean`: gates both `shuffle_ratio` and `z_score` (default: `1.0`)
+- `bh_ks`: k values included in **within-graph** BH on dinucleotide `p_upper`
+  (default: `[11]`). Packet `dinucleotide_bh_q` is **not** the paper's
+  cross-genus FDR — that is a post-pass over genera outside `run_gqc`.
+- `circular`: k-mer circularity (default: `metadata["circular"]` or `false`)
+- `canonical`: used only when `strand_mode=:double`; see `strand_mode`
+- `strand_mode`: `:single` (default; `canonical=false`), `:canonical`
+  (`canonical=true`), or `:double` (honor `canonical` kwarg)
 - `write_node_link_json`: include `formats/node_link.json` (default: `true`)
-- `make_plots`: write plots under `plots/` (default: `true`)
+- `make_plots`: write plots under `plots/` (default: `true`; set
+  `ENV["GKSwstype"]="100"` on HPC)
 - `null_kinds`: `(:dinucleotide, :codon)` by default
 
 # Returns
-- Single-graph mode: absolute path to the packet directory `output_root/<graph_set>/`.
-- Graph-set mode: absolute path to `output_root` (each child packet is under it).
+- Single-graph mode: absolute path to the packet directory `output_root/<graph_id>/`.
+- Graph-set mode: absolute path to `output_root` (each child packet under unique `graph_id`).
 """
 function run_gqc(input_dir::AbstractString,
                  output_root::AbstractString;
@@ -1036,8 +1161,12 @@ function _run_gqc_one(input_dir::AbstractString,
     graph_set = string(get(metadata, "label", graph_id))
     k_meta = Int(get(metadata, "k", 0))
     circ = circular === nothing ? Bool(get(metadata, "circular", false)) : circular
-    k_list = isempty(ks) ? (k_meta > 0 ? [k_meta] : Int[]) : collect(Int, ks)
+    effective_canonical = _gqc_effective_canonical(strand_mode, canonical)
+    k_list = isempty(ks) ? (k_meta > 0 ? [k_meta] : Int[]) : sort(unique(Int(k) for k in ks))
     isempty(k_list) && error("no k provided: set metadata[\"k\"] or pass ks=")
+    ## Within-graph BH family defaults to k=11 only (C5). Cross-genus FDR is external.
+    bh_list = sort(unique(Int(k) for k in (bh_ks === nothing ? GQC_DEFAULT_BH_KS : bh_ks)))
+    bh_set = Set(bh_list)
 
     g = read_gfa_records(gfa_path)
     ids, adj, self_loops = _gqc_undirected_adjacency(g)
@@ -1063,9 +1192,10 @@ function _run_gqc_one(input_dir::AbstractString,
 
     ref_dir = joinpath(input_dir, "reference")
     ref_seqs = _gqc_load_reference_sequences(ref_dir)
-    seg_seqs = [uppercase(s.sequence) for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
+    seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
+                for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
 
-    out_dir = joinpath(output_root, graph_set)
+    out_dir = _gqc_packet_dir(output_root, graph_id)
     mkpath(out_dir)
     for sub in ("nodes", "edges", "unitigs", "nulls", "plots", "formats")
         mkpath(joinpath(out_dir, sub))
@@ -1101,7 +1231,6 @@ function _run_gqc_one(input_dir::AbstractString,
     summary_rows = Dict{String, Any}[]
     null_p_dinuc = Float64[]
     null_k_order = Int[]
-    bh_set = bh_ks === nothing ? Set(k_list) : Set(Int(k) for k in bh_ks)
 
     for k in k_list
         row = Dict{String, Any}(
@@ -1129,11 +1258,32 @@ function _run_gqc_one(input_dir::AbstractString,
             "n_tangles" => tangles,
             "n_self_loops" => self_loops,
             "strand_mode" => string(strand_mode),
+            "canonical" => effective_canonical,
             "gqc_version" => gqc_version,
+            ## Always emit null / BH columns (frozen schema); fill below.
+            "dinucleotide_observed_repeats" => missing,
+            "dinucleotide_null_mean" => missing,
+            "dinucleotide_null_std" => missing,
+            "dinucleotide_shuffle_ratio" => missing,
+            "dinucleotide_z_score" => missing,
+            "dinucleotide_shuffle_p_upper" => missing,
+            "dinucleotide_null_degenerate" => false,
+            "dinucleotide_bh_q" => missing,
+            "codon_observed_repeats" => missing,
+            "codon_null_mean" => missing,
+            "codon_null_std" => missing,
+            "codon_shuffle_ratio" => missing,
+            "codon_z_score" => missing,
+            "codon_shuffle_p_upper" => missing,
+            "codon_null_degenerate" => false,
         )
-        merge!(row, Dict{String, Any}(cov_q))
+        for cov_key in ("cov_q0", "cov_q25", "cov_q50", "cov_q75", "cov_q100")
+            row[cov_key] = get(cov_q, cov_key, missing)
+        end
         ref_stats = gqc_reference_concordance(g, ref_seqs; k=k, circular=circ)
-        merge!(row, ref_stats)
+        for rk in ("ref_kmer_fraction", "ref_path_fraction", "ref_absent_kmers", "ref_breaks", "ref_walkability")
+            row[rk] = get(ref_stats, rk, missing)
+        end
 
         null_ratio_ci = nothing
         for kind in null_kinds
@@ -1144,7 +1294,7 @@ function _run_gqc_one(input_dir::AbstractString,
                                           salt=salt,
                                           genus_index=genus_index,
                                           circular=circ,
-                                          canonical=canonical,
+                                          canonical=effective_canonical,
                                           min_shuffle_mean=min_shuffle_mean,
                                           null_kind=kind)
             prefix = string(kind)
@@ -1154,6 +1304,7 @@ function _run_gqc_one(input_dir::AbstractString,
             row["$(prefix)_shuffle_ratio"] = stats.shuffle_ratio
             row["$(prefix)_z_score"] = stats.z_score
             row["$(prefix)_shuffle_p_upper"] = stats.shuffle_p_upper
+            row["$(prefix)_null_degenerate"] = stats.null_degenerate
             ## null long table
             open(joinpath(out_dir, "nulls", "$(graph_id)__k$(k)__$(prefix).tsv"), "w") do io
                 println(io, "graph_id\tk\tnull_kind\treplicate\tnull_repeats")
@@ -1181,7 +1332,7 @@ function _run_gqc_one(input_dir::AbstractString,
             end
         end
 
-        ## hooks for panlingual consumers
+        ## hooks for panlingual consumers (JSON only; not in summary.csv)
         row["graph_feature_vector"] = [
             Float64(n_seg), Float64(n_link), Float64(density), Float64(beta0), Float64(beta1),
             Float64(length(roles.tips)), Float64(bubbles), Float64(get(row, "dinucleotide_shuffle_ratio", 0) isa Number ? row["dinucleotide_shuffle_ratio"] : NaN),
@@ -1197,11 +1348,10 @@ function _run_gqc_one(input_dir::AbstractString,
             end
             gqc_make_plots(row, degree_hist, unitig_lengths, coverages, null_ratio_ci,
                            joinpath(out_dir, "plots"), graph_id, k; adj=adj, ids=ids, g=g)
-            ## beta0/beta1 vs k will be written after sweep as a combined plot
         end
     end
 
-    ## BH across selected k for dinucleotide p_upper
+    ## Within-graph BH on dinucleotide p_upper for bh_ks only (not cross-genus FDR).
     if !isempty(null_p_dinuc)
         qvals = benjamini_hochberg(null_p_dinuc)
         qmap = Dict(null_k_order[i] => qvals[i] for i in eachindex(null_k_order))
@@ -1211,35 +1361,32 @@ function _run_gqc_one(input_dir::AbstractString,
     end
 
     if make_plots && length(summary_rows) >= 1
-        ks_plot = [r["k"] for r in summary_rows]
-        b0 = [r["beta0"] for r in summary_rows]
-        b1 = [r["beta1"] for r in summary_rows]
-        p = Plots.plot(ks_plot, b0; label="β0", xlabel="k", ylabel="Betti", title="Betti vs k")
-        Plots.plot!(p, ks_plot, b1; label="β1")
-        _gqc_save_plot(p, joinpath(out_dir, "plots"), "betti_vs_k", graph_id, first(ks_plot))
-    end
-
-    ## summary.csv / summary.json
-    all_keys = OrderedCollections.OrderedSet{String}()
-    for row in summary_rows
-        for k in keys(row)
-            push!(all_keys, k)
+        try
+            ks_plot = [r["k"] for r in summary_rows]
+            b0 = [r["beta0"] for r in summary_rows]
+            b1 = [r["beta1"] for r in summary_rows]
+            p = Plots.plot(ks_plot, b0; label="β0", xlabel="k", ylabel="Betti", title="Betti vs k")
+            Plots.plot!(p, ks_plot, b1; label="β1")
+            _gqc_save_plot(p, joinpath(out_dir, "plots"), "betti_vs_k", graph_id, first(ks_plot))
+        catch e
+            @warn "gqc betti_vs_k plot failed" exception=e
         end
     end
-    ## drop bulky vector fields from CSV
-    csv_keys = [k for k in all_keys if k != "graph_feature_vector" && k != "distance_to_null"]
+
+    ## summary.csv — frozen ordered columns (I2)
+    csv_keys = collect(String, GQC_SUMMARY_COLUMNS)
     open(joinpath(out_dir, "summary.csv"), "w") do io
         println(io, join(csv_keys, ','))
         for row in summary_rows
-            vals = [repr(get(row, k, "")) for k in csv_keys]
-            ## simpler CSV: string without Julia repr quotes for numbers
             rendered = String[]
-            for k in csv_keys
-                v = get(row, k, "")
+            for col in csv_keys
+                v = get(row, col, missing)
                 if v === missing
                     push!(rendered, "")
                 elseif v isa AbstractString
                     push!(rendered, '"' * replace(v, '"' => "\"\"") * '"')
+                elseif v isa Bool
+                    push!(rendered, string(v))
                 else
                     push!(rendered, string(v))
                 end
@@ -1259,75 +1406,75 @@ function _run_gqc_one(input_dir::AbstractString,
         println(io, "- components (β0): **$(beta0)**; β1: **$(beta1)**; largest fraction: **$(round(largest_frac; digits=3))**")
         println(io, "- tips: **$(length(roles.tips))**; bubbles: **$(bubbles)**; tangles: **$(tangles)**")
         println(io, "- unitigs: **$(length(unitig_lengths))**; N50: **$(n50stats.n50)**; L50: **$(n50stats.l50)**")
-        println(io, "- strand_mode: `$(strand_mode)` (single-strand recommended until PR #471)")
+        println(io, "- strand_mode: `$(strand_mode)` → effective canonical=$(effective_canonical)")
+        println(io, "- bh_ks (within-graph only): ", join(bh_list, ", "),
+                " — packet q-values are **not** the paper cross-genus FDR")
         println(io, "- k sweep: ", join(k_list, ", "))
         println(io)
         println(io, "See `summary.csv`, `formats/`, and `plots/` for details.")
     end
 
-    params = Dict(
+    params = Dict{String, Any}(
         "ks" => k_list,
         "n_shuffles" => n_shuffles,
         "shuffle_seed" => shuffle_seed,
         "salt" => salt,
         "genus_index" => genus_index,
         "min_shuffle_mean" => min_shuffle_mean,
-        "bh_ks" => collect(bh_set),
+        "bh_ks" => bh_list,
         "circular" => circ,
-        "canonical" => canonical,
+        "canonical" => effective_canonical,
         "strand_mode" => string(strand_mode),
-        "null_kinds" => collect(string.(null_kinds)),
+        "null_kinds" => sort(collect(string.(null_kinds))),
         "write_node_link_json" => write_node_link_json,
         "make_plots" => make_plots,
     )
-    input_hashes = Dict("graph.gfa" => sha256_file(gfa_path))
+    input_hashes = Dict{String, String}("graph.gfa" => sha256_file(gfa_path))
     meta_path = joinpath(input_dir, "metadata.json")
     if isfile(meta_path)
         input_hashes["metadata.json"] = sha256_file(meta_path)
     end
 
-    ## checksums for outputs
-    checksum_lines = String[]
-    function _add_checksum!(path)
-        isfile(path) || return
-        rel = relpath(path, out_dir)
-        h = sha256_file(path)
-        push!(checksum_lines, "$(h)  $(rel)")
-        return h
-    end
-    output_hashes = Dict{String, String}()
-    for (root, _, files) in walkdir(out_dir)
+    ## Hash all artifacts except CHECKSUMS / manifest (stable identity; I5).
+    artifact_entries = Tuple{String, String}[]
+    for (root, dirs, files) in walkdir(out_dir)
+        sort!(dirs); sort!(files)
         for f in files
-            f == "CHECKSUMS.sha256" && continue
-            f == "manifest.json" && continue
+            (f == "CHECKSUMS.sha256" || f == "manifest.json") && continue
             p = joinpath(root, f)
-            output_hashes[relpath(p, out_dir)] = _add_checksum!(p)
+            push!(artifact_entries, (relpath(p, out_dir), sha256_file(p)))
         end
     end
-    open(joinpath(out_dir, "CHECKSUMS.sha256"), "w") do io
-        for line in sort(checksum_lines)
-            println(io, line)
-        end
-    end
+    sort!(artifact_entries; by=first)
+    output_hashes = OrderedCollections.OrderedDict{String, String}(artifact_entries)
 
-    manifest = Dict(
+    manifest_path = joinpath(out_dir, "manifest.json")
+    manifest = Dict{String, Any}(
         "gqc_version" => gqc_version,
         "commit" => _gqc_git_commit(),
-        "params" => params,
+        "params" => _gqc_canonicalize_params(params),
         "params_hash" => _gqc_params_hash(params),
-        "input_sha256" => input_hashes,
+        "input_sha256" => OrderedCollections.OrderedDict(sort(collect(input_hashes); by=first)),
         "output_sha256" => output_hashes,
-        "formats" => [relpath(f, out_dir) for f in format_files],
+        "formats" => sort([relpath(f, out_dir) for f in format_files]),
         "graph_id" => graph_id,
         "graph_set" => graph_set,
+        "packet_dir" => basename(out_dir),
         "metadata" => metadata,
+        "bh_note" => "dinucleotide_bh_q is within-graph BH over bh_ks only; paper cross-genus FDR is a post-pass",
     )
-    open(joinpath(out_dir, "manifest.json"), "w") do io
+    open(manifest_path, "w") do io
         JSON.print(io, manifest, 2)
     end
-    ## refresh checksums to include manifest
-    open(joinpath(out_dir, "CHECKSUMS.sha256"), "a") do io
-        println(io, sha256_file(joinpath(out_dir, "manifest.json")), "  manifest.json")
+
+    ## CHECKSUMS: sorted by path, includes manifest.json, excludes itself.
+    checksum_entries = copy(artifact_entries)
+    push!(checksum_entries, ("manifest.json", sha256_file(manifest_path)))
+    sort!(checksum_entries; by=first)
+    open(joinpath(out_dir, "CHECKSUMS.sha256"), "w") do io
+        for (rel, h) in checksum_entries
+            println(io, h, "  ", rel)
+        end
     end
 
     return out_dir
