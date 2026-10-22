@@ -44,7 +44,7 @@ struct PathReroutingResult{T}
 end
 
 """
-    genomic_dijkstra(graph::AbstractGraph, 
+    genomic_dijkstra(graph::Graphs.AbstractGraph, 
                      source::Int, 
                      target::Int,
                      kmers::Vector{T},
@@ -58,7 +58,7 @@ This implementation is specifically optimized for genomic k-mer graphs with:
 - **Biological constraints**: Only considers valid k-mer transitions (k-1 overlaps)
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `source::Int`: Source k-mer index
 - `target::Int`: Target k-mer index  
 - `kmers::Vector{T}`: Vector of k-mers corresponding to graph vertices
@@ -97,7 +97,7 @@ optimal_sequence = reconstruct_sequence(result.path, 31)
 Based on genomic Dijkstra implementation from:
 `2022-01-21-dijkstra-point-to-point.ipynb`
 """
-function genomic_dijkstra(graph::AbstractGraph,
+function genomic_dijkstra(graph::Graphs.AbstractGraph,
         source::Int,
         target::Int,
         kmers::Vector{T},
@@ -202,7 +202,7 @@ function genomic_dijkstra(graph::AbstractGraph,
 end
 
 """
-    bidirectional_genomic_dijkstra(graph::AbstractGraph,
+    bidirectional_genomic_dijkstra(graph::Graphs.AbstractGraph,
                                    source::Int,
                                    target::Int, 
                                    kmers::Vector{T},
@@ -214,7 +214,7 @@ This algorithm simultaneously searches from source and target (reverse complemen
 meeting in the middle for significant performance improvements on long genomic paths.
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `source::Int`: Source k-mer index
 - `target::Int`: Target k-mer index
 - `kmers::Vector{T}`: Vector of k-mers corresponding to graph vertices  
@@ -248,7 +248,7 @@ speedup = uni_result.execution_time / result.execution_time
 Based on bidirectional genomic Dijkstra from:
 `2022-01-22-bidirectional-dijkstra-point-to-point.ipynb`
 """
-function bidirectional_genomic_dijkstra(graph::AbstractGraph,
+function bidirectional_genomic_dijkstra(graph::Graphs.AbstractGraph,
         source::Int,
         target::Int,
         kmers::Vector{T},
@@ -406,7 +406,7 @@ function bidirectional_genomic_dijkstra(graph::AbstractGraph,
 end
 
 """
-    dynamic_path_rerouting(graph::AbstractGraph,
+    dynamic_path_rerouting(graph::Graphs.AbstractGraph,
                           original_path::Vector{Int},
                           kmers::Vector{T},
                           kmer_coverage::Dict{T, Int};
@@ -419,7 +419,7 @@ This algorithm identifies problematic nodes (low coverage k-mers) in a path and
 finds alternative routes that avoid these regions while maintaining biological validity.
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `original_path::Vector{Int}`: Original path as vertex indices
 - `kmers::Vector{T}`: Vector of k-mers corresponding to vertices
 - `kmer_coverage::Dict{T, Int}`: Coverage counts for each k-mer
@@ -456,7 +456,7 @@ end
 Based on dynamic path rerouting from:
 `2021-12-22-rerouting.ipynb`
 """
-function dynamic_path_rerouting(graph::AbstractGraph,
+function dynamic_path_rerouting(graph::Graphs.AbstractGraph,
         original_path::Vector{Int},
         kmers::Vector{T},
         kmer_coverage::Dict{T, Int};
