@@ -71,6 +71,56 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test stats.shuffle_p_upper ≈ expected_p
     end
 
+    Test.@testset "resolve_gqc_input_dirs single vs graph-set" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        single = Mycelia.resolve_gqc_input_dirs(fixture)
+        Test.@test single.mode === :single_graph
+        Test.@test length(single.dirs) == 1
+        Test.@test single.dirs[1] == abspath(fixture)
+
+        set_root = mktempdir()
+        for (name, label) in (("graph_a", "set_a"), ("graph_b", "set_b"))
+            dest = joinpath(set_root, name)
+            mkpath(dest)
+            cp(joinpath(fixture, "graph.gfa"), joinpath(dest, "graph.gfa"))
+            meta = JSON.parsefile(joinpath(fixture, "metadata.json"))
+            meta["graph_id"] = name
+            meta["label"] = label
+            open(joinpath(dest, "metadata.json"), "w") do io
+                JSON.print(io, meta, 2)
+            end
+        end
+        ## decoy: non-graph child must be ignored
+        mkpath(joinpath(set_root, "notes"))
+        write(joinpath(set_root, "notes", "readme.txt"), "skip me")
+
+        resolved = Mycelia.resolve_gqc_input_dirs(set_root)
+        Test.@test resolved.mode === :graph_set
+        Test.@test length(resolved.dirs) == 2
+        Test.@test basename.(resolved.dirs) == ["graph_a", "graph_b"]
+
+        ## top-level graph.gfa wins over child folders
+        hybrid = mktempdir()
+        cp(joinpath(fixture, "graph.gfa"), joinpath(hybrid, "graph.gfa"))
+        cp(joinpath(fixture, "metadata.json"), joinpath(hybrid, "metadata.json"))
+        child = joinpath(hybrid, "nested")
+        mkpath(child)
+        cp(joinpath(fixture, "graph.gfa"), joinpath(child, "graph.gfa"))
+        hybrid_res = Mycelia.resolve_gqc_input_dirs(hybrid)
+        Test.@test hybrid_res.mode === :single_graph
+        Test.@test length(hybrid_res.dirs) == 1
+
+        empty_dir = mktempdir()
+        err = try
+            Mycelia.resolve_gqc_input_dirs(empty_dir)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("single-graph folder", sprint(showerror, err))
+    end
+
     Test.@testset "synthetic single-strand GFA packet" begin
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         out_root = mktempdir()
@@ -112,5 +162,45 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test length(g.segments) == 5
         Test.@test length(g.links) == 4
         Test.@test g.segments["1"].depth == 10.0
+    end
+
+    Test.@testset "graph-set folder runs all child graphs" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        set_root = mktempdir()
+        for (name, label) in (("graph_a", "set_a"), ("graph_b", "set_b"))
+            dest = joinpath(set_root, name)
+            mkpath(dest)
+            cp(joinpath(fixture, "graph.gfa"), joinpath(dest, "graph.gfa"))
+            meta = JSON.parsefile(joinpath(fixture, "metadata.json"))
+            meta["graph_id"] = name
+            meta["label"] = label
+            open(joinpath(dest, "metadata.json"), "w") do io
+                JSON.print(io, meta, 2)
+            end
+        end
+        out_root = mktempdir()
+        returned = Mycelia.run_gqc(set_root, out_root;
+            ks=[5],
+            n_shuffles=5,
+            shuffle_seed=20261021,
+            genus_index=10,
+            strand_mode=:single,
+            make_plots=false,
+            write_node_link_json=false,
+            null_kinds=(:dinucleotide,),
+        )
+        Test.@test returned == abspath(out_root)
+        packet_a = joinpath(out_root, "set_a")
+        packet_b = joinpath(out_root, "set_b")
+        Test.@test isfile(joinpath(packet_a, "manifest.json"))
+        Test.@test isfile(joinpath(packet_b, "manifest.json"))
+        Test.@test isfile(joinpath(packet_a, "summary.csv"))
+        Test.@test isfile(joinpath(packet_b, "summary.csv"))
+        man_a = JSON.parsefile(joinpath(packet_a, "manifest.json"))
+        man_b = JSON.parsefile(joinpath(packet_b, "manifest.json"))
+        Test.@test man_a["params"]["genus_index"] == 10
+        Test.@test man_b["params"]["genus_index"] == 11
+        Test.@test man_a["graph_id"] == "graph_a"
+        Test.@test man_b["graph_id"] == "graph_b"
     end
 end

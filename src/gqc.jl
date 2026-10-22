@@ -896,13 +896,53 @@ function _gqc_git_commit()
 end
 
 """
+    resolve_gqc_input_dirs(input_dir) -> NamedTuple{(:mode, :dirs), Tuple{Symbol, Vector{String}}}
+
+Classify `input_dir` for gqc:
+
+- **`:single_graph`**: `input_dir/graph.gfa` exists. Returns that one folder.
+- **`:graph_set`**: no top-level `graph.gfa`, but one or more *immediate* child
+  directories each contain `graph.gfa`. Returns those children (sorted by name).
+
+A top-level `graph.gfa` always wins (single-graph mode), even if child folders
+also look like graphs. Nested graph-sets deeper than one level are ignored.
+
+# Returns
+`(mode = :single_graph | :graph_set, dirs = Vector{String})` with absolute paths.
+"""
+function resolve_gqc_input_dirs(input_dir::AbstractString)
+    root = abspath(input_dir)
+    isdir(root) || error("gqc input_dir is not a directory: $root")
+    if isfile(joinpath(root, "graph.gfa"))
+        return (mode = :single_graph, dirs = String[root])
+    end
+    children = String[]
+    for name in sort(readdir(root))
+        child = joinpath(root, name)
+        isdir(child) || continue
+        if isfile(joinpath(child, "graph.gfa"))
+            push!(children, child)
+        end
+    end
+    isempty(children) && error(
+        "gqc input_dir must be a single-graph folder (contains graph.gfa) or a " *
+        "graph-set folder (immediate children each contain graph.gfa); got: $root"
+    )
+    return (mode = :graph_set, dirs = children)
+end
+
+"""
     run_gqc(input_dir, output_root; kwargs...) -> String
 
-Run gqc v0.1 on one graph folder and write a QC packet under
-`output_root/<graph_set>/`.
+Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
 
 # Arguments
-- `input_dir`: folder containing `graph.gfa`, `metadata.json`, optional `reference/*.fasta`
+- `input_dir`: either
+  - **single-graph folder** — contains `graph.gfa`, optional `metadata.json`,
+    optional `reference/*.fasta`; or
+  - **graph-set folder** — no top-level `graph.gfa`; each immediate child that
+    contains `graph.gfa` is processed as its own graph (see
+    `resolve_gqc_input_dirs`)
 - `output_root`: parent directory for packet output
 
 # Keyword arguments
@@ -910,7 +950,8 @@ Run gqc v0.1 on one graph folder and write a QC packet under
 - `n_shuffles`: dinucleotide/codon null replicates (default: `100`)
 - `shuffle_seed`: base RNG seed (default: `20261021`; per-graph RNG =
   `Xoshiro(shuffle_seed + 1000*salt + genus_index)`)
-- `salt`, `genus_index`: seeding offsets (paper formula)
+- `salt`, `genus_index`: seeding offsets (paper formula). In graph-set mode,
+  graph `i` (1-based, sorted child order) uses `genus_index + i - 1`.
 - `min_shuffle_mean`: minimum null mean for ratio (default: `1.0`)
 - `bh_ks`: k values included in BH correction (default: all `ks`)
 - `circular`, `canonical`: k-mer counting flags
@@ -920,7 +961,8 @@ Run gqc v0.1 on one graph folder and write a QC packet under
 - `null_kinds`: `(:dinucleotide, :codon)` by default
 
 # Returns
-Absolute path to the packet directory `output_root/<graph_set>/`.
+- Single-graph mode: absolute path to the packet directory `output_root/<graph_set>/`.
+- Graph-set mode: absolute path to `output_root` (each child packet is under it).
 """
 function run_gqc(input_dir::AbstractString,
                  output_root::AbstractString;
@@ -938,6 +980,52 @@ function run_gqc(input_dir::AbstractString,
                  make_plots::Bool=true,
                  null_kinds::Tuple=(:dinucleotide, :codon),
                  gqc_version::String=GQC_VERSION)::String
+
+    resolved = resolve_gqc_input_dirs(input_dir)
+    output_root = abspath(output_root)
+    mkpath(output_root)
+    packets = String[]
+    for (i, graph_dir) in enumerate(resolved.dirs)
+        packet = _run_gqc_one(graph_dir, output_root;
+            ks=ks,
+            n_shuffles=n_shuffles,
+            shuffle_seed=shuffle_seed,
+            salt=salt,
+            genus_index=genus_index + i - 1,
+            min_shuffle_mean=min_shuffle_mean,
+            bh_ks=bh_ks,
+            circular=circular,
+            canonical=canonical,
+            strand_mode=strand_mode,
+            write_node_link_json=write_node_link_json,
+            make_plots=make_plots,
+            null_kinds=null_kinds,
+            gqc_version=gqc_version,
+        )
+        push!(packets, packet)
+    end
+    if resolved.mode === :single_graph
+        return only(packets)
+    end
+    return output_root
+end
+
+function _run_gqc_one(input_dir::AbstractString,
+                      output_root::AbstractString;
+                      ks::AbstractVector{<:Integer}=Int[],
+                      n_shuffles::Int=GQC_N_SHUFFLES,
+                      shuffle_seed::Int=GQC_SHUFFLE_SEED,
+                      salt::Int=0,
+                      genus_index::Int=1,
+                      min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
+                      bh_ks::Union{Nothing, AbstractVector{<:Integer}}=nothing,
+                      circular::Union{Nothing, Bool}=nothing,
+                      canonical::Bool=true,
+                      strand_mode::Symbol=:single,
+                      write_node_link_json::Bool=true,
+                      make_plots::Bool=true,
+                      null_kinds::Tuple=(:dinucleotide, :codon),
+                      gqc_version::String=GQC_VERSION)::String
 
     input_dir = abspath(input_dir)
     output_root = abspath(output_root)
