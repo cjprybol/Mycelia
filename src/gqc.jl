@@ -509,7 +509,8 @@ and from the original (paper `checked_shuffles` contract).
 """
 function gqc_checked_dinucleotide_shuffles(sequences::Vector{String},
                                            rng::Random.AbstractRNG;
-                                           n_shuffles::Int=GQC_N_SHUFFLES)
+                                           n_shuffles::Int=GQC_N_SHUFFLES,
+                                           max_attempts_per_seq::Int=1000)
     function dinuc_counts(s::String)
         c = Dict{String, Int}()
         for i in 1:(length(s) - 1)
@@ -518,24 +519,46 @@ function gqc_checked_dinucleotide_shuffles(sequences::Vector{String},
         end
         return c
     end
+    ## Homopolymers / length≤2 have no distinct Altschul–Erickson shuffle.
+    function shuffleable(seq::String)
+        length(seq) > 2 && length(unique(seq)) > 1
+    end
     results = Vector{Vector{String}}(undef, n_shuffles)
     for t in 1:n_shuffles
         shuffled_segs = String[]
         for seq in sequences
-            s = dinucleotide_shuffle(seq, rng)
-            if length(seq) >= 2
-                dinuc_counts(s) == dinuc_counts(seq) || error("dinucleotide counts not preserved")
-                s[1] == seq[1] || error("first base not preserved")
-                s[end] == seq[end] || error("last base not preserved")
+            s = seq
+            if shuffleable(seq)
+                found = false
+                for _ in 1:max_attempts_per_seq
+                    candidate = dinucleotide_shuffle(seq, rng)
+                    dinuc_counts(candidate) == dinuc_counts(seq) || error("dinucleotide counts not preserved")
+                    candidate[1] == seq[1] || error("first base not preserved")
+                    candidate[end] == seq[end] || error("last base not preserved")
+                    if candidate != seq
+                        s = candidate
+                        found = true
+                        break
+                    end
+                end
+                found || error("could not produce a dinucleotide shuffle distinct from original")
+            else
+                s = dinucleotide_shuffle(seq, rng)
+                if length(seq) >= 2
+                    dinuc_counts(s) == dinuc_counts(seq) || error("dinucleotide counts not preserved")
+                    s[1] == seq[1] || error("first base not preserved")
+                    s[end] == seq[end] || error("last base not preserved")
+                end
             end
-            s == seq && length(seq) > 2 && error("shuffle identical to original")
             push!(shuffled_segs, s)
         end
         results[t] = shuffled_segs
     end
-    ## all shuffle copies distinct as genome concatenations
-    joined = [join(segs, '|') for segs in results]
-    length(unique(joined)) == n_shuffles || error("duplicate shuffles detected")
+    ## Prefer distinct genome concatenations when at least one segment is shuffleable
+    if any(shuffleable, sequences)
+        joined = [join(segs, '|') for segs in results]
+        length(unique(joined)) == n_shuffles || error("duplicate shuffles detected")
+    end
     return results
 end
 

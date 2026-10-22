@@ -7,7 +7,7 @@ import SHA
 Test.@testset "gqc v0.1 helpers and packet" begin
 
     Test.@testset "dinucleotide_shuffle preserves dinucs and ends" begin
-        seq = "ACGTACGTACGTACGTACGTACGTACGTAA"
+        seq = "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA"
         rng = Random.Xoshiro(20261021)
         shuffled = Mycelia.dinucleotide_shuffle(seq, rng)
         Test.@test length(shuffled) == length(seq)
@@ -52,7 +52,7 @@ Test.@testset "gqc v0.1 helpers and packet" begin
     end
 
     Test.@testset "repeat null formulas" begin
-        seqs = ["ACGTACGTACGTACGTACGTACGTACGTAA"]
+        seqs = ["ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA"]
         stats = Mycelia.gqc_repeat_null_stats(seqs;
             k=5,
             n_shuffles=20,
