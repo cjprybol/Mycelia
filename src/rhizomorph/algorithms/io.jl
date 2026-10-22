@@ -155,7 +155,8 @@ derived from sequence overlap.
 Intended for graphs produced by `convert_to_canonical` (for example via
 `build_kmer_graph_canonical` or `build_qualmer_graph_canonical`). In such a
 graph each vertex is the lexicographically smaller of a k-mer and its reverse
-complement, and edges are undirected and carry no strand fields, so
+complement, and edges are undirected and carry no per-endpoint
+`src_strand`/`dst_strand` fields, so
 `write_gfa_next` writes every link as `+ +`. That is only correct when both
 k-mers were observed in their canonical orientation; an adjacency such as
 `A -> reverse_complement(B)` must instead be written `L A + B - (k-1)M`.
@@ -172,8 +173,11 @@ link as `L v - u -`. Self-loops (`u == v`) are handled the same way, e.g. a
 k-mer whose `(k-1)`-suffix equals the `(k-1)`-prefix of its own reverse
 complement yields `L u + u -`.
 
-Orientation is derived from sequence rather than from edge evidence strand
-flags, so it is correct regardless of how evidence was recorded.
+Orientation is derived from the k-mer sequences, not from edge evidence.
+`convert_to_canonical` records one strand bit per edge observation, which
+cannot distinguish `+ -`, `- +` and `- -` junctions. Every emitted link is
+therefore a valid overlap, but not necessarily an observed one (see Known
+limitation).
 
 # Segment lines
 S lines are identical to those written by `write_gfa_next` with the same
@@ -187,7 +191,12 @@ differ only in orientation into a single undirected edge. The links written
 here therefore reflect every valid `(k-1)` overlap between adjacent canonical
 k-mers, not the multiplicity or the specific orientations that were observed.
 An edge between two canonical k-mers can, in principle, yield a link for an
-orientation combination that no read traversed.
+orientation combination that no read traversed. This happens only when more
+than one combination is valid for the same edge: a palindromic k-mer at even
+k (whose `+` and `-` spell the same sequence, so the links are equivalent
+walks) or a short tandem repeat such as `ACACA -- CACAC` (where both `u -> v`
+and `v -> u` are valid). Neither case arises for non-repetitive sequence at
+typical assembly k.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Undirected graph with nucleotide k-mer labels

@@ -15,6 +15,7 @@ import MetaGraphsNext
 import BioSequences
 import FASTX
 import Kmers
+import Graphs
 
 Test.@testset "write_gfa_canonical link orientation" begin
     function parse_gfa(path)
@@ -48,6 +49,17 @@ Test.@testset "write_gfa_canonical link orientation" begin
     end
 
     flip(c::Char) = c == '+' ? '-' : '+'
+
+    # Return the exception thrown by `f`, or `nothing`, so tests can check the
+    # message as well as the type.
+    function thrown(f)
+        try
+            f()
+        catch e
+            return e
+        end
+        return nothing
+    end
 
     # GFA-equivalence-aware membership: (a, oa, b, ob) == (b, !ob, a, !oa).
     function has_link(links, a, a_or, b, b_or)
@@ -107,10 +119,17 @@ Test.@testset "write_gfa_canonical link orientation" begin
             Test.@test any(l -> l[2] != l[4], links)
 
             # No GFA-equivalent duplicates.
-            keys = map(links) do (a, a_or, b, b_or, _)
+            link_keys = map(links) do (a, a_or, b, b_or, _)
                 min((a, a_or, b, b_or), (b, flip(b_or), a, flip(a_or)))
             end
-            Test.@test length(unique(keys)) == length(keys)
+            Test.@test length(unique(link_keys)) == length(link_keys)
+
+            # Pin the exact output, including which member of each GFA-equivalent
+            # pair is written (more `+` first, then lower segment index).
+            Test.@test links == [
+                ("1", '+', "2", '+', 4), ("2", '+', "3", '+', 4),
+                ("3", '+', "4", '-', 4), ("5", '+', "4", '+', 4),
+                ("6", '+', "5", '+', 4), ("6", '-', "7", '+', 4)]
 
             # S lines match write_gfa_next exactly, so segment IDs join.
             legacy = joinpath(dir, "legacy.gfa")
@@ -168,21 +187,73 @@ Test.@testset "write_gfa_canonical link orientation" begin
             Test.@test length(ss_links) == length("ACCCAGGTTGA") - k
             Test.@test all(l -> l[2] == '+' && l[4] == '+', ss_links)
             Test.@test all(link -> link_is_spelled(ss_segments, link), ss_links)
-            Test.@test_throws ArgumentError Mycelia.Rhizomorph.write_gfa_canonical(
-                ss_graph, joinpath(dir, "rejected.gfa"))
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(
+                ss_graph, joinpath(dir, "rejected.gfa")))
+            Test.@test err isa ArgumentError
+            Test.@test occursin("expects an undirected canonical graph",
+                sprint(showerror, err))
         end
     end
 
     Test.@testset "argument validation" begin
         graph = canonical_graph("ACCCAGGTTGA", 5)
         mktempdir() do dir
-            Test.@test_throws ArgumentError Mycelia.Rhizomorph.write_gfa_canonical(
-                graph, joinpath(dir, "x.gfa"); segment_naming = :bogus)
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(
+                graph, joinpath(dir, "x.gfa"); segment_naming = :bogus))
+            Test.@test err isa ArgumentError
+            Test.@test occursin("segment_naming must be", sprint(showerror, err))
             gfa = joinpath(dir, "named.gfa")
             Mycelia.Rhizomorph.write_gfa_canonical(graph, gfa; segment_naming = :sequence)
             _, segments, links = parse_gfa(gfa)
             Test.@test all(((id, seq),) -> id == seq, segments)
             Test.@test all(link -> link_is_spelled(segments, link), links)
+        end
+    end
+
+    Test.@testset "palindromic k-mer at even k" begin
+        # k = 4: ACATG has k-mers ACAT and CATG; CATG is its own reverse
+        # complement, so `ACAT + CATG +` and `ACAT + CATG -` are both spelled
+        # and both written for the single canonical edge.
+        k = 4
+        graph = canonical_graph("ACATG", k)
+        mktempdir() do dir
+            gfa = joinpath(dir, "palindrome.gfa")
+            Mycelia.Rhizomorph.write_gfa_canonical(graph, gfa)
+            _, segments, links = parse_gfa(gfa)
+            acat = segment_id_of(graph, Kmers.DNAKmer{k}("ACAT"))
+            catg = segment_id_of(graph, Kmers.DNAKmer{k}("CATG"))
+            Test.@test length(links) == 2
+            Test.@test has_link(links, acat, '+', catg, '+')
+            Test.@test has_link(links, acat, '+', catg, '-')
+            Test.@test all(link -> link_is_spelled(segments, link), links)
+        end
+    end
+
+    Test.@testset "input contract on hand-built graphs" begin
+        mktempdir() do dir
+            # An edge with no (k-1) overlap cannot come from the canonical
+            # builders, but the public signature accepts it; it must raise
+            # rather than be dropped silently.
+            g = MetaGraphsNext.MetaGraph(Graphs.Graph();
+                label_type = Kmers.DNAKmer{5}, vertex_data_type = Nothing,
+                edge_data_type = Nothing)
+            g[Kmers.DNAKmer{5}("AAAAA")] = nothing
+            g[Kmers.DNAKmer{5}("CCGCC")] = nothing
+            g[Kmers.DNAKmer{5}("AAAAA"), Kmers.DNAKmer{5}("CCGCC")] = nothing
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(
+                g, joinpath(dir, "no_overlap.gfa")))
+            Test.@test err isa ErrorException
+            Test.@test occursin("no valid 4-base overlap", sprint(showerror, err))
+
+            h = MetaGraphsNext.MetaGraph(Graphs.Graph();
+                label_type = String, vertex_data_type = Nothing,
+                edge_data_type = Nothing)
+            h["ACGTA"] = nothing
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(
+                h, joinpath(dir, "string_labels.gfa")))
+            Test.@test err isa ArgumentError
+            Test.@test occursin("requires nucleotide k-mer labels",
+                sprint(showerror, err))
         end
     end
 end
