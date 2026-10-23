@@ -5,9 +5,8 @@ on:
     branches:
       - master
     tags: '*'
+  # Any base branch (including stacked PR bases like cursor/gqc-v0.1), not only master.
   pull_request:
-    branches:
-      - master
 
 # Cancel superseded runs on a PR branch when a newer commit is pushed; never
 # cancel a master run (post-merge CI must always complete).
