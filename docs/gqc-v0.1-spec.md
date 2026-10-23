@@ -48,6 +48,24 @@ Reference loader accepts `.fa`, `.fas`, `.fna`, `.ffn`, `.fasta`, optional `.gz`
 one sequence per FASTA record (no chimeric joins). Bytes before the first `>`
 are ignored. Load count is logged and stored under `manifest.reference_load`.
 
+## Length metrics (overlap-corrected)
+
+Unitig and assembly spans subtract link overlaps along each path:
+
+`span = sum(segment lengths) − sum(L-line overlaps on consecutive edges)`.
+
+- Overlap from the GFA `L` CIGAR when present (leading integer, e.g. `10M` → 10).
+- Else, on uniform-length (k-mer-node) graphs, default overlap is `L − 1`.
+
+| Field | Meaning |
+|-------|---------|
+| `total_bp` | Sum of overlap-corrected unitig spans |
+| `total_segment_bp` | Raw sum of segment lengths (no overlap correction) |
+| `unitig_n50` / `unitig_l50` / `unitig_max` | From overlap-corrected unitig lengths |
+
+A path of `k`-mers that spells an `n`-bp sequence has unitig length `n`
+(not `k × n_nodes`).
+
 ## Outputs
 
 Packet directory: `output_root/<graph_id_slug>/` (slug refuses absolute/`..` ids).
@@ -71,7 +89,8 @@ Graph-set failures append `output_root/gqc_graph_set_errors.jsonl` and continue.
 ## `summary.csv` columns
 
 Frozen order: `Mycelia.GQC_SUMMARY_COLUMNS` (includes `null_source`,
-`null_applicable`, dinucleotide/codon null fields, BH q, coverage, concordance).
+`null_applicable`, dinucleotide/codon null fields, within-graph BH q, coverage,
+concordance, `total_segment_bp`).
 
 Missing values: empty CSV field / JSON `null`.
 
@@ -81,12 +100,20 @@ Missing values: empty CSV field / JSON `null`.
 |-----------|--------|
 | `null_applicable=false` | observed / mean / p / q → missing; degenerate → false |
 | Degenerate shuffle | `*_null_degenerate=true`; p still conservative Monte Carlo |
-| BH k not in `bh_ks` | `dinucleotide_bh_q` missing |
+| BH k not in `bh_ks` | `dinucleotide_bh_q_within_graph` missing |
 
-### Q-value scope
+### Q-value scope (important)
 
-`dinucleotide_bh_q` is **within-graph** Benjamini–Hochberg over `bh_ks` only.
-Paper cross-genus FDR is a post-pass outside `run_gqc`.
+`dinucleotide_bh_q_within_graph` is Benjamini–Hochberg over `bh_ks` **inside one
+graph only**. With the default `bh_ks=[11]` it equals that graph’s k=11 p-value.
+
+**Cross-genus / cross-graph FDR is the caller’s job.** Use:
+
+```julia
+Mycelia.gqc_cross_bh(["pkt_a/summary.json", "pkt_b/summary.json"]; k=11)
+```
+
+which returns `(graph_id, k, p, q)` rows with BH across those graphs.
 
 ## Concordance limitation (I6)
 

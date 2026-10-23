@@ -286,13 +286,13 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         rows = JSON.parsefile(joinpath(packet, "summary.json"))
         by_k = Dict(Int(r["k"]) => r for r in rows)
         ## JSON encodes missing as null → nothing
-        Test.@test by_k[5]["dinucleotide_bh_q"] === nothing
-        Test.@test by_k[21]["dinucleotide_bh_q"] === nothing
-        Test.@test by_k[11]["dinucleotide_bh_q"] isa Real
-        Test.@test by_k[11]["dinucleotide_bh_q"] ≈ by_k[11]["dinucleotide_shuffle_p_upper"]
+        Test.@test by_k[5]["dinucleotide_bh_q_within_graph"] === nothing
+        Test.@test by_k[21]["dinucleotide_bh_q_within_graph"] === nothing
+        Test.@test by_k[11]["dinucleotide_bh_q_within_graph"] isa Real
+        Test.@test by_k[11]["dinucleotide_bh_q_within_graph"] ≈ by_k[11]["dinucleotide_shuffle_p_upper"]
         man = JSON.parsefile(joinpath(packet, "manifest.json"))
         Test.@test man["params"]["bh_ks"] == [11]
-        Test.@test occursin("within-graph", man["bh_note"])
+        Test.@test occursin("within-graph", man["bh_note"]) || occursin("gqc_cross_bh", man["bh_note"])
     end
 
     Test.@testset "graph-set folder runs all child graphs" begin
@@ -500,13 +500,66 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             Test.@test row["null_applicable"] == false
             Test.@test row["null_source"] == "segments"
             Test.@test row["dinucleotide_shuffle_p_upper"] === nothing
-            Test.@test row["dinucleotide_bh_q"] === nothing
+            Test.@test row["dinucleotide_bh_q_within_graph"] === nothing
         end
         man = JSON.parsefile(joinpath(packet, "manifest.json"))
         Test.@test man["params"]["null_applicable"] == false
         Test.@test occursin("kmer_node", man["params"]["null_source_reason"]) ||
                    occursin("auto_fallback", man["params"]["null_source_reason"])
         Test.@test man["params"]["ks"] == [5, 11, 21]
+    end
+
+    Test.@testset "overlap-corrected unitig length spells genome" begin
+        k = 5
+        ref = "ATGCGATCGATCGTTACCGGATCCATG"  ## n=27 → 23 kmers
+        n = length(ref)
+        kmers = String[ref[i:(i + k - 1)] for i in 1:(n - k + 1)]
+        root = mktempdir()
+        open(joinpath(root, "graph.gfa"), "w") do io
+            println(io, "H\tVN:Z:1.0")
+            for (i, km) in enumerate(kmers)
+                println(io, "S\t", i, '\t', km, "\tLN:i:", k)
+            end
+            for i in 1:(length(kmers) - 1)
+                println(io, "L\t", i, "\t+\t", i + 1, "\t+\t", k - 1, "M")
+            end
+        end
+        open(joinpath(root, "metadata.json"), "w") do io
+            JSON.print(io, Dict("graph_id" => "path_k5", "label" => "path", "k" => k), 2)
+        end
+        packet = Mycelia.run_gqc(root, mktempdir();
+            ks=[k], n_shuffles=5, strand_mode=:single, null_source=:segments,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+        row = only(JSON.parsefile(joinpath(packet, "summary.json")))
+        Test.@test row["total_segment_bp"] == length(kmers) * k
+        Test.@test row["total_bp"] == n
+        Test.@test row["unitig_n50"] == n
+        Test.@test row["unitig_max"] == n
+        Test.@test row["n_unitigs"] == 1
+    end
+
+    Test.@testset "gqc_cross_bh across graphs" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        paths = String[]
+        for (i, gid) in enumerate(("xa", "xb"))
+            tmp = mktempdir()
+            cp(joinpath(fixture, "graph.gfa"), joinpath(tmp, "graph.gfa"))
+            open(joinpath(tmp, "metadata.json"), "w") do io
+                JSON.print(io, Dict("graph_id" => gid, "label" => gid, "k" => 5), 2)
+            end
+            pkt = Mycelia.run_gqc(tmp, mktempdir();
+                ks=[5, 11], bh_ks=[11], n_shuffles=10, strand_mode=:single,
+                make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+            push!(paths, joinpath(pkt, "summary.json"))
+        end
+        cross = Mycelia.gqc_cross_bh(paths; k=11)
+        Test.@test length(cross) == 2
+        Test.@test all(r.k == 11 for r in cross)
+        ## Within each packet q==p; across graphs q can differ when m>1
+        ps = sort([r.p for r in cross])
+        qs = sort([r.q for r in cross])
+        Test.@test length(ps) == 2
+        Test.@test all(q >= p - 1e-12 for (p, q) in zip(ps, qs)) || issorted(qs)
     end
 
     Test.@testset "I1 reference bytes in input_sha256" begin

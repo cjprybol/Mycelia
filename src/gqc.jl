@@ -9,7 +9,8 @@ const GQC_MIN_SHUFFLE_MEAN = 1.0
 const GQC_DEFAULT_BH_KS = [11]
 ## Frozen summary.csv column order (every field always emitted).
 const GQC_SUMMARY_COLUMNS = (
-    "graph_id", "k", "n_segments", "n_links", "total_bp", "density",
+    "graph_id", "k", "n_segments", "n_links",
+    "total_bp", "total_segment_bp", "density",
     "n_components", "largest_component_fraction", "beta0", "beta1",
     "n_tips", "n_linear", "n_branch", "n_isolated", "n_sources", "n_sinks",
     "n_unitigs", "unitig_n50", "unitig_l50", "unitig_max",
@@ -18,7 +19,7 @@ const GQC_SUMMARY_COLUMNS = (
     "ref_kmer_fraction", "ref_path_fraction", "ref_absent_kmers", "ref_breaks", "ref_walkability",
     "dinucleotide_observed_repeats", "dinucleotide_null_mean", "dinucleotide_null_std",
     "dinucleotide_shuffle_ratio", "dinucleotide_z_score", "dinucleotide_shuffle_p_upper",
-    "dinucleotide_null_degenerate", "dinucleotide_bh_q",
+    "dinucleotide_null_degenerate", "dinucleotide_bh_q_within_graph",
     "codon_observed_repeats", "codon_null_mean", "codon_null_std",
     "codon_shuffle_ratio", "codon_z_score", "codon_shuffle_p_upper",
     "codon_null_degenerate",
@@ -117,6 +118,44 @@ function benjamini_hochberg(p::Vector{Float64})::Vector{Float64}
         q[i] = running
     end
     return q
+end
+
+"""
+    gqc_cross_bh(summary_paths; k=11, p_key="dinucleotide_shuffle_p_upper")
+
+Cross-genus (cross-graph) Benjamini–Hochberg on per-graph p-values at a single `k`.
+
+# Arguments
+- `summary_paths`: iterable of `summary.json` paths (one packet each)
+
+# Returns
+`Vector` of `NamedTuple`s `(graph_id, k, p, q)` sorted by ascending `p`.
+Packet column `dinucleotide_bh_q_within_graph` is **not** this — callers must
+run this (or equivalent) for paper-style FDR across genera.
+"""
+function gqc_cross_bh(summary_paths;
+                      k::Int=11,
+                      p_key::AbstractString="dinucleotide_shuffle_p_upper")
+    rows = NamedTuple{(:graph_id, :k, :p, :q), Tuple{String, Int, Float64, Float64}}[]
+    collected = Tuple{String, Float64}[]
+    for path in summary_paths
+        data = JSON.parsefile(string(path))
+        for row in data
+            Int(row["k"]) == k || continue
+            p = row[p_key]
+            p === nothing && continue
+            push!(collected, (string(row["graph_id"]), Float64(p)))
+        end
+    end
+    isempty(collected) && return rows
+    ps = Float64[p for (_, p) in collected]
+    qs = benjamini_hochberg(ps)
+    order = sortperm(ps)
+    for i in order
+        gid, p = collected[i]
+        push!(rows, (graph_id=gid, k=k, p=p, q=qs[i]))
+    end
+    return rows
 end
 
 """
@@ -388,36 +427,93 @@ function _gqc_tangle_count(adj::Vector{Vector{Int}}; degree_threshold::Int=4)
 end
 
 """
-Compact non-branching paths (undirected deg==2 chains) into unitigs.
-Returns vector of unitig lengths in bp (sum of segment lengths along the path).
+Parse a GFA L-line overlap CIGAR (e.g. `30M`, `30`) to an integer bp overlap.
 """
-function _gqc_unitig_lengths(g::GFAGraph, ids::Vector{String}, adj::Vector{Vector{Int}})
+function _gqc_parse_overlap(overlap::AbstractString; default::Int=0)::Int
+    m = match(r"^(\d+)", string(overlap))
+    m === nothing && return default
+    return parse(Int, m.captures[1])
+end
+
+"""
+Undirected (min,max) segment-id → overlap bp lookup from GFA L lines.
+"""
+function _gqc_overlap_lookup(g::GFAGraph; default_overlap::Int=0)
+    lookup = Dict{Tuple{String, String}, Int}()
+    for link in g.links
+        a, b = minmax(link.from, link.to)
+        ov = _gqc_parse_overlap(link.overlap; default=default_overlap)
+        lookup[(a, b)] = max(get(lookup, (a, b), 0), ov)
+    end
+    return lookup
+end
+
+"""
+Span length of a segment path: `sum(seg_len) - sum(overlap on consecutive links)`.
+"""
+function _gqc_path_span_bp(g::GFAGraph,
+                           ids::Vector{String},
+                           path::Vector{Int},
+                           overlap_lookup::Dict{Tuple{String, String}, Int};
+                           default_overlap::Int=0)::Int
+    isempty(path) && return 0
+    total = g.segments[ids[path[1]]].length
+    for i in 2:length(path)
+        u = ids[path[i - 1]]
+        v = ids[path[i]]
+        ov = get(overlap_lookup, minmax(u, v), default_overlap)
+        total += g.segments[ids[path[i]]].length - ov
+    end
+    return max(total, 0)
+end
+
+"""
+Default overlap for missing L-line CIGARs: `L-1` on uniform-length (k-mer-node)
+graphs, otherwise `0`.
+"""
+function _gqc_default_overlap(seg_seqs::Vector{String})::Int
+    isempty(seg_seqs) && return 0
+    lens = length.(seg_seqs)
+    all(==(first(lens)), lens) || return 0
+    L = first(lens)
+    return L > 1 ? L - 1 : 0
+end
+
+"""
+Compact non-branching paths (undirected deg==2 chains) into unitigs.
+
+Returns overlap-corrected unitig lengths in bp:
+`sum(segment lengths) - sum(link overlaps along the path)`.
+Missing overlaps use `default_overlap` (typically `k-1` for k-mer-node graphs).
+"""
+function _gqc_unitig_lengths(g::GFAGraph, ids::Vector{String}, adj::Vector{Vector{Int}};
+                             default_overlap::Int=0,
+                             overlap_lookup::Union{Nothing, Dict{Tuple{String, String}, Int}}=nothing)
+    lookup = overlap_lookup === nothing ? _gqc_overlap_lookup(g; default_overlap=default_overlap) : overlap_lookup
     n = length(ids)
     deg = _gqc_degrees(adj)
     visited = falses(n)
     lengths = Int[]
+    function finish!(path::Vector{Int})
+        push!(lengths, _gqc_path_span_bp(g, ids, path, lookup; default_overlap=default_overlap))
+        return nothing
+    end
     for start in 1:n
         visited[start] && continue
         ## start unitig at tips or branch points, or any unvisited isolated/linear
         if deg[start] == 2
-            ## only start at an endpoint of a linear run if neighbor not both unvisited later
             continue
         end
         path = Int[start]
         visited[start] = true
-        ## extend through each neighbor direction that is linear
         for nbr0 in adj[start]
-            if visited[nbr0]
-                continue
-            end
+            visited[nbr0] && continue
             prev = start
             cur = nbr0
             while true
                 push!(path, cur)
                 visited[cur] = true
-                if deg[cur] != 2
-                    break
-                end
+                deg[cur] != 2 && break
                 nexts = [v for v in adj[cur] if v != prev]
                 isempty(nexts) && break
                 prev = cur
@@ -425,7 +521,7 @@ function _gqc_unitig_lengths(g::GFAGraph, ids::Vector{String}, adj::Vector{Vecto
                 visited[cur] && break
             end
         end
-        push!(lengths, sum(g.segments[ids[i]].length for i in path))
+        finish!(path)
     end
     ## remaining pure cycles / unvisited linear components
     for start in 1:n
@@ -443,7 +539,7 @@ function _gqc_unitig_lengths(g::GFAGraph, ids::Vector{String}, adj::Vector{Vecto
             visited[cur] = true
             deg[cur] != 2 && break
         end
-        push!(lengths, sum(g.segments[ids[i]].length for i in path))
+        finish!(path)
     end
     return lengths
 end
@@ -1354,8 +1450,9 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
   graph `i` (1-based, sorted child order) uses `genus_index + i - 1`.
 - `min_shuffle_mean`: gates both `shuffle_ratio` and `z_score` (default: `1.0`)
 - `bh_ks`: k values included in **within-graph** BH on dinucleotide `p_upper`
-  (default: `[11]`). Packet `dinucleotide_bh_q` is **not** the paper's
-  cross-genus FDR — that is a post-pass over genera outside `run_gqc`.
+  (default: `[11]`). Packet `dinucleotide_bh_q_within_graph` is **not** the
+  paper's cross-genus FDR — use `Mycelia.gqc_cross_bh` (or equivalent) outside
+  `run_gqc`.
 - `circular`: k-mer circularity (default: `metadata["circular"]` or `false`)
 - `canonical`: `nothing` (default) → derived from `strand_mode`; explicit `true`/`false`
   is honored (including under `:single`)
@@ -1489,13 +1586,21 @@ function _run_gqc_one(input_dir::AbstractString,
     indeg, outdeg, sources, sinks = _gqc_directed_degrees(g)
     bubbles = _gqc_simple_bubbles(adj)
     tangles = _gqc_tangle_count(adj)
-    unitig_lengths = _gqc_unitig_lengths(g, ids, adj)
+    seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
+                for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
+    default_ov = _gqc_default_overlap(seg_seqs)
+    overlap_lookup = _gqc_overlap_lookup(g; default_overlap=default_ov)
+    unitig_lengths = _gqc_unitig_lengths(g, ids, adj;
+                                         default_overlap=default_ov,
+                                         overlap_lookup=overlap_lookup)
     n50stats = _gqc_n50_l50(unitig_lengths)
     cov_q = _gqc_coverage_quantiles(g)
     coverages = Float64[s.depth for s in values(g.segments) if s.depth !== nothing]
     n_seg = length(g.segments)
     n_link = length(g.links)
-    total_bp = sum(s.length for s in values(g.segments); init=0)
+    total_segment_bp = sum(s.length for s in values(g.segments); init=0)
+    ## Overlap-corrected assembly span (sum of unitig spans).
+    total_bp = isempty(unitig_lengths) ? total_segment_bp : sum(unitig_lengths)
     density = n_seg > 1 ? (2 * n_link) / (n_seg * (n_seg - 1)) : 0.0
     largest_frac = n_seg > 0 ? maximum(length(c) for c in comps) / n_seg : 0.0
     ## Betti numbers on undirected simple graph: β0 = components, β1 = e - v + c (cyclomatic)
@@ -1506,8 +1611,6 @@ function _run_gqc_one(input_dir::AbstractString,
     ref_dir = joinpath(input_dir, "reference")
     ref_load = _gqc_load_reference_sequences(ref_dir)
     ref_seqs = ref_load.sequences
-    seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
-                for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
     overlaps = _gqc_link_overlaps(g)
     resolved_null_source, null_seqs, null_applicable, null_reason =
         _gqc_resolve_null_sequences(null_source, ref_load, seg_seqs;
@@ -1578,6 +1681,7 @@ function _run_gqc_one(input_dir::AbstractString,
             "n_segments" => n_seg,
             "n_links" => n_link,
             "total_bp" => total_bp,
+            "total_segment_bp" => total_segment_bp,
             "density" => density,
             "n_components" => beta0,
             "largest_component_fraction" => largest_frac,
@@ -1607,7 +1711,7 @@ function _run_gqc_one(input_dir::AbstractString,
             "dinucleotide_z_score" => missing,
             "dinucleotide_shuffle_p_upper" => missing,
             "dinucleotide_null_degenerate" => false,
-            "dinucleotide_bh_q" => missing,
+            "dinucleotide_bh_q_within_graph" => missing,
             "codon_observed_repeats" => missing,
             "codon_null_mean" => missing,
             "codon_null_std" => missing,
@@ -1696,7 +1800,7 @@ function _run_gqc_one(input_dir::AbstractString,
         qvals = benjamini_hochberg(null_p_dinuc)
         qmap = Dict(null_k_order[i] => qvals[i] for i in eachindex(null_k_order))
         for row in summary_rows
-            row["dinucleotide_bh_q"] = get(qmap, row["k"], missing)
+            row["dinucleotide_bh_q_within_graph"] = get(qmap, row["k"], missing)
         end
     end
 
@@ -1742,15 +1846,15 @@ function _run_gqc_one(input_dir::AbstractString,
     open(joinpath(out_dir, "report.md"), "w") do io
         println(io, "# gqc v$(gqc_version) report — $(graph_id)")
         println(io)
-        println(io, "- segments: **$(n_seg)**; links: **$(n_link)**; bp: **$(total_bp)**")
+        println(io, "- segments: **$(n_seg)**; links: **$(n_link)**; total_bp (overlap-corrected): **$(total_bp)**; total_segment_bp (raw): **$(total_segment_bp)**")
         println(io, "- components (β0): **$(beta0)**; β1: **$(beta1)**; largest fraction: **$(round(largest_frac; digits=3))**")
         println(io, "- tips: **$(length(roles.tips))**; bubbles: **$(bubbles)**; tangles: **$(tangles)**")
-        println(io, "- unitigs: **$(length(unitig_lengths))**; N50: **$(n50stats.n50)**; L50: **$(n50stats.l50)**")
+        println(io, "- unitigs: **$(length(unitig_lengths))**; N50: **$(n50stats.n50)**; L50: **$(n50stats.l50)** (overlap-corrected spans)")
         println(io, "- strand_mode: `$(resolved_strand)` → effective canonical=$(effective_canonical)")
         println(io, "- null_source: `$(resolved_null_source)` (requested `$(null_source)`); applicable=$(null_applicable); reason=$(null_reason)")
         println(io, "- reference records loaded: **$(ref_load.n_records)** from $(length(ref_load.files_matched)) file(s)")
-        println(io, "- bh_ks (within-graph only): ", join(bh_list, ", "),
-                " — packet q-values are **not** the paper cross-genus FDR")
+        println(io, "- `dinucleotide_bh_q_within_graph` uses bh_ks=[", join(bh_list, ", "),
+                "] **inside this graph only** — cross-genus BH is the caller's job (`Mycelia.gqc_cross_bh`)")
         println(io, "- k sweep: ", join(k_list, ", "))
         println(io)
         println(io, "See `summary.csv`, `formats/`, and `plots/` for details.")
@@ -1820,7 +1924,8 @@ function _run_gqc_one(input_dir::AbstractString,
             "files_matched" => [basename(f) for f in ref_load.files_matched],
             "note" => ref_load.note,
         ),
-        "bh_note" => "dinucleotide_bh_q is within-graph BH over bh_ks only; paper cross-genus FDR is a post-pass",
+        "bh_note" => "dinucleotide_bh_q_within_graph is BH over bh_ks inside one graph only; use Mycelia.gqc_cross_bh for cross-genus FDR",
+        "length_note" => "total_bp and unitig_* use overlap-corrected spans; total_segment_bp is raw sum of segment lengths",
         "concordance_note" => "ref_walkability is shared k-mer content (always RC-folded); not GFA-link walkability (I6)",
     )
     open(manifest_path, "w") do io
