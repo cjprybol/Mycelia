@@ -98,7 +98,7 @@ MyceliaKernelAbstractionsExt = "KernelAbstractions"
 [compat]
 Aqua = "0.8"
 KernelAbstractions = "0.9"
-UMAP = "0.1.11"
+UMAP = "0.3"
 # TRANSITIVE PIN, not a dependency we use. Mycelia never imports XML; it is
 # declared as a direct dep solely so this bound can constrain the XLSX -> XML
 # resolution. See the paired stale_deps entry in test/aqua.jl and the test that
