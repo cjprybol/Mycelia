@@ -7,6 +7,11 @@ const GQC_SHUFFLE_SEED = 20261021
 const GQC_MIN_SHUFFLE_MEAN = 1.0
 ## Default BH family is k=11 only (within-graph). Paper cross-genus FDR is a post-pass.
 const GQC_DEFAULT_BH_KS = [11]
+## Frozen node TSV header for both `nodes/<slug>.tsv` and `formats/nodes.tsv`.
+const GQC_NODE_TSV_COLUMNS = (
+    "graph_id", "node_id", "index", "length", "depth",
+    "degree", "in_degree", "out_degree", "sequence",
+)
 ## Frozen summary.csv column order (every field always emitted).
 const GQC_SUMMARY_COLUMNS = (
     "graph_id", "k", "n_segments", "n_links",
@@ -1083,20 +1088,40 @@ end
 # Standard-format writers
 # =============================================================================
 
-function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_link_json::Bool=true)
+"""
+Write the unified node TSV (`GQC_NODE_TSV_COLUMNS`) for one graph.
+
+Used by both `nodes/<slug>.tsv` and `formats/nodes.tsv`. Schema/column naming
+only — values are the same quantities previously split across the two files.
+"""
+function _gqc_write_nodes_tsv(io::IO,
+                              g::GFAGraph,
+                              ids::Vector{String},
+                              adj::Vector{Vector{Int}};
+                              graph_id::AbstractString="")
+    degrees = _gqc_degrees(adj)
+    indeg, outdeg, _, _ = _gqc_directed_degrees(g)
+    println(io, join(GQC_NODE_TSV_COLUMNS, '\t'))
+    for (i, id) in enumerate(ids)
+        s = g.segments[id]
+        seq = s.sequence == "*" ? "" : s.sequence
+        d = s.depth === nothing ? "" : string(s.depth)
+        println(io, graph_id, '\t', id, '\t', i, '\t', s.length, '\t', d, '\t',
+                degrees[i], '\t', indeg[id], '\t', outdeg[id], '\t', seq)
+    end
+    return nothing
+end
+
+function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString;
+                           write_node_link_json::Bool=true,
+                           graph_id::AbstractString="")
     mkpath(formats_dir)
     ids, adj, _ = _gqc_undirected_adjacency(g)
     n = length(ids)
-    ## nodes.tsv
+    ## nodes.tsv (unified schema; same columns as nodes/<slug>.tsv)
     nodes_path = joinpath(formats_dir, "nodes.tsv")
     open(nodes_path, "w") do io
-        println(io, "node_id\tindex\tlength\tdepth\tsequence")
-        for (i, id) in enumerate(ids)
-            s = g.segments[id]
-            seq = s.sequence == "*" ? "" : s.sequence
-            d = s.depth === nothing ? "" : string(s.depth)
-            println(io, id, '\t', i, '\t', s.length, '\t', d, '\t', seq)
-        end
+        _gqc_write_nodes_tsv(io, g, ids, adj; graph_id=graph_id)
     end
     ## edges.tsv
     edges_path = joinpath(formats_dir, "edges.tsv")
@@ -1625,15 +1650,9 @@ function _run_gqc_one(input_dir::AbstractString,
         mkpath(joinpath(out_dir, sub))
     end
 
-    ## long tables — always use slug in paths (I4)
+    ## long tables — always use slug in paths (I4); node TSV uses unified schema
     open(joinpath(out_dir, "nodes", "$(slug).tsv"), "w") do io
-        println(io, "graph_id\tnode_id\tlength\tdepth\tdegree\tin_degree\tout_degree")
-        for (i, id) in enumerate(ids)
-            s = g.segments[id]
-            d = s.depth === nothing ? "" : string(s.depth)
-            println(io, graph_id, '\t', id, '\t', s.length, '\t', d, '\t',
-                    degrees[i], '\t', indeg[id], '\t', outdeg[id])
-        end
+        _gqc_write_nodes_tsv(io, g, ids, adj; graph_id=graph_id)
     end
     open(joinpath(out_dir, "edges", "$(slug).tsv"), "w") do io
         println(io, "graph_id\tfrom\tfrom_orient\tto\tto_orient\toverlap")
@@ -1649,7 +1668,9 @@ function _run_gqc_one(input_dir::AbstractString,
         end
     end
 
-    format_files = gqc_write_formats(g, joinpath(out_dir, "formats"); write_node_link_json=write_node_link_json)
+    format_files = gqc_write_formats(g, joinpath(out_dir, "formats");
+                                     write_node_link_json=write_node_link_json,
+                                     graph_id=graph_id)
 
     ## Generate shuffles once per null kind, then score each k (I10).
     null_by_kind = Dict{Symbol, Dict{Int, NamedTuple}}()

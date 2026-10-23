@@ -256,6 +256,33 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test g.segments["1"].depth == 10.0
     end
 
+    Test.@testset "unified node TSV header matches spec" begin
+        expected = join(Mycelia.GQC_NODE_TSV_COLUMNS, '\t')
+        Test.@test expected ==
+            "graph_id\tnode_id\tindex\tlength\tdepth\tdegree\tin_degree\tout_degree\tsequence"
+        ## Spec documents the same frozen order
+        spec = read(joinpath(@__DIR__, "..", "..", "docs", "gqc-v0.1-spec.md"), String)
+        Test.@test occursin(expected, spec)
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        packet = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=5, strand_mode=:single, make_plots=false,
+            write_node_link_json=false, null_kinds=(:dinucleotide,))
+        fmt_header = first(readlines(joinpath(packet, "formats", "nodes.tsv")))
+        long_header = first(readlines(joinpath(packet, "nodes", "synth_ss_k5.tsv")))
+        Test.@test fmt_header == expected
+        Test.@test long_header == expected
+        ## Same body (schema-unified files are identical for a packet)
+        fmt_lines = readlines(joinpath(packet, "formats", "nodes.tsv"))
+        long_lines = readlines(joinpath(packet, "nodes", "synth_ss_k5.tsv"))
+        Test.@test fmt_lines == long_lines
+        ## Spot-check: index is 1-based and sequence column present
+        cols = split(fmt_lines[2], '\t')
+        Test.@test length(cols) == length(Mycelia.GQC_NODE_TSV_COLUMNS)
+        Test.@test cols[1] == "synth_ss_k5"  ## graph_id
+        Test.@test cols[3] == "1"            ## index
+        Test.@test !isempty(cols[end])       ## sequence
+    end
+
     Test.@testset "C3 MTX golden with reverse-only link" begin
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_reverse_link")
         packet = Mycelia.run_gqc(fixture, mktempdir();
