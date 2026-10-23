@@ -467,7 +467,7 @@ Use for visualizing high-dimensional data in 2 or 3 dimensions, especially when 
 - `n_components`: output dimension (2 or 3)
 
 # Returns
-- `model`        : the trained UMAP.UMAP model  
+- `model`        : a `UMAP.UMAPResult` (access embedding via `model.embedding`)
 """
 function umap_embed(X::AbstractMatrix{<:Real};
         n_neighbors::Int = Mycelia.nearest_prime(Int(round(log(maximum(size(X)))))),
@@ -477,15 +477,16 @@ function umap_embed(X::AbstractMatrix{<:Real};
         throw(ArgumentError("UMAP input contains non-finite values (NaN or Inf)."))
     end
 
+    # UMAP.jl v0.3+ replaced UMAP.UMAP_ with UMAP.fit → UMAPResult
     if size(X, 2) < 4096
         dist_matrix = Distances.pairwise(Distances.Euclidean(), X; dims = 2)
-        model = UMAP.UMAP_(dist_matrix, n_components;
+        model = UMAP.fit(dist_matrix, n_components;
             n_neighbors = n_neighbors,
             min_dist = min_dist,
             metric = :precomputed
         )
     else
-        model = UMAP.UMAP_(X, n_components, n_neighbors = n_neighbors, min_dist = min_dist)
+        model = UMAP.fit(X, n_components; n_neighbors = n_neighbors, min_dist = min_dist)
     end
 
     return model
@@ -514,7 +515,7 @@ matrix (e.g., from FoldSeek TM-scores, AAmer cosine, or a consensus of multiple 
 # Returns
 - `embedding`    : (n_components × n) matrix of UMAP coordinates
 - `labels`       : the input labels (passed through for convenience)
-- `model`        : the trained UMAP.UMAP model
+- `model`        : a `UMAP.UMAPResult` (access embedding via `model.embedding`)
 """
 function umap_from_dist(
         D::AbstractMatrix{<:Real}, labels::AbstractVector{<:AbstractString};
@@ -529,7 +530,8 @@ function umap_from_dist(
         throw(ArgumentError("Distance matrix contains non-finite values (NaN or Inf)."))
     end
 
-    model = UMAP.UMAP_(D, n_components;
+    # UMAP.jl v0.3+ replaced UMAP.UMAP_ with UMAP.fit → UMAPResult
+    model = UMAP.fit(D, n_components;
         n_neighbors = n_neighbors,
         min_dist = min_dist,
         metric = :precomputed)
