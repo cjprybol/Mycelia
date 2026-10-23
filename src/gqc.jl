@@ -1083,6 +1083,30 @@ end
 # Standard-format writers
 # =============================================================================
 
+"""
+XML-escape text for GraphML attributes and element content: `& < > " '`.
+"""
+function _gqc_xml_escape(s::AbstractString)::String
+    # Order matters: escape `&` first so replacements are not re-escaped.
+    buf = IOBuffer()
+    for c in s
+        if c == '&'
+            print(buf, "&amp;")
+        elseif c == '<'
+            print(buf, "&lt;")
+        elseif c == '>'
+            print(buf, "&gt;")
+        elseif c == '"'
+            print(buf, "&quot;")
+        elseif c == '\''
+            print(buf, "&apos;")
+        else
+            print(buf, c)
+        end
+    end
+    return String(take!(buf))
+end
+
 function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_link_json::Bool=true)
     mkpath(formats_dir)
     ids, adj, _ = _gqc_undirected_adjacency(g)
@@ -1143,21 +1167,24 @@ function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_
         println(io, """  <graph id="G" edgedefault="directed">""")
         for id in ids
             s = g.segments[id]
-            println(io, """    <node id="$(id)">""")
-            println(io, """      <data key="d_len">$(s.length)</data>""")
+            eid = _gqc_xml_escape(id)
+            println(io, """    <node id="$(eid)">""")
+            println(io, """      <data key="d_len">$(_gqc_xml_escape(string(s.length)))</data>""")
             if s.depth !== nothing
-                println(io, """      <data key="d_depth">$(s.depth)</data>""")
+                println(io, """      <data key="d_depth">$(_gqc_xml_escape(string(s.depth)))</data>""")
             end
             if s.sequence != "*"
-                println(io, """      <data key="d_seq">$(s.sequence)</data>""")
+                println(io, """      <data key="d_seq">$(_gqc_xml_escape(s.sequence))</data>""")
             end
             println(io, """    </node>""")
         end
         for (ei, link) in enumerate(g.links)
-            println(io, """    <edge id="e$ei" source="$(link.from)" target="$(link.to)">""")
-            println(io, """      <data key="e_ov">$(link.overlap)</data>""")
-            println(io, """      <data key="e_fo">$(link.from_forward ? "+" : "-")</data>""")
-            println(io, """      <data key="e_to">$(link.to_forward ? "+" : "-")</data>""")
+            esrc = _gqc_xml_escape(link.from)
+            etgt = _gqc_xml_escape(link.to)
+            println(io, """    <edge id="e$ei" source="$(esrc)" target="$(etgt)">""")
+            println(io, """      <data key="e_ov">$(_gqc_xml_escape(link.overlap))</data>""")
+            println(io, """      <data key="e_fo">$(_gqc_xml_escape(link.from_forward ? "+" : "-"))</data>""")
+            println(io, """      <data key="e_to">$(_gqc_xml_escape(link.to_forward ? "+" : "-"))</data>""")
             println(io, """    </edge>""")
         end
         println(io, """  </graph>""")

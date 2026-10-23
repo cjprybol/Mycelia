@@ -3,6 +3,8 @@ import Mycelia
 import Random
 import JSON
 import CodecZlib
+import EzXML
+import OrderedCollections
 
 Test.@testset "gqc v0.1 helpers and packet" begin
 
@@ -271,6 +273,65 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test (2, 1) in pairs
         Test.@test (3, 2) in pairs
         Test.@test (4, 3) in pairs
+    end
+
+    Test.@testset "GraphML XML-escapes special characters" begin
+        Test.@test Mycelia._gqc_xml_escape("a&b<c>d\"e'f") == "a&amp;b&lt;c&gt;d&quot;e&apos;f"
+        id_a = "n&1<'\">"
+        id_b = "n>2\"&'"
+        seq_a = "AC&GT<>'\""
+        overlap = "3M&<>'\""
+        segs = OrderedCollections.OrderedDict{String, Mycelia.GFASegment}()
+        segs[id_a] = Mycelia.GFASegment(id_a, seq_a, length(seq_a), 1.5, nothing, nothing)
+        segs[id_b] = Mycelia.GFASegment(id_b, "TGCA", 4, nothing, nothing, nothing)
+        links = Mycelia.GFALink[Mycelia.GFALink(id_a, true, id_b, false, overlap)]
+        g = Mycelia.GFAGraph(segs, links, String[], "special.gfa")
+        formats_dir = mktempdir()
+        Mycelia.gqc_write_formats(g, formats_dir; write_node_link_json=false)
+        xml = read(joinpath(formats_dir, "graph.graphml"), String)
+        ## Raw file must contain entities, not bare specials in attributes/content.
+        Test.@test occursin("&amp;", xml)
+        Test.@test occursin("&lt;", xml)
+        Test.@test occursin("&gt;", xml)
+        Test.@test occursin("&quot;", xml)
+        Test.@test occursin("&apos;", xml)
+        doc = EzXML.parsexml(xml)  ## round-trip through an XML parser
+        root = EzXML.root(doc)
+        graph = nothing
+        for child in EzXML.eachelement(root)
+            EzXML.nodename(child) == "graph" && (graph = child; break)
+        end
+        Test.@test graph !== nothing
+        nodes = Dict{String, EzXML.Node}()
+        edges = EzXML.Node[]
+        for child in EzXML.eachelement(graph)
+            name = EzXML.nodename(child)
+            if name == "node"
+                nodes[child["id"]] = child
+            elseif name == "edge"
+                push!(edges, child)
+            end
+        end
+        Test.@test haskey(nodes, id_a)
+        Test.@test haskey(nodes, id_b)
+        function data_by_key(parent, key)
+            for d in EzXML.eachelement(parent)
+                EzXML.nodename(d) == "data" && d["key"] == key && return d
+            end
+            return nothing
+        end
+        seq_node = data_by_key(nodes[id_a], "d_seq")
+        Test.@test seq_node !== nothing
+        Test.@test EzXML.nodecontent(seq_node) == seq_a
+        Test.@test length(edges) == 1
+        edge = only(edges)
+        Test.@test edge["source"] == id_a
+        Test.@test edge["target"] == id_b
+        ov = data_by_key(edge, "e_ov")
+        Test.@test ov !== nothing
+        Test.@test EzXML.nodecontent(ov) == overlap
+        Test.@test EzXML.nodecontent(data_by_key(edge, "e_fo")) == "+"
+        Test.@test EzXML.nodecontent(data_by_key(edge, "e_to")) == "-"
     end
 
     Test.@testset "C5 bh_ks defaults to [11] within-graph" begin
