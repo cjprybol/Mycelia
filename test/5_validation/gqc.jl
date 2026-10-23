@@ -90,10 +90,9 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         stats = Mycelia.gqc_repeat_null_stats(seqs;
             k=11, n_shuffles=8, shuffle_seed=20261021, min_shuffle_mean=1.0,
             null_kind=:dinucleotide)
-        if stats.null_mean < 1.0
-            Test.@test stats.shuffle_ratio === missing
-            Test.@test stats.z_score === missing
-        end
+        Test.@test stats.null_mean < 1.0  ## fixture seed keeps μ below floor
+        Test.@test stats.shuffle_ratio === missing
+        Test.@test stats.z_score === missing
     end
 
     Test.@testset "repeat null formulas" begin
@@ -116,22 +115,34 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test stats.shuffle_p_upper ≈ expected_p
     end
 
-    Test.@testset "I3 strand_mode ties effective canonical" begin
-        Test.@test Mycelia._gqc_effective_canonical(:single, true) === false
+    Test.@testset "I3/I7 strand_mode + metadata + explicit canonical" begin
+        ## Explicit canonical=true under :single is honored (not silently forced false)
+        Test.@test Mycelia._gqc_effective_canonical(:single, true) === true
+        Test.@test Mycelia._gqc_effective_canonical(:single, false) === false
         Test.@test Mycelia._gqc_effective_canonical(:canonical, false) === true
         Test.@test Mycelia._gqc_effective_canonical(:double, true) === true
         Test.@test Mycelia._gqc_effective_canonical(:double, false) === false
-        ## :single vs :canonical changes repeat counts on RC-paired kmers
+        ## nothing defaults → :single / false
+        dflt = Mycelia._gqc_resolve_strand(Dict{String, Any}(), nothing, nothing)
+        Test.@test dflt.strand_mode === :single
+        Test.@test dflt.canonical === false
+        ## metadata strand_mode like circular
+        meta = Mycelia._gqc_resolve_strand(Dict{String, Any}("strand_mode" => "canonical"), nothing, nothing)
+        Test.@test meta.strand_mode === :canonical
+        Test.@test meta.canonical === true
         seqs = ["ACGTAA"]
-        ss = Mycelia.gqc_repeat_counts(seqs; k=3, canonical=Mycelia._gqc_effective_canonical(:single, true))
-        can = Mycelia.gqc_repeat_counts(seqs; k=3, canonical=Mycelia._gqc_effective_canonical(:canonical, false))
+        ss = Mycelia.gqc_repeat_counts(seqs; k=3, canonical=false)
+        can = Mycelia.gqc_repeat_counts(seqs; k=3, canonical=true)
         Test.@test ss.repeats != can.repeats || ss.distinct_kmers != can.distinct_kmers
     end
 
-    Test.@testset "I1 params_hash invariant to ks/bh_ks order" begin
+    Test.@testset "I1/I2 params_hash + numeric ks in canonicalize" begin
         a = Dict{String, Any}("ks" => [5, 11, 21], "bh_ks" => [11, 5], "n_shuffles" => 10)
         b = Dict{String, Any}("ks" => [21, 5, 11], "bh_ks" => [5, 11], "n_shuffles" => 10)
         Test.@test Mycelia._gqc_params_hash(a) == Mycelia._gqc_params_hash(b)
+        canon = Mycelia._gqc_canonicalize_params(a)
+        Test.@test canon["ks"] == [5, 11, 21]
+        Test.@test canon["bh_ks"] == [5, 11]
     end
 
     Test.@testset "resolve_gqc_input_dirs single vs graph-set" begin
@@ -208,13 +219,13 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test isfile(joinpath(packet, "formats", "edges.tsv"))
         Test.@test isfile(joinpath(packet, "formats", "adjacency.mtx"))
         Test.@test isfile(joinpath(packet, "formats", "node_link.json"))
-        ## I7 PNG existence
-        Test.@test isfile(joinpath(packet, "plots", "degree", "synth_ss_k5__k5.png")) ||
-                   isfile(joinpath(packet, "plots", "structure", "synth_ss_k5__k5.png"))
+        ## I7 PNG existence (both degree and structure)
+        Test.@test isfile(joinpath(packet, "plots", "degree", "synth_ss_k5__k5.png"))
+        Test.@test isfile(joinpath(packet, "plots", "structure", "synth_ss_k5__k5.png"))
         ## I2 frozen summary header
         header = first(readlines(joinpath(packet, "summary.csv")))
         Test.@test header == join(Mycelia.GQC_SUMMARY_COLUMNS, ',')
-        ## I5 CHECKSUMS sorted by path
+        ## CHECKSUMS sorted by path
         checksum_paths = [split(l, r"\s+"; limit=2)[2] for l in readlines(joinpath(packet, "CHECKSUMS.sha256")) if !isempty(l)]
         Test.@test checksum_paths == sort(checksum_paths)
         ## MTX banner
@@ -236,6 +247,7 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test haskey(manifest, "input_sha256")
         Test.@test haskey(manifest, "params_hash")
         Test.@test manifest["params"]["bh_ks"] == [11]
+        Test.@test manifest["params"]["ks"] == [5]
         Test.@test manifest["params"]["canonical"] == false  ## :single
         Test.@test any(endswith(f, "graph.graphml") for f in manifest["formats"])
         g = Mycelia.read_gfa_records(joinpath(fixture, "graph.gfa"))
@@ -349,18 +361,24 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         cp(joinpath(fixture, "metadata.json"), joinpath(tmp, "metadata.json"))
         refdir = mkpath(joinpath(tmp, "reference"))
         open(CodecZlib.GzipCompressorStream, joinpath(refdir, "ref.fasta.gz"), "w") do io
+            println(io, "IGNORE")
             println(io, ">r1")
             println(io, "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA")
             println(io, ">r2")
             println(io, "GCTTAGCTAGGCTTAACCTAGGCTTAGCTAA")
         end
-        seqs = Mycelia._gqc_load_reference_sequences(refdir)
-        Test.@test length(seqs) == 2
-        Test.@test startswith(seqs[1], "ATGCGATCGA")
-        Test.@test startswith(seqs[2], "GCTTAGCTAG")
-        ## Must not concatenate across records
-        Test.@test length(seqs[1]) == 63
-        Test.@test length(seqs[2]) == 31
+        load = Mycelia._gqc_load_reference_sequences(refdir)
+        Test.@test load.n_records == 2
+        Test.@test startswith(load.sequences[1], "ATGCGATCGA")
+        Test.@test startswith(load.sequences[2], "GCTTAGCTAG")
+        Test.@test length(load.sequences[1]) == 63
+        Test.@test length(load.sequences[2]) == 31
+        ## .fas / .ffn accepted
+        open(joinpath(refdir, "extra.fas"), "w") do io
+            println(io, ">x"); println(io, "ACGTACGTACGT")
+        end
+        load2 = Mycelia._gqc_load_reference_sequences(refdir)
+        Test.@test load2.n_records == 3
     end
 
     Test.@testset "null_source=:auto uses reference on k-mer-node graphs" begin
@@ -444,5 +462,148 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test row2["null_applicable"] == false
         Test.@test row2["dinucleotide_shuffle_p_upper"] === nothing
         Test.@test row2["dinucleotide_observed_repeats"] === nothing
+    end
+
+    Test.@testset "CRITICAL 31-mer nodes without metadata k suppress segment nulls" begin
+        rng = Random.Xoshiro(20261022)
+        bases = ['A', 'C', 'G', 'T']
+        ref = String([rand(rng, bases) for _ in 1:150])
+        kmer_k = 31
+        kmers = String[ref[i:(i + kmer_k - 1)] for i in 1:(length(ref) - kmer_k + 1)]
+        ckmers = unique(String[Mycelia._gqc_canonical_kmer(km) for km in kmers])
+        Test.@test length(ckmers) == 120 || length(ckmers) > 100
+        root = mktempdir()
+        open(joinpath(root, "graph.gfa"), "w") do io
+            println(io, "H\tVN:Z:1.0")
+            for (i, km) in enumerate(ckmers)
+                println(io, "S\t", i, '\t', km, "\tLN:i:", kmer_k)
+            end
+            ## overlaps L-1 mark de Bruijn structure
+            for i in 1:(length(ckmers) - 1)
+                println(io, "L\t", i, "\t+\t", i + 1, "\t+\t", kmer_k - 1, "M")
+            end
+        end
+        ## no metadata k, no reference
+        open(joinpath(root, "metadata.json"), "w") do io
+            JSON.print(io, Dict("graph_id" => "rand31", "label" => "rand31",
+                                "strand_mode" => "canonical", "circular" => false), 2)
+        end
+        packet = Mycelia.run_gqc(root, mktempdir();
+            ks=[5, 11, 21], bh_ks=[11], n_shuffles=20,
+            strand_mode=:canonical, null_source=:auto,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide,),
+        )
+        rows = JSON.parsefile(joinpath(packet, "summary.json"))
+        Test.@test length(rows) == 3
+        for row in rows
+            Test.@test row["null_applicable"] == false
+            Test.@test row["null_source"] == "segments"
+            Test.@test row["dinucleotide_shuffle_p_upper"] === nothing
+            Test.@test row["dinucleotide_bh_q"] === nothing
+        end
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        Test.@test man["params"]["null_applicable"] == false
+        Test.@test occursin("kmer_node", man["params"]["null_source_reason"]) ||
+                   occursin("auto_fallback", man["params"]["null_source_reason"])
+        Test.@test man["params"]["ks"] == [5, 11, 21]
+    end
+
+    Test.@testset "I1 reference bytes in input_sha256" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        tmp = mktempdir()
+        cp(joinpath(fixture, "graph.gfa"), joinpath(tmp, "graph.gfa"))
+        meta = JSON.parsefile(joinpath(fixture, "metadata.json"))
+        open(joinpath(tmp, "metadata.json"), "w") do io
+            JSON.print(io, meta, 2)
+        end
+        mkpath(joinpath(tmp, "reference"))
+        open(joinpath(tmp, "reference", "genome.fasta"), "w") do io
+            println(io, ">g"); println(io, "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGC")
+        end
+        packet = Mycelia.run_gqc(tmp, mktempdir();
+            ks=[5], n_shuffles=5, strand_mode=:canonical, null_source=:auto,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        Test.@test haskey(man["input_sha256"], "reference/genome.fasta")
+        Test.@test man["params"]["resolved_null_source"] == "reference"
+    end
+
+    Test.@testset "I3 overwrite=:skip resume + graph-set errors file" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        set_root = mktempdir()
+        for (name, gid) in (("ok_a", "ok_a"), ("zz_bad", "/tmp/illegal-id"))
+            dest = joinpath(set_root, name)
+            mkpath(dest)
+            cp(joinpath(fixture, "graph.gfa"), joinpath(dest, "graph.gfa"))
+            meta = JSON.parsefile(joinpath(fixture, "metadata.json"))
+            meta["graph_id"] = gid
+            open(joinpath(dest, "metadata.json"), "w") do io
+                JSON.print(io, meta, 2)
+            end
+        end
+        out = mktempdir()
+        Mycelia.run_gqc(set_root, out;
+            ks=[5], n_shuffles=5, strand_mode=:single, null_source=:auto,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
+            overwrite=:error)
+        Test.@test isfile(joinpath(out, "ok_a", "manifest.json"))
+        Test.@test isfile(joinpath(out, "gqc_graph_set_errors.jsonl"))
+        err_line = read(joinpath(out, "gqc_graph_set_errors.jsonl"), String)
+        Test.@test occursin("absolute or traversal", err_line)
+        ## resume: skip completed ok_a
+        Mycelia.run_gqc(set_root, out;
+            ks=[5], n_shuffles=5, strand_mode=:single, null_source=:segments,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
+            overwrite=:skip)
+        Test.@test isfile(joinpath(out, "ok_a", "manifest.json"))
+    end
+
+    Test.@testset "I4 slug paths and refuse absolute graph_id" begin
+        err = try
+            Mycelia._gqc_slug_graph_id("/tmp/escape")
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("absolute or traversal", sprint(showerror, err))
+        Test.@test Mycelia._gqc_slug_graph_id("cohort/sample") == "cohort_sample"
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        tmp = mktempdir()
+        cp(joinpath(fixture, "graph.gfa"), joinpath(tmp, "graph.gfa"))
+        open(joinpath(tmp, "metadata.json"), "w") do io
+            JSON.print(io, Dict("graph_id" => "cohort/sample", "label" => "x", "k" => 5), 2)
+        end
+        packet = Mycelia.run_gqc(tmp, mktempdir();
+            ks=[5], n_shuffles=5, strand_mode=:single,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+        Test.@test basename(packet) == "cohort_sample"
+        Test.@test isfile(joinpath(packet, "nodes", "cohort_sample.tsv"))
+    end
+
+    Test.@testset "I5 circular concordance skips short records" begin
+        g = Mycelia.read_gfa_records(joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic", "graph.gfa"))
+        refs = ["ACGTACGT", "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGA"]  ## 8-bp + long
+        d = Mycelia.gqc_reference_concordance(g, refs; k=11, circular=true)
+        Test.@test d["ref_kmer_fraction"] isa Real || d["ref_kmer_fraction"] === missing
+        ## must not throw BoundsError
+        Test.@test true
+    end
+
+    Test.@testset "I10 shuffle-once matches per-k gqc_repeat_null_stats" begin
+        seqs = ["ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA"]
+        ks = [5, 11, 21]
+        multi = Mycelia.gqc_repeat_null_stats_for_ks(seqs;
+            ks=ks, n_shuffles=30, shuffle_seed=20261021, salt=0, genus_index=1,
+            circular=false, canonical=true, null_kind=:dinucleotide)
+        for k in ks
+            one = Mycelia.gqc_repeat_null_stats(seqs;
+                k=k, n_shuffles=30, shuffle_seed=20261021, salt=0, genus_index=1,
+                circular=false, canonical=true, null_kind=:dinucleotide)
+            Test.@test multi[k].null_repeats == one.null_repeats
+            Test.@test multi[k].observed_repeats == one.observed_repeats
+            Test.@test multi[k].shuffle_p_upper ≈ one.shuffle_p_upper
+        end
     end
 end

@@ -1,0 +1,111 @@
+# gqc v0.1 specification
+
+Mycelia graph QC packet (`src/gqc.jl`). Semver **0.1.0**.
+
+## Input layout
+
+### Single-graph folder
+
+```text
+<input_dir>/
+  graph.gfa
+  metadata.json          # optional but recommended
+  reference/             # optional; preferred for repeat nulls
+    *.fa|*.fas|*.fna|*.ffn|*.fasta[+ .gz]
+```
+
+### Graph-set folder
+
+No top-level `graph.gfa`. Each *immediate* child that contains `graph.gfa` is one graph.
+Top-level `graph.gfa` always wins (single-graph mode).
+
+## `run_gqc` keywords (highlights)
+
+| Keyword | Default | Notes |
+|---------|---------|-------|
+| `null_source` | `:auto` | `:auto` / `:reference` / `:segments` |
+| `bh_ks` | `[11]` | Within-graph BH family only |
+| `strand_mode` | `nothing` → metadata → `:single` | `:single` / `:canonical` / `:double` |
+| `canonical` | `nothing` → derived | Explicit bool is honored |
+| `overwrite` | `:error` | `:skip` resume / `:replace` / `:error` |
+| `n_shuffles` | `100` | Monte Carlo null replicates |
+
+## `null_source`
+
+- **`:auto`**: use loaded reference records when `n_records > 0`; else GFA segments.
+- **`:reference`**: require loaded records; error if none.
+- **`:segments`**: force segments.
+
+**K-mer-node guard:** if every segment has the same length `L` and
+(`L >= max(ks)` **or** all GFA overlaps equal `L-1` **or** `L == metadata["k"]`),
+segment-sourced nulls set `null_applicable=false` (no p/q). Does **not** require
+`metadata["k"]` to match a sweep k.
+
+Fallback reasons are stored in `params.null_source_reason` and
+`manifest.null_source_reason`.
+
+Reference loader accepts `.fa`, `.fas`, `.fna`, `.ffn`, `.fasta`, optional `.gz`,
+one sequence per FASTA record (no chimeric joins). Bytes before the first `>`
+are ignored. Load count is logged and stored under `manifest.reference_load`.
+
+## Outputs
+
+Packet directory: `output_root/<graph_id_slug>/` (slug refuses absolute/`..` ids).
+
+```text
+manifest.json
+CHECKSUMS.sha256
+summary.csv / summary.json / report.md
+nodes/<slug>.tsv  edges/<slug>.tsv  unitigs/<slug>.tsv
+nulls/<slug>__k<k>__<kind>.tsv
+plots/...
+formats/
+  graph.graphml
+  nodes.tsv  edges.tsv
+  adjacency.mtx      # Matrix Market coordinate pattern *symmetric* (lower triangle)
+  node_link.json     # optional; directed GFA L lines
+```
+
+Graph-set failures append `output_root/gqc_graph_set_errors.jsonl` and continue.
+
+## `summary.csv` columns
+
+Frozen order: `Mycelia.GQC_SUMMARY_COLUMNS` (includes `null_source`,
+`null_applicable`, dinucleotide/codon null fields, BH q, coverage, concordance).
+
+Missing values: empty CSV field / JSON `null`.
+
+### Null sentinels
+
+| Situation | Fields |
+|-----------|--------|
+| `null_applicable=false` | observed / mean / p / q → missing; degenerate → false |
+| Degenerate shuffle | `*_null_degenerate=true`; p still conservative Monte Carlo |
+| BH k not in `bh_ks` | `dinucleotide_bh_q` missing |
+
+### Q-value scope
+
+`dinucleotide_bh_q` is **within-graph** Benjamini–Hochberg over `bh_ks` only.
+Paper cross-genus FDR is a post-pass outside `run_gqc`.
+
+## Concordance limitation (I6)
+
+`ref_kmer_fraction` / `ref_walkability` always RC-fold k-mers and treat
+walkability as consecutive reference k-mers both present as nodes — they do
+**not** read GFA `L` lines. Under `strand_mode=:single` the repeat null does not
+fold RC; concordance still does. Prefer `strand_mode=:canonical` for HVP
+k-mer-node graphs.
+
+## MTX convention
+
+`%%MatrixMarket matrix coordinate pattern symmetric` with the **lower triangle**
+(`row >= col`), 1-based indices matching `formats/nodes.tsv`. Directed multi-edges
+remain in `edges.tsv` / GraphML / `node_link.json`.
+
+## Reproducibility
+
+- RNG: `Xoshiro(shuffle_seed + 1000*salt + genus_index)`
+- Shuffles generated once per null kind, then counted at each k
+- `params_hash` sorts integer vectors numerically; `ks`/`bh_ks` in the manifest
+  match analysis order
+- `input_sha256` covers `graph.gfa`, `metadata.json`, and every matched reference file

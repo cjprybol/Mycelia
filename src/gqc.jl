@@ -1,6 +1,5 @@
 # gqc v0.1 — reusable graph QC packet
-# Spec: docs/gqc-v0.1-spec.md (project store). Semver 0.1.0.
-# Caveat: prefer SingleStrand GFA builds until write_gfa_next / PR #471 lands.
+# Spec: docs/gqc-v0.1-spec.md (in-repo). Semver 0.1.0.
 
 const GQC_VERSION = "0.1.0"
 const GQC_N_SHUFFLES = 100
@@ -643,11 +642,20 @@ function gqc_repeat_null_stats(sequences::Vector{String};
             push!(null_repeats, Float64(r.repeats))
         end
     elseif null_kind == :codon
+        norms = [replace(uppercase(s), 'U' => 'T') for s in sequences]
+        joined_orig = join(norms, '|')
+        seen = Set{String}()
         for _ in 1:n_shuffles
-            segs = [codon_shuffle(replace(uppercase(s), 'U' => 'T'), rng) for s in sequences]
+            segs = [codon_shuffle(s, rng) for s in norms]
+            joined = join(segs, '|')
+            if joined == joined_orig || joined in seen
+                null_degenerate = true
+            end
+            push!(seen, joined)
             r = gqc_repeat_counts(segs; k=k, circular=circular, canonical=canonical)
             push!(null_repeats, Float64(r.repeats))
         end
+        length(seen) < n_shuffles && (null_degenerate = true)
     else
         error("unknown null_kind=$null_kind")
     end
@@ -670,60 +678,184 @@ function gqc_repeat_null_stats(sequences::Vector{String};
     )
 end
 
+"""
+Generate null shuffles once for `null_kind`, then score repeat stats at each k.
+
+Bit-identical to calling `gqc_repeat_null_stats` once per k with the same seed
+(each of those calls reseeds to the same RNG state before shuffling).
+"""
+function gqc_repeat_null_stats_for_ks(sequences::Vector{String};
+                                      ks::AbstractVector{<:Integer},
+                                      n_shuffles::Int=GQC_N_SHUFFLES,
+                                      shuffle_seed::Int=GQC_SHUFFLE_SEED,
+                                      salt::Int=0,
+                                      genus_index::Int=1,
+                                      circular::Bool=false,
+                                      canonical::Bool=true,
+                                      min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
+                                      null_kind::Symbol=:dinucleotide)
+    rng = Random.Xoshiro(shuffle_seed + 1000 * salt + genus_index)
+    null_degenerate = false
+    shuffle_sets = Vector{Vector{String}}()
+    if null_kind == :dinucleotide
+        shuffle_sets, null_degenerate = gqc_checked_dinucleotide_shuffles(
+            sequences, rng; n_shuffles=n_shuffles)
+    elseif null_kind == :codon
+        norms = [replace(uppercase(s), 'U' => 'T') for s in sequences]
+        joined_orig = join(norms, '|')
+        seen = Set{String}()
+        for _ in 1:n_shuffles
+            segs = [codon_shuffle(s, rng) for s in norms]
+            joined = join(segs, '|')
+            (joined == joined_orig || joined in seen) && (null_degenerate = true)
+            push!(seen, joined)
+            push!(shuffle_sets, segs)
+        end
+        length(seen) < n_shuffles && (null_degenerate = true)
+    else
+        error("unknown null_kind=$null_kind")
+    end
+    out = Dict{Int, NamedTuple}()
+    for k in ks
+        observed = gqc_repeat_counts(sequences; k=Int(k), circular=circular, canonical=canonical)
+        null_repeats = Float64[
+            Float64(gqc_repeat_counts(segs; k=Int(k), circular=circular, canonical=canonical).repeats)
+            for segs in shuffle_sets
+        ]
+        μ = Statistics.mean(null_repeats)
+        σ = length(null_repeats) > 1 ? Statistics.std(null_repeats) : 0.0
+        ratio = μ >= min_shuffle_mean ? observed.repeats / μ : missing
+        z = (μ >= min_shuffle_mean && σ > 0) ? (observed.repeats - μ) / σ : missing
+        p_upper = (1 + count(>=(observed.repeats), null_repeats)) / (n_shuffles + 1)
+        out[Int(k)] = (;
+            observed_repeats=observed.repeats,
+            observed_kmer_positions=observed.kmer_positions,
+            observed_distinct_kmers=observed.distinct_kmers,
+            null_mean=μ,
+            null_std=σ,
+            shuffle_ratio=ratio,
+            z_score=z,
+            shuffle_p_upper=p_upper,
+            null_repeats=null_repeats,
+            null_degenerate=null_degenerate,
+        )
+    end
+    return out
+end
+
 # =============================================================================
 # Reference concordance
 # =============================================================================
+
+const GQC_REFERENCE_EXT_RE = r"\.(fa|fas|fna|ffn|fasta)(\.gz)?$"i
 
 """
 Load reference FASTA records from `reference_dir`.
 
 Each FASTA record becomes its own sequence (no chimeric joins across records).
-Supports plain and `.gz` files. `U` is mapped to `T`.
+Accepts `.fa`, `.fas`, `.fna`, `.ffn`, `.fasta`, optional `.gz`. `U`→`T`.
+Bytes before the first `>` are ignored (not prepended to the first record).
+
+Returns a named tuple `(sequences, n_records, files_matched, note)`.
 """
 function _gqc_load_reference_sequences(reference_dir::AbstractString)
     seqs = String[]
-    isdir(reference_dir) || return seqs
-    for file in sort(readdir(reference_dir; join=true))
-        occursin(r"\.(fa|fna|fasta)(\.gz)?$"i, file) || continue
-        raw_io = open(file)
-        io = endswith(lowercase(file), ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+    files_matched = String[]
+    if !isdir(reference_dir)
+        return (sequences=seqs, n_records=0, files_matched=files_matched,
+                note="no_reference_dir")
+    end
+    entries = sort(readdir(reference_dir; join=true))
+    any_file = false
+    files_failed = String[]
+    for file in entries
+        isfile(file) || continue
+        any_file = true
+        occursin(GQC_REFERENCE_EXT_RE, file) || continue
         try
-            buf = IOBuffer()
-            in_record = false
-            function flush_record!()
-                s = replace(String(take!(buf)), 'U' => 'T')
-                !isempty(s) && push!(seqs, s)
+            raw_io = open(file)
+            io = endswith(lowercase(file), ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+            try
                 buf = IOBuffer()
-                return nothing
-            end
-            for line in eachline(io)
-                if startswith(line, '>')
-                    in_record && flush_record!()
-                    in_record = true
-                else
-                    print(buf, uppercase(strip(line)))
+                in_record = false
+                function flush_record!()
+                    s = replace(String(take!(buf)), 'U' => 'T')
+                    !isempty(s) && push!(seqs, s)
+                    buf = IOBuffer()
+                    return nothing
                 end
+                for line in eachline(io)
+                    if startswith(line, '>')
+                        in_record && flush_record!()
+                        take!(buf)  ## drop any pre-header junk
+                        in_record = true
+                    elseif in_record
+                        print(buf, uppercase(strip(line)))
+                    end
+                end
+                in_record && flush_record!()
+            finally
+                close(io)
             end
-            in_record && flush_record!()
-        finally
-            close(io)
+            push!(files_matched, file)
+        catch e
+            push!(files_failed, basename(file) * ": " * sprint(showerror, e))
+            @warn "gqc reference file failed; skipping" file exception=e
         end
     end
-    return seqs
+    note = if isempty(files_matched) && !isempty(files_failed)
+        "reference_files_failed: " * join(files_failed, "; ")
+    elseif isempty(files_matched)
+        any_file ? "reference_dir_no_matching_extensions" : "reference_dir_empty"
+    elseif isempty(seqs)
+        "reference_files_matched_but_zero_records"
+    elseif !isempty(files_failed)
+        "ok_with_skipped_files"
+    else
+        "ok"
+    end
+    @info "gqc reference load" dir=reference_dir n_records=length(seqs) files=length(files_matched) note=note
+    return (sequences=seqs, n_records=length(seqs), files_matched=files_matched, note=note)
 end
 
 """
-True when every segment sequence length equals the graph k (or a sweep k).
-Such graphs are k-mer-node graphs: segment-based repeat nulls are not meaningful.
+Parse GFA `L` overlap fields like `30M` / `30` into integers (best-effort).
+"""
+function _gqc_link_overlaps(g::GFAGraph)::Vector{Int}
+    out = Int[]
+    for link in g.links
+        m = match(r"^(\d+)", string(link.overlap))
+        m === nothing && continue
+        push!(out, parse(Int, m.captures[1]))
+    end
+    return out
+end
+
+"""
+True when every segment has the same length `L` and the graph looks like a
+k-mer-node (de Bruijn) graph:
+
+- `L >= maximum(ks)` when `ks` is non-empty, or
+- all GFA link overlaps equal `L - 1` when overlaps are present, or
+- `L == graph_k` when metadata k is set
+
+Does **not** require `metadata["k"]` or that `L` appear in the sweep `ks`.
 """
 function _gqc_is_kmer_node_graph(seg_seqs::Vector{String};
                                  graph_k::Int=0,
-                                 ks::AbstractVector{<:Integer}=Int[])
+                                 ks::AbstractVector{<:Integer}=Int[],
+                                 overlaps::AbstractVector{<:Integer}=Int[])
     isempty(seg_seqs) && return false
     lens = length.(seg_seqs)
     all(==(first(lens)), lens) || return false
     L = first(lens)
     L > 0 || return false
+    if !isempty(ks) && L >= maximum(Int(k) for k in ks)
+        return true
+    end
+    if !isempty(overlaps) && all(==(L - 1), overlaps)
+        return true
+    end
     (graph_k > 0 && L == graph_k) && return true
     return any(L == Int(k) for k in ks)
 end
@@ -731,30 +863,41 @@ end
 """
 Resolve sequences for repeat nulls.
 
-# Arguments
-- `null_source`: `:auto` (reference if present, else segments), `:reference`, or `:segments`
-
-Returns `(source::Symbol, sequences::Vector{String}, applicable::Bool)`.
-When `applicable` is false (segment source on a k-mer-node graph), callers should
-emit `not_applicable` rather than a degenerate p-value.
+Returns `(source, sequences, applicable, reason)`.
 """
 function _gqc_resolve_null_sequences(null_source::Symbol,
-                                     ref_seqs::Vector{String},
+                                     ref_load,
                                      seg_seqs::Vector{String};
                                      graph_k::Int=0,
-                                     ks::AbstractVector{<:Integer}=Int[])
+                                     ks::AbstractVector{<:Integer}=Int[],
+                                     overlaps::AbstractVector{<:Integer}=Int[])
     null_source in (:auto, :reference, :segments) || error(
         "null_source must be :auto, :reference, or :segments; got $null_source"
     )
-    if null_source === :reference || (null_source === :auto && !isempty(ref_seqs))
-        null_source === :reference && isempty(ref_seqs) && error(
-            "null_source=:reference but no reference/*.fasta records were found"
+    ref_seqs = ref_load.sequences
+    if null_source === :reference
+        isempty(ref_seqs) && error(
+            "null_source=:reference but no reference records were loaded " *
+            "(note=$(ref_load.note); matched=$(length(ref_load.files_matched)) files)"
         )
-        return (:reference, ref_seqs, true)
+        return (:reference, ref_seqs, true, "explicit_reference")
     end
-    ## segments (explicit or :auto with no reference)
-    applicable = !_gqc_is_kmer_node_graph(seg_seqs; graph_k=graph_k, ks=ks)
-    return (:segments, seg_seqs, applicable)
+    if null_source === :auto && !isempty(ref_seqs)
+        return (:reference, ref_seqs, true, "auto_reference_present")
+    end
+    ## segments path
+    is_kmer = _gqc_is_kmer_node_graph(seg_seqs; graph_k=graph_k, ks=ks, overlaps=overlaps)
+    reason = if null_source === :segments
+        is_kmer ? "explicit_segments_kmer_node" : "explicit_segments"
+    elseif null_source === :auto
+        base = isempty(ref_load.files_matched) ? "auto_fallback_no_reference_files" :
+               (ref_load.n_records == 0 ? "auto_fallback_zero_records ($(ref_load.note))" :
+                "auto_fallback_segments")
+        is_kmer ? base * ";kmer_node_guard" : base
+    else
+        "segments"
+    end
+    return (:segments, seg_seqs, !is_kmer, reason)
 end
 
 function gqc_reference_concordance(g::GFAGraph, reference_seqs::Vector{String}; k::Int, circular::Bool=false)
@@ -765,10 +908,14 @@ function gqc_reference_concordance(g::GFAGraph, reference_seqs::Vector{String}; 
         "ref_breaks" => missing,
         "ref_walkability" => missing,
     )
-    seg_seqs = [uppercase(s.sequence) for s in values(g.segments) if s.sequence != "*"]
+    ## Concordance always folds RC (shared k-mer content). Known limitation vs
+    ## strand_mode=:single repeat nulls — documented in docs/gqc-v0.1-spec.md (I6).
+    seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
+                for s in values(g.segments) if s.sequence != "*"]
     graph_kmers = Set{String}()
     for seq in seg_seqs
         n = length(seq)
+        n < k && continue
         for i in 1:(n - k + 1)
             raw = seq[i:(i + k - 1)]
             occursin(r"[^ACGT]", raw) && continue
@@ -780,13 +927,23 @@ function gqc_reference_concordance(g::GFAGraph, reference_seqs::Vector{String}; 
     present = 0
     for seq in reference_seqs
         n = length(seq)
+        ## Skip records shorter than k (circular wrap would BoundsError when n < k-1).
+        n < k && continue
         n_pos = circular ? n : (n - k + 1)
-        for i in 1:max(n_pos, 0)
+        for i in 1:n_pos
             if circular
-                raw = i + k - 1 <= n ? seq[i:(i + k - 1)] : seq[i:n] * seq[1:(k - (n - i + 1))]
+                if i + k - 1 <= n
+                    raw = seq[i:(i + k - 1)]
+                else
+                    need = k - (n - i + 1)
+                    need <= 0 && continue
+                    need > n && continue
+                    raw = seq[i:n] * seq[1:need]
+                end
             else
                 raw = seq[i:(i + k - 1)]
             end
+            length(raw) != k && continue
             occursin(r"[^ACGT]", raw) && continue
             ck = _gqc_canonical_kmer(uppercase(raw))
             push!(ref_kmers, ck)
@@ -796,11 +953,13 @@ function gqc_reference_concordance(g::GFAGraph, reference_seqs::Vector{String}; 
     end
     absent = length(setdiff(ref_kmers, graph_kmers))
     frac = ref_positions > 0 ? present / ref_positions : missing
-    ## path fraction / walkability: fraction of consecutive ref kmer pairs that are both in graph
+    ## path fraction / walkability: consecutive ref k-mers both in the node set
+    ## (does not read GFA links; known limitation I6).
     walkable = 0
     pair_total = 0
     for seq in reference_seqs
         n = length(seq)
+        n < k + 1 && continue
         for i in 1:(n - k)
             a = uppercase(seq[i:(i + k - 1)])
             b = uppercase(seq[(i + 1):(i + k)])
@@ -1009,15 +1168,22 @@ function _gqc_read_metadata(path::AbstractString)
 end
 
 """
-Canonicalize params for hashing: sort keys and sort vector values so that
-`ks` / `bh_ks` / `null_kinds` order does not change `params_hash`.
+Canonicalize params for hashing / manifest storage.
+
+Integer vectors (`ks`, `bh_ks`) are sorted **numerically**. Other vectors are
+sorted by `string`. Hash is permutation-invariant; stored order matches analysis.
 """
 function _gqc_canonicalize_params(params::Dict)
     out = Dict{String, Any}()
     for (k, v) in params
         key = string(k)
         if v isa AbstractVector
-            out[key] = sort(collect(v); by=string)
+            vals = collect(v)
+            if !isempty(vals) && all(x -> x isa Integer, vals)
+                out[key] = sort(Int[Int(x) for x in vals])
+            else
+                out[key] = sort(vals; by=string)
+            end
         else
             out[key] = v
         end
@@ -1032,40 +1198,92 @@ function _gqc_params_hash(params::Dict)
 end
 
 """
-Effective k-mer RC folding from `strand_mode` (I3).
-
-- `:single` → `canonical=false` (no RC fold; ssRNA-safe)
-- `:canonical` → `canonical=true`
-- `:double` → honor the explicit `canonical` keyword
+Slug `graph_id` for filesystem paths. Refuses absolute paths and `..` traversal.
 """
-function _gqc_effective_canonical(strand_mode::Symbol, canonical::Bool)::Bool
-    if strand_mode === :single
-        return false
-    elseif strand_mode === :canonical
-        return true
-    elseif strand_mode === :double
-        return canonical
-    else
-        error("unknown strand_mode=$strand_mode; expected :single, :double, or :canonical")
+function _gqc_slug_graph_id(graph_id::AbstractString)::String
+    s = string(graph_id)
+    isempty(strip(s)) && error("graph_id is empty")
+    if startswith(s, '/') || startswith(s, '\\') || occursin(r"^[A-Za-z]:[/\\]", s) ||
+       occursin("..", s) || occursin('\0', s)
+        error("refusing absolute or traversal graph_id: $(repr(s))")
     end
+    slug = replace(s, r"[^\w.\-]+" => "_")
+    slug = strip(slug, ['_', '.'])
+    (isempty(slug) || slug in (".", "..")) && error("graph_id slugs to empty/invalid: $(repr(s))")
+    return slug
 end
 
 """
-Unique packet directory under `output_root`. Prefers `graph_id`, refuses to
-overwrite a non-empty existing directory (C4).
+Resolve strand_mode / canonical (I7).
+
+- Keyword `strand_mode === nothing` → `metadata["strand_mode"]` → default `:single`
+- Keyword `canonical === nothing` → derived from strand mode (no silent override)
+- `:single` → `canonical=false` unless caller passed `canonical=true` explicitly
+- `:canonical` → `canonical=true`
+- `:double` → honor explicit `canonical` (default `true`)
 """
-function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString)
-    slug = replace(string(graph_id), r"[^\w.\-]+" => "_")
-    isempty(slug) && error("graph_id is empty; cannot choose packet directory")
+function _gqc_resolve_strand(metadata::Dict, strand_mode_kw, canonical_kw)
+    resolved_sm = if strand_mode_kw !== nothing
+        Symbol(strand_mode_kw)
+    elseif haskey(metadata, "strand_mode")
+        Symbol(string(metadata["strand_mode"]))
+    else
+        :single
+    end
+    resolved_sm in (:single, :double, :canonical) || error(
+        "unknown strand_mode=$resolved_sm; expected :single, :double, or :canonical"
+    )
+    eff = if resolved_sm === :canonical
+        true
+    elseif resolved_sm === :single
+        canonical_kw === nothing ? false : Bool(canonical_kw)
+    else
+        canonical_kw === nothing ? true : Bool(canonical_kw)
+    end
+    return (strand_mode=resolved_sm, canonical=eff)
+end
+
+"""
+Effective k-mer RC folding from resolved `strand_mode` + optional canonical flag.
+"""
+function _gqc_effective_canonical(strand_mode::Symbol, canonical::Bool)::Bool
+    return _gqc_resolve_strand(Dict{String, Any}(), strand_mode, canonical).canonical
+end
+
+"""
+Packet directory under `output_root` using slugged `graph_id`.
+
+`overwrite`:
+- `:error` — refuse non-empty existing dir (default)
+- `:skip` — return existing dir if it has `manifest.json` + `CHECKSUMS.sha256`
+- `:replace` — remove and recreate
+"""
+function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString;
+                         overwrite::Symbol=:error)
+    overwrite in (:error, :skip, :replace) || error(
+        "overwrite must be :error, :skip, or :replace; got $overwrite"
+    )
+    slug = _gqc_slug_graph_id(graph_id)
     out_dir = joinpath(abspath(output_root), slug)
     if isdir(out_dir)
         entries = filter(name -> !startswith(name, '.'), readdir(out_dir))
-        isempty(entries) || error(
-            "refusing to overwrite existing gqc packet directory: $out_dir " *
-            "(graph_id=$graph_id). Use unique graph_id values."
-        )
+        if !isempty(entries)
+            complete = isfile(joinpath(out_dir, "manifest.json")) &&
+                       isfile(joinpath(out_dir, "CHECKSUMS.sha256"))
+            if overwrite === :skip && complete
+                return (dir=out_dir, slug=slug, skipped=true)
+            elseif overwrite === :replace
+                rm(out_dir; recursive=true, force=true)
+            else
+                error(
+                    "refusing to overwrite existing gqc packet directory: $out_dir " *
+                    "(graph_id=$(repr(graph_id)), slug=$slug). " *
+                    "Pass overwrite=:skip or overwrite=:replace to resume/replace."
+                )
+            end
+        end
     end
-    return out_dir
+    return (dir=out_dir, slug=slug, skipped=false)
 end
 
 function _gqc_git_commit()
@@ -1139,21 +1357,22 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
   (default: `[11]`). Packet `dinucleotide_bh_q` is **not** the paper's
   cross-genus FDR — that is a post-pass over genera outside `run_gqc`.
 - `circular`: k-mer circularity (default: `metadata["circular"]` or `false`)
-- `canonical`: used only when `strand_mode=:double`; see `strand_mode`
-- `strand_mode`: `:single` (default; `canonical=false`), `:canonical`
-  (`canonical=true`), or `:double` (honor `canonical` kwarg)
+- `canonical`: `nothing` (default) → derived from `strand_mode`; explicit `true`/`false`
+  is honored (including under `:single`)
+- `strand_mode`: `nothing` (default) → `metadata["strand_mode"]` → `:single`;
+  or `:single` / `:canonical` / `:double`
 - `write_node_link_json`: include `formats/node_link.json` (default: `true`)
 - `make_plots`: write plots under `plots/` (default: `true`; set
   `ENV["GKSwstype"]="100"` on HPC)
 - `null_kinds`: `(:dinucleotide, :codon)` by default
-- `null_source`: `:auto` (default; use `reference/*.fasta` records when present,
-  else GFA segments), `:reference`, or `:segments`. K-mer-node graphs with a
-  segment source mark repeat nulls `null_applicable=false` instead of a
-  degenerate p-value.
+- `null_source`: `:auto` (default; use reference records when present),
+  `:reference`, or `:segments`. Uniform-length k-mer-node graphs with a segment
+  source mark `null_applicable=false`.
+- `overwrite`: `:error` (default), `:skip` (resume complete packets), or `:replace`
 
 # Returns
-- Single-graph mode: absolute path to the packet directory `output_root/<graph_id>/`.
-- Graph-set mode: absolute path to `output_root` (each child packet under unique `graph_id`).
+- Single-graph mode: absolute path to the packet directory `output_root/<slug>/`.
+- Graph-set mode: absolute path to `output_root` (each child under unique slug).
 """
 function run_gqc(input_dir::AbstractString,
                  output_root::AbstractString;
@@ -1165,37 +1384,59 @@ function run_gqc(input_dir::AbstractString,
                  min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
                  bh_ks::Union{Nothing, AbstractVector{<:Integer}}=nothing,
                  circular::Union{Nothing, Bool}=nothing,
-                 canonical::Bool=true,
-                 strand_mode::Symbol=:single,
+                 canonical::Union{Nothing, Bool}=nothing,
+                 strand_mode::Union{Nothing, Symbol}=nothing,
                  write_node_link_json::Bool=true,
                  make_plots::Bool=true,
                  null_kinds::Tuple=(:dinucleotide, :codon),
                  null_source::Symbol=:auto,
+                 overwrite::Symbol=:error,
                  gqc_version::String=GQC_VERSION)::String
 
     resolved = resolve_gqc_input_dirs(input_dir)
     output_root = abspath(output_root)
     mkpath(output_root)
     packets = String[]
+    errors = Dict{String, Any}[]
     for (i, graph_dir) in enumerate(resolved.dirs)
-        packet = _run_gqc_one(graph_dir, output_root;
-            ks=ks,
-            n_shuffles=n_shuffles,
-            shuffle_seed=shuffle_seed,
-            salt=salt,
-            genus_index=genus_index + i - 1,
-            min_shuffle_mean=min_shuffle_mean,
-            bh_ks=bh_ks,
-            circular=circular,
-            canonical=canonical,
-            strand_mode=strand_mode,
-            write_node_link_json=write_node_link_json,
-            make_plots=make_plots,
-            null_kinds=null_kinds,
-            null_source=null_source,
-            gqc_version=gqc_version,
-        )
-        push!(packets, packet)
+        try
+            packet = _run_gqc_one(graph_dir, output_root;
+                ks=ks,
+                n_shuffles=n_shuffles,
+                shuffle_seed=shuffle_seed,
+                salt=salt,
+                genus_index=genus_index + i - 1,
+                min_shuffle_mean=min_shuffle_mean,
+                bh_ks=bh_ks,
+                circular=circular,
+                canonical=canonical,
+                strand_mode=strand_mode,
+                write_node_link_json=write_node_link_json,
+                make_plots=make_plots,
+                null_kinds=null_kinds,
+                null_source=null_source,
+                overwrite=overwrite,
+                gqc_version=gqc_version,
+            )
+            push!(packets, packet)
+        catch e
+            resolved.mode === :single_graph && rethrow(e)
+            rec = Dict{String, Any}(
+                "graph_dir" => graph_dir,
+                "error" => sprint(showerror, e),
+                "exception_type" => string(typeof(e)),
+            )
+            push!(errors, rec)
+            @error "gqc graph-set child failed; continuing" graph_dir exception=e
+        end
+    end
+    if !isempty(errors)
+        err_path = joinpath(output_root, "gqc_graph_set_errors.jsonl")
+        open(err_path, "w") do io
+            for rec in errors
+                println(io, JSON.json(rec))
+            end
+        end
     end
     if resolved.mode === :single_graph
         return only(packets)
@@ -1213,12 +1454,13 @@ function _run_gqc_one(input_dir::AbstractString,
                       min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
                       bh_ks::Union{Nothing, AbstractVector{<:Integer}}=nothing,
                       circular::Union{Nothing, Bool}=nothing,
-                      canonical::Bool=true,
-                      strand_mode::Symbol=:single,
+                      canonical::Union{Nothing, Bool}=nothing,
+                      strand_mode::Union{Nothing, Symbol}=nothing,
                       write_node_link_json::Bool=true,
                       make_plots::Bool=true,
                       null_kinds::Tuple=(:dinucleotide, :codon),
                       null_source::Symbol=:auto,
+                      overwrite::Symbol=:error,
                       gqc_version::String=GQC_VERSION)::String
 
     input_dir = abspath(input_dir)
@@ -1230,7 +1472,9 @@ function _run_gqc_one(input_dir::AbstractString,
     graph_set = string(get(metadata, "label", graph_id))
     k_meta = Int(get(metadata, "k", 0))
     circ = circular === nothing ? Bool(get(metadata, "circular", false)) : circular
-    effective_canonical = _gqc_effective_canonical(strand_mode, canonical)
+    strand_res = _gqc_resolve_strand(metadata, strand_mode, canonical)
+    resolved_strand = strand_res.strand_mode
+    effective_canonical = strand_res.canonical
     k_list = isempty(ks) ? (k_meta > 0 ? [k_meta] : Int[]) : sort(unique(Int(k) for k in ks))
     isempty(k_list) && error("no k provided: set metadata[\"k\"] or pass ks=")
     ## Within-graph BH family defaults to k=11 only (C5). Cross-genus FDR is external.
@@ -1260,20 +1504,26 @@ function _run_gqc_one(input_dir::AbstractString,
     beta1 = n_undirected_edges - n_seg + beta0
 
     ref_dir = joinpath(input_dir, "reference")
-    ref_seqs = _gqc_load_reference_sequences(ref_dir)
+    ref_load = _gqc_load_reference_sequences(ref_dir)
+    ref_seqs = ref_load.sequences
     seg_seqs = [replace(uppercase(s.sequence), 'U' => 'T')
                 for s in values(g.segments) if s.sequence != "*" && !isempty(s.sequence)]
-    resolved_null_source, null_seqs, null_applicable = _gqc_resolve_null_sequences(
-        null_source, ref_seqs, seg_seqs; graph_k=k_meta, ks=k_list)
+    overlaps = _gqc_link_overlaps(g)
+    resolved_null_source, null_seqs, null_applicable, null_reason =
+        _gqc_resolve_null_sequences(null_source, ref_load, seg_seqs;
+                                    graph_k=k_meta, ks=k_list, overlaps=overlaps)
 
-    out_dir = _gqc_packet_dir(output_root, graph_id)
+    packet_info = _gqc_packet_dir(output_root, graph_id; overwrite=overwrite)
+    packet_info.skipped && return packet_info.dir
+    out_dir = packet_info.dir
+    slug = packet_info.slug
     mkpath(out_dir)
     for sub in ("nodes", "edges", "unitigs", "nulls", "plots", "formats")
         mkpath(joinpath(out_dir, sub))
     end
 
-    ## long tables
-    open(joinpath(out_dir, "nodes", "$(graph_id).tsv"), "w") do io
+    ## long tables — always use slug in paths (I4)
+    open(joinpath(out_dir, "nodes", "$(slug).tsv"), "w") do io
         println(io, "graph_id\tnode_id\tlength\tdepth\tdegree\tin_degree\tout_degree")
         for (i, id) in enumerate(ids)
             s = g.segments[id]
@@ -1282,14 +1532,14 @@ function _run_gqc_one(input_dir::AbstractString,
                     degrees[i], '\t', indeg[id], '\t', outdeg[id])
         end
     end
-    open(joinpath(out_dir, "edges", "$(graph_id).tsv"), "w") do io
+    open(joinpath(out_dir, "edges", "$(slug).tsv"), "w") do io
         println(io, "graph_id\tfrom\tfrom_orient\tto\tto_orient\toverlap")
         for link in g.links
             println(io, graph_id, '\t', link.from, '\t', link.from_forward ? "+" : "-", '\t',
                     link.to, '\t', link.to_forward ? "+" : "-", '\t', link.overlap)
         end
     end
-    open(joinpath(out_dir, "unitigs", "$(graph_id).tsv"), "w") do io
+    open(joinpath(out_dir, "unitigs", "$(slug).tsv"), "w") do io
         println(io, "graph_id\tunitig_index\tlength")
         for (i, L) in enumerate(sort(unitig_lengths; rev=true))
             println(io, graph_id, '\t', i, '\t', L)
@@ -1297,6 +1547,24 @@ function _run_gqc_one(input_dir::AbstractString,
     end
 
     format_files = gqc_write_formats(g, joinpath(out_dir, "formats"); write_node_link_json=write_node_link_json)
+
+    ## Generate shuffles once per null kind, then score each k (I10).
+    null_by_kind = Dict{Symbol, Dict{Int, NamedTuple}}()
+    if null_applicable
+        for kind in null_kinds
+            null_by_kind[kind] = gqc_repeat_null_stats_for_ks(null_seqs;
+                ks=k_list,
+                n_shuffles=n_shuffles,
+                shuffle_seed=shuffle_seed,
+                salt=salt,
+                genus_index=genus_index,
+                circular=circ,
+                canonical=effective_canonical,
+                min_shuffle_mean=min_shuffle_mean,
+                null_kind=kind,
+            )
+        end
+    end
 
     ## per-k summary rows + nulls
     summary_rows = Dict{String, Any}[]
@@ -1328,7 +1596,7 @@ function _run_gqc_one(input_dir::AbstractString,
             "n_bubbles" => bubbles,
             "n_tangles" => tangles,
             "n_self_loops" => self_loops,
-            "strand_mode" => string(strand_mode),
+            "strand_mode" => string(resolved_strand),
             "canonical" => effective_canonical,
             "gqc_version" => gqc_version,
             ## Always emit null / BH columns (frozen schema); fill below.
@@ -1363,22 +1631,13 @@ function _run_gqc_one(input_dir::AbstractString,
             prefix = string(kind)
             if !null_applicable
                 ## K-mer-node graph + segment source: do not emit degenerate p.
-                open(joinpath(out_dir, "nulls", "$(graph_id)__k$(k)__$(prefix).tsv"), "w") do io
+                open(joinpath(out_dir, "nulls", "$(slug)__k$(k)__$(prefix).tsv"), "w") do io
                     println(io, "graph_id\tk\tnull_kind\treplicate\tnull_repeats")
-                    println(io, "# null_applicable=false (k-mer-node graph; provide reference/*.fasta or null_source=:reference)")
+                    println(io, "# null_applicable=false reason=$(null_reason)")
                 end
                 continue
             end
-            stats = gqc_repeat_null_stats(null_seqs;
-                                          k=k,
-                                          n_shuffles=n_shuffles,
-                                          shuffle_seed=shuffle_seed,
-                                          salt=salt,
-                                          genus_index=genus_index,
-                                          circular=circ,
-                                          canonical=effective_canonical,
-                                          min_shuffle_mean=min_shuffle_mean,
-                                          null_kind=kind)
+            stats = null_by_kind[kind][k]
             row["$(prefix)_observed_repeats"] = stats.observed_repeats
             row["$(prefix)_null_mean"] = stats.null_mean
             row["$(prefix)_null_std"] = stats.null_std
@@ -1387,7 +1646,7 @@ function _run_gqc_one(input_dir::AbstractString,
             row["$(prefix)_shuffle_p_upper"] = stats.shuffle_p_upper
             row["$(prefix)_null_degenerate"] = stats.null_degenerate
             ## null long table
-            open(joinpath(out_dir, "nulls", "$(graph_id)__k$(k)__$(prefix).tsv"), "w") do io
+            open(joinpath(out_dir, "nulls", "$(slug)__k$(k)__$(prefix).tsv"), "w") do io
                 println(io, "graph_id\tk\tnull_kind\treplicate\tnull_repeats")
                 for (i, r) in enumerate(stats.null_repeats)
                     println(io, graph_id, '\t', k, '\t', prefix, '\t', i, '\t', r)
@@ -1428,7 +1687,7 @@ function _run_gqc_one(input_dir::AbstractString,
                 degree_hist[d] = get(degree_hist, d, 0) + 1
             end
             gqc_make_plots(row, degree_hist, unitig_lengths, coverages, null_ratio_ci,
-                           joinpath(out_dir, "plots"), graph_id, k; adj=adj, ids=ids, g=g)
+                           joinpath(out_dir, "plots"), slug, k; adj=adj, ids=ids, g=g)
         end
     end
 
@@ -1448,7 +1707,7 @@ function _run_gqc_one(input_dir::AbstractString,
             b1 = [r["beta1"] for r in summary_rows]
             p = Plots.plot(ks_plot, b0; label="β0", xlabel="k", ylabel="Betti", title="Betti vs k")
             Plots.plot!(p, ks_plot, b1; label="β1")
-            _gqc_save_plot(p, joinpath(out_dir, "plots"), "betti_vs_k", graph_id, first(ks_plot))
+            _gqc_save_plot(p, joinpath(out_dir, "plots"), "betti_vs_k", slug, first(ks_plot))
         catch e
             @warn "gqc betti_vs_k plot failed" exception=e
         end
@@ -1487,8 +1746,9 @@ function _run_gqc_one(input_dir::AbstractString,
         println(io, "- components (β0): **$(beta0)**; β1: **$(beta1)**; largest fraction: **$(round(largest_frac; digits=3))**")
         println(io, "- tips: **$(length(roles.tips))**; bubbles: **$(bubbles)**; tangles: **$(tangles)**")
         println(io, "- unitigs: **$(length(unitig_lengths))**; N50: **$(n50stats.n50)**; L50: **$(n50stats.l50)**")
-        println(io, "- strand_mode: `$(strand_mode)` → effective canonical=$(effective_canonical)")
-        println(io, "- null_source: `$(resolved_null_source)` (requested `$(null_source)`); applicable=$(null_applicable)")
+        println(io, "- strand_mode: `$(resolved_strand)` → effective canonical=$(effective_canonical)")
+        println(io, "- null_source: `$(resolved_null_source)` (requested `$(null_source)`); applicable=$(null_applicable); reason=$(null_reason)")
+        println(io, "- reference records loaded: **$(ref_load.n_records)** from $(length(ref_load.files_matched)) file(s)")
         println(io, "- bh_ks (within-graph only): ", join(bh_list, ", "),
                 " — packet q-values are **not** the paper cross-genus FDR")
         println(io, "- k sweep: ", join(k_list, ", "))
@@ -1506,21 +1766,28 @@ function _run_gqc_one(input_dir::AbstractString,
         "bh_ks" => bh_list,
         "circular" => circ,
         "canonical" => effective_canonical,
-        "strand_mode" => string(strand_mode),
+        "strand_mode" => string(resolved_strand),
         "null_kinds" => sort(collect(string.(null_kinds))),
         "null_source" => string(null_source),
         "resolved_null_source" => string(resolved_null_source),
         "null_applicable" => null_applicable,
+        "null_source_reason" => null_reason,
+        "reference_n_records" => ref_load.n_records,
         "write_node_link_json" => write_node_link_json,
         "make_plots" => make_plots,
+        "overwrite" => string(overwrite),
     )
     input_hashes = Dict{String, String}("graph.gfa" => sha256_file(gfa_path))
     meta_path = joinpath(input_dir, "metadata.json")
     if isfile(meta_path)
         input_hashes["metadata.json"] = sha256_file(meta_path)
     end
+    ## Hash every reference file the loader matched (I1).
+    for ref_file in ref_load.files_matched
+        input_hashes["reference/" * basename(ref_file)] = sha256_file(ref_file)
+    end
 
-    ## Hash all artifacts except CHECKSUMS / manifest (stable identity; I5).
+    ## Hash all artifacts except CHECKSUMS / manifest (stable identity).
     artifact_entries = Tuple{String, String}[]
     for (root, dirs, files) in walkdir(out_dir)
         sort!(dirs); sort!(files)
@@ -1543,10 +1810,18 @@ function _run_gqc_one(input_dir::AbstractString,
         "output_sha256" => output_hashes,
         "formats" => sort([relpath(f, out_dir) for f in format_files]),
         "graph_id" => graph_id,
+        "graph_id_slug" => slug,
         "graph_set" => graph_set,
         "packet_dir" => basename(out_dir),
         "metadata" => metadata,
+        "null_source_reason" => null_reason,
+        "reference_load" => Dict{String, Any}(
+            "n_records" => ref_load.n_records,
+            "files_matched" => [basename(f) for f in ref_load.files_matched],
+            "note" => ref_load.note,
+        ),
         "bh_note" => "dinucleotide_bh_q is within-graph BH over bh_ks only; paper cross-genus FDR is a post-pass",
+        "concordance_note" => "ref_walkability is shared k-mer content (always RC-folded); not GFA-link walkability (I6)",
     )
     open(manifest_path, "w") do io
         JSON.print(io, manifest, 2)
