@@ -1,26 +1,28 @@
 # gqc v0.1 — reproducible HPC runs
 
 How to run `Mycelia.run_gqc` on Lawrencium, NERSC (Perlmutter), and Lovelace
-at Mycelia commit **`f2ece978`** (`cursor/gqc-v0.1`). Doc-only; claims checked
-against that revision.
+on the **post-v0.1 stacked fixes** branch (based on `cursor/gqc-v0.1` @
+`f2ece978`, plus GraphML escaping, collision-free seeds, unified node TSV).
+Pin to the consolidated PR head, not a floating tip.
 
 Companion API/spec: [`docs/gqc-v0.1-spec.md`](gqc-v0.1-spec.md).
 
 ## Julia version and pin
 
-| Item | At `f2ece978` |
-|------|----------------|
+| Item | Value |
+|------|-------|
 | `Project.toml` `[compat] julia` | `"1.10"` |
 | `Manifest.toml` `julia_version` | `1.10.12` (when a Manifest is present) |
 | CI matrix | `julia-version: ['lts']` (Julia 1.10 LTS line) |
 
 Use **Julia 1.10.x** (prefer 1.10.12 to match the Manifest). Instantiate **at the
-pinned Mycelia commit**, not a floating branch tip:
+pinned Mycelia commit** for the run (consolidated stack head, or `f2ece978` only
+if you intentionally accept legacy seeds):
 
 ```bash
 git clone https://github.com/cjprybol/Mycelia.git
 cd Mycelia
-git checkout f2ece978
+git checkout <consolidated-stack-sha>   # or f2ece978 for #472-only
 julia --project=. -e 'import Pkg; Pkg.instantiate()'
 ```
 
@@ -39,7 +41,7 @@ creation can fail or hang on HPC.
 
 ## Nulls and references (required before trusting q-values)
 
-Defaults at `f2ece978` (`src/gqc.jl`):
+Defaults (`src/gqc.jl`):
 
 - `null_source=:auto` — if any reference records load, nulls use **reference**;
   else segments (k-mer-node graphs then set `null_applicable=false`)
@@ -56,19 +58,29 @@ Defaults at `f2ece978` (`src/gqc.jl`):
 | `params.resolved_null_source` | `"reference"` |
 | `params.null_applicable` | `true` |
 | `params.null_source` | `"auto"` or `"reference"` (what you requested) |
+| `params.seed_scheme` | `"gqc-null-v1-sha256"` on this stack (see below) |
 
 Summary rows also carry `null_source` / `null_applicable`. If
 `resolved_null_source` is `"segments"` or `null_applicable` is `false`, do
 **not** treat p/q as paper-style reference nulls.
 
-Cross-genus FDR is **not** computed inside `run_gqc` (within-graph BH only).
-Use a post-pass (e.g. `Mycelia.gqc_cross_bh` on later stacked heads, or your own
-BH across packets).
+Cross-genus FDR is **not** computed inside `run_gqc` (within-graph BH only;
+column `dinucleotide_bh_q_within_graph`). Use a post-pass
+(`Mycelia.gqc_cross_bh` or your own BH across packets).
+
+### Seed scheme (differs from `f2ece978`)
+
+This stack uses **`gqc-null-v1-sha256`**: one `Xoshiro` per
+`(shuffle_seed, salt, genus_index, null_kind, replicate)` via
+`Mycelia.gqc_derive_null_seed`. Null numeric outputs **differ** from packets
+produced at `f2ece978` (legacy `shuffle_seed + 1000*salt + genus_index`). Reruns
+under the same scheme remain bit-identical. Confirm `params.seed_scheme` in the
+manifest before comparing to older HVP tables.
 
 ## Threads and memory
 
-`run_gqc` at `f2ece978` does **not** call `Threads.@threads` for null shuffles;
-replicates advance one RNG stream sequentially. Extra CPUs help Julia/BLAS and
+`run_gqc` does **not** call `Threads.@threads` for null shuffles; each replicate
+gets its own seeded RNG and runs sequentially. Extra CPUs help Julia/BLAS and
 Plots more than the null loop itself.
 
 Practical starting points (tune with `seff` / `sacct`):
@@ -117,7 +129,7 @@ user (`mail_user=`, `ENV["SLURM_MAIL_USER"]`, or `git config user.email`).
 import Mycelia
 ENV["GKSwstype"] = "100"
 
-mycelia = "/path/to/Mycelia"   # checked out at f2ece978
+mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
 ENV["GKSwstype"]="100"
@@ -149,7 +161,7 @@ login nodes (cgroup limits). Prefer `constraint="cpu"` for this CPU packet.
 import Mycelia
 ENV["GKSwstype"] = "100"
 
-mycelia = "/path/to/Mycelia"   # f2ece978
+mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
 ENV["GKSwstype"]="100"
@@ -182,7 +194,7 @@ writes timestamped stdout/stderr under `~/workspace/slurmlogs` by default.
 import Mycelia
 ENV["GKSwstype"] = "100"
 
-mycelia = "/path/to/Mycelia"   # f2ece978
+mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
 ENV["GKSwstype"]="100"
@@ -200,11 +212,14 @@ Mycelia.lovelace_run(; job_name="gqc-v0.1", cmd=cmd)
 ## Post-run checklist
 
 1. Packet(s) under `output_root/<graph_id_slug>/`
-2. `manifest.json`: `resolved_null_source == "reference"`, `null_applicable == true`
+2. `manifest.json`: `resolved_null_source == "reference"`, `null_applicable == true`,
+   `seed_scheme == "gqc-null-v1-sha256"`
 3. `summary.csv` / `summary.json` for metrics; `nulls/` for replicate tables
-4. Graph-set: inspect `output_root/gqc_graph_set_errors.jsonl` if present
-5. Re-run with the same commit + seeds for bit-identical nulls (at `f2ece978`:
-   `Xoshiro(shuffle_seed + 1000*salt + genus_index)` per graph/kind stream)
+4. Node TSVs (`nodes/<slug>.tsv` and `formats/nodes.tsv`) share one header
+   (`GQC_NODE_TSV_COLUMNS`); GraphML IDs/attrs are XML-escaped
+5. Graph-set: inspect `output_root/gqc_graph_set_errors.jsonl` if present
+6. Re-run with the same commit + `(shuffle_seed, salt, genus_index)` for
+   bit-identical nulls under `gqc-null-v1-sha256`
 
 ## See also
 
