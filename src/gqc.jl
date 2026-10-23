@@ -1089,16 +1089,36 @@ end
 # =============================================================================
 
 """
+Resolve `graph_id` for node TSV / formats writers.
+
+Prefer an explicit non-empty `graph_id` (what `run_gqc` passes from metadata /
+`basename(input_dir)`). Otherwise fall back to `basename(dirname(g.path))`,
+matching the no-metadata `run_gqc` default when the GFA lives at
+`<input_dir>/graph.gfa`.
+"""
+function _gqc_resolve_node_tsv_graph_id(g::GFAGraph;
+                                       graph_id::AbstractString="")::String
+    gid = strip(string(graph_id))
+    !isempty(gid) && return gid
+    p = string(g.path)
+    isempty(p) && return ""
+    parent = basename(dirname(abspath(p)))
+    return (isempty(parent) || parent == ".") ? "" : parent
+end
+
+"""
 Write the unified node TSV (`GQC_NODE_TSV_COLUMNS`) for one graph.
 
 Used by both `nodes/<slug>.tsv` and `formats/nodes.tsv`. Schema/column naming
 only — values are the same quantities previously split across the two files.
+`graph_id` is resolved via `_gqc_resolve_node_tsv_graph_id`.
 """
 function _gqc_write_nodes_tsv(io::IO,
                               g::GFAGraph,
                               ids::Vector{String},
                               adj::Vector{Vector{Int}};
                               graph_id::AbstractString="")
+    gid = _gqc_resolve_node_tsv_graph_id(g; graph_id=graph_id)
     degrees = _gqc_degrees(adj)
     indeg, outdeg, _, _ = _gqc_directed_degrees(g)
     println(io, join(GQC_NODE_TSV_COLUMNS, '\t'))
@@ -1106,7 +1126,7 @@ function _gqc_write_nodes_tsv(io::IO,
         s = g.segments[id]
         seq = s.sequence == "*" ? "" : s.sequence
         d = s.depth === nothing ? "" : string(s.depth)
-        println(io, graph_id, '\t', id, '\t', i, '\t', s.length, '\t', d, '\t',
+        println(io, gid, '\t', id, '\t', i, '\t', s.length, '\t', d, '\t',
                 degrees[i], '\t', indeg[id], '\t', outdeg[id], '\t', seq)
     end
     return nothing

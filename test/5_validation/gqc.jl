@@ -278,9 +278,19 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         ## Spot-check: index is 1-based and sequence column present
         cols = split(fmt_lines[2], '\t')
         Test.@test length(cols) == length(Mycelia.GQC_NODE_TSV_COLUMNS)
-        Test.@test cols[1] == "synth_ss_k5"  ## graph_id
+        Test.@test cols[1] == "synth_ss_k5"  ## run graph_id (not empty)
+        Test.@test all(startswith(l, "synth_ss_k5\t") for l in fmt_lines[2:end])
         Test.@test cols[3] == "1"            ## index
         Test.@test !isempty(cols[end])       ## sequence
+        ## Standalone formats writer: empty kwarg → basename(dirname(g.path))
+        g = Mycelia.read_gfa_records(joinpath(fixture, "graph.gfa"))
+        formats_only = mktempdir()
+        Mycelia.gqc_write_formats(g, formats_only; write_node_link_json=false)
+        stand_cols = split(readlines(joinpath(formats_only, "nodes.tsv"))[2], '\t')
+        Test.@test stand_cols[1] == "gqc_synthetic"
+        Test.@test !isempty(stand_cols[1])
+        Test.@test Mycelia._gqc_resolve_node_tsv_graph_id(g; graph_id="explicit") == "explicit"
+        Test.@test Mycelia._gqc_resolve_node_tsv_graph_id(g; graph_id="") == "gqc_synthetic"
     end
 
     Test.@testset "C3 MTX golden with reverse-only link" begin
