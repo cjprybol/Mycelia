@@ -80,9 +80,13 @@ Test.@testset "bidirectional_genomic_dijkstra agrees with genomic_dijkstra" begi
         Test.@test result.total_cost ≈ 1.99
     end
 
-    Test.@testset "(b) one queue empties while a path still exists" begin
+    Test.@testset "(b) termination is correct after one queue empties" begin
         ## Reverse side exhausts first: target 3 has a single ancestor chain
         ## 1 -> 2 -> 3, while the source fans out into a long cheap branch.
+        ## This guards the new empty-queue-as-Inf stopping rule. It is not a
+        ## regression test for the old `while` condition: the old code always
+        ## broke at the first meeting vertex before either queue could empty,
+        ## so that defect was latent and has no reproducing input.
         graph, kmers,
         coverage = build_case(
             9,
