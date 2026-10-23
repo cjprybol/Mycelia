@@ -129,6 +129,12 @@ k-mer-node graphs.
 (`row >= col`), 1-based indices matching `formats/nodes.tsv`. Directed multi-edges
 remain in `edges.tsv` / GraphML / `node_link.json`.
 
+## GraphML escaping
+
+`formats/graph.graphml` XML-escapes node/edge IDs and attribute/data values for
+`& < > " '` (`Mycelia._gqc_xml_escape`) so special characters round-trip through
+an XML parser.
+
 ## Reproducibility
 
 - RNG: `Xoshiro(shuffle_seed + 1000*salt + genus_index)`
