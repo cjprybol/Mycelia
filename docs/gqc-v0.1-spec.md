@@ -137,8 +137,30 @@ an XML parser.
 
 ## Reproducibility
 
-- RNG: `Xoshiro(shuffle_seed + 1000*salt + genus_index)`
-- Shuffles generated once per null kind, then counted at each k
+### Null seed scheme (`gqc-null-v1-sha256`)
+
+Each null replicate uses its own RNG:
+
+```text
+seed = u64_le(sha256("gqc-null-v1|shuffle_seed|salt|genus_index|null_kind|replicate")[1:8])
+rng  = Xoshiro(seed)
+```
+
+- `replicate` is **1-based** (`1 … n_shuffles`)
+- `null_kind` is the symbol name (`dinucleotide` / `codon`)
+- Graph-set child `i` (1-based, sorted) uses `genus_index + i - 1`
+
+This replaces the legacy formula `shuffle_seed + 1000*salt + genus_index`, which
+aliased `(salt+1, genus)` with `(salt, genus+1000)` and gave both null kinds the
+same stream. Manifest records `params.seed_scheme`, `params.seed_scheme_detail`,
+and top-level `seed_note`.
+
+Shuffles are generated once per null kind (per-replicate seeds), then counted at
+each k. Reruns with the same inputs/params are bit-identical under this scheme.
+
+**Note:** null numeric outputs differ from packets produced under the legacy
+formula (e.g. head `f2ece978`).
+
 - `params_hash` sorts integer vectors numerically; `ks`/`bh_ks` in the manifest
   match analysis order
 - `input_sha256` covers `graph.gfa`, `metadata.json`, and every matched reference file
