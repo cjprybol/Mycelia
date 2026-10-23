@@ -86,6 +86,35 @@ formats/
 
 Graph-set failures append `output_root/gqc_graph_set_errors.jsonl` and continue.
 
+## Node TSV schema (unified, BREAKING)
+
+`nodes/<slug>.tsv` and `formats/nodes.tsv` share one frozen header
+(`Mycelia.GQC_NODE_TSV_COLUMNS`):
+
+```text
+graph_id	node_id	index	length	depth	degree	in_degree	out_degree	sequence
+```
+
+| Column | Meaning |
+|--------|---------|
+| `graph_id` | Packet graph id (see below) |
+| `node_id` | GFA segment id |
+| `index` | 1-based order matching MTX row/col (`formats/nodes.tsv` / adjacency) |
+| `length` | Segment length (bp) |
+| `depth` | GFA `DP:f` when present; else empty |
+| `degree` | Undirected simple-graph degree |
+| `in_degree` / `out_degree` | Directed GFA link degrees |
+| `sequence` | Segment sequence (`*` → empty) |
+
+Both files contain the same rows for a packet (identical schema and values).
+
+**`graph_id` filling:** `run_gqc` always passes the run’s graph id (metadata
+`graph_id`, else `basename(input_dir)`). Standalone `gqc_write_formats` /
+`_gqc_write_nodes_tsv` without an explicit `graph_id` fall back to
+`basename(dirname(g.path))` (the folder containing `graph.gfa`), matching that
+default. The column is empty only when neither an explicit id nor a usable path
+parent is available.
+
 ## `summary.csv` columns
 
 Frozen order: `Mycelia.GQC_SUMMARY_COLUMNS` (includes `null_source`,
