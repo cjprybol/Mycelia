@@ -659,4 +659,58 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             Test.@test multi[k].shuffle_p_upper ≈ one.shuffle_p_upper
         end
     end
+
+    Test.@testset "null seeds unique for n=1000 across kinds and graphs" begin
+        n = 1000
+        seed = 20261021
+        salt = 0
+        kinds = (:dinucleotide, :codon)
+        graphs = 1:5
+        seeds = UInt64[]
+        for g in graphs, kind in kinds, rep in 1:n
+            push!(seeds, Mycelia.gqc_derive_null_seed(seed, salt, g, kind, rep))
+        end
+        Test.@test length(seeds) == n * length(kinds) * length(graphs)
+        Test.@test length(unique(seeds)) == length(seeds)
+        ## Legacy alias pair must not collide under the new scheme
+        Test.@test Mycelia.gqc_derive_null_seed(seed, 1, 1, :dinucleotide, 1) !=
+                   Mycelia.gqc_derive_null_seed(seed, 0, 1001, :dinucleotide, 1)
+        Test.@test Mycelia.gqc_derive_null_seed(seed, 0, 1, :dinucleotide, 1) !=
+                   Mycelia.gqc_derive_null_seed(seed, 0, 1, :codon, 1)
+    end
+
+    Test.@testset "null stats bit-identical on rerun; seed_scheme in manifest" begin
+        seqs = ["ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA"]
+        kwargs = (;
+            k=5, n_shuffles=40, shuffle_seed=20261021, salt=0, genus_index=1,
+            circular=false, canonical=true, null_kind=:dinucleotide,
+        )
+        a = Mycelia.gqc_repeat_null_stats(seqs; kwargs...)
+        b = Mycelia.gqc_repeat_null_stats(seqs; kwargs...)
+        Test.@test a.null_repeats == b.null_repeats
+        Test.@test a.shuffle_p_upper == b.shuffle_p_upper
+        ca = Mycelia.gqc_repeat_null_stats(seqs; kwargs..., null_kind=:codon)
+        cb = Mycelia.gqc_repeat_null_stats(seqs; kwargs..., null_kind=:codon)
+        Test.@test ca.null_repeats == cb.null_repeats
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        packet = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=10, strand_mode=:single,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide, :codon))
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        Test.@test man["params"]["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test occursin("gqc-null-v1", man["params"]["seed_scheme_detail"])
+        Test.@test occursin("gqc-null-v1", man["seed_note"])
+        ## Same packet twice → bit-identical null TSV + summary null fields
+        packet2 = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=10, strand_mode=:single,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide, :codon))
+        row1 = only(JSON.parsefile(joinpath(packet, "summary.json")))
+        row2 = only(JSON.parsefile(joinpath(packet2, "summary.json")))
+        Test.@test row1["dinucleotide_null_mean"] == row2["dinucleotide_null_mean"]
+        Test.@test row1["dinucleotide_shuffle_p_upper"] == row2["dinucleotide_shuffle_p_upper"]
+        Test.@test row1["codon_null_mean"] == row2["codon_null_mean"]
+        Test.@test row1["codon_shuffle_p_upper"] == row2["codon_shuffle_p_upper"]
+    end
 end
