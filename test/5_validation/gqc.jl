@@ -649,6 +649,9 @@ Test.@testset "gqc v0.1 helpers and packet" begin
                 ks=[5, 11], bh_ks=[11], n_shuffles=10, strand_mode=:single,
                 make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
             push!(paths, joinpath(pkt, "summary.json"))
+            ## Single-graph: cross-genus column missing
+            row11 = only(r for r in JSON.parsefile(joinpath(pkt, "summary.json")) if r["k"] == 11)
+            Test.@test row11["dinucleotide_bh_q_cross_genus"] === nothing
         end
         cross = Mycelia.gqc_cross_bh(paths; k=11)
         Test.@test length(cross) == 2
@@ -658,6 +661,46 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         qs = sort([r.q for r in cross])
         Test.@test length(ps) == 2
         Test.@test all(q >= p - 1e-12 for (p, q) in zip(ps, qs)) || issorted(qs)
+    end
+
+    Test.@testset "graph-set writes dinucleotide_bh_q_cross_genus = gqc_cross_bh" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        root = mktempdir()
+        for gid in ("genus_a", "genus_b", "genus_c")
+            d = joinpath(root, gid)
+            mkpath(d)
+            cp(joinpath(fixture, "graph.gfa"), joinpath(d, "graph.gfa"))
+            open(joinpath(d, "metadata.json"), "w") do io
+                JSON.print(io, Dict("graph_id" => gid, "label" => gid, "k" => 5), 2)
+            end
+        end
+        out = Mycelia.run_gqc(root, mktempdir();
+            ks=[5, 11], bh_ks=[11], n_shuffles=12, strand_mode=:single,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+        paths = String[joinpath(out, gid, "summary.json") for gid in ("genus_a", "genus_b", "genus_c")]
+        Test.@test all(isfile, paths)
+        ## Frozen header still ends with the additive column
+        hdr = first(readlines(joinpath(out, "genus_a", "summary.csv")))
+        Test.@test hdr == join(Mycelia.GQC_SUMMARY_COLUMNS, ',')
+        Test.@test endswith(hdr, "dinucleotide_bh_q_cross_genus")
+        Test.@test occursin("dinucleotide_bh_q_within_graph", hdr)
+        cross = Mycelia.gqc_cross_bh(paths; k=11)
+        qmap = Dict(r.graph_id => r.q for r in cross)
+        Test.@test length(qmap) == 3
+        for gid in ("genus_a", "genus_b", "genus_c")
+            rows = JSON.parsefile(joinpath(out, gid, "summary.json"))
+            by_k = Dict(Int(r["k"]) => r for r in rows)
+            Test.@test by_k[5]["dinucleotide_bh_q_cross_genus"] === nothing  ## not in bh_ks
+            Test.@test by_k[11]["dinucleotide_bh_q_cross_genus"] isa Real
+            Test.@test by_k[11]["dinucleotide_bh_q_cross_genus"] ≈ qmap[gid] atol=1e-12
+            ## Existing within-graph column still present / unchanged semantics
+            Test.@test by_k[11]["dinucleotide_bh_q_within_graph"] isa Real
+            Test.@test by_k[11]["dinucleotide_bh_q_within_graph"] ≈
+                       by_k[11]["dinucleotide_shuffle_p_upper"] atol=1e-12
+            man = JSON.parsefile(joinpath(out, gid, "manifest.json"))
+            Test.@test man["cross_genus_bh"]["column"] == "dinucleotide_bh_q_cross_genus"
+            Test.@test man["cross_genus_bh"]["n_packets"] == 3
+        end
     end
 
     Test.@testset "I1 reference bytes in input_sha256" begin

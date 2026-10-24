@@ -133,16 +133,18 @@ Missing values: empty CSV field / JSON `null`.
 
 ### Q-value scope (important)
 
-`dinucleotide_bh_q_within_graph` is Benjamini–Hochberg over `bh_ks` **inside one
-graph only**. With the default `bh_ks=[11]` it equals that graph’s k=11 p-value.
+| Column | Scope |
+|--------|-------|
+| `dinucleotide_bh_q_within_graph` | BH over `bh_ks` **inside one graph** (unchanged) |
+| `dinucleotide_bh_q_cross_genus` | **Additive** (appended column). BH across packets in a **graph-set** run at each `bh_ks` k — same values as `Mycelia.gqc_cross_bh`. Missing (`null`) on single-graph runs |
 
-**Cross-genus / cross-graph FDR is the caller’s job.** Use:
+With default `bh_ks=[11]`, within-graph q equals that graph’s k=11 p-value when only one k is in the family.
+
+`run_gqc` graph-set mode writes `dinucleotide_bh_q_cross_genus` after all children finish. The helper remains available for custom cohorts:
 
 ```julia
 Mycelia.gqc_cross_bh(["pkt_a/summary.json", "pkt_b/summary.json"]; k=11)
 ```
-
-which returns `(graph_id, k, p, q)` rows with BH across those graphs.
 
 ## Concordance limitation (I6)
 

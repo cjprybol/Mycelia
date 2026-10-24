@@ -5,7 +5,7 @@ const GQC_VERSION = "0.1.0"
 const GQC_N_SHUFFLES = 100
 const GQC_SHUFFLE_SEED = 20261021
 const GQC_MIN_SHUFFLE_MEAN = 1.0
-## Default BH family is k=11 only (within-graph). Paper cross-genus FDR is a post-pass.
+## Default BH family is k=11 (within-graph and cross-genus passes).
 const GQC_DEFAULT_BH_KS = [11]
 ## Collision-free null seeding (replaces `shuffle_seed + 1000*salt + genus_index`).
 const GQC_SEED_SCHEME = "gqc-null-v1-sha256"
@@ -18,6 +18,7 @@ const GQC_NODE_TSV_COLUMNS = (
     "degree", "in_degree", "out_degree", "sequence",
 )
 ## Frozen summary.csv column order (every field always emitted).
+## Additive columns append at the end so prior names/positions stay stable.
 const GQC_SUMMARY_COLUMNS = (
     "graph_id", "k", "n_segments", "n_links",
     "total_bp", "total_segment_bp", "density",
@@ -35,6 +36,7 @@ const GQC_SUMMARY_COLUMNS = (
     "codon_null_degenerate",
     "null_source", "null_applicable",
     "strand_mode", "canonical", "gqc_version",
+    "dinucleotide_bh_q_cross_genus",
 )
 
 # =============================================================================
@@ -140,8 +142,11 @@ Cross-genus (cross-graph) Benjamini–Hochberg on per-graph p-values at a single
 
 # Returns
 `Vector` of `NamedTuple`s `(graph_id, k, p, q)` sorted by ascending `p`.
-Packet column `dinucleotide_bh_q_within_graph` is **not** this — callers must
-run this (or equivalent) for paper-style FDR across genera.
+
+`run_gqc` in **graph-set** mode writes the same q into each packet's
+`dinucleotide_bh_q_cross_genus` column (via this helper). Within-graph BH remains
+`dinucleotide_bh_q_within_graph`. Callers may still invoke this helper on an
+arbitrary set of packets outside `run_gqc`.
 """
 function gqc_cross_bh(summary_paths;
                       k::Int=11,
@@ -166,6 +171,108 @@ function gqc_cross_bh(summary_paths;
         push!(rows, (graph_id=gid, k=k, p=p, q=qs[i]))
     end
     return rows
+end
+
+"""
+Render frozen `GQC_SUMMARY_COLUMNS` rows to `summary.csv`.
+"""
+function _gqc_write_summary_csv(path::AbstractString, summary_rows)::Nothing
+    csv_keys = collect(String, GQC_SUMMARY_COLUMNS)
+    open(path, "w") do io
+        println(io, join(csv_keys, ','))
+        for row in summary_rows
+            rendered = String[]
+            for col in csv_keys
+                v = get(row, col, missing)
+                if v === missing || v === nothing
+                    push!(rendered, "")
+                elseif v isa AbstractString
+                    push!(rendered, '"' * replace(v, '"' => "\"\"") * '"')
+                elseif v isa Bool
+                    push!(rendered, string(v))
+                else
+                    push!(rendered, string(v))
+                end
+            end
+            println(io, join(rendered, ','))
+        end
+    end
+    return nothing
+end
+
+"""
+After a graph-set run, fill `dinucleotide_bh_q_cross_genus` from `gqc_cross_bh`
+and rewrite each packet's summary/report/manifest checksums.
+"""
+function _gqc_apply_cross_genus_bh!(packets::Vector{String};
+                                    bh_ks::AbstractVector{<:Integer}=GQC_DEFAULT_BH_KS)::Nothing
+    paths = String[joinpath(p, "summary.json") for p in packets if isfile(joinpath(p, "summary.json"))]
+    length(paths) < 1 && return nothing
+    q_by = Dict{Tuple{String, Int}, Float64}()
+    for k in bh_ks
+        for r in gqc_cross_bh(paths; k=Int(k))
+            q_by[(r.graph_id, r.k)] = r.q
+        end
+    end
+    for packet in packets
+        summary_json = joinpath(packet, "summary.json")
+        isfile(summary_json) || continue
+        rows = JSON.parsefile(summary_json)
+        for row in rows
+            key = (string(row["graph_id"]), Int(row["k"]))
+            row["dinucleotide_bh_q_cross_genus"] = get(q_by, key, nothing)
+        end
+        open(summary_json, "w") do io
+            JSON.print(io, rows, 2)
+        end
+        _gqc_write_summary_csv(joinpath(packet, "summary.csv"), rows)
+        report_path = joinpath(packet, "report.md")
+        if isfile(report_path)
+            txt = read(report_path, String)
+            note = "- `dinucleotide_bh_q_cross_genus` is BH across graphs in this graph-set " *
+                   "at bh_ks (same values as `Mycelia.gqc_cross_bh`)"
+            if !occursin("dinucleotide_bh_q_cross_genus", txt)
+                txt = replace(txt,
+                    "- `dinucleotide_bh_q_within_graph`" =>
+                        note * "\n- `dinucleotide_bh_q_within_graph`")
+                write(report_path, txt)
+            end
+        end
+        man_path = joinpath(packet, "manifest.json")
+        if isfile(man_path)
+            man = JSON.parsefile(man_path)
+            man["bh_note"] =
+                "dinucleotide_bh_q_within_graph = BH over bh_ks inside one graph; " *
+                "dinucleotide_bh_q_cross_genus = BH across graphs in the graph-set " *
+                "(equals Mycelia.gqc_cross_bh); helper remains available for custom cohorts"
+            man["cross_genus_bh"] = Dict{String, Any}(
+                "column" => "dinucleotide_bh_q_cross_genus",
+                "bh_ks" => sort(Int[Int(k) for k in bh_ks]),
+                "n_packets" => length(paths),
+            )
+            open(man_path, "w") do io
+                JSON.print(io, man, 2)
+            end
+        end
+        ## Refresh CHECKSUMS for rewritten artifacts (and manifest).
+        checksum_path = joinpath(packet, "CHECKSUMS.sha256")
+        entries = Tuple{String, String}[]
+        for (root, dirs, files) in walkdir(packet)
+            sort!(dirs); sort!(files)
+            for f in files
+                f == "CHECKSUMS.sha256" && continue
+                p = joinpath(root, f)
+                push!(entries, (relpath(p, packet), sha256_file(p)))
+            end
+        end
+        sort!(entries; by=first)
+        open(checksum_path, "w") do io
+            for (rel, h) in entries
+                println(io, h, "  ", rel)
+            end
+        end
+    end
+    return nothing
 end
 
 """
@@ -1605,10 +1712,9 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
   `gqc_derive_null_seed` (not `seed + 1000*salt + genus`). In graph-set mode,
   graph `i` (1-based, sorted child order) uses `genus_index + i - 1`.
 - `min_shuffle_mean`: gates both `shuffle_ratio` and `z_score` (default: `1.0`)
-- `bh_ks`: k values included in **within-graph** BH on dinucleotide `p_upper`
-  (default: `[11]`). Packet `dinucleotide_bh_q_within_graph` is **not** the
-  paper's cross-genus FDR — use `Mycelia.gqc_cross_bh` (or equivalent) outside
-  `run_gqc`.
+- `bh_ks`: k values for within-graph BH and for the additive cross-genus column
+  (default: `[11]`). `dinucleotide_bh_q_within_graph` is BH inside one graph;
+  graph-set runs also write `dinucleotide_bh_q_cross_genus` via `gqc_cross_bh`.
 - `circular`: k-mer circularity (default: `metadata["circular"]` or `false`)
 - `canonical`: `nothing` (default) → derived from `strand_mode`; explicit `true`/`false`
   is honored (including under `:single`)
@@ -1690,6 +1796,11 @@ function run_gqc(input_dir::AbstractString,
                 println(io, JSON.json(rec))
             end
         end
+    end
+    ## Cross-genus BH column (additive): fill from gqc_cross_bh over successful packets.
+    bh_list = sort(unique(Int(k) for k in (bh_ks === nothing ? GQC_DEFAULT_BH_KS : bh_ks)))
+    if resolved.mode === :graph_set && !isempty(packets)
+        _gqc_apply_cross_genus_bh!(packets; bh_ks=bh_list)
     end
     if resolved.mode === :single_graph
         return only(packets)
@@ -1864,6 +1975,7 @@ function _run_gqc_one(input_dir::AbstractString,
             "dinucleotide_shuffle_p_upper" => missing,
             "dinucleotide_null_degenerate" => false,
             "dinucleotide_bh_q_within_graph" => missing,
+            "dinucleotide_bh_q_cross_genus" => missing,  ## filled in graph-set post-pass
             "codon_observed_repeats" => missing,
             "codon_null_mean" => missing,
             "codon_null_std" => missing,
@@ -1970,26 +2082,7 @@ function _run_gqc_one(input_dir::AbstractString,
     end
 
     ## summary.csv — frozen ordered columns (I2)
-    csv_keys = collect(String, GQC_SUMMARY_COLUMNS)
-    open(joinpath(out_dir, "summary.csv"), "w") do io
-        println(io, join(csv_keys, ','))
-        for row in summary_rows
-            rendered = String[]
-            for col in csv_keys
-                v = get(row, col, missing)
-                if v === missing
-                    push!(rendered, "")
-                elseif v isa AbstractString
-                    push!(rendered, '"' * replace(v, '"' => "\"\"") * '"')
-                elseif v isa Bool
-                    push!(rendered, string(v))
-                else
-                    push!(rendered, string(v))
-                end
-            end
-            println(io, join(rendered, ','))
-        end
-    end
+    _gqc_write_summary_csv(joinpath(out_dir, "summary.csv"), summary_rows)
     open(joinpath(out_dir, "summary.json"), "w") do io
         JSON.print(io, summary_rows, 2)
     end
@@ -2006,7 +2099,9 @@ function _run_gqc_one(input_dir::AbstractString,
         println(io, "- null_source: `$(resolved_null_source)` (requested `$(null_source)`); applicable=$(null_applicable); reason=$(null_reason)")
         println(io, "- reference records loaded: **$(ref_load.n_records)** from $(length(ref_load.files_matched)) file(s)")
         println(io, "- `dinucleotide_bh_q_within_graph` uses bh_ks=[", join(bh_list, ", "),
-                "] **inside this graph only** — cross-genus BH is the caller's job (`Mycelia.gqc_cross_bh`)")
+                "] **inside this graph only**")
+        println(io, "- `dinucleotide_bh_q_cross_genus` is filled for **graph-set** runs ",
+                "(BH across packets; same as `Mycelia.gqc_cross_bh`); missing for single-graph")
         println(io, "- seed scheme: `$(GQC_SEED_SCHEME)` (per replicate; see manifest)")
         println(io, "- k sweep: ", join(k_list, ", "))
         println(io)
@@ -2079,7 +2174,7 @@ function _run_gqc_one(input_dir::AbstractString,
             "files_matched" => [basename(f) for f in ref_load.files_matched],
             "note" => ref_load.note,
         ),
-        "bh_note" => "dinucleotide_bh_q_within_graph is BH over bh_ks inside one graph only; use Mycelia.gqc_cross_bh for cross-genus FDR",
+        "bh_note" => "dinucleotide_bh_q_within_graph = BH over bh_ks inside one graph; dinucleotide_bh_q_cross_genus = BH across graphs in a graph-set (equals Mycelia.gqc_cross_bh); missing on single-graph runs",
         "length_note" => "total_bp and unitig_* use overlap-corrected spans; total_segment_bp is raw sum of segment lengths",
         "concordance_note" => "ref_walkability is shared k-mer content (always RC-folded); not GFA-link walkability (I6)",
         "seed_note" => GQC_SEED_SCHEME_DETAIL,
