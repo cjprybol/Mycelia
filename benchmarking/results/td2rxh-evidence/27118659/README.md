@@ -19,7 +19,10 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
   Each task used a node-local TMPDIR.
 - Harness: `benchmarking/indel_reroute_evidence.jl --cells td2rxh`, launched by `benchmarking/run_td2rxh_evidence_lrc.sbatch`.
 - Analysis: `benchmarking/td2rxh_paired_analysis.jl` at Mycelia 498b2822, run over `shards/seed*.csv`.
-  Its outputs are in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty), and `td2rxh_paired_deltas.{png,svg}`.
+  Tracked outputs in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty).
+  Regenerate the figure locally (not committed):  
+  `julia --project=. benchmarking/td2rxh_paired_analysis.jl --csv shards/seed1.csv,...,shards/seed16.csv --output-dir analysis`  
+  writes `td2rxh_paired_deltas.{png,svg}`.
 
 ## Result
 

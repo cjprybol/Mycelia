@@ -5,6 +5,11 @@ module Td2rxhEvidenceAnalysisTest
 # decision rule (with amendments 1-3) in benchmarking/td2rxh_paired_analysis.jl. No
 # assembly runs here; the harness runs on HPC.
 #
+# Default CI runs one fast smoke testset below (no figure write, no sbatch/Slurm
+# stubs). The remaining suite is opt-in via MYCELIA_RUN_SLOW=true or
+# MYCELIA_RUN_ALL=true (also covered by the td2rxh-slow CI lane).
+#   MYCELIA_RUN_SLOW=true julia --project=. -e 'include("test/4_assembly/td2rxh_evidence_analysis_test.jl")'
+#
 # The decision-rule testsets pair a POSITIVE control (a clean win must be
 # accepted) with NEGATIVE controls (a loss, a one-read-length win, a fit-identity
 # regression, a raw-significant-but-not-after-Holm cell, a missing cell, an
@@ -17,6 +22,12 @@ import CSV
 import DataFrames
 import StableRNGs
 import Random
+
+# Nested modules must stay at true module top-level (cannot live inside `if`).
+# File is included in default discovery; only the heavy suite below is gated.
+const RUN_SLOW =
+    lowercase(strip(get(ENV, "MYCELIA_RUN_ALL", "false"))) == "true" ||
+    lowercase(strip(get(ENV, "MYCELIA_RUN_SLOW", "false"))) == "true"
 
 module Harness
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "indel_reroute_evidence.jl"))
@@ -83,6 +94,28 @@ end
 cell_index(cell) = findfirst(==(cell), PREREGISTERED_CELLS)
 rate_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).error_rate
 readlen_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).read_length
+
+# Ungated smoke: a few seconds, pure Julia contract checks for default CI.
+Test.@testset "td2rxh evidence smoke" begin
+    cells = Harness.select_cells("td2rxh")
+    Test.@test Harness.cell_id.(cells) == PREREGISTERED_CELLS
+    Test.@test Analysis.TD2RXH_EXPECTED_CELLS == PREREGISTERED_CELLS
+    Test.@test all(c -> c.kmax == 31, cells)
+    Test.@test Analysis.TD2RXH_N_SEEDS == 16
+    Test.@test Analysis.TD2RXH_H1_MAX_INCREMENTAL_SECONDS_PER_READ == 0.30
+    Test.@test Analysis.TD2RXH_ALPHA == 0.05
+    Test.@test Harness.select_cells("all") === Harness.ALL_CELLS
+    Test.@test Harness.select_cells("smoke") === Harness.SMOKE_CELLS
+    Test.@test_throws ArgumentError Harness.select_cells("td2rhx")
+    Test.@test Harness.parse_args(["--cells", "td2rxh", "--seeds", "3"]) ==
+               Dict("cells" => "td2rxh", "seeds" => "3")
+    Test.@test_throws ArgumentError Harness.parse_args(["--cell", "td2rxh"])
+    Test.@test Harness.CSV_HEADER == vcat(LEGACY_HEADER, NEW_COLUMNS)
+end
+
+if !RUN_SLOW
+    @info "Skipping remaining td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
+else
 
 Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
     Test.@testset "td2rxh cell grid matches the pre-registration" begin
@@ -482,5 +515,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test !isfile(joinpath(out, "report.md"))
     end
 end
+
+end # RUN_SLOW
 
 end
