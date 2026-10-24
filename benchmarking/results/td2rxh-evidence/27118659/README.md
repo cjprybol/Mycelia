@@ -22,7 +22,10 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
   `report.md` and `td2rxh_cell_verdicts.csv` were regenerated after review round 7, which rounds the median deltas to 1e-6 before the median gates.
   That rounding is an implementation detail, not part of the pre-registered rule (which rounds only inside the signed-rank test).
   The inputs carry 6 decimals, so no real difference is lost and float residue can no longer decide a gate's sign: no verdict, status or p-value changed, and one displayed fit-identity median moved from 0.001333 to 0.001334.
-  Its outputs are in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty), and `td2rxh_paired_deltas.{png,svg}`.
+  Tracked outputs in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty).
+  Regenerate the figure locally (not committed):  
+  `julia --project=. benchmarking/td2rxh_paired_analysis.jl --csv shards/seed1.csv,...,shards/seed16.csv --output-dir analysis`  
+  writes `td2rxh_paired_deltas.{png,svg}`.
 
 ## Result
 

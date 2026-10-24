@@ -5,6 +5,10 @@ module Td2rxhEvidenceAnalysisTest
 # decision rule (with amendments 1-3) in benchmarking/td2rxh_paired_analysis.jl. No
 # assembly runs here; the harness runs on HPC.
 #
+# Slow / opt-in: skipped by default. Enable with MYCELIA_RUN_SLOW=true or
+# MYCELIA_RUN_ALL=true (also listed in runtests.jl SLOW_TEST_FILES).
+#   MYCELIA_RUN_SLOW=true julia --project=. -e 'include("test/4_assembly/td2rxh_evidence_analysis_test.jl")'
+#
 # The decision-rule testsets pair a POSITIVE control (a clean win must be
 # accepted) with NEGATIVE controls (a loss, a one-read-length win, a fit-identity
 # regression, a raw-significant-but-not-after-Holm cell, a missing cell, an
@@ -26,6 +30,12 @@ import CSV
 import DataFrames
 import StableRNGs
 import Random
+
+# Nested modules must stay at true module top-level (cannot live inside `if`).
+# Default CI skips this whole file via runtests.jl `SLOW_TEST_FILES`.
+const RUN_SLOW =
+    lowercase(strip(get(ENV, "MYCELIA_RUN_ALL", "false"))) == "true" ||
+    lowercase(strip(get(ENV, "MYCELIA_RUN_SLOW", "false"))) == "true"
 
 module Harness
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "indel_reroute_evidence.jl"))
@@ -92,6 +102,10 @@ end
 cell_index(cell) = findfirst(==(cell), PREREGISTERED_CELLS)
 rate_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).error_rate
 readlen_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).read_length
+
+if !RUN_SLOW
+    @info "Skipping td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
+else
 
 Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
     Test.@testset "td2rxh cell grid matches the pre-registration" begin
@@ -729,5 +743,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test !isfile(joinpath(out, "report.md"))
     end
 end
+
+end # RUN_SLOW
 
 end

@@ -14,8 +14,20 @@ module Td2rxhSbatchGuardTest
 # branches, and the SIGTERM path. Round-1 review reproduced two
 # of these as fail-open on the first draft (a stale CSV passing the row guard, and
 # a failing git passing the dirty guard).
+#
+# Slow / opt-in: skipped by default. Enable with MYCELIA_RUN_SLOW=true or
+# MYCELIA_RUN_ALL=true (also listed in runtests.jl SLOW_TEST_FILES).
+#   MYCELIA_RUN_SLOW=true julia --project=. -e 'include("test/4_assembly/td2rxh_sbatch_guard_test.jl")'
 
 import Test
+
+const RUN_SLOW =
+    lowercase(strip(get(ENV, "MYCELIA_RUN_ALL", "false"))) == "true" ||
+    lowercase(strip(get(ENV, "MYCELIA_RUN_SLOW", "false"))) == "true"
+
+if !RUN_SLOW
+    @info "Skipping td-2rxh sbatch guard tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
+else
 
 const SBATCH = joinpath(
     @__DIR__, "..", "..", "benchmarking", "run_td2rxh_evidence_lrc.sbatch")
@@ -274,5 +286,7 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
         end
     end
 end
+
+end # RUN_SLOW
 
 end

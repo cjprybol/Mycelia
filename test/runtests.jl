@@ -9,6 +9,8 @@
 #   Full tests (HPC):           MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
 #   Full tests (alt):           MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
 #   Full tests (portable):      LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   Slow Julia-only suites:     MYCELIA_RUN_SLOW=true julia --project=. -e 'import Pkg; Pkg.test()'
+#                               (also enabled by MYCELIA_RUN_ALL=true)
 #   Show plots interactively:   MYCELIA_SHOW_PLOTS=true julia --project=. -e "import Pkg; Pkg.test()"
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
@@ -43,6 +45,11 @@ const MYCELIA_RUN_ALL = _multi_input_hybrid_smoke_env_enabled(
 )
 const MYCELIA_RUN_EXTERNAL =
     _multi_input_hybrid_external_suite_enabled(ENV)
+# Slow Julia-only suites (no bioconda/network). Opt-in via MYCELIA_RUN_SLOW, or
+# included automatically when MYCELIA_RUN_ALL is set (HPC full suite).
+const MYCELIA_RUN_SLOW =
+    MYCELIA_RUN_ALL ||
+    _multi_input_hybrid_smoke_env_enabled(ENV, "MYCELIA_RUN_SLOW")
 const MYCELIA_SHOW_PLOTS = _multi_input_hybrid_smoke_env_enabled(
     ENV,
     "MYCELIA_SHOW_PLOTS",
@@ -128,10 +135,18 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
     "sequence_comparison.jl"
 ])
 
+# Pure-Julia suites that are too heavy for default CI; enable with
+# MYCELIA_RUN_SLOW=true (or MYCELIA_RUN_ALL=true).
+const SLOW_TEST_FILES = Set([
+    "td2rxh_evidence_analysis_test.jl",
+    "td2rxh_sbatch_guard_test.jl",
+])
+
 # Helper function to include all test files in a directory
 function include_all_tests(dir; skip_files = Set{String}())
     test_count = 0
-    skipped_count = 0
+    skipped_external = 0
+    skipped_slow = 0
     for (root, dirs, files) in walkdir(dir)
         if occursin(".ipynb_checkpoints", root)
             continue
@@ -145,17 +160,25 @@ function include_all_tests(dir; skip_files = Set{String}())
                 if !MYCELIA_RUN_EXTERNAL
                     if occursin("third_party_assemblers", file) ||
                        file in EXTERNAL_DEPENDENCY_FILES
-                        skipped_count += 1
+                        skipped_external += 1
                         continue
                     end
+                end
+                # Skip slow Julia-only suites unless MYCELIA_RUN_SLOW / RUN_ALL
+                if !MYCELIA_RUN_SLOW && file in SLOW_TEST_FILES
+                    skipped_slow += 1
+                    continue
                 end
                 include(joinpath(root, file))
                 test_count += 1
             end
         end
     end
-    if skipped_count > 0 && !MYCELIA_RUN_EXTERNAL
-        @info "Skipped $skipped_count test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
+    if skipped_external > 0 && !MYCELIA_RUN_EXTERNAL
+        @info "Skipped $skipped_external test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
+    end
+    if skipped_slow > 0 && !MYCELIA_RUN_SLOW
+        @info "Skipped $skipped_slow slow test file(s) in $(basename(dir)). Set MYCELIA_RUN_SLOW=true (or MYCELIA_RUN_ALL=true) to include."
     end
     return test_count
 end
