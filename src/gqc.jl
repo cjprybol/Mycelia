@@ -7,6 +7,16 @@ const GQC_SHUFFLE_SEED = 20261021
 const GQC_MIN_SHUFFLE_MEAN = 1.0
 ## Default BH family is k=11 (within-graph and cross-genus passes).
 const GQC_DEFAULT_BH_KS = [11]
+## Collision-free null seeding (replaces `shuffle_seed + 1000*salt + genus_index`).
+const GQC_SEED_SCHEME = "gqc-null-v1-sha256"
+const GQC_SEED_SCHEME_DETAIL =
+    "Xoshiro(u64_le(sha256(\"gqc-null-v1|shuffle_seed|salt|genus_index|null_kind|replicate\")[1:8])); " *
+    "replicate is 1-based; one RNG per (graph, null_kind, replicate)"
+## Frozen node TSV header for both `nodes/<slug>.tsv` and `formats/nodes.tsv`.
+const GQC_NODE_TSV_COLUMNS = (
+    "graph_id", "node_id", "index", "length", "depth",
+    "degree", "in_degree", "out_degree", "sequence",
+)
 ## Frozen summary.csv column order (every field always emitted).
 ## Additive columns append at the end so prior names/positions stay stable.
 const GQC_SUMMARY_COLUMNS = (
@@ -279,6 +289,41 @@ function codon_shuffle(sequence::String, rng::Random.AbstractRNG)::String
     codons = [sequence[(3(i - 1) + 1):(3i)] for i in 1:n_codons]
     Random.shuffle!(rng, codons)
     return join(codons) * sequence[(n - overhang + 1):n]
+end
+
+"""
+    gqc_derive_null_seed(shuffle_seed, salt, genus_index, null_kind, replicate) -> UInt64
+
+Collision-free seed for one null replicate (`GQC_SEED_SCHEME`).
+
+The legacy formula `shuffle_seed + 1000*salt + genus_index` aliased
+`(salt+1, genus)` with `(salt, genus+1000)` and gave the same stream to every
+`null_kind`. This hashes the full tuple instead.
+"""
+function gqc_derive_null_seed(shuffle_seed::Integer,
+                              salt::Integer,
+                              genus_index::Integer,
+                              null_kind::Symbol,
+                              replicate::Integer)::UInt64
+    payload = string(
+        "gqc-null-v1|", Int(shuffle_seed), '|', Int(salt), '|',
+        Int(genus_index), '|', null_kind, '|', Int(replicate),
+    )
+    d = SHA.sha256(payload)
+    x = zero(UInt64)
+    for i in 1:8
+        x |= UInt64(d[i]) << (8 * (i - 1))
+    end
+    return x
+end
+
+function _gqc_null_rng(shuffle_seed::Integer,
+                       salt::Integer,
+                       genus_index::Integer,
+                       null_kind::Symbol,
+                       replicate::Integer)::Random.Xoshiro
+    return Random.Xoshiro(gqc_derive_null_seed(
+        shuffle_seed, salt, genus_index, null_kind, replicate))
 end
 
 # =============================================================================
@@ -734,13 +779,50 @@ end
 
 """
     gqc_checked_dinucleotide_shuffles(sequences, rng; n_shuffles=100)
+    gqc_checked_dinucleotide_shuffles(sequences; shuffle_seed, salt, genus_index, null_kind, n_shuffles=100)
 
 Shuffle each segment independently `n_shuffles` times. Preserves dinucleotide
 counts and end bases when a shuffle is produced. When no distinct shuffle exists
 (unique Eulerian trail, AT repeats, short motifs), falls back to the original
 sequence and/or allows repeated nulls — never aborts. Returns
 `(shuffles, null_degenerate)`.
+
+The keyword form uses collision-free per-replicate seeds (`gqc_derive_null_seed`).
+The `rng` form streams from a single RNG (tests / legacy).
 """
+function gqc_checked_dinucleotide_shuffles(sequences::Vector{String};
+                                           shuffle_seed::Int,
+                                           salt::Int=0,
+                                           genus_index::Int=1,
+                                           null_kind::Symbol=:dinucleotide,
+                                           n_shuffles::Int=GQC_N_SHUFFLES,
+                                           max_attempts_per_seq::Int=1000)
+    results = Vector{Vector{String}}(undef, n_shuffles)
+    null_degenerate = false
+    for t in 1:n_shuffles
+        rng = _gqc_null_rng(shuffle_seed, salt, genus_index, null_kind, t)
+        one, deg = gqc_checked_dinucleotide_shuffles(
+            sequences, rng; n_shuffles=1, max_attempts_per_seq=max_attempts_per_seq)
+        results[t] = only(one)
+        null_degenerate |= deg
+    end
+    ## Cross-replicate uniqueness (single-rep calls cannot see this).
+    function normalize_seq(seq::String)
+        return replace(uppercase(seq), 'U' => 'T')
+    end
+    function shuffleable(seq::String)
+        s = normalize_seq(seq)
+        length(s) > 2 && length(unique(s)) > 1
+    end
+    if any(shuffleable, sequences)
+        joined = [join(segs, '|') for segs in results]
+        length(unique(joined)) < n_shuffles && (null_degenerate = true)
+    else
+        null_degenerate = true
+    end
+    return results, null_degenerate
+end
+
 function gqc_checked_dinucleotide_shuffles(sequences::Vector{String},
                                            rng::Random.AbstractRNG;
                                            n_shuffles::Int=GQC_N_SHUFFLES,
@@ -835,11 +917,14 @@ function gqc_repeat_null_stats(sequences::Vector{String};
                                min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
                                null_kind::Symbol=:dinucleotide)
     observed = gqc_repeat_counts(sequences; k=k, circular=circular, canonical=canonical)
-    rng = Random.Xoshiro(shuffle_seed + 1000 * salt + genus_index)
     null_repeats = Float64[]
     null_degenerate = false
     if null_kind == :dinucleotide
-        shuffles, null_degenerate = gqc_checked_dinucleotide_shuffles(sequences, rng; n_shuffles=n_shuffles)
+        shuffles, null_degenerate = gqc_checked_dinucleotide_shuffles(
+            sequences;
+            shuffle_seed=shuffle_seed, salt=salt, genus_index=genus_index,
+            null_kind=null_kind, n_shuffles=n_shuffles,
+        )
         for segs in shuffles
             r = gqc_repeat_counts(segs; k=k, circular=circular, canonical=canonical)
             push!(null_repeats, Float64(r.repeats))
@@ -848,7 +933,8 @@ function gqc_repeat_null_stats(sequences::Vector{String};
         norms = [replace(uppercase(s), 'U' => 'T') for s in sequences]
         joined_orig = join(norms, '|')
         seen = Set{String}()
-        for _ in 1:n_shuffles
+        for t in 1:n_shuffles
+            rng = _gqc_null_rng(shuffle_seed, salt, genus_index, null_kind, t)
             segs = [codon_shuffle(s, rng) for s in norms]
             joined = join(segs, '|')
             if joined == joined_orig || joined in seen
@@ -897,17 +983,20 @@ function gqc_repeat_null_stats_for_ks(sequences::Vector{String};
                                       canonical::Bool=true,
                                       min_shuffle_mean::Float64=GQC_MIN_SHUFFLE_MEAN,
                                       null_kind::Symbol=:dinucleotide)
-    rng = Random.Xoshiro(shuffle_seed + 1000 * salt + genus_index)
     null_degenerate = false
     shuffle_sets = Vector{Vector{String}}()
     if null_kind == :dinucleotide
         shuffle_sets, null_degenerate = gqc_checked_dinucleotide_shuffles(
-            sequences, rng; n_shuffles=n_shuffles)
+            sequences;
+            shuffle_seed=shuffle_seed, salt=salt, genus_index=genus_index,
+            null_kind=null_kind, n_shuffles=n_shuffles,
+        )
     elseif null_kind == :codon
         norms = [replace(uppercase(s), 'U' => 'T') for s in sequences]
         joined_orig = join(norms, '|')
         seen = Set{String}()
-        for _ in 1:n_shuffles
+        for t in 1:n_shuffles
+            rng = _gqc_null_rng(shuffle_seed, salt, genus_index, null_kind, t)
             segs = [codon_shuffle(s, rng) for s in norms]
             joined = join(segs, '|')
             (joined == joined_orig || joined in seen) && (null_degenerate = true)
@@ -1190,20 +1279,84 @@ end
 # Standard-format writers
 # =============================================================================
 
-function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_link_json::Bool=true)
+"""
+XML-escape text for GraphML attributes and element content: `& < > " '`.
+"""
+function _gqc_xml_escape(s::AbstractString)::String
+    # Order matters: escape `&` first so replacements are not re-escaped.
+    buf = IOBuffer()
+    for c in s
+        if c == '&'
+            print(buf, "&amp;")
+        elseif c == '<'
+            print(buf, "&lt;")
+        elseif c == '>'
+            print(buf, "&gt;")
+        elseif c == '"'
+            print(buf, "&quot;")
+        elseif c == '\''
+            print(buf, "&apos;")
+        else
+            print(buf, c)
+        end
+    end
+    return String(take!(buf))
+end
+
+"""
+Resolve `graph_id` for node TSV / formats writers.
+
+Prefer an explicit non-empty `graph_id` (what `run_gqc` passes from metadata /
+`basename(input_dir)`). Otherwise fall back to `basename(dirname(g.path))`,
+matching the no-metadata `run_gqc` default when the GFA lives at
+`<input_dir>/graph.gfa`.
+"""
+function _gqc_resolve_node_tsv_graph_id(g::GFAGraph;
+                                       graph_id::AbstractString="")::String
+    gid = strip(string(graph_id))
+    !isempty(gid) && return gid
+    p = string(g.path)
+    isempty(p) && return ""
+    parent = basename(dirname(abspath(p)))
+    return (isempty(parent) || parent == ".") ? "" : parent
+end
+
+"""
+Write the unified node TSV (`GQC_NODE_TSV_COLUMNS`) for one graph.
+
+Used by both `nodes/<slug>.tsv` and `formats/nodes.tsv`. Schema/column naming
+only — values are the same quantities previously split across the two files.
+`graph_id` is resolved via `_gqc_resolve_node_tsv_graph_id`.
+"""
+function _gqc_write_nodes_tsv(io::IO,
+                              g::GFAGraph,
+                              ids::Vector{String},
+                              adj::Vector{Vector{Int}};
+                              graph_id::AbstractString="")
+    gid = _gqc_resolve_node_tsv_graph_id(g; graph_id=graph_id)
+    degrees = _gqc_degrees(adj)
+    indeg, outdeg, _, _ = _gqc_directed_degrees(g)
+    println(io, join(GQC_NODE_TSV_COLUMNS, '\t'))
+    for (i, id) in enumerate(ids)
+        s = g.segments[id]
+        seq = s.sequence == "*" ? "" : s.sequence
+        d = s.depth === nothing ? "" : string(s.depth)
+        println(io, gid, '\t', id, '\t', i, '\t', s.length, '\t', d, '\t',
+                degrees[i], '\t', indeg[id], '\t', outdeg[id], '\t', seq)
+    end
+    return nothing
+end
+
+function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString;
+                           write_node_link_json::Bool=true,
+                           graph_id::AbstractString="")
     mkpath(formats_dir)
     ids, adj, _ = _gqc_undirected_adjacency(g)
     n = length(ids)
-    ## nodes.tsv
+    ## nodes.tsv (unified schema; same columns as nodes/<slug>.tsv)
     nodes_path = joinpath(formats_dir, "nodes.tsv")
     open(nodes_path, "w") do io
-        println(io, "node_id\tindex\tlength\tdepth\tsequence")
-        for (i, id) in enumerate(ids)
-            s = g.segments[id]
-            seq = s.sequence == "*" ? "" : s.sequence
-            d = s.depth === nothing ? "" : string(s.depth)
-            println(io, id, '\t', i, '\t', s.length, '\t', d, '\t', seq)
-        end
+        _gqc_write_nodes_tsv(io, g, ids, adj; graph_id=graph_id)
     end
     ## edges.tsv
     edges_path = joinpath(formats_dir, "edges.tsv")
@@ -1250,21 +1403,24 @@ function gqc_write_formats(g::GFAGraph, formats_dir::AbstractString; write_node_
         println(io, """  <graph id="G" edgedefault="directed">""")
         for id in ids
             s = g.segments[id]
-            println(io, """    <node id="$(id)">""")
-            println(io, """      <data key="d_len">$(s.length)</data>""")
+            eid = _gqc_xml_escape(id)
+            println(io, """    <node id="$(eid)">""")
+            println(io, """      <data key="d_len">$(_gqc_xml_escape(string(s.length)))</data>""")
             if s.depth !== nothing
-                println(io, """      <data key="d_depth">$(s.depth)</data>""")
+                println(io, """      <data key="d_depth">$(_gqc_xml_escape(string(s.depth)))</data>""")
             end
             if s.sequence != "*"
-                println(io, """      <data key="d_seq">$(s.sequence)</data>""")
+                println(io, """      <data key="d_seq">$(_gqc_xml_escape(s.sequence))</data>""")
             end
             println(io, """    </node>""")
         end
         for (ei, link) in enumerate(g.links)
-            println(io, """    <edge id="e$ei" source="$(link.from)" target="$(link.to)">""")
-            println(io, """      <data key="e_ov">$(link.overlap)</data>""")
-            println(io, """      <data key="e_fo">$(link.from_forward ? "+" : "-")</data>""")
-            println(io, """      <data key="e_to">$(link.to_forward ? "+" : "-")</data>""")
+            esrc = _gqc_xml_escape(link.from)
+            etgt = _gqc_xml_escape(link.to)
+            println(io, """    <edge id="e$ei" source="$(esrc)" target="$(etgt)">""")
+            println(io, """      <data key="e_ov">$(_gqc_xml_escape(link.overlap))</data>""")
+            println(io, """      <data key="e_fo">$(_gqc_xml_escape(link.from_forward ? "+" : "-"))</data>""")
+            println(io, """      <data key="e_to">$(_gqc_xml_escape(link.to_forward ? "+" : "-"))</data>""")
             println(io, """    </edge>""")
         end
         println(io, """  </graph>""")
@@ -1551,9 +1707,9 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
 # Keyword arguments
 - `ks`: k values for repeat-null / reference concordance sweep (default: `[metadata["k"]]`)
 - `n_shuffles`: dinucleotide/codon null replicates (default: `100`)
-- `shuffle_seed`: base RNG seed (default: `20261021`; per-graph RNG =
-  `Xoshiro(shuffle_seed + 1000*salt + genus_index)`)
-- `salt`, `genus_index`: seeding offsets (paper formula). In graph-set mode,
+- `shuffle_seed`, `salt`, `genus_index`: seed tuple inputs (default seed
+  `20261021`). Per-replicate RNG uses `GQC_SEED_SCHEME` /
+  `gqc_derive_null_seed` (not `seed + 1000*salt + genus`). In graph-set mode,
   graph `i` (1-based, sorted child order) uses `genus_index + i - 1`.
 - `min_shuffle_mean`: gates both `shuffle_ratio` and `z_score` (default: `1.0`)
 - `bh_ks`: k values for within-graph BH and for the additive cross-genus column
@@ -1736,15 +1892,9 @@ function _run_gqc_one(input_dir::AbstractString,
         mkpath(joinpath(out_dir, sub))
     end
 
-    ## long tables — always use slug in paths (I4)
+    ## long tables — always use slug in paths (I4); node TSV uses unified schema
     open(joinpath(out_dir, "nodes", "$(slug).tsv"), "w") do io
-        println(io, "graph_id\tnode_id\tlength\tdepth\tdegree\tin_degree\tout_degree")
-        for (i, id) in enumerate(ids)
-            s = g.segments[id]
-            d = s.depth === nothing ? "" : string(s.depth)
-            println(io, graph_id, '\t', id, '\t', s.length, '\t', d, '\t',
-                    degrees[i], '\t', indeg[id], '\t', outdeg[id])
-        end
+        _gqc_write_nodes_tsv(io, g, ids, adj; graph_id=graph_id)
     end
     open(joinpath(out_dir, "edges", "$(slug).tsv"), "w") do io
         println(io, "graph_id\tfrom\tfrom_orient\tto\tto_orient\toverlap")
@@ -1760,7 +1910,9 @@ function _run_gqc_one(input_dir::AbstractString,
         end
     end
 
-    format_files = gqc_write_formats(g, joinpath(out_dir, "formats"); write_node_link_json=write_node_link_json)
+    format_files = gqc_write_formats(g, joinpath(out_dir, "formats");
+                                     write_node_link_json=write_node_link_json,
+                                     graph_id=graph_id)
 
     ## Generate shuffles once per null kind, then score each k (I10).
     null_by_kind = Dict{Symbol, Dict{Int, NamedTuple}}()
@@ -1950,6 +2102,7 @@ function _run_gqc_one(input_dir::AbstractString,
                 "] **inside this graph only**")
         println(io, "- `dinucleotide_bh_q_cross_genus` is filled for **graph-set** runs ",
                 "(BH across packets; same as `Mycelia.gqc_cross_bh`); missing for single-graph")
+        println(io, "- seed scheme: `$(GQC_SEED_SCHEME)` (per replicate; see manifest)")
         println(io, "- k sweep: ", join(k_list, ", "))
         println(io)
         println(io, "See `summary.csv`, `formats/`, and `plots/` for details.")
@@ -1961,6 +2114,8 @@ function _run_gqc_one(input_dir::AbstractString,
         "shuffle_seed" => shuffle_seed,
         "salt" => salt,
         "genus_index" => genus_index,
+        "seed_scheme" => GQC_SEED_SCHEME,
+        "seed_scheme_detail" => GQC_SEED_SCHEME_DETAIL,
         "min_shuffle_mean" => min_shuffle_mean,
         "bh_ks" => bh_list,
         "circular" => circ,
@@ -2022,6 +2177,7 @@ function _run_gqc_one(input_dir::AbstractString,
         "bh_note" => "dinucleotide_bh_q_within_graph = BH over bh_ks inside one graph; dinucleotide_bh_q_cross_genus = BH across graphs in a graph-set (equals Mycelia.gqc_cross_bh); missing on single-graph runs",
         "length_note" => "total_bp and unitig_* use overlap-corrected spans; total_segment_bp is raw sum of segment lengths",
         "concordance_note" => "ref_walkability is shared k-mer content (always RC-folded); not GFA-link walkability (I6)",
+        "seed_note" => GQC_SEED_SCHEME_DETAIL,
     )
     open(manifest_path, "w") do io
         JSON.print(io, manifest, 2)

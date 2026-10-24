@@ -86,6 +86,35 @@ formats/
 
 Graph-set failures append `output_root/gqc_graph_set_errors.jsonl` and continue.
 
+## Node TSV schema (unified, BREAKING)
+
+`nodes/<slug>.tsv` and `formats/nodes.tsv` share one frozen header
+(`Mycelia.GQC_NODE_TSV_COLUMNS`):
+
+```text
+graph_id	node_id	index	length	depth	degree	in_degree	out_degree	sequence
+```
+
+| Column | Meaning |
+|--------|---------|
+| `graph_id` | Packet graph id (see below) |
+| `node_id` | GFA segment id |
+| `index` | 1-based order matching MTX row/col (`formats/nodes.tsv` / adjacency) |
+| `length` | Segment length (bp) |
+| `depth` | GFA `DP:f` when present; else empty |
+| `degree` | Undirected simple-graph degree |
+| `in_degree` / `out_degree` | Directed GFA link degrees |
+| `sequence` | Segment sequence (`*` → empty) |
+
+Both files contain the same rows for a packet (identical schema and values).
+
+**`graph_id` filling:** `run_gqc` always passes the run’s graph id (metadata
+`graph_id`, else `basename(input_dir)`). Standalone `gqc_write_formats` /
+`_gqc_write_nodes_tsv` without an explicit `graph_id` fall back to
+`basename(dirname(g.path))` (the folder containing `graph.gfa`), matching that
+default. The column is empty only when neither an explicit id nor a usable path
+parent is available.
+
 ## `summary.csv` columns
 
 Frozen order: `Mycelia.GQC_SUMMARY_COLUMNS` (includes `null_source`,
@@ -131,10 +160,38 @@ k-mer-node graphs.
 (`row >= col`), 1-based indices matching `formats/nodes.tsv`. Directed multi-edges
 remain in `edges.tsv` / GraphML / `node_link.json`.
 
+## GraphML escaping
+
+`formats/graph.graphml` XML-escapes node/edge IDs and attribute/data values for
+`& < > " '` (`Mycelia._gqc_xml_escape`) so special characters round-trip through
+an XML parser.
+
 ## Reproducibility
 
-- RNG: `Xoshiro(shuffle_seed + 1000*salt + genus_index)`
-- Shuffles generated once per null kind, then counted at each k
+### Null seed scheme (`gqc-null-v1-sha256`)
+
+Each null replicate uses its own RNG:
+
+```text
+seed = u64_le(sha256("gqc-null-v1|shuffle_seed|salt|genus_index|null_kind|replicate")[1:8])
+rng  = Xoshiro(seed)
+```
+
+- `replicate` is **1-based** (`1 … n_shuffles`)
+- `null_kind` is the symbol name (`dinucleotide` / `codon`)
+- Graph-set child `i` (1-based, sorted) uses `genus_index + i - 1`
+
+This replaces the legacy formula `shuffle_seed + 1000*salt + genus_index`, which
+aliased `(salt+1, genus)` with `(salt, genus+1000)` and gave both null kinds the
+same stream. Manifest records `params.seed_scheme`, `params.seed_scheme_detail`,
+and top-level `seed_note`.
+
+Shuffles are generated once per null kind (per-replicate seeds), then counted at
+each k. Reruns with the same inputs/params are bit-identical under this scheme.
+
+**Note:** null numeric outputs differ from packets produced under the legacy
+formula (e.g. head `f2ece978`).
+
 - `params_hash` sorts integer vectors numerically; `ks`/`bh_ks` in the manifest
   match analysis order
 - `input_sha256` covers `graph.gfa`, `metadata.json`, and every matched reference file
