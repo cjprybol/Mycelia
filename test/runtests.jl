@@ -136,9 +136,10 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
 ])
 
 # Pure-Julia suites that are too heavy for default CI; enable with
-# MYCELIA_RUN_SLOW=true (or MYCELIA_RUN_ALL=true).
+# MYCELIA_RUN_SLOW=true (or MYCELIA_RUN_ALL=true). Evidence analysis stays in
+# default discovery so its ungated smoke testset runs per-PR; only the sbatch
+# guard file is discovery-gated (its body is also self-gated).
 const SLOW_TEST_FILES = Set([
-    "td2rxh_evidence_analysis_test.jl",
     "td2rxh_sbatch_guard_test.jl",
 ])
 
