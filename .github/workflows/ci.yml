@@ -53,7 +53,10 @@ jobs:
             echo "No usable base SHA; skipping artifact check."
             exit 0
           fi
-          artifacts=$(git diff --name-only "${BASE_SHA}...HEAD" -- results | grep -E '^results/.*\.(json|csv)$' || true)
+          # Diff on its own so a git failure exits under -e; || true only for
+          # grep's no-match (rc 1), not for a failed git diff in a pipeline.
+          changed=$(git diff --name-only "${BASE_SHA}...HEAD" -- results)
+          artifacts=$(printf '%s\n' "${changed}" | grep -E '^results/.*\.(json|csv)$' || true)
           if [[ -n "${artifacts}" ]]; then
             echo "::error::Benchmark artifacts committed in results/:"
             echo "${artifacts}"
