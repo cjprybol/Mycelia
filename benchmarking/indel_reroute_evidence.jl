@@ -290,7 +290,16 @@ function write_rows(output_path::AbstractString, rows::Vector{String})::Nothing
     return nothing
 end
 
-function main(args::Vector{String} = ARGS)::Nothing
+"""
+    main(args; runner = run_arm) -> Int
+
+Run every (cell, seed, arm) and return the number of arms that threw. A failed
+arm is logged with its backtrace and skipped, so the other arms still produce
+rows; the script entry point exits 1 when any arm failed, so a short CSV can
+never come with exit 0. `runner` exists so tests can force failures without
+running an assembly.
+"""
+function main(args::Vector{String} = ARGS; runner = run_arm)::Int
     parsed = parse_args(args)
     seeds = [parse(Int, s) for s in split(get(parsed, "seeds", "42,43,44"), ",")]
     cells_name = get(parsed, "cells", "all")
@@ -325,14 +334,17 @@ function main(args::Vector{String} = ARGS)::Nothing
         flush(stdout)
     end
 
+    n_failed = 0
     for cell in cells
         for seed in seeds
             reads, reference = simulate_reads(cell, seed)
             for arm in arm_order(seed)
                 result = try
-                    run_arm(reads, cell, arm, reference)
+                    runner(reads, cell, arm, reference)
                 catch exception
-                    @warn "arm failed" cell=cell_id(cell) seed arm exception
+                    n_failed += 1
+                    @error "arm failed" cell=cell_id(cell) seed arm exception=(
+                        exception, catch_backtrace())
                     continue
                 end
                 push!(rows, csv_row(label, cell, seed, arm, length(reads), result))
@@ -353,9 +365,11 @@ function main(args::Vector{String} = ARGS)::Nothing
 
     println("# finished=", string(Dates.now()))
     println("# wrote ", output_path, " (", length(rows) - 1, " rows)")
-    return nothing
+    n_failed > 0 &&
+        println(stderr, "# FAILED: ", n_failed, " arm(s) threw; see the errors above")
+    return n_failed
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    main()
+    main() == 0 || exit(1)
 end

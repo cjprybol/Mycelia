@@ -7,7 +7,8 @@ module Td2rxhSbatchGuardTest
 # repository, so "the guard is present" is replaced by "the guard was seen to
 # fire". Covered: row count, stale CSV, modified tracked file, failing rev-parse,
 # failing status, failing or garbage sha256sum, missing Manifest, non-zero julia
-# exit, unknown cell set, --seeds/--label passthrough, symlinked TMPDIR base,
+# exit, unknown cell set, --seeds/--label/--cells passthrough, MYCELIA_PROJECT
+# cleared, symlinked TMPDIR base,
 # TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
 # Not covered: the "julia not runnable", "not in benchmarking/" and mktemp-failure
 # branches, and the SIGTERM path. Round-1 review reproduced two
@@ -24,6 +25,7 @@ const JULIA_STUB = """
 if [[ "\${2:-}" == "--version" ]]; then echo "julia version 1.10.0"; exit 0; fi
 # Record the run invocation so tests can check the provenance-carrying arguments.
 echo "\$*" > "\$HOME/julia_args.txt"
+echo "MYCELIA_PROJECT=\${MYCELIA_PROJECT-<unset>}" > "\$HOME/julia_env.txt"
 out=""
 while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "--out" ]]; then out="\$2"; fi
@@ -107,6 +109,27 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             Test.@test occursin(" --seeds 3 ", args)
             Test.@test occursin(r"--label td2rxh@[0-9a-f]{12}\+manifestabcdef012345", args)
             Test.@test occursin("--out results/td2rxh/99/seed3.csv", args)
+            # The cell set is passed through, not hardcoded: a hardcoded td2rxh
+            # would let a smoke submission run the full grid and still clear the
+            # 4-row guard (round-7 review, surviving mutant).
+            Test.@test occursin(" --cells td2rxh ", args)
+            rc_smoke,
+            _ = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "4", "TD2RXH_CELLS" => "smoke"))
+            smoke_args = read(joinpath(home, "julia_args.txt"), String)
+            Test.@test rc_smoke == 0
+            Test.@test occursin(" --cells smoke ", smoke_args)
+        end
+        Test.@testset "MYCELIA_PROJECT from the submit shell cannot redirect the run" begin
+            # The harness activates MYCELIA_PROJECT over --project, so an exported
+            # value would run code the provenance label does not name.
+            repo, home, bindir = fixture()
+            rc,
+            _ = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "MYCELIA_PROJECT" => "/bogus/checkout"))
+            Test.@test rc == 0
+            Test.@test strip(read(joinpath(home, "julia_env.txt"), String)) ==
+                       "MYCELIA_PROJECT=<unset>"
         end
         Test.@testset "too few rows fails" begin
             repo, home, bindir = fixture()

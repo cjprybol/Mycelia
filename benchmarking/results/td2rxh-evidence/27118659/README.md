@@ -50,7 +50,7 @@ The rule needs only ≥1 engaged run, so the cell is still COMPLETE.
 - The only cells where nanopore wins are at 5% error, where both arms are severely fragmented: the median best contig covers 7–15% of the genome.
   The gain is in the **single best contig**.
   At that error rate nanopore produces about twice as many contigs (median about 1,490 → 2,870 at 1000 bp and about 1,550 → 3,260 at 2000 bp) and about half the total contig bases.
-  In both arms the total contig bases are 5–22× the genome length, so this is not a better assembly overall.
+  In both arms the total contig bases are about 11–22× the genome length at this error rate (nanopore 11–14×, illumina 19–22×), so this is not a better assembly overall.
 - The fit-identity gate is a median.
   At 2000/e0.05 the median Δ is +0.0013, but two seeds lose 0.13–0.17 fit identity.
 - At 1% error, nanopore is significantly and substantially **worse** than illumina: the median paired coverage loss is 0.43 at 1000 bp and 0.19 at 2000 bp.

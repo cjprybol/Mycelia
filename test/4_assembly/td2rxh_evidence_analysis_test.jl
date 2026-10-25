@@ -157,6 +157,14 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test_throws ArgumentError Analysis.signflip_signed_rank_test([1.0, NaN])
         # Symmetric: sign reversal leaves the two-sided p unchanged.
         Test.@test Analysis.signflip_signed_rank_test(-collect(1.0:8.0)).pvalue ≈ 2 / 256
+        # Mixed signs WITH a tie, hand-enumerated. |d| = (1, 1, 2) gets average
+        # ranks (1.5, 1.5, 3), T = 3, and 6 of the 8 sign assignments reach |T| >= 3.
+        # Ordinal ranks (1, 2, 3) would give T = 4 and 4 of 8, p = 0.5 (round-7
+        # review: an ordinal-rank mutant survived every same-sign pin above).
+        tie = Analysis.signflip_signed_rank_test([-1.0, 1.0, 2.0])
+        Test.@test tie.statistic == 3.0 && tie.pvalue == 0.75
+        # Mixed signs, no tie: T = 8 of a maximum 10; 4 of 16 assignments reach it.
+        Test.@test Analysis.signflip_signed_rank_test([-1.0, 2.0, 3.0, 4.0]).pvalue == 0.25
     end
 
     Test.@testset "holm_adjust uses a fixed family; NaN counts as p = 1 (review mutant E)" begin
@@ -263,6 +271,8 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # Family is still 6: the best cell is multiplied by 6, not 5.
         Test.@test minimum(r.verdicts.p_holm) ≈ 6 * 2 / 2^16
         Test.@test r.verdict.qualifying_error_rates == [0.01, 0.02]
+        # MET takes precedence over a non-final cell (amendment 2).
+        Test.@test r.verdict.verdict == "MET"
         Test.@test r.h1 == "INCOMPLETE"
         loss = analyse(synthetic_table(cells = present, delta = (c, s) -> -0.001 * s))
         Test.@test loss.verdict.verdict == "INCOMPLETE"
@@ -366,6 +376,60 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test r1.verdicts[1, :n_fit_pairs] == 15
         Test.@test r1.verdicts[1, :median_fit_identity_delta] == 0.0
         Test.@test r1.verdict.qualifying_error_rates == [0.01, 0.02, 0.05]
+    end
+
+    Test.@testset "median gates use rounded deltas: a true median of 0 is 0" begin
+        # Eight pairs at +1e-6 and eight at -1e-6, built from 6-decimal values as
+        # the CSVs hold them. The true median is 0, but unrounded floats give
+        # (0.930001 - 0.930000 + 0.501000 - 0.501001) / 2 = -5.6e-17, which would
+        # fail the fit-identity gate (>= 0) at cell 1 (round-7 review).
+        df = synthetic_table()
+        df.best_contig_fit_identity = Float64.(df.best_contig_fit_identity)
+        df.best_contig_reference_coverage = Float64.(df.best_contig_reference_coverage)
+        for seed in 1:16
+            pair = (df.cell .== PREREGISTERED_CELLS[1]) .& (df.seed .== seed)
+            ill, ont = pair .& (df.arm .== "illumina"), pair .& (df.arm .== "nanopore")
+            df[ill, :best_contig_fit_identity] .= seed <= 8 ? 0.930000 : 0.501001
+            df[ont, :best_contig_fit_identity] .= seed <= 8 ? 0.930001 : 0.501000
+        end
+        r = analyse(df)
+        Test.@test r.verdicts[1, :median_fit_identity_delta] == 0.0
+        Test.@test r.verdict.qualifying_error_rates == [0.01, 0.02, 0.05]
+        # The same residue on the primary metric: its recorded median must be 0.
+        cov = synthetic_table(delta = (c, s) -> 0.0)
+        cov.best_contig_reference_coverage = Float64.(cov.best_contig_reference_coverage)
+        for seed in 1:16
+            pair = (cov.cell .== PREREGISTERED_CELLS[1]) .& (cov.seed .== seed)
+            ill, ont = pair .& (cov.arm .== "illumina"), pair .& (cov.arm .== "nanopore")
+            cov[ill, :best_contig_reference_coverage] .= seed <= 8 ? 0.930000 : 0.501001
+            cov[ont, :best_contig_reference_coverage] .= seed <= 8 ? 0.930001 : 0.501000
+        end
+        rc = analyse(cov)
+        Test.@test rc.verdicts[1, :median_primary_delta] == 0.0
+        Test.@test !rc.verdicts[1, :h2_holds]
+    end
+
+    Test.@testset "harness: a failed arm is counted, logged with a backtrace, not silent" begin
+        # The script exits 1 when main returns > 0; before round 7 a failed arm was
+        # a @warn with no backtrace and the process exited 0 with a short CSV.
+        out = tempname() * ".csv"
+        args = ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"]
+        logs,
+        n_failed = Test.collect_test_logs() do
+            redirect_stdout(devnull) do
+                redirect_stderr(devnull) do
+                    Harness.main(args; runner = (args...) -> error("boom"))
+                end
+            end
+        end
+        Test.@test n_failed == 4   # 2 smoke cells x 1 seed x 2 arms
+        failures = filter(l -> l.message == "arm failed", logs)
+        Test.@test length(failures) == 4
+        Test.@test all(l -> l.level == Base.CoreLogging.Error, failures)
+        Test.@test all(
+            l -> l.kwargs[:exception] isa Tuple &&
+                 l.kwargs[:exception][2] isa Vector, failures)
+        Test.@test length(readlines(out)) == 1   # header only
     end
 
     Test.@testset "H1' threshold and three states" begin

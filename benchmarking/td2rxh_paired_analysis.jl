@@ -27,11 +27,14 @@
 #       Holm-adjusted p < 0.05.
 #   ACCEPTANCE: MET iff, for at least one error rate, H2 holds at BOTH read lengths
 #       and the median best_contig_fit_identity delta (over pairs where both arms
-#       are finite) is >= 0 in both. NOT MET if none qualifies and every cell is
-#       COMPLETE or UNDEFINED (a measured null: more data cannot change it).
-#       INCOMPLETE whenever any cell is MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED
-#       (conservative: the amendment-2 list, applied whether or not that cell could
-#       still change the outcome). Fit identity carries no p-value but gates
+#       are finite) is >= 0 in both. MET takes precedence: a qualifying error rate
+#       is MET even if another cell is not final (amendment 2: "MET if some error
+#       rate qualifies (unchanged)"). Otherwise NOT MET if every cell is COMPLETE or
+#       UNDEFINED (a measured null: more data cannot change it), and INCOMPLETE when
+#       no rate qualifies and any cell is MISSING, INCOMPLETE or
+#       TREATMENT-NOT-APPLIED (conservative: applied whether or not that cell could
+#       still change the outcome). Both medians are taken over deltas rounded to
+#       1e-6, as the test rounds them. Fit identity carries no p-value but gates
 #       acceptance; n_contigs and the divergence/anchor counters are written per arm
 #       to td2rxh_paired.csv for inspection and are not tested.
 #
@@ -258,12 +261,17 @@ function cell_verdicts(paired::DataFrames.DataFrame;
         n_pairs = DataFrames.nrow(group)
         primary_ill = Float64.(group[!, Symbol(TD2RXH_PRIMARY_METRIC, "_illumina")])
         primary_ont = Float64.(group[!, Symbol(TD2RXH_PRIMARY_METRIC, "_nanopore")])
-        delta = primary_ont .- primary_ill
+        # Both gated deltas are rounded exactly as the signed-rank test rounds them,
+        # so the median gates (> 0, >= 0) cannot be decided by float residue: two
+        # true deltas of +-1e-6 otherwise average to -5.6e-17, not 0.
+        delta = round.(primary_ont .- primary_ill; digits = TD2RXH_DELTA_DIGITS)
         incremental = (Float64.(group.wall_seconds_nanopore) .-
                        Float64.(group.wall_seconds_illumina)) ./
                       Float64.(group.n_reads_illumina)
-        fit = Float64.(group.best_contig_fit_identity_nanopore) .-
-              Float64.(group.best_contig_fit_identity_illumina)
+        fit = round.(
+            Float64.(group.best_contig_fit_identity_nanopore) .-
+            Float64.(group.best_contig_fit_identity_illumina);
+            digits = TD2RXH_DELTA_DIGITS)
         n_engaged = count(_engaged, group.indel_engaged_nanopore)
         empty_ill = Int.(group.n_contigs_illumina) .== 0
         empty_ont = Int.(group.n_contigs_nanopore) .== 0
@@ -346,10 +354,12 @@ const TD2RXH_FINAL_STATUSES = ("COMPLETE", "UNDEFINED")
     acceptance(verdicts) -> NamedTuple
 
 The pre-registered td-2rxh acceptance rule (with amendments 1-3). Returns the
-qualifying error rates and a three-state verdict: "MET"; "NOT MET" (none
-qualifies and every cell is COMPLETE or UNDEFINED); or "INCOMPLETE" (any cell
-MISSING, INCOMPLETE or TREATMENT-NOT-APPLIED -- conservative, whether or not that
-cell could still change the outcome).
+qualifying error rates and a three-state verdict, checked in this order: "MET"
+when any error rate qualifies, even if some other cell is not final (amendment 2);
+otherwise "NOT MET" when every cell is COMPLETE or UNDEFINED; otherwise
+"INCOMPLETE" (no rate qualifies and some cell is MISSING, INCOMPLETE or
+TREATMENT-NOT-APPLIED -- conservative, whether or not that cell could still change
+the outcome).
 """
 function acceptance(verdicts::DataFrames.DataFrame)::NamedTuple
     qualifying = Float64[]
