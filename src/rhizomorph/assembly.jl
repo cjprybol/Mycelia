@@ -61,9 +61,11 @@ function _qualmer_edge_score(edge_data)
 end
 
 """
-Vertex score under an explicit `weighting`. `:evidence` reproduces the count-based
-default exactly; `:quality` returns the vertex's JOINT-quality confidence
-(`_qualmer_joint_confidence`), which compounds across independent observations.
+Vertex score under an explicit `weighting`.
+
+- `:evidence` — count-based default exactly
+- `:quality` — JOINT-quality confidence (`_qualmer_joint_confidence`)
+- `:posterior` — Float64 posterior log-odds `Λ(v)` (`_qualmer_posterior_log_odds`)
 
 A vertex carrying no recoverable quality falls back to the evidence score rather than
 scoring 0.0: a missing measurement must not be read as a confident "bad", which would
@@ -71,9 +73,32 @@ silently delete real structure whenever quality is absent.
 """
 function _qualmer_vertex_score(vertex_data, weighting::Symbol)
     weighting == :evidence && return _qualmer_vertex_score(vertex_data)
+    if weighting == :posterior
+        log_odds = _qualmer_posterior_log_odds(vertex_data)
+        log_odds === nothing && return _qualmer_vertex_score(vertex_data)
+        return log_odds
+    end
     confidence = _qualmer_joint_confidence(vertex_data)
     confidence === nothing && return _qualmer_vertex_score(vertex_data)
     return confidence
+end
+
+"""
+Scalar posterior log-odds `Λ(v)` for a qualmer vertex (H-11 P1/P2).
+
+Reads `first(get_all_dataset_ids(...))` with the same single-dataset assumption as
+`_qualmer_joint_confidence`. Returns `nothing` when no quality evidence is recoverable
+(caller must treat that as keep / no opinion, not as a zero score).
+"""
+function _qualmer_posterior_log_odds(
+        vertex_data;
+        prior_error::Float64 = Rhizomorph.DEFAULT_POSTERIOR_PRIOR_ERROR
+)
+    dataset_ids = Rhizomorph.get_all_dataset_ids(vertex_data)
+    isempty(dataset_ids) && return nothing
+    return Rhizomorph.get_vertex_posterior_log_odds(
+        vertex_data, first(dataset_ids); prior_error = prior_error
+    )
 end
 
 """
@@ -191,6 +216,11 @@ term dominated the product's variance and made the walk MORE coverage-driven und
 `:quality` than under `:evidence`, which is the opposite of the option's purpose.
 Caught in PR #453 review.
 
+`:posterior` (H-11 v1) uses the evidence edge score. Vertex `Λ` already carries the
+calibrated quality signal for prune + fallback; there is no edge-side posterior API yet,
+and mixing UInt8 joint-Phred with Float64 log-odds in the product would reintroduce the
+scale bug above. Decoder / Viterbi transitions are NOT wired to `:posterior` in v1.
+
 An edge carrying no recoverable quality falls back to the evidence score, for the same
 reason `_qualmer_vertex_score` does: absent evidence is not bad evidence. The `max(1.0,
 …)` floor keeps a legitimately-observed edge from zeroing the product outright, so a
@@ -202,6 +232,8 @@ rework is tracked as td-2tg8.
 """
 function _qualmer_edge_score(edge_data, weighting::Symbol)
     weighting == :evidence && return _qualmer_edge_score(edge_data)
+    # H-11 v1: posterior influence is vertex Λ (prune + fallback); edges stay counts.
+    weighting == :posterior && return _qualmer_edge_score(edge_data)
     confidence = _qualmer_edge_joint_quality_confidence(edge_data)
     confidence === nothing && return _qualmer_edge_score(edge_data)
     return max(1.0, confidence)
@@ -233,6 +265,31 @@ function _prune_qualmer_graph_by_quality(graph, min_quality::Float64)
         confidence = _qualmer_joint_confidence(pruned[label])
         confidence === nothing && continue
         confidence < min_quality && push!(doomed, label)
+    end
+    for label in doomed
+        haskey(pruned, label) && delete!(pruned, label)
+    end
+    return pruned, length(doomed)
+end
+
+"""
+Drop qualmer vertices whose posterior log-odds `Λ(v)` falls below `min_log_odds`.
+
+H-11 P2 counterpart of `_prune_qualmer_graph_by_quality` for
+`traversal_weighting = :posterior`. Same keep-on-missing-quality policy: quality-less
+vertices are preserved. Operates on a deepcopy.
+
+H-11 v1 quality influence is **prune + fallback walk only** — not Viterbi / decoder
+transitions or primary Eulerian path scoring.
+"""
+function _prune_qualmer_graph_by_posterior_log_odds(graph, min_log_odds::Float64)
+    pruned = deepcopy(graph)
+    labels = collect(MetaGraphsNext.labels(pruned))
+    doomed = eltype(labels)[]
+    for label in labels
+        log_odds = _qualmer_posterior_log_odds(pruned[label])
+        log_odds === nothing && continue
+        log_odds < min_log_odds && push!(doomed, label)
     end
     for label in doomed
         haskey(pruned, label) && delete!(pruned, label)
@@ -432,8 +489,12 @@ struct AssemblyConfig
     # decision, so the qualmer arm returns byte-identical contigs to the k-mer arm
     # on every assembly metric. That is a deliberate design choice (PR #335 moved
     # the arm onto the k-mer arm's `find_contigs_next` to fix degenerate assemblies),
-    # NOT a bug — so it stays the default. `:quality` is the opt-in that makes the
-    # quality channel load-bearing, for callers who want it.
+    # NOT a bug — so it stays the default. `:quality` is the opt-in uncalibrated
+    # UInt8 joint-Q path. `:posterior` (H-11) is the opt-in calibrated Float64
+    # log-odds path (`get_vertex_posterior_log_odds`).
+    #
+    # H-11 v1: `:posterior` / `:quality` influence **prune + fallback walk only** —
+    # not Stage-1 Viterbi / decoder transitions or primary Eulerian path scoring.
     #
     # It must never become a silent default: turning it on CHANGES assembly output,
     # which would invalidate every existing benchmark result (same rule as
@@ -443,7 +504,7 @@ struct AssemblyConfig
     # JOINT-quality floor consulted ONLY when traversal_weighting=:quality. Qualmer
     # vertices whose joint-quality confidence falls below this are dropped before contig
     # extraction, which is what makes the traversal quality-dependent. Inert under
-    # `:evidence`.
+    # `:evidence` and `:posterior`.
     #
     # This is on the JOINT (summed-across-observations) Phred scale of
     # `planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`, which runs 0-255, NOT
@@ -457,6 +518,14 @@ struct AssemblyConfig
     # explicitly for low-coverage data, where demanding multiple observations of every
     # k-mer will prune real sequence.
     traversal_min_quality::Float64
+
+    # Posterior log-odds floor consulted ONLY when traversal_weighting=:posterior.
+    # Vertices with `Λ(v) < traversal_min_log_odds` are pruned before contig extraction;
+    # quality-less vertices are kept. Inert under `:evidence` / `:quality`.
+    # Default `0.0` means "require Λ ≥ 0" (more likely true than false after the
+    # chemistry prior). Production thresholds should be phiX-fit (tier1-spec §2);
+    # this default is a documented starting point, not a calibrated gate.
+    traversal_min_log_odds::Float64
 
     # Constructor with validation
     function AssemblyConfig(;
@@ -488,7 +557,8 @@ struct AssemblyConfig
             olc_tool::Symbol = :auto,
             olc_options::NamedTuple = (;),
             traversal_weighting::Symbol = :evidence,
-            traversal_min_quality::Float64 = 60.0
+            traversal_min_quality::Float64 = 60.0,
+            traversal_min_log_odds::Float64 = 0.0
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -627,8 +697,8 @@ struct AssemblyConfig
             error("qualmer_memory_profile must be :full, :lightweight_quality, or :ultralight_quality, " *
                   "got qualmer_memory_profile=:$(effective_qualmer_memory_profile)")
         end
-        if !(traversal_weighting in (:evidence, :quality))
-            error("traversal_weighting must be :evidence or :quality, got " *
+        if !(traversal_weighting in (:evidence, :quality, :posterior))
+            error("traversal_weighting must be :evidence, :quality, or :posterior, got " *
                   "traversal_weighting=:$(traversal_weighting)")
         end
         # Bounded by the JOINT Phred scale [0, 255] (combine_phred_scores clamps there),
@@ -639,11 +709,19 @@ struct AssemblyConfig
             error("traversal_min_quality must be between 0.0 and 255.0, got " *
                   "traversal_min_quality=$(traversal_min_quality)")
         end
+        if !isfinite(traversal_min_log_odds)
+            error("traversal_min_log_odds must be finite, got " *
+                  "traversal_min_log_odds=$(traversal_min_log_odds)")
+        end
         # Discoverability: mirrors the olc_tool / skip_solid / efficiency-mode
         # warnings — a caller who sets the floor but forgets the selector would
         # otherwise get evidence-weighted traversal and no indication why.
-        if traversal_weighting == :evidence && traversal_min_quality != 60.0
+        if traversal_weighting != :quality && traversal_min_quality != 60.0
             @warn "traversal_min_quality is only used when traversal_weighting=:quality " *
+                  "and is ignored for traversal_weighting=:$(traversal_weighting)."
+        end
+        if traversal_weighting != :posterior && traversal_min_log_odds != 0.0
+            @warn "traversal_min_log_odds is only used when traversal_weighting=:posterior " *
                   "and is ignored for traversal_weighting=:$(traversal_weighting)."
         end
 
@@ -792,7 +870,8 @@ struct AssemblyConfig
             olc_tool,
             olc_options,
             traversal_weighting,
-            traversal_min_quality
+            traversal_min_quality,
+            traversal_min_log_odds
         )
     end
 end
@@ -2548,9 +2627,9 @@ function _assemble_with_iterative_corrector(
         # named here is silently dropped on the corrector route — no error, no warning,
         # and `assembly_stats` then reports the un-requested value as though it were
         # what the caller asked for. `traversal_weighting` / `traversal_min_quality`
-        # were dropped exactly that way (found by execution in PR #453 review, not by
-        # inspection). Anything added to AssemblyConfig that affects re-assembly must
-        # be forwarded here too.
+        # / `traversal_min_log_odds` were dropped exactly that way (found by execution
+        # in PR #453 review, not by inspection). Anything added to AssemblyConfig that
+        # affects re-assembly must be forwarded here too.
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
             dedup_revcomp = config.dedup_revcomp,
@@ -2561,7 +2640,8 @@ function _assemble_with_iterative_corrector(
             qualmer_memory_profile = config.qualmer_memory_profile,
             qualmer_prefilter_min_count = config.qualmer_prefilter_min_count,
             traversal_weighting = config.traversal_weighting,
-            traversal_min_quality = config.traversal_min_quality)
+            traversal_min_quality = config.traversal_min_quality,
+            traversal_min_log_odds = config.traversal_min_log_odds)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -3118,11 +3198,12 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
     # their thresholds. Operate on a deepcopy so a REUSED corrector final-pass
     # graph (td-04tb) is not mutated for other consumers; the cleaned copy is what
     # we both extract contigs from AND return in the AssemblyResult.
-    # Opt-in quality-weighted traversal (td-4e19d.2). Under the `:evidence` default this
-    # block is an EXACT no-op, so every existing benchmark result is unchanged. Under
-    # `:quality` it prunes low-Phred vertices BEFORE extraction, which is the only way
-    # per-base quality can influence `find_contigs_next` / `find_eulerian_paths_next` —
-    # both are purely topological and expose no scoring hook.
+    # Opt-in quality-weighted traversal (td-4e19d.2 / H-11 P2). Under the `:evidence`
+    # default this block is an EXACT no-op, so every existing benchmark result is
+    # unchanged. Under `:quality` / `:posterior` it prunes low-score vertices BEFORE
+    # extraction — the only way per-base quality can influence `find_contigs_next` /
+    # `find_eulerian_paths_next` in H-11 v1 (both are purely topological). Decoder /
+    # Viterbi transitions are not wired here.
     quality_pruned_vertices = 0
     if config.traversal_weighting == :quality
         graph,
@@ -3131,6 +3212,13 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         _log_info(config,
             "Quality-weighted traversal (td-4e19d.2): pruned $(quality_pruned_vertices) " *
             "vertices below joint Q$(config.traversal_min_quality)")
+    elseif config.traversal_weighting == :posterior
+        graph,
+        quality_pruned_vertices = _prune_qualmer_graph_by_posterior_log_odds(
+            graph, config.traversal_min_log_odds)
+        _log_info(config,
+            "Posterior-weighted traversal (H-11 P2): pruned $(quality_pruned_vertices) " *
+            "vertices below Λ=$(config.traversal_min_log_odds)")
     end
 
     cleanup_stats = nothing
@@ -3259,8 +3347,10 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         # that reads as stronger than it is (td-4e19d.2).
         "quality_preserved" => true,
         "traversal_weighting" => string(config.traversal_weighting),
-        "quality_influences_traversal" => config.traversal_weighting == :quality,
+        "quality_influences_traversal" => config.traversal_weighting in
+                                          (:quality, :posterior),
         "traversal_quality_pruned_vertices" => quality_pruned_vertices,
+        "traversal_min_log_odds" => config.traversal_min_log_odds,
         # Always true: canonical (undirected) qualmer reconstruction is now
         # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,
@@ -8907,6 +8997,13 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
         filter(vertices) do v
             confidence = _qualmer_joint_confidence(graph[v])
             confidence === nothing || confidence >= config.traversal_min_quality
+        end
+    elseif weighting == :posterior
+        # Same keep-on-missing-quality policy as
+        # `_prune_qualmer_graph_by_posterior_log_odds`.
+        filter(vertices) do v
+            log_odds = _qualmer_posterior_log_odds(graph[v])
+            log_odds === nothing || log_odds >= config.traversal_min_log_odds
         end
     else
         filter(v -> _qualmer_vertex_score(graph[v]) >= 1.0, vertices)
