@@ -259,6 +259,62 @@ Test.@testset "Quality Functions" begin
         Test.@test Λ_sra > Λ_one
     end
 
+    Test.@testset "AssemblyConfig.strip_simple_dot_mates reaches collapse" begin
+        # Public config surface: default false; true collapses lone `.1`/`.2`.
+        cfg_off = Mycelia.Rhizomorph.AssemblyConfig(; k = 11)
+        Test.@test cfg_off.strip_simple_dot_mates === false
+        cfg_on = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 11, traversal_weighting = :posterior, strip_simple_dot_mates = true)
+        Test.@test cfg_on.strip_simple_dot_mates === true
+        Test.@test cfg_on.traversal_weighting == :posterior
+
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[30 + 33, 30 + 33, 30 + 33]
+        sra = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+
+        # Wire config flag into the collapse / Λ APIs (same path assembly uses).
+        groups_off = Mycelia.Rhizomorph.collapse_molecule_qualities(
+            sra, "test";
+            strip_simple_dot_mates = cfg_off.strip_simple_dot_mates,
+        )
+        groups_on = Mycelia.Rhizomorph.collapse_molecule_qualities(
+            sra, "test";
+            strip_simple_dot_mates = cfg_on.strip_simple_dot_mates,
+        )
+        Test.@test length(groups_off) == 2
+        Test.@test length(groups_on) == 1
+
+        Λ_off = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(
+            sra, "test";
+            strip_simple_dot_mates = cfg_off.strip_simple_dot_mates,
+        )
+        Λ_on = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(
+            sra, "test";
+            strip_simple_dot_mates = cfg_on.strip_simple_dot_mates,
+        )
+        Test.@test Λ_off > Λ_on  # two molecules vs one collapsed molecule
+
+        # assemble_genome records the flag in assembly_stats (forwarded through config).
+        seq = BioSequences.LongDNA{4}("ATGCATGCATG")
+        reads = [FASTX.FASTQ.Record("SRR1.1", seq, fill(UInt8(40), length(seq))),
+                 FASTX.FASTQ.Record("SRR1.2", seq, fill(UInt8(40), length(seq)))]
+        result = Mycelia.Rhizomorph.assemble_genome(
+            reads; k = 5, verbose = false, traversal_weighting = :posterior,
+            strip_simple_dot_mates = true)
+        Test.@test result.assembly_stats["strip_simple_dot_mates"] === true
+        Test.@test result.assembly_stats["traversal_weighting"] == "posterior"
+    end
+
     Test.@testset "collapse_molecule_qualities - mean of error probabilities" begin
         # Two entries, raw Q10 and Q20 at each position (Phred+33 encoded).
         # mean_p = (10^(-1) + 10^(-2)) / 2 = 0.055

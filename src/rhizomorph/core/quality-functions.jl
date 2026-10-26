@@ -475,16 +475,27 @@ function collapse_molecule_qualities(
 end
 
 """
-    collapse_molecule_qualities(vertex_data, dataset_id) -> Union{Nothing, Vector{Vector{Float64}}}
+    collapse_molecule_qualities(vertex_data, dataset_id; strip_simple_dot_mates=false)
+        -> Union{Nothing, Vector{Vector{Float64}}}
 
 Fragment-key all observation ids in `dataset_id`, collapse each molecule's
 entries with mean-of-`p`, and return one length-k error-probability vector per
 molecule (order is not meaningful; treat as a bag).
 
+`strip_simple_dot_mates` is forwarded to `fragment_observation_id` (default
+`false` keeps SRA-style `SRR*.1` / `SRR*.2` distinct). Assembly reaches this
+via `AssemblyConfig.strip_simple_dot_mates`.
+
 Returns `nothing` when the dataset is missing or has no quality evidence.
 """
-function collapse_molecule_qualities(vertex_data, dataset_id::String)
-    groups = _molecule_quality_groups(vertex_data, dataset_id)
+function collapse_molecule_qualities(
+        vertex_data,
+        dataset_id::String;
+        strip_simple_dot_mates::Bool = false
+)
+    groups = _molecule_quality_groups(
+        vertex_data, dataset_id; strip_simple_dot_mates = strip_simple_dot_mates
+    )
     groups === nothing && return nothing
 
     molecule_ps = Vector{Vector{Float64}}()
@@ -500,13 +511,19 @@ Group Phred+33 quality vectors by `fragment_observation_id(observation_id)`.
 
 Returns `nothing` if the dataset is absent or no `QualityEvidenceEntry` exists.
 """
-function _molecule_quality_groups(vertex_data, dataset_id::String)
+function _molecule_quality_groups(
+        vertex_data,
+        dataset_id::String;
+        strip_simple_dot_mates::Bool = false
+)
     dataset_evidence = get_dataset_evidence(vertex_data, dataset_id)
     dataset_evidence === nothing && return nothing
 
     groups = Dict{String, Vector{Vector{UInt8}}}()
     for (observation_id, observation_evidence) in dataset_evidence
-        frag = fragment_observation_id(observation_id)
+        frag = fragment_observation_id(
+            observation_id; strip_simple_dot_mates = strip_simple_dot_mates
+        )
         for evidence_entry in observation_evidence
             if evidence_entry isa QualityEvidenceEntry
                 bucket = get!(groups, frag) do
@@ -572,7 +589,8 @@ function _posterior_log_odds_from_molecule_errors(
 end
 
 """
-    get_vertex_posterior_log_odds_scores(vertex_data, dataset_id; prior_error) -> Union{Nothing, Vector{Float64}}
+    get_vertex_posterior_log_odds_scores(vertex_data, dataset_id;
+        prior_error, strip_simple_dot_mates) -> Union{Nothing, Vector{Float64}}
 
 Per-position Float64 posterior log-odds `Λ_j` after fragment-keyed molecule
 collapse (H-11 E5). Additive API — does not alter `get_vertex_joint_quality`.
@@ -581,6 +599,9 @@ collapse (H-11 E5). Additive API — does not alter `get_vertex_joint_quality`.
 - `vertex_data`: Qualmer (or other quality-evidence) vertex
 - `dataset_id::String`: Dataset key
 - `prior_error::Float64`: Chemistry prior P(error); default `DEFAULT_POSTERIOR_PRIOR_ERROR`
+- `strip_simple_dot_mates::Bool`: forwarded to fragment-key collapse; default
+  `false` (SRA-style spots stay distinct). Assembly sets this from
+  `AssemblyConfig.strip_simple_dot_mates`.
 
 # Returns
 - `Vector{Float64}` of length k, or `nothing` if no quality evidence
@@ -588,15 +609,19 @@ collapse (H-11 E5). Additive API — does not alter `get_vertex_joint_quality`.
 function get_vertex_posterior_log_odds_scores(
         vertex_data,
         dataset_id::String;
-        prior_error::Float64 = DEFAULT_POSTERIOR_PRIOR_ERROR
+        prior_error::Float64 = DEFAULT_POSTERIOR_PRIOR_ERROR,
+        strip_simple_dot_mates::Bool = false
 )
-    molecule_ps = collapse_molecule_qualities(vertex_data, dataset_id)
+    molecule_ps = collapse_molecule_qualities(
+        vertex_data, dataset_id; strip_simple_dot_mates = strip_simple_dot_mates
+    )
     molecule_ps === nothing && return nothing
     return _posterior_log_odds_from_molecule_errors(molecule_ps; prior_error = prior_error)
 end
 
 """
-    get_vertex_posterior_log_odds(vertex_data, dataset_id; prior_error) -> Union{Nothing, Float64}
+    get_vertex_posterior_log_odds(vertex_data, dataset_id;
+        prior_error, strip_simple_dot_mates) -> Union{Nothing, Float64}
 
 Scalar k-mer posterior log-odds `Λ(v)`: the **weakest** per-position score from
 `get_vertex_posterior_log_odds_scores` (conjunction semantics matching
@@ -611,10 +636,14 @@ Returns `nothing` when the vertex has no recoverable quality evidence.
 function get_vertex_posterior_log_odds(
         vertex_data,
         dataset_id::String;
-        prior_error::Float64 = DEFAULT_POSTERIOR_PRIOR_ERROR
+        prior_error::Float64 = DEFAULT_POSTERIOR_PRIOR_ERROR,
+        strip_simple_dot_mates::Bool = false
 )
     scores = get_vertex_posterior_log_odds_scores(
-        vertex_data, dataset_id; prior_error = prior_error
+        vertex_data,
+        dataset_id;
+        prior_error = prior_error,
+        strip_simple_dot_mates = strip_simple_dot_mates,
     )
     scores === nothing && return nothing
     isempty(scores) && return nothing

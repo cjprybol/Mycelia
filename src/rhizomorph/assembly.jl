@@ -71,10 +71,16 @@ A vertex carrying no recoverable quality falls back to the evidence score rather
 scoring 0.0: a missing measurement must not be read as a confident "bad", which would
 silently delete real structure whenever quality is absent.
 """
-function _qualmer_vertex_score(vertex_data, weighting::Symbol)
+function _qualmer_vertex_score(
+        vertex_data,
+        weighting::Symbol;
+        strip_simple_dot_mates::Bool = false
+)
     weighting == :evidence && return _qualmer_vertex_score(vertex_data)
     if weighting == :posterior
-        log_odds = _qualmer_posterior_log_odds(vertex_data)
+        log_odds = _qualmer_posterior_log_odds(
+            vertex_data; strip_simple_dot_mates = strip_simple_dot_mates
+        )
         log_odds === nothing && return _qualmer_vertex_score(vertex_data)
         return log_odds
     end
@@ -89,15 +95,22 @@ Scalar posterior log-odds `Λ(v)` for a qualmer vertex (H-11 P1/P2).
 Reads `first(get_all_dataset_ids(...))` with the same single-dataset assumption as
 `_qualmer_joint_confidence`. Returns `nothing` when no quality evidence is recoverable
 (caller must treat that as keep / no opinion, not as a zero score).
+
+`strip_simple_dot_mates` is forwarded from `AssemblyConfig.strip_simple_dot_mates`
+into fragment-key collapse (default `false`).
 """
 function _qualmer_posterior_log_odds(
         vertex_data;
-        prior_error::Float64 = Rhizomorph.DEFAULT_POSTERIOR_PRIOR_ERROR
+        prior_error::Float64 = Rhizomorph.DEFAULT_POSTERIOR_PRIOR_ERROR,
+        strip_simple_dot_mates::Bool = false
 )
     dataset_ids = Rhizomorph.get_all_dataset_ids(vertex_data)
     isempty(dataset_ids) && return nothing
     return Rhizomorph.get_vertex_posterior_log_odds(
-        vertex_data, first(dataset_ids); prior_error = prior_error
+        vertex_data,
+        first(dataset_ids);
+        prior_error = prior_error,
+        strip_simple_dot_mates = strip_simple_dot_mates,
     )
 end
 
@@ -282,12 +295,18 @@ vertices are preserved. Operates on a deepcopy.
 H-11 v1 quality influence is **prune + fallback walk only** — not Viterbi / decoder
 transitions or primary Eulerian path scoring.
 """
-function _prune_qualmer_graph_by_posterior_log_odds(graph, min_log_odds::Float64)
+function _prune_qualmer_graph_by_posterior_log_odds(
+        graph,
+        min_log_odds::Float64;
+        strip_simple_dot_mates::Bool = false
+)
     pruned = deepcopy(graph)
     labels = collect(MetaGraphsNext.labels(pruned))
     doomed = eltype(labels)[]
     for label in labels
-        log_odds = _qualmer_posterior_log_odds(pruned[label])
+        log_odds = _qualmer_posterior_log_odds(
+            pruned[label]; strip_simple_dot_mates = strip_simple_dot_mates
+        )
         log_odds === nothing && continue
         log_odds < min_log_odds && push!(doomed, label)
     end
@@ -529,6 +548,12 @@ struct AssemblyConfig
     # Callers must not treat this default as calibrated.
     traversal_min_log_odds::Float64
 
+    # When true, fragment-key collapse also strips lone trailing `.1`/`.2` mate
+    # suffixes (see `fragment_observation_id`). Default `false` keeps SRA-style
+    # spot ids (`SRR123.1` / `SRR123.2`) as distinct molecules. Consulted on the
+    # `:posterior` path (prune + fallback Λ); inert for `:evidence` / `:quality`.
+    strip_simple_dot_mates::Bool
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -560,7 +585,8 @@ struct AssemblyConfig
             olc_options::NamedTuple = (;),
             traversal_weighting::Symbol = :evidence,
             traversal_min_quality::Float64 = 60.0,
-            traversal_min_log_odds::Float64 = 0.0
+            traversal_min_log_odds::Float64 = 0.0,
+            strip_simple_dot_mates::Bool = false
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -726,6 +752,10 @@ struct AssemblyConfig
             @warn "traversal_min_log_odds is only used when traversal_weighting=:posterior " *
                   "and is ignored for traversal_weighting=:$(traversal_weighting)."
         end
+        if traversal_weighting != :posterior && strip_simple_dot_mates
+            @warn "strip_simple_dot_mates is only used when traversal_weighting=:posterior " *
+                  "and is ignored for traversal_weighting=:$(traversal_weighting)."
+        end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
         # quality-aware find_contigs_next calls in _qualmer_graph_to_assembly pass
@@ -873,7 +903,8 @@ struct AssemblyConfig
             olc_options,
             traversal_weighting,
             traversal_min_quality,
-            traversal_min_log_odds
+            traversal_min_log_odds,
+            strip_simple_dot_mates
         )
     end
 end
@@ -2629,9 +2660,9 @@ function _assemble_with_iterative_corrector(
         # named here is silently dropped on the corrector route — no error, no warning,
         # and `assembly_stats` then reports the un-requested value as though it were
         # what the caller asked for. `traversal_weighting` / `traversal_min_quality`
-        # / `traversal_min_log_odds` were dropped exactly that way (found by execution
-        # in PR #453 review, not by inspection). Anything added to AssemblyConfig that
-        # affects re-assembly must be forwarded here too.
+        # / `traversal_min_log_odds` / `strip_simple_dot_mates` were dropped exactly
+        # that way (found by execution in PR #453 review, not by inspection). Anything
+        # added to AssemblyConfig that affects re-assembly must be forwarded here too.
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
             dedup_revcomp = config.dedup_revcomp,
@@ -2643,7 +2674,8 @@ function _assemble_with_iterative_corrector(
             qualmer_prefilter_min_count = config.qualmer_prefilter_min_count,
             traversal_weighting = config.traversal_weighting,
             traversal_min_quality = config.traversal_min_quality,
-            traversal_min_log_odds = config.traversal_min_log_odds)
+            traversal_min_log_odds = config.traversal_min_log_odds,
+            strip_simple_dot_mates = config.strip_simple_dot_mates)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -3217,7 +3249,10 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
     elseif config.traversal_weighting == :posterior
         graph,
         quality_pruned_vertices = _prune_qualmer_graph_by_posterior_log_odds(
-            graph, config.traversal_min_log_odds)
+            graph,
+            config.traversal_min_log_odds;
+            strip_simple_dot_mates = config.strip_simple_dot_mates,
+        )
         _log_info(config,
             "Posterior-weighted traversal (H-11 P2): pruned $(quality_pruned_vertices) " *
             "vertices below Λ=$(config.traversal_min_log_odds)")
@@ -3353,6 +3388,7 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
                                           (:quality, :posterior),
         "traversal_quality_pruned_vertices" => quality_pruned_vertices,
         "traversal_min_log_odds" => config.traversal_min_log_odds,
+        "strip_simple_dot_mates" => config.strip_simple_dot_mates,
         # Always true: canonical (undirected) qualmer reconstruction is now
         # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,
@@ -9003,8 +9039,11 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
     elseif weighting == :posterior
         # Same keep-on-missing-quality policy as
         # `_prune_qualmer_graph_by_posterior_log_odds`.
+        strip_dots = config.strip_simple_dot_mates
         filter(vertices) do v
-            log_odds = _qualmer_posterior_log_odds(graph[v])
+            log_odds = _qualmer_posterior_log_odds(
+                graph[v]; strip_simple_dot_mates = strip_dots
+            )
             log_odds === nothing || log_odds >= config.traversal_min_log_odds
         end
     else
@@ -9026,7 +9065,12 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
         # "quality-weighted", but under the `:evidence` default the walk scores purely on
         # evidence counts; `weighting` is what actually makes it quality-driven.
         path = _quality_weighted_walk(
-            graph, start_vertex, config.k * 10; weighting = weighting)  # Reasonable max length
+            graph,
+            start_vertex,
+            config.k * 10;
+            weighting = weighting,
+            strip_simple_dot_mates = config.strip_simple_dot_mates,
+        )
 
         if length(path) > 1  # Need at least 2 vertices to form a meaningful contig
             # Mark all vertices in path as visited
@@ -9051,7 +9095,8 @@ end
 Perform quality-weighted walk through qualmer graph.
 """
 function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000;
-        weighting::Symbol = :evidence)
+        weighting::Symbol = :evidence,
+        strip_simple_dot_mates::Bool = false)
     path = [start_vertex]
     current = start_vertex
     visited = Set([current])
@@ -9073,7 +9118,11 @@ function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000;
 
         for neighbor in unvisited
             # Calculate score based on vertex evidence and edge evidence
-            vertex_quality = _qualmer_vertex_score(graph[neighbor], weighting)
+            vertex_quality = _qualmer_vertex_score(
+                graph[neighbor],
+                weighting;
+                strip_simple_dot_mates = strip_simple_dot_mates,
+            )
 
             # Check if edge exists and get its quality weight
             edge_quality = 1.0
