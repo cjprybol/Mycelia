@@ -115,6 +115,8 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             # would let a smoke submission run the full grid and still clear the
             # 4-row guard (round-7 review, surviving mutant).
             Test.@test occursin(" --cells td2rxh ", args)
+            # A depot startup.jl must not get to edit the load path.
+            Test.@test occursin("+lts --startup-file=no --project=..", args)
             rc_smoke,
             _ = run_sbatch(repo, home, bindir;
                 extra_env = Dict("STUB_ROWS" => "4", "TD2RXH_CELLS" => "smoke"))

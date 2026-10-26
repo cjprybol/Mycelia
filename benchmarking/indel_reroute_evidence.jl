@@ -32,8 +32,15 @@
 # made -- point it at an unfixed checkout, then at the branch):
 #
 #   MYCELIA_PROJECT=/path/to/checkout LD_LIBRARY_PATH='' \
-#     julia --project=/path/to/checkout benchmarking/indel_reroute_evidence.jl \
-#       --seeds 42,43,44 --out results.csv
+#     julia --startup-file=no --project=/path/to/checkout \
+#       benchmarking/indel_reroute_evidence.jl --seeds 42,43,44 --out results.csv
+#
+# MYCELIA_PROJECT (default: this file's checkout) is what selects the code: the
+# script activates it, which supersedes --project. Before running anything it
+# checks the resulting state (`check_provenance`): Mycelia must load from
+# <checkout>/src/Mycelia.jl and the checkout must be first on the load path, so
+# no dependency can resolve from another environment. --startup-file=no stops a
+# depot startup.jl from editing the load path; the check refuses if one did.
 #
 # Options:
 #   --seeds a,b,c    replicate seeds            (default 42,43,44)
@@ -371,32 +378,57 @@ function main(args::Vector{String} = ARGS; runner = run_arm)::Int
     return n_failed
 end
 
-"""
-    assert_mycelia_from(project) -> String
+_resolved(path::AbstractString)::String = ispath(path) ? realpath(path) : String(path)
 
-Return the path Mycelia was loaded from, or throw if it is not inside `project`.
-`Pkg.activate` does not make the project win: an exported `JULIA_LOAD_PATH`
-with a leading entry is searched first, so `import Mycelia` can resolve to a
-different checkout than the one the run label names.
 """
-function assert_mycelia_from(project::AbstractString)::String
-    loaded = realpath(pathof(Mycelia))
+    check_provenance(project; loaded = pathof(Mycelia), load_path = Base.load_path())
+        -> String
+
+Check the loaded STATE, not the environment variables that could have produced
+it: Mycelia must be exactly `<project>/src/Mycelia.jl` (a sibling or nested
+checkout fails), and `<project>/Project.toml` must be FIRST on the load path.
+The project's Manifest lists every dependency, so with the project first each
+one resolves from it; an earlier entry -- from `JULIA_LOAD_PATH`, a depot
+`startup.jl`, or anything else -- could otherwise supply a dependency from
+another environment while Mycelia itself still loads from the right place.
+Paths are compared after `realpath`, so symlinks cannot fake or hide a match.
+
+Returns the Mycelia path. Throws `ArgumentError` on a mismatch, and
+`Base.IOError` (from `realpath`) when `project` does not exist. Not covered: a
+precompile cache built from another checkout, and Manifest `path =` dependencies
+(hashed by path, not content; the current Manifest has none).
+"""
+function check_provenance(project::AbstractString;
+        loaded::AbstractString = pathof(Mycelia),
+        load_path::AbstractVector{<:AbstractString} = Base.load_path())::String
     root = realpath(project)
-    startswith(loaded, root * "/") ||
-        throw(ArgumentError("Mycelia was loaded from $(loaded), not from the project " *
-                            "$(root); check JULIA_LOAD_PATH and MYCELIA_PROJECT"))
-    return loaded
+    expected = joinpath(root, "src", "Mycelia.jl")
+    actual = _resolved(loaded)
+    actual == expected ||
+        throw(ArgumentError("Mycelia was loaded from $(actual), not $(expected); " *
+                            "check MYCELIA_PROJECT and the load path"))
+    first_env = isempty(load_path) ? "<empty>" : _resolved(first(load_path))
+    first_env == joinpath(root, "Project.toml") ||
+        throw(ArgumentError("the project is not first on the load path (first: " *
+                            "$(first_env)); dependencies could resolve from another " *
+                            "environment. Run with --startup-file=no and without " *
+                            "JULIA_LOAD_PATH"))
+    return expected
 end
 
 """
-    script_main(args; runner = run_arm, project = _PROJECT) -> Int
+    script_main(args; runner = run_arm, provenance = () -> check_provenance(_PROJECT))
+        -> Int
 
-The script's exit status: 1 when any arm failed, else 0. It first checks that
-Mycelia came from `project`, so the code that runs is the code the label names.
+The script's exit status: 1 when any arm failed, else 0. The provenance check
+runs FIRST, before any arm or output file, so a refused run produces nothing;
+a refusal (or a warm-up error) throws rather than returning, and the uncaught
+exception still makes julia exit non-zero. Tests inject `provenance`, since a
+test environment is legitimately not the script's environment.
 """
 function script_main(args::Vector{String} = ARGS; runner = run_arm,
-        project::AbstractString = _PROJECT)::Int
-    println("# mycelia=", assert_mycelia_from(project))
+        provenance = () -> check_provenance(_PROJECT))::Int
+    println("# mycelia=", provenance())
     return main(args; runner = runner) == 0 ? 0 : 1
 end
 

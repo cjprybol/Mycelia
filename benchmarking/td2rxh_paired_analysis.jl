@@ -17,8 +17,8 @@
 #       upper bound on decode cost alone.
 #   H2 (contiguity): per cell, delta = nanopore - illumina on the PRIMARY metric
 #       best_contig_reference_coverage (a contiguity measure, not sequence
-#       accuracy; see indel_bench_best_reference_alignment), rounded to 1e-6.
-#       Exact two-sided sign-flip permutation test on the Wilcoxon signed-rank
+#       accuracy; see indel_bench_best_reference_alignment), rounded to 1e-6
+#       before ranking in the test. Exact two-sided sign-flip permutation test on the Wilcoxon signed-rank
 #       statistic (average ranks, zeros dropped), exact under ties. Holm across the
 #       6 pre-registered cells, fixed family: a cell that is MISSING, INCOMPLETE
 #       (< 16 paired seeds), UNDEFINED (no non-zero delta) or TREATMENT-NOT-APPLIED
@@ -41,8 +41,11 @@
 # round 7, after the data existed): the median gates (H2 median delta > 0, fit
 # identity median delta >= 0) are taken over deltas rounded to 1e-6. The
 # pre-registration rounds only inside the signed-rank test. The input CSVs carry
-# 6 decimals, so this removes float residue and nothing else; re-running on the
-# committed 27118659 shards changed no verdict, status or p-value.
+# 6 decimals, so no real difference is lost and float residue can no longer
+# decide a gate's sign (a median of two rounded deltas can still carry residue
+# in its last digits, e.g. -0.11674999999999999, but never across zero).
+# Re-running on the committed 27118659 shards changed no verdict, status or
+# p-value.
 #
 # Input integrity is enforced, not assumed: malformed or mixed run labels, cells
 # outside the pre-registered six, seeds outside 1..16, duplicate (cell, seed, arm)

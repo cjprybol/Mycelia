@@ -13,10 +13,12 @@ module Td2rxhEvidenceAnalysisTest
 # because a review-round mutant survived without them; each says which.
 #
 # The harness failure path is tested without an assembly through an injected
-# `runner`: failed arms are counted, logged with a backtrace, reported on stderr,
-# and make `script_main` (the script's exit status) return 1; Mycelia loaded
-# from outside the labelled checkout is refused. The one-line entry point
-# `exit(script_main())` itself is not executed by any test.
+# `runner`: failed arms (even one) are counted, logged with a backtrace, reported
+# on stderr, and make `script_main` (the script's exit status) return 1. The
+# provenance check runs on a fake checkout tree (sibling, nested, symlinked,
+# project-not-first) and is shown to run before any arm. Not executed by any
+# test: the one-line entry `exit(script_main())` and script_main's default
+# `provenance` closure (the live environment differs between test launchers).
 
 import Test
 import CSV
@@ -418,9 +420,11 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # Before round 7 a failed arm was a @warn with no backtrace and the process
         # exited 0 with a short CSV. `script_main` is the script's exit status
         # (the entry point is `exit(script_main())`). Warm-up is off because it
-        # calls run_arm directly, not `runner`.
+        # calls run_arm directly, not `runner`. Provenance is injected: a test
+        # environment is legitimately not the script's environment.
         quiet(f) = redirect_stdout(f, devnull)
         args(out) = ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"]
+        ok = () -> "provenance checked"
         boom = (args...) -> error("boom")
         out, err = tempname() * ".csv", tempname()
         logs,
@@ -443,41 +447,84 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test length(readlines(out)) == 1   # header only
         Test.@test occursin("# FAILED: 4 arm(s) threw", read(err, String))
 
-        # The exit status: 1 when any arm failed, 0 when none did.
-        fake = (args...) -> (substitution_length_divergences = 0, window_divergences = 0,
+        fake_result = (substitution_length_divergences = 0, window_divergences = 0,
             window_anchor_rejections = 0, trace_contract_errors = 0, indel_engaged = 1,
             indel_requested = 1, reassembly_k = 31, n_contigs = 1, largest_contig = 2000,
             largest_ratio = 1.0, total_contig_bases = 2000, wall_seconds = 1.0,
             wall_seconds_per_read = 0.01, best_contig_reference_coverage = 1.0,
             best_contig_fit_identity = 1.0)
-        Test.with_logger(Base.CoreLogging.NullLogger()) do
-            redirect_stderr(devnull) do
-                Test.@test quiet(() -> Harness.script_main(args(tempname()); runner = boom)) ==
-                           1
-            end
+        fake = (args...) -> fake_result
+        # Exactly ONE failed arm must already make the exit status 1 (round 9: a
+        # `> 1` threshold survived when every test failed all four arms).
+        one_bad = (reads, cell, arm, reference) ->
+            (cell === Harness.SMOKE_CELLS[1] && arm == :nanopore) ? error("one") : fake_result
+        silenced(f) = Test.with_logger(Base.CoreLogging.NullLogger()) do
+            redirect_stderr(() -> quiet(f), devnull)
         end
+        Test.@test silenced(() -> Harness.script_main(
+            args(tempname()); runner = boom, provenance = ok)) == 1
+        one_out = tempname() * ".csv"
+        Test.@test silenced(() -> Harness.script_main(
+            args(one_out); runner = one_bad, provenance = ok)) == 1
+        Test.@test length(readlines(one_out)) == 4   # header + 3 arm rows
         ok_out = tempname() * ".csv"
-        Test.@test quiet(() -> Harness.script_main(args(ok_out); runner = fake)) == 0
+        Test.@test quiet(() -> Harness.script_main(
+            args(ok_out); runner = fake, provenance = ok)) == 0
         Test.@test length(readlines(ok_out)) == 5   # header + 4 arm rows
     end
 
-    Test.@testset "harness refuses to run Mycelia loaded from another project" begin
-        # A leading JULIA_LOAD_PATH entry can make `import Mycelia` resolve outside
-        # the checkout the run label names (round-8 review).
-        Test.@test startswith(Harness.assert_mycelia_from(Harness._PROJECT),
-            realpath(Harness._PROJECT))
-        Test.@test_throws ArgumentError Harness.assert_mycelia_from(mktempdir())
-        # Through the entry point. Arguments are valid and no arm can run an
-        # assembly, so the refusal is the only ArgumentError on this path.
-        never = (args...) -> error("the project check should have refused first")
-        Test.@test_throws ArgumentError Test.with_logger(Base.CoreLogging.NullLogger()) do
-            redirect_stdout(devnull) do
-                Harness.script_main(
-                    ["--cells", "smoke", "--seeds", "1", "--out", tempname(),
-                        "--warmup", "false"];
-                    runner = never, project = mktempdir())
-            end
+    Test.@testset "script_main checks provenance before running anything" begin
+        # A refused run must produce nothing: no arm runs and no CSV is written
+        # (round 9: checking after main() still threw, but only after every arm
+        # had run from the wrong checkout).
+        ran = Ref(false)
+        runner = (args...) -> (ran[] = true; error("an arm ran"))
+        out = tempname() * ".csv"
+        refuse = () -> throw(ArgumentError("Mycelia was loaded from /elsewhere"))
+        Test.@test_throws r"Mycelia was loaded from" redirect_stdout(devnull) do
+            Harness.script_main(
+                ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"];
+                runner = runner, provenance = refuse)
         end
+        Test.@test !ran[]
+        Test.@test !isfile(out)
+    end
+
+    Test.@testset "provenance: Mycelia exactly from this checkout, project first" begin
+        # A fake tree, so the test does not depend on how the test itself was
+        # launched. `ab` is a sibling sharing a's prefix; a/.worktrees/x is nested.
+        root = mktempdir()
+        for dir in ("a", "ab", joinpath("a", ".worktrees", "x"))
+            mkpath(joinpath(root, dir, "src"))
+            touch(joinpath(root, dir, "src", "Mycelia.jl"))
+            touch(joinpath(root, dir, "Project.toml"))
+        end
+        touch(joinpath(root, "a", "src", "other.jl"))
+        a, ab = joinpath(root, "a"), joinpath(root, "ab")
+        nested = joinpath(a, ".worktrees", "x")
+        link = joinpath(root, "link")
+        symlink(a, link)
+        src(p) = joinpath(p, "src", "Mycelia.jl")
+        proj(p) = joinpath(p, "Project.toml")
+        stdlib = "/no/such/stdlib"   # later entries are not consulted
+        check(project, loaded, load_path) =
+            Harness.check_provenance(project; loaded = loaded, load_path = load_path)
+
+        Test.@test check(a, src(a), [proj(a), stdlib]) == src(realpath(a))
+        # Symlinks resolve on either side.
+        Test.@test check(link, src(a), [proj(a), stdlib]) == src(realpath(a))
+        Test.@test check(a, src(link), [proj(link), stdlib]) == src(realpath(a))
+
+        wrong_load = r"Mycelia was loaded from"
+        Test.@test_throws wrong_load check(a, src(ab), [proj(a)])        # sibling prefix
+        Test.@test_throws wrong_load check(a, src(nested), [proj(a)])    # nested checkout
+        Test.@test_throws wrong_load check(a, joinpath(a, "src", "other.jl"), [proj(a)])
+
+        not_first = r"not first on the load path"
+        Test.@test_throws not_first check(a, src(a), [proj(ab), proj(a)])  # env ahead
+        Test.@test_throws not_first check(a, src(a), [proj(nested), proj(a)])
+        Test.@test_throws not_first check(a, src(a), String[])
+        Test.@test_throws Base.IOError check(joinpath(root, "missing"), src(a), [proj(a)])
     end
 
     Test.@testset "H1' threshold and three states" begin

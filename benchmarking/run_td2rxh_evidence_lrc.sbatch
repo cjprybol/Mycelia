@@ -86,11 +86,16 @@ if ! manifest_sha="$(sha256sum ../Manifest.toml | cut -c1-12)" ||
 fi
 label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
 echo "Checkout: $(cd .. && pwd)  label=${label}"
-# sbatch exports the submit shell's environment, and three variables could make
-# the code that runs differ from the checkout the label names: MYCELIA_PROJECT
-# (the harness activates it over --project), JULIA_LOAD_PATH (a leading entry is
-# searched before the active project) and JULIA_PROJECT. Unset all three; the
-# harness also refuses to run unless Mycelia loads from inside this checkout.
+# The guarantee that the code which runs is the checkout the label names comes
+# from the harness's check_provenance, which checks the loaded state: Mycelia
+# from <checkout>/src and <checkout>/Project.toml first on the load path. The
+# lines here only keep the submit shell from tripping it. sbatch exports that
+# shell's environment: MYCELIA_PROJECT would select another checkout (the harness
+# activates it, superseding --project) and a non-default JULIA_LOAD_PATH would
+# put an environment ahead of the project. Unset, the load path is Julia's
+# default ("@", "@v#.#", "@stdlib"). JULIA_PROJECT is unset only for tidiness:
+# --project and the harness's Pkg.activate both supersede it. --startup-file=no
+# (below) keeps a depot startup.jl from editing the load path.
 unset MYCELIA_PROJECT JULIA_LOAD_PATH JULIA_PROJECT
 
 # Mycelia's Stage-1 corrector needs a temp root that (a) does not resolve through
@@ -149,7 +154,7 @@ out="${outdir}/seed${seed}.csv"
 rm -f "${out}"
 
 echo ">>> RUN cells=${cells} seed=${seed} -> ${out}  $(date)"
-if "${JULIA}" "${JULIA_ARGS[@]}" --project=.. indel_reroute_evidence.jl \
+if "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project=.. indel_reroute_evidence.jl \
     --cells "${cells}" --seeds "${seed}" --out "${out}" --label "${label}"; then
   julia_rc=0
 else
