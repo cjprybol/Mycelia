@@ -128,6 +128,8 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             # Each would run code the provenance label does not name: the harness
             # activates MYCELIA_PROJECT over --project, and a leading
             # JULIA_LOAD_PATH entry is searched before the active project.
+            # JULIA_LOAD_PATH is pinned to "@:@stdlib" rather than unset, so the
+            # global environment's preferences are not stacked either.
             repo, home, bindir = fixture()
             rc,
             _ = run_sbatch(repo, home, bindir;
@@ -136,7 +138,7 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
                     "JULIA_LOAD_PATH" => "/bogus/env:", "JULIA_PROJECT" => "/bogus/project"))
             Test.@test rc == 0
             Test.@test readlines(joinpath(home, "julia_env.txt")) ==
-                       ["MYCELIA_PROJECT=<unset>", "JULIA_LOAD_PATH=<unset>",
+                       ["MYCELIA_PROJECT=<unset>", "JULIA_LOAD_PATH=@:@stdlib",
                 "JULIA_PROJECT=<unset>"]
         end
         Test.@testset "julia exiting 0 with too few rows is reported as such" begin

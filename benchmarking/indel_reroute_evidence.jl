@@ -35,12 +35,19 @@
 #     julia --startup-file=no --project=/path/to/checkout \
 #       benchmarking/indel_reroute_evidence.jl --seeds 42,43,44 --out results.csv
 #
-# MYCELIA_PROJECT (default: this file's checkout) is what selects the code: the
-# script activates it, which supersedes --project. Before running anything it
-# checks the resulting state (`check_provenance`): Mycelia must load from
-# <checkout>/src/Mycelia.jl and the checkout must be first on the load path, so
-# no dependency can resolve from another environment. --startup-file=no stops a
-# depot startup.jl from editing the load path; the check refuses if one did.
+# MYCELIA_PROJECT (default: this file's checkout) is what selects the Mycelia
+# package: the script activates it, which supersedes --project. This script and
+# indel_benchmark_common.jl always come from the checkout the script is run from
+# (the one the sbatch label records); MYCELIA_PROJECT changes only the package.
+# Before running anything the script checks the resulting state
+# (`check_provenance`): Mycelia must load from <checkout>/src/Mycelia.jl, the
+# checkout must be first on the load path, and every loaded package must be the
+# one the load path resolves to -- so a dependency preloaded from another
+# environment (e.g. by a depot startup.jl) is refused too. --startup-file=no is
+# still required: it is what keeps a startup file from running at all.
+# Not covered: preferences and artifact overrides from a depot (the sbatch sets
+# JULIA_LOAD_PATH="@:@stdlib", which drops the global environment's
+# preferences; depot artifacts/Overrides.toml is not checked).
 #
 # Options:
 #   --seeds a,b,c    replicate seeds            (default 42,43,44)
@@ -381,26 +388,55 @@ end
 _resolved(path::AbstractString)::String = ispath(path) ? realpath(path) : String(path)
 
 """
-    check_provenance(project; loaded = pathof(Mycelia), load_path = Base.load_path())
-        -> String
+    loaded_package_paths() -> Vector{Tuple{String, String, Union{Nothing, String}}}
+
+`(name, loaded_from, resolves_to)` for every loaded package with a UUID and a
+source file: where it was actually loaded from, and where `Base.locate_package`
+resolves it under the CURRENT load path.
+"""
+function loaded_package_paths()::Vector{Tuple{String, String, Union{Nothing, String}}}
+    paths = Tuple{String, String, Union{Nothing, String}}[]
+    for (id, mod) in Base.loaded_modules
+        id.uuid === nothing && continue
+        source = pathof(mod)
+        source === nothing && continue
+        push!(paths, (id.name, source, Base.locate_package(id)))
+    end
+    return paths
+end
+
+"""
+    check_provenance(project; loaded = pathof(Mycelia), load_path = Base.load_path(),
+        packages = loaded_package_paths()) -> String
 
 Check the loaded STATE, not the environment variables that could have produced
-it: Mycelia must be exactly `<project>/src/Mycelia.jl` (a sibling or nested
-checkout fails), and `<project>/Project.toml` must be FIRST on the load path.
-The project's Manifest lists every dependency, so with the project first each
-one resolves from it; an earlier entry -- from `JULIA_LOAD_PATH`, a depot
-`startup.jl`, or anything else -- could otherwise supply a dependency from
-another environment while Mycelia itself still loads from the right place.
+it, in three parts:
+
+1. Mycelia is exactly `<project>/src/Mycelia.jl` (a sibling or nested checkout
+   fails).
+2. `<project>/Project.toml` is FIRST on the load path, so every package the
+   project's Manifest lists resolves from it.
+3. Every loaded package IS the one the load path resolves it to. Part 2 alone
+   only says where packages would resolve now; a depot `startup.jl` can import a
+   dependency from another environment and then restore the load path, and the
+   already-loaded module is reused. Part 3 refuses that, and refuses a loaded
+   package the load path cannot resolve at all.
+
 Paths are compared after `realpath`, so symlinks cannot fake or hide a match.
+Fails closed on layouts this project does not use: a `JuliaProject.toml`, or a
+nonexistent leading load-path entry (which cannot supply anything, but is
+still refused).
 
 Returns the Mycelia path. Throws `ArgumentError` on a mismatch, and
-`Base.IOError` (from `realpath`) when `project` does not exist. Not covered: a
-precompile cache built from another checkout, and Manifest `path =` dependencies
-(hashed by path, not content; the current Manifest has none).
+`Base.IOError` (from `realpath`) when `project` does not exist. Not covered:
+depot preferences and `artifacts/Overrides.toml` (see the header), a
+precompile cache built from another checkout, and Manifest `path =`
+dependencies (hashed by path, not content; the current Manifest has none).
 """
 function check_provenance(project::AbstractString;
         loaded::AbstractString = pathof(Mycelia),
-        load_path::AbstractVector{<:AbstractString} = Base.load_path())::String
+        load_path::AbstractVector{<:AbstractString} = Base.load_path(),
+        packages = loaded_package_paths())::String
     root = realpath(project)
     expected = joinpath(root, "src", "Mycelia.jl")
     actual = _resolved(loaded)
@@ -411,8 +447,17 @@ function check_provenance(project::AbstractString;
     first_env == joinpath(root, "Project.toml") ||
         throw(ArgumentError("the project is not first on the load path (first: " *
                             "$(first_env)); dependencies could resolve from another " *
-                            "environment. Run with --startup-file=no and without " *
-                            "JULIA_LOAD_PATH"))
+                            "environment. Run with --startup-file=no and " *
+                            "JULIA_LOAD_PATH unset or \"@:@stdlib\""))
+    for (name, from, resolves_to) in packages
+        resolves_to === nothing &&
+            throw(ArgumentError("package $(name) is loaded (from $(from)) but the load " *
+                                "path cannot resolve it; it came from another environment"))
+        _resolved(from) == _resolved(resolves_to) ||
+            throw(ArgumentError("package $(name) was loaded from $(_resolved(from)) but " *
+                                "the project resolves it to $(_resolved(resolves_to)); " *
+                                "was it preloaded, e.g. by a startup file?"))
+    end
     return expected
 end
 
@@ -421,10 +466,11 @@ end
         -> Int
 
 The script's exit status: 1 when any arm failed, else 0. The provenance check
-runs FIRST, before any arm or output file, so a refused run produces nothing;
-a refusal (or a warm-up error) throws rather than returning, and the uncaught
-exception still makes julia exit non-zero. Tests inject `provenance`, since a
-test environment is legitimately not the script's environment.
+runs FIRST, before any arm or output file, so a refused run produces nothing.
+Any error outside an arm -- a refusal, argument parsing, read simulation, the
+warm-up -- throws rather than returning, and the uncaught exception still makes
+julia exit non-zero. Tests inject `provenance` for the in-process cases; a
+subprocess test runs the script itself with the default.
 """
 function script_main(args::Vector{String} = ARGS; runner = run_arm,
         provenance = () -> check_provenance(_PROJECT))::Int

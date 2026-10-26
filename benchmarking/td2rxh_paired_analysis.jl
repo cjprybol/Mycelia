@@ -18,8 +18,9 @@
 #   H2 (contiguity): per cell, delta = nanopore - illumina on the PRIMARY metric
 #       best_contig_reference_coverage (a contiguity measure, not sequence
 #       accuracy; see indel_bench_best_reference_alignment), rounded to 1e-6
-#       before ranking in the test. Exact two-sided sign-flip permutation test on the Wilcoxon signed-rank
-#       statistic (average ranks, zeros dropped), exact under ties. Holm across the
+#       before ranking in the test. Exact two-sided sign-flip permutation test on
+#       the Wilcoxon signed-rank statistic (average ranks, zeros dropped), exact
+#       under ties. Holm across the
 #       6 pre-registered cells, fixed family: a cell that is MISSING, INCOMPLETE
 #       (< 16 paired seeds), UNDEFINED (no non-zero delta) or TREATMENT-NOT-APPLIED
 #       (no nanopore run with indel_engaged >= 1) enters at p = 1 and cannot

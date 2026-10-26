@@ -88,15 +88,20 @@ label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
 echo "Checkout: $(cd .. && pwd)  label=${label}"
 # The guarantee that the code which runs is the checkout the label names comes
 # from the harness's check_provenance, which checks the loaded state: Mycelia
-# from <checkout>/src and <checkout>/Project.toml first on the load path. The
-# lines here only keep the submit shell from tripping it. sbatch exports that
-# shell's environment: MYCELIA_PROJECT would select another checkout (the harness
-# activates it, superseding --project) and a non-default JULIA_LOAD_PATH would
-# put an environment ahead of the project. Unset, the load path is Julia's
-# default ("@", "@v#.#", "@stdlib"). JULIA_PROJECT is unset only for tidiness:
-# --project and the harness's Pkg.activate both supersede it. --startup-file=no
-# (below) keeps a depot startup.jl from editing the load path.
-unset MYCELIA_PROJECT JULIA_LOAD_PATH JULIA_PROJECT
+# from <checkout>/src, <checkout>/Project.toml first on the load path, and every
+# loaded package the one that load path resolves to. The lines here keep the
+# submit shell from tripping it, and narrow what the check cannot see. sbatch
+# exports that shell's environment: MYCELIA_PROJECT would select another
+# checkout (the harness activates it, superseding --project). JULIA_LOAD_PATH is
+# SET to "@:@stdlib" -- the active project plus the standard library -- rather
+# than unset: Julia's default also stacks the global environment ("@v#.#"),
+# whose LocalPreferences.toml could still change a package's behaviour (e.g. a
+# JLL library path) with the project first. Depot artifacts/Overrides.toml is
+# not covered. JULIA_PROJECT is unset only for tidiness: --project and the
+# harness's Pkg.activate both supersede it. --startup-file=no (below) keeps a
+# depot startup.jl from running at all.
+unset MYCELIA_PROJECT JULIA_PROJECT
+export JULIA_LOAD_PATH="@:@stdlib"
 
 # Mycelia's Stage-1 corrector needs a temp root that (a) does not resolve through
 # a symlink (_owned_assembly_artifact_identity) and (b) supports

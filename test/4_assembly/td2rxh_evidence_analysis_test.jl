@@ -16,9 +16,10 @@ module Td2rxhEvidenceAnalysisTest
 # `runner`: failed arms (even one) are counted, logged with a backtrace, reported
 # on stderr, and make `script_main` (the script's exit status) return 1. The
 # provenance check runs on a fake checkout tree (sibling, nested, symlinked,
-# project-not-first) and is shown to run before any arm. Not executed by any
-# test: the one-line entry `exit(script_main())` and script_main's default
-# `provenance` closure (the live environment differs between test launchers).
+# project-not-first, empty load path, missing project, packages loaded from
+# elsewhere or unresolvable) and is shown, through script_main, to refuse before
+# any arm runs or any CSV is written. A subprocess test runs the script itself,
+# so the entry point and the default check against the live state are executed.
 
 import Test
 import CSV
@@ -455,9 +456,11 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
             best_contig_fit_identity = 1.0)
         fake = (args...) -> fake_result
         # Exactly ONE failed arm must already make the exit status 1 (round 9: a
-        # `> 1` threshold survived when every test failed all four arms).
+        # `> 1` threshold survived when every test failed all four arms). It is
+        # the FIRST arm of its seed (seed 1 runs illumina first), so a `break` in
+        # place of `continue` would also lose the nanopore row: 2 rows, not 3.
         one_bad = (reads, cell, arm, reference) ->
-            (cell === Harness.SMOKE_CELLS[1] && arm == :nanopore) ? error("one") : fake_result
+            (cell === Harness.SMOKE_CELLS[1] && arm == :illumina) ? error("one") : fake_result
         silenced(f) = Test.with_logger(Base.CoreLogging.NullLogger()) do
             redirect_stderr(() -> quiet(f), devnull)
         end
@@ -473,24 +476,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test length(readlines(ok_out)) == 5   # header + 4 arm rows
     end
 
-    Test.@testset "script_main checks provenance before running anything" begin
-        # A refused run must produce nothing: no arm runs and no CSV is written
-        # (round 9: checking after main() still threw, but only after every arm
-        # had run from the wrong checkout).
-        ran = Ref(false)
-        runner = (args...) -> (ran[] = true; error("an arm ran"))
-        out = tempname() * ".csv"
-        refuse = () -> throw(ArgumentError("Mycelia was loaded from /elsewhere"))
-        Test.@test_throws r"Mycelia was loaded from" redirect_stdout(devnull) do
-            Harness.script_main(
-                ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"];
-                runner = runner, provenance = refuse)
-        end
-        Test.@test !ran[]
-        Test.@test !isfile(out)
-    end
-
-    Test.@testset "provenance: Mycelia exactly from this checkout, project first" begin
+    Test.@testset "provenance: Mycelia from this checkout, project first, packages as resolved" begin
         # A fake tree, so the test does not depend on how the test itself was
         # launched. `ab` is a sibling sharing a's prefix; a/.worktrees/x is nested.
         root = mktempdir()
@@ -507,8 +493,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         src(p) = joinpath(p, "src", "Mycelia.jl")
         proj(p) = joinpath(p, "Project.toml")
         stdlib = "/no/such/stdlib"   # later entries are not consulted
-        check(project, loaded, load_path) =
-            Harness.check_provenance(project; loaded = loaded, load_path = load_path)
+        none = Tuple{String, String, Union{Nothing, String}}[]
+        check(project, loaded, load_path; packages = none) =
+            Harness.check_provenance(
+                project; loaded = loaded, load_path = load_path, packages = packages)
 
         Test.@test check(a, src(a), [proj(a), stdlib]) == src(realpath(a))
         # Symlinks resolve on either side.
@@ -525,6 +513,93 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test_throws not_first check(a, src(a), [proj(nested), proj(a)])
         Test.@test_throws not_first check(a, src(a), String[])
         Test.@test_throws Base.IOError check(joinpath(root, "missing"), src(a), [proj(a)])
+
+        # Every loaded package must be the one the load path resolves it to: a
+        # startup file can import a dependency from another environment and then
+        # restore the load path (round 10), leaving parts 1-2 satisfied.
+        dep_here = joinpath(root, "a", "src", "other.jl")      # stands in for a dep
+        dep_elsewhere = joinpath(root, "ab", "src", "Mycelia.jl")
+        ok_pkgs = [("Dep", dep_here, dep_here), ("Linked", joinpath(link, "src", "other.jl"), dep_here)]
+        Test.@test check(a, src(a), [proj(a)]; packages = ok_pkgs) == src(realpath(a))
+        Test.@test_throws r"package Dep was loaded from .* but the project resolves it" check(
+            a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, dep_here)])
+        Test.@test_throws r"package Dep is loaded .* cannot resolve it" check(
+            a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, nothing)])
+
+        # Through script_main with a REAL refusal: the check runs before anything,
+        # so no arm runs and no CSV is written (round 9: checking after main()
+        # still threw, but only after every arm had run from the wrong checkout).
+        ran = Ref(false)
+        runner = (args...) -> (ran[] = true; error("an arm ran"))
+        out = tempname() * ".csv"
+        Test.@test_throws wrong_load redirect_stdout(devnull) do
+            Harness.script_main(
+                ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"];
+                runner = runner, provenance = () -> check(a, src(ab), [proj(a)]))
+        end
+        Test.@test !ran[]
+        Test.@test !isfile(out)
+
+        # The live default for `loaded` is this session's Mycelia, which is not
+        # the fake checkout `a` (round 10: hardcoding the defaults to the expected
+        # values survived every test that passed the keywords explicitly).
+        Test.@test_throws wrong_load Harness.check_provenance(
+            a; load_path = [proj(a)], packages = none)
+
+        # A REAL preload: import a package from another environment, then restore
+        # the load path, as a startup file could. The live producer must report it
+        # as loaded but unresolvable, and the check must refuse it.
+        uuid = "8c4e2f6a-1b3d-4e5f-9a7b-0c1d2e3f4a5b"
+        fake_env = mktempdir()
+        mkpath(joinpath(fake_env, "FakeDepTd2rxh", "src"))
+        write(joinpath(fake_env, "FakeDepTd2rxh", "Project.toml"),
+            "name = \"FakeDepTd2rxh\"\nuuid = \"$(uuid)\"\nversion = \"0.1.0\"\n")
+        write(joinpath(fake_env, "FakeDepTd2rxh", "src", "FakeDepTd2rxh.jl"),
+            "module FakeDepTd2rxh end\n")
+        write(joinpath(fake_env, "Project.toml"), "[deps]\nFakeDepTd2rxh = \"$(uuid)\"\n")
+        write(joinpath(fake_env, "Manifest.toml"),
+            "manifest_format = \"2.0\"\n\n[[deps.FakeDepTd2rxh]]\n" *
+            "path = \"FakeDepTd2rxh\"\nuuid = \"$(uuid)\"\nversion = \"0.1.0\"\n")
+        pushfirst!(LOAD_PATH, fake_env)
+        try
+            Base.require(Base.PkgId(Base.UUID(uuid), "FakeDepTd2rxh"))
+        finally
+            popfirst!(LOAD_PATH)
+        end
+        preloaded = filter(t -> t[1] == "FakeDepTd2rxh", Harness.loaded_package_paths())
+        Test.@test length(preloaded) == 1
+        Test.@test only(preloaded)[3] === nothing
+        Test.@test_throws r"package FakeDepTd2rxh is loaded" check(
+            a, src(a), [proj(a)]; packages = preloaded)
+    end
+
+    Test.@testset "the script itself: default provenance check, real entry point" begin
+        # Runs the script as a subprocess, so `exit(script_main())` and the default
+        # `provenance` closure (check_provenance against the live state) are
+        # executed (round 10: a no-op default survived every in-process test).
+        # `--cells nonexistent` stops a run right after a PASSED check, so no
+        # assembly runs either way. julia_cmd() keeps this session's flags, so the
+        # subprocess reuses its precompile cache.
+        root = realpath(joinpath(@__DIR__, "..", ".."))
+        script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
+        function run_script(load_path::String)
+            out, err = IOBuffer(), IOBuffer()
+            proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
+                "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
+                run(pipeline(
+                    ignorestatus(`$(Base.julia_cmd()) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
+                    stdout = out, stderr = err))
+            end
+            return proc.exitcode, String(take!(out)), String(take!(err))
+        end
+        rc, out, err = run_script("@:@stdlib")
+        Test.@test occursin("# mycelia=$(joinpath(root, "src", "Mycelia.jl"))", out)
+        Test.@test rc == 1 && occursin("unknown --cells", err)
+        # An environment ahead of the project: refused before anything else runs.
+        rc2, out2, err2 = run_script(mktempdir() * ":@:@stdlib")
+        Test.@test rc2 == 1
+        Test.@test !occursin("# mycelia=", out2)
+        Test.@test occursin("not first on the load path", err2)
     end
 
     Test.@testset "H1' threshold and three states" begin
