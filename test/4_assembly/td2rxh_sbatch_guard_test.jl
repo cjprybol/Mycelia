@@ -97,6 +97,11 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             Test.@test rc == 0
             Test.@test occursin("label=td2rxh@", log) &&
                        occursin("+manifestabcdef012345", log)
+            # No JULIA_LOAD_PATH in the submit environment: only an exported pin
+            # reaches julia (round 11: dropping `export` survived).
+            Test.@test readlines(joinpath(home, "julia_env.txt")) ==
+                       ["MYCELIA_PROJECT=<unset>", "JULIA_LOAD_PATH=@:@stdlib",
+                "JULIA_PROJECT=<unset>"]
         end
         Test.@testset "seed and provenance label reach the harness" begin
             # The analysis rejects malformed or mixed labels, but only if the label

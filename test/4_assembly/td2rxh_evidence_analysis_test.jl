@@ -519,10 +519,15 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # restore the load path (round 10), leaving parts 1-2 satisfied.
         dep_here = joinpath(root, "a", "src", "other.jl")      # stands in for a dep
         dep_elsewhere = joinpath(root, "ab", "src", "Mycelia.jl")
-        ok_pkgs = [("Dep", dep_here, dep_here), ("Linked", joinpath(link, "src", "other.jl"), dep_here)]
+        # Symlinks resolve on both sides: `from` through the link in "Linked",
+        # `resolves_to` through it in "LinkedTarget" (round 11: a check resolving
+        # only `from` passed on any host whose temp dir is not itself a symlink).
+        ok_pkgs = [("Dep", dep_here, dep_here),
+            ("Linked", joinpath(link, "src", "other.jl"), dep_here),
+            ("LinkedTarget", realpath(dep_here), joinpath(link, "src", "other.jl"))]
         Test.@test check(a, src(a), [proj(a)]; packages = ok_pkgs) == src(realpath(a))
         Test.@test_throws r"package Dep was loaded from .* but the project resolves it" check(
-            a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, dep_here)])
+            a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, dep_here)])
         Test.@test_throws r"package Dep is loaded .* cannot resolve it" check(
             a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, nothing)])
 
@@ -560,6 +565,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         write(joinpath(fake_env, "Manifest.toml"),
             "manifest_format = \"2.0\"\n\n[[deps.FakeDepTd2rxh]]\n" *
             "path = \"FakeDepTd2rxh\"\nuuid = \"$(uuid)\"\nversion = \"0.1.0\"\n")
+        # FakeDepTd2rxh stays loaded for the rest of this process (modules cannot
+        # be unloaded), and its precompile file goes to the depot. A later
+        # in-process call to the live loaded_package_paths() / check_provenance
+        # defaults would refuse it; the live check below runs in a subprocess.
         pushfirst!(LOAD_PATH, fake_env)
         try
             Base.require(Base.PkgId(Base.UUID(uuid), "FakeDepTd2rxh"))
@@ -578,16 +587,20 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # `provenance` closure (check_provenance against the live state) are
         # executed (round 10: a no-op default survived every in-process test).
         # `--cells nonexistent` stops a run right after a PASSED check, so no
-        # assembly runs either way. julia_cmd() keeps this session's flags, so the
-        # subprocess reuses its precompile cache.
+        # assembly runs either way. The child drops this session's coverage,
+        # pkgimages and bounds-check flags: under Pkg.test(coverage=true) they
+        # made it compile every package from scratch (round 11: ~36 min).
         root = realpath(joinpath(@__DIR__, "..", ".."))
         script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
+        session_only = ("--code-coverage", "--pkgimages", "--check-bounds")
+        julia = Cmd(filter(arg -> !any(startswith(arg, f) for f in session_only),
+            Base.julia_cmd().exec))
         function run_script(load_path::String)
             out, err = IOBuffer(), IOBuffer()
             proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
                 "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
                 run(pipeline(
-                    ignorestatus(`$(Base.julia_cmd()) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
+                    ignorestatus(`$(julia) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
                     stdout = out, stderr = err))
             end
             return proc.exitcode, String(take!(out)), String(take!(err))
