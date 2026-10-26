@@ -25,7 +25,9 @@ const JULIA_STUB = """
 if [[ "\${2:-}" == "--version" ]]; then echo "julia version 1.10.0"; exit 0; fi
 # Record the run invocation so tests can check the provenance-carrying arguments.
 echo "\$*" > "\$HOME/julia_args.txt"
-echo "MYCELIA_PROJECT=\${MYCELIA_PROJECT-<unset>}" > "\$HOME/julia_env.txt"
+for v in MYCELIA_PROJECT JULIA_LOAD_PATH JULIA_PROJECT; do
+  echo "\$v=\${!v-<unset>}"
+done > "\$HOME/julia_env.txt"
 out=""
 while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "--out" ]]; then out="\$2"; fi
@@ -120,16 +122,25 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             Test.@test rc_smoke == 0
             Test.@test occursin(" --cells smoke ", smoke_args)
         end
-        Test.@testset "MYCELIA_PROJECT from the submit shell cannot redirect the run" begin
-            # The harness activates MYCELIA_PROJECT over --project, so an exported
-            # value would run code the provenance label does not name.
+        Test.@testset "the submit shell's project variables cannot redirect the run" begin
+            # Each would run code the provenance label does not name: the harness
+            # activates MYCELIA_PROJECT over --project, and a leading
+            # JULIA_LOAD_PATH entry is searched before the active project.
             repo, home, bindir = fixture()
             rc,
             _ = run_sbatch(repo, home, bindir;
-                extra_env = Dict("STUB_ROWS" => "12", "MYCELIA_PROJECT" => "/bogus/checkout"))
+                extra_env = Dict(
+                    "STUB_ROWS" => "12", "MYCELIA_PROJECT" => "/bogus/checkout",
+                    "JULIA_LOAD_PATH" => "/bogus/env:", "JULIA_PROJECT" => "/bogus/project"))
             Test.@test rc == 0
-            Test.@test strip(read(joinpath(home, "julia_env.txt"), String)) ==
-                       "MYCELIA_PROJECT=<unset>"
+            Test.@test readlines(joinpath(home, "julia_env.txt")) ==
+                       ["MYCELIA_PROJECT=<unset>", "JULIA_LOAD_PATH=<unset>",
+                "JULIA_PROJECT=<unset>"]
+        end
+        Test.@testset "julia exiting 0 with too few rows is reported as such" begin
+            repo, home, bindir = fixture()
+            rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "5"))
+            Test.@test rc == 1 && occursin("julia exited 0 but", log)
         end
         Test.@testset "too few rows fails" begin
             repo, home, bindir = fixture()

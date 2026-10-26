@@ -47,7 +47,7 @@
 # td-2rxh grid (`--cells td2rxh`): 6 kb genome x read length {1000, 2000} x 20x
 # x error {0.01, 0.02, 0.05}. It asks whether the merged sparse-rung staging
 # (#420) plus the #450 reroute fix deliver the :nanopore > :illumina win at
-# 1000bp+. Its decision rule (and amendment 1) was pre-registered on bead
+# 1000bp+. Its decision rule (and amendments 1-3) was pre-registered on bead
 # td-2rxh before any run; benchmarking/td2rxh_paired_analysis.jl applies it.
 #
 # Timing fairness: both arms of a pair run in one process; `GC.gc()` runs before
@@ -295,9 +295,10 @@ end
 
 Run every (cell, seed, arm) and return the number of arms that threw. A failed
 arm is logged with its backtrace and skipped, so the other arms still produce
-rows; the script entry point exits 1 when any arm failed, so a short CSV can
-never come with exit 0. `runner` exists so tests can force failures without
-running an assembly.
+rows; `script_main` turns any failure into exit 1, so a short CSV can never come
+with exit 0. `runner` exists so tests can force failures without running an
+assembly. The warm-up always calls `run_arm` directly (an error there is
+uncaught and aborts the run), so tests that pass a `runner` use `--warmup false`.
 """
 function main(args::Vector{String} = ARGS; runner = run_arm)::Int
     parsed = parse_args(args)
@@ -370,6 +371,35 @@ function main(args::Vector{String} = ARGS; runner = run_arm)::Int
     return n_failed
 end
 
+"""
+    assert_mycelia_from(project) -> String
+
+Return the path Mycelia was loaded from, or throw if it is not inside `project`.
+`Pkg.activate` does not make the project win: an exported `JULIA_LOAD_PATH`
+with a leading entry is searched first, so `import Mycelia` can resolve to a
+different checkout than the one the run label names.
+"""
+function assert_mycelia_from(project::AbstractString)::String
+    loaded = realpath(pathof(Mycelia))
+    root = realpath(project)
+    startswith(loaded, root * "/") ||
+        throw(ArgumentError("Mycelia was loaded from $(loaded), not from the project " *
+                            "$(root); check JULIA_LOAD_PATH and MYCELIA_PROJECT"))
+    return loaded
+end
+
+"""
+    script_main(args; runner = run_arm, project = _PROJECT) -> Int
+
+The script's exit status: 1 when any arm failed, else 0. It first checks that
+Mycelia came from `project`, so the code that runs is the code the label names.
+"""
+function script_main(args::Vector{String} = ARGS; runner = run_arm,
+        project::AbstractString = _PROJECT)::Int
+    println("# mycelia=", assert_mycelia_from(project))
+    return main(args; runner = runner) == 0 ? 0 : 1
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
-    main() == 0 || exit(1)
+    exit(script_main())
 end

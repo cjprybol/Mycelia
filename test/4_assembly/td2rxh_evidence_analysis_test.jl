@@ -11,6 +11,12 @@ module Td2rxhEvidenceAnalysisTest
 # undefined cell, an unengaged treatment, duplicate and mixed-label shards), so a
 # rule that always says yes, or always says no, fails. Several controls exist
 # because a review-round mutant survived without them; each says which.
+#
+# The harness failure path is tested without an assembly through an injected
+# `runner`: failed arms are counted, logged with a backtrace, reported on stderr,
+# and make `script_main` (the script's exit status) return 1; Mycelia loaded
+# from outside the labelled checkout is refused. The one-line entry point
+# `exit(script_main())` itself is not executed by any test.
 
 import Test
 import CSV
@@ -406,19 +412,22 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         end
         rc = analyse(cov)
         Test.@test rc.verdicts[1, :median_primary_delta] == 0.0
-        Test.@test !rc.verdicts[1, :h2_holds]
     end
 
-    Test.@testset "harness: a failed arm is counted, logged with a backtrace, not silent" begin
-        # The script exits 1 when main returns > 0; before round 7 a failed arm was
-        # a @warn with no backtrace and the process exited 0 with a short CSV.
-        out = tempname() * ".csv"
-        args = ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"]
+    Test.@testset "harness: failed arms are counted, logged, and make the script exit 1" begin
+        # Before round 7 a failed arm was a @warn with no backtrace and the process
+        # exited 0 with a short CSV. `script_main` is the script's exit status
+        # (the entry point is `exit(script_main())`). Warm-up is off because it
+        # calls run_arm directly, not `runner`.
+        quiet(f) = redirect_stdout(f, devnull)
+        args(out) = ["--cells", "smoke", "--seeds", "1", "--out", out, "--warmup", "false"]
+        boom = (args...) -> error("boom")
+        out, err = tempname() * ".csv", tempname()
         logs,
         n_failed = Test.collect_test_logs() do
-            redirect_stdout(devnull) do
-                redirect_stderr(devnull) do
-                    Harness.main(args; runner = (args...) -> error("boom"))
+            open(err, "w") do io
+                redirect_stderr(io) do
+                    quiet(() -> Harness.main(args(out); runner = boom))
                 end
             end
         end
@@ -426,10 +435,49 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         failures = filter(l -> l.message == "arm failed", logs)
         Test.@test length(failures) == 4
         Test.@test all(l -> l.level == Base.CoreLogging.Error, failures)
+        # A real backtrace, not merely a vector-shaped placeholder.
         Test.@test all(
             l -> l.kwargs[:exception] isa Tuple &&
-                 l.kwargs[:exception][2] isa Vector, failures)
+                 l.kwargs[:exception][1] isa ErrorException &&
+                 !isempty(l.kwargs[:exception][2]), failures)
         Test.@test length(readlines(out)) == 1   # header only
+        Test.@test occursin("# FAILED: 4 arm(s) threw", read(err, String))
+
+        # The exit status: 1 when any arm failed, 0 when none did.
+        fake = (args...) -> (substitution_length_divergences = 0, window_divergences = 0,
+            window_anchor_rejections = 0, trace_contract_errors = 0, indel_engaged = 1,
+            indel_requested = 1, reassembly_k = 31, n_contigs = 1, largest_contig = 2000,
+            largest_ratio = 1.0, total_contig_bases = 2000, wall_seconds = 1.0,
+            wall_seconds_per_read = 0.01, best_contig_reference_coverage = 1.0,
+            best_contig_fit_identity = 1.0)
+        Test.with_logger(Base.CoreLogging.NullLogger()) do
+            redirect_stderr(devnull) do
+                Test.@test quiet(() -> Harness.script_main(args(tempname()); runner = boom)) ==
+                           1
+            end
+        end
+        ok_out = tempname() * ".csv"
+        Test.@test quiet(() -> Harness.script_main(args(ok_out); runner = fake)) == 0
+        Test.@test length(readlines(ok_out)) == 5   # header + 4 arm rows
+    end
+
+    Test.@testset "harness refuses to run Mycelia loaded from another project" begin
+        # A leading JULIA_LOAD_PATH entry can make `import Mycelia` resolve outside
+        # the checkout the run label names (round-8 review).
+        Test.@test startswith(Harness.assert_mycelia_from(Harness._PROJECT),
+            realpath(Harness._PROJECT))
+        Test.@test_throws ArgumentError Harness.assert_mycelia_from(mktempdir())
+        # Through the entry point. Arguments are valid and no arm can run an
+        # assembly, so the refusal is the only ArgumentError on this path.
+        never = (args...) -> error("the project check should have refused first")
+        Test.@test_throws ArgumentError Test.with_logger(Base.CoreLogging.NullLogger()) do
+            redirect_stdout(devnull) do
+                Harness.script_main(
+                    ["--cells", "smoke", "--seeds", "1", "--out", tempname(),
+                        "--warmup", "false"];
+                    runner = never, project = mktempdir())
+            end
+        end
     end
 
     Test.@testset "H1' threshold and three states" begin

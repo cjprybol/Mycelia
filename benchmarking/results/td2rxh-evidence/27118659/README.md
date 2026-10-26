@@ -18,7 +18,10 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
   The single run label is `td2rxh@e984af449ac3+manifest6893ba277d71`, which is Mycelia HEAD plus the `Manifest.toml` hash.
   Each task used a node-local TMPDIR.
 - Harness: `benchmarking/indel_reroute_evidence.jl --cells td2rxh`, launched by `benchmarking/run_td2rxh_evidence_lrc.sbatch`.
-- Analysis: `benchmarking/td2rxh_paired_analysis.jl` at Mycelia 498b2822, run over `shards/seed*.csv`.
+- Analysis: `benchmarking/td2rxh_paired_analysis.jl`, first run at Mycelia 498b2822 over `shards/seed*.csv`.
+  `report.md` and `td2rxh_cell_verdicts.csv` were regenerated after review round 7, which rounds the median deltas to 1e-6 before the median gates.
+  That rounding is an implementation detail, not part of the pre-registered rule (which rounds only inside the signed-rank test).
+  The inputs carry 6 decimals, so it removed float residue only: no verdict, status or p-value changed, and one displayed fit-identity median moved from 0.001333 to 0.001334.
   Its outputs are in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty), and `td2rxh_paired_deltas.{png,svg}`.
 
 ## Result
@@ -50,7 +53,7 @@ The rule needs only ≥1 engaged run, so the cell is still COMPLETE.
 - The only cells where nanopore wins are at 5% error, where both arms are severely fragmented: the median best contig covers 7–15% of the genome.
   The gain is in the **single best contig**.
   At that error rate nanopore produces about twice as many contigs (median about 1,490 → 2,870 at 1000 bp and about 1,550 → 3,260 at 2000 bp) and about half the total contig bases.
-  In both arms the total contig bases are about 11–22× the genome length at this error rate (nanopore 11–14×, illumina 19–22×), so this is not a better assembly overall.
+  In both arms the total contig bases are about 11–22× the genome length at this error rate (nanopore 10.7–13.5×, illumina 19.1–22.1×), so this is not a better assembly overall.
 - The fit-identity gate is a median.
   At 2000/e0.05 the median Δ is +0.0013, but two seeds lose 0.13–0.17 fit identity.
 - At 1% error, nanopore is significantly and substantially **worse** than illumina: the median paired coverage loss is 0.43 at 1000 bp and 0.19 at 2000 bp.

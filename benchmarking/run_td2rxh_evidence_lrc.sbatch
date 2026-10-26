@@ -86,10 +86,12 @@ if ! manifest_sha="$(sha256sum ../Manifest.toml | cut -c1-12)" ||
 fi
 label="td2rxh@${commit:0:12}+manifest${manifest_sha}"
 echo "Checkout: $(cd .. && pwd)  label=${label}"
-# The harness activates ${MYCELIA_PROJECT} when it is set, overriding --project,
-# and sbatch exports the submit shell's environment. Unset it so the code that
-# runs is the checkout the label names.
-unset MYCELIA_PROJECT
+# sbatch exports the submit shell's environment, and three variables could make
+# the code that runs differ from the checkout the label names: MYCELIA_PROJECT
+# (the harness activates it over --project), JULIA_LOAD_PATH (a leading entry is
+# searched before the active project) and JULIA_PROJECT. Unset all three; the
+# harness also refuses to run unless Mycelia loads from inside this checkout.
+unset MYCELIA_PROJECT JULIA_LOAD_PATH JULIA_PROJECT
 
 # Mycelia's Stage-1 corrector needs a temp root that (a) does not resolve through
 # a symlink (_owned_assembly_artifact_identity) and (b) supports
@@ -164,7 +166,7 @@ if [[ "${julia_rc}" -ne 0 ]]; then
   echo ">>> FAIL: julia exited ${julia_rc} (see .err)" >&2
   rc=1
 elif [[ "${rows}" -lt "${expected}" ]]; then
-  echo ">>> FAIL: ${out} has ${rows} of ${expected} arm rows; some arms threw (see .err)" >&2
+  echo ">>> FAIL: julia exited 0 but ${out} has ${rows} of ${expected} arm rows" >&2
   rc=1
 fi
 echo "=== done rc=${rc} $(date) ==="

@@ -33,10 +33,16 @@
 #       UNDEFINED (a measured null: more data cannot change it), and INCOMPLETE when
 #       no rate qualifies and any cell is MISSING, INCOMPLETE or
 #       TREATMENT-NOT-APPLIED (conservative: applied whether or not that cell could
-#       still change the outcome). Both medians are taken over deltas rounded to
-#       1e-6, as the test rounds them. Fit identity carries no p-value but gates
+#       still change the outcome). Fit identity carries no p-value but gates
 #       acceptance; n_contigs and the divergence/anchor counters are written per arm
 #       to td2rxh_paired.csv for inspection and are not tested.
+#
+# IMPLEMENTATION DETAIL, NOT PART OF THE PRE-REGISTERED RULE (added in review
+# round 7, after the data existed): the median gates (H2 median delta > 0, fit
+# identity median delta >= 0) are taken over deltas rounded to 1e-6. The
+# pre-registration rounds only inside the signed-rank test. The input CSVs carry
+# 6 decimals, so this removes float residue and nothing else; re-running on the
+# committed 27118659 shards changed no verdict, status or p-value.
 #
 # Input integrity is enforced, not assumed: malformed or mixed run labels, cells
 # outside the pre-registered six, seeds outside 1..16, duplicate (cell, seed, arm)
@@ -261,9 +267,10 @@ function cell_verdicts(paired::DataFrames.DataFrame;
         n_pairs = DataFrames.nrow(group)
         primary_ill = Float64.(group[!, Symbol(TD2RXH_PRIMARY_METRIC, "_illumina")])
         primary_ont = Float64.(group[!, Symbol(TD2RXH_PRIMARY_METRIC, "_nanopore")])
-        # Both gated deltas are rounded exactly as the signed-rank test rounds them,
-        # so the median gates (> 0, >= 0) cannot be decided by float residue: two
-        # true deltas of +-1e-6 otherwise average to -5.6e-17, not 0.
+        # Both gated deltas are rounded to 1e-6 (see the header: an implementation
+        # detail, not pre-registered) so the median gates (> 0, >= 0) cannot be
+        # decided by float residue: two true deltas of +-1e-6 otherwise average to
+        # -5.6e-17, not 0. Inputs carry 6 decimals, so no real difference is lost.
         delta = round.(primary_ont .- primary_ill; digits = TD2RXH_DELTA_DIGITS)
         incremental = (Float64.(group.wall_seconds_nanopore) .-
                        Float64.(group.wall_seconds_illumina)) ./
