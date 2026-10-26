@@ -205,13 +205,58 @@ Test.@testset "Quality Functions" begin
     Test.@testset "fragment_observation_id" begin
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragA/1") == "fragA"
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragA/2") == "fragA"
-        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragB.1") == "fragB"
-        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragB.2") == "fragB"
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragC_R1") == "fragC"
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragC_R2") == "fragC"
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("plain_read") == "plain_read"
         # Only trailing suffixes strip; embedded `/1` mid-string is preserved.
         Test.@test Mycelia.Rhizomorph.fragment_observation_id("x/1y") == "x/1y"
+        # `_R1`/`_R2` are end-anchored only.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("sample_R1_lane") ==
+                   "sample_R1_lane"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("foo_R2bar") == "foo_R2bar"
+
+        # Default: SRA-style spot ids `SRR123.1` / `SRR123.2` stay DISTINCT
+        # (lone `.1`/`.2` are not mate suffixes).
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.1") == "SRR123.1"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.2") == "SRR123.2"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.1") !=
+                   Mycelia.Rhizomorph.fragment_observation_id("SRR123.2")
+        # Illumina-style acc.spot.mate still collapses mates.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.5.1") == "SRR123.5"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.5.2") == "SRR123.5"
+        # Lone `.1`/`.2` opt-in for callers who know they mean mates.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id(
+            "fragB.1"; strip_simple_dot_mates = true) == "fragB"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id(
+            "fragB.2"; strip_simple_dot_mates = true) == "fragB"
+    end
+
+    Test.@testset "SRA-style ids stay distinct molecules under default strip" begin
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[30 + 33, 30 + 33, 30 + 33]
+        sra = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        groups = Mycelia.Rhizomorph.collapse_molecule_qualities(sra, "test")
+        Test.@test groups !== nothing
+        Test.@test length(groups) == 2  # two molecules, not one
+        Λ_sra = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(sra, "test")
+        one = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            one, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Λ_one = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(one, "test")
+        Test.@test Λ_sra > Λ_one
     end
 
     Test.@testset "collapse_molecule_qualities - mean of error probabilities" begin

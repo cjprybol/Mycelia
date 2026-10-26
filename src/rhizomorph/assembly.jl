@@ -522,9 +522,11 @@ struct AssemblyConfig
     # Posterior log-odds floor consulted ONLY when traversal_weighting=:posterior.
     # Vertices with `Λ(v) < traversal_min_log_odds` are pruned before contig extraction;
     # quality-less vertices are kept. Inert under `:evidence` / `:quality`.
-    # Default `0.0` means "require Λ ≥ 0" (more likely true than false after the
-    # chemistry prior). Production thresholds should be phiX-fit (tier1-spec §2);
-    # this default is a documented starting point, not a calibrated gate.
+    #
+    # Default `0.0` is a **placeholder until P3 calibration** (phiX fit per
+    # tier1-spec §2) — not a tuned production gate. Semantically it means
+    # "require Λ ≥ 0" (more likely true than false after the chemistry prior).
+    # Callers must not treat this default as calibrated.
     traversal_min_log_odds::Float64
 
     # Constructor with validation

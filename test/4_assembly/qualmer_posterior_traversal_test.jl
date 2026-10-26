@@ -131,28 +131,23 @@ Test.@testset "H-11 P2 posterior traversal (E1/E3)" begin
             Test.@test result.assembly_stats["quality_influences_traversal"] == true
         end
 
-        digests = (
-            contig_digest(oracle), contig_digest(c40), contig_digest(c02),
-            contig_digest(anti))
         prunes = (
             oracle.assembly_stats["traversal_quality_pruned_vertices"],
             c40.assembly_stats["traversal_quality_pruned_vertices"],
             c02.assembly_stats["traversal_quality_pruned_vertices"],
             anti.assembly_stats["traversal_quality_pruned_vertices"])
 
-        # Quality channel is load-bearing: not all four conditions agree.
-        Test.@test length(unique(digests)) > 1 || length(unique(prunes)) > 1
-
-        # Constant Q40 vs Q2 must differ (positive control that quality, not
-        # sequence, is the variable) — digests or prune counts.
-        Test.@test contig_digest(c40) != contig_digest(c02) ||
-                   c40.assembly_stats["traversal_quality_pruned_vertices"] !=
+        # Constant Q40 vs Q2: quality is the only variable — prune sets must
+        # differ (positive control; no `||` with digests).
+        Test.@test c40.assembly_stats["traversal_quality_pruned_vertices"] !=
                    c02.assembly_stats["traversal_quality_pruned_vertices"]
+        Test.@test contig_digest(c40) != contig_digest(c02)
 
-        # Oracle vs antioracle: swapped quality stories change the assembly.
-        Test.@test contig_digest(oracle) != contig_digest(anti) ||
-                   oracle.assembly_stats["traversal_quality_pruned_vertices"] !=
-                   anti.assembly_stats["traversal_quality_pruned_vertices"]
+        # Oracle vs antioracle: swapped quality stories change contig digests.
+        Test.@test contig_digest(oracle) != contig_digest(anti)
+
+        # Not all four conditions share one prune count.
+        Test.@test length(unique(prunes)) > 1
 
         Test.@test !isempty(oracle.contigs)
         Test.@test maximum(length.(oracle.contigs)) > k

@@ -358,11 +358,19 @@ end
 # -----------------------------------------------------------------------------
 
 """
-Trailing mate / read-pair suffixes stripped to form a fragment observation key.
-
-Matches (at end of string only): `/1`, `/2`, `.1`, `.2`, `_R1`, `_R2`.
+End-anchored `/1`, `/2`, `_R1`, `_R2` mate suffixes (always stripped).
 """
-const FRAGMENT_OBSERVATION_ID_SUFFIX = r"(?:/[12]|\.[12]|_R[12])$"
+const FRAGMENT_OBSERVATION_ID_SLASH_OR_R = r"(?:/[12]|_R[12])$"
+
+"""
+Opt-in: strip a lone trailing `.1`/`.2` as well (collides with SRA spot ids).
+"""
+const FRAGMENT_OBSERVATION_ID_SUFFIX_SIMPLE_DOT = r"(?:/[12]|\.[12]|_R[12])$"
+
+"""
+Illumina-style `acc.<spot>.<mate>`: keep `.<spot>`, drop trailing `.<mate>`.
+"""
+const FRAGMENT_OBSERVATION_ID_DOT_SPOT_MATE = r"(\.\d+)\.[12]$"
 
 """
 Default chemistry prior error probability for posterior log-odds (`≈ Q30`).
@@ -379,16 +387,35 @@ Keeps `log(p)` / `log1p(-p)` finite so `Λ` is never ±Inf or NaN for finite Phr
 const POSTERIOR_ERROR_PROB_EPS = 1e-300
 
 """
-    fragment_observation_id(observation_id::AbstractString) -> String
+    fragment_observation_id(observation_id; strip_simple_dot_mates=false) -> String
 
-Map a read / mate identifier to its fragment key by stripping a trailing
-`/1`, `/2`, `.1`, `.2`, `_R1`, or `_R2` suffix.
+Map a read / mate identifier to its fragment key by stripping a trailing mate
+suffix (H-11 E5).
 
-Paired-end mates that share a fragment therefore collapse to one molecule under
-H-11 E5 (see `collapse_molecule_qualities` / `get_vertex_posterior_log_odds`).
+# Default strip set (end-anchored)
+- `/1`, `/2`
+- `_R1`, `_R2` (end only — `sample_R1_lane` is unchanged)
+- `.1`, `.2` only when preceded by another `.digits` field (`acc.5.1` → `acc.5`)
+
+# SRA-style ids
+`SRR123.1` and `SRR123.2` are **distinct molecules** under the default (spot
+numbers, not mate suffixes). They are **not** collapsed. Set
+`strip_simple_dot_mates=true` only when you know lone `.1`/`.2` mean mates.
+
+See `collapse_molecule_qualities` / `get_vertex_posterior_log_odds`.
 """
-function fragment_observation_id(observation_id::AbstractString)::String
-    return replace(String(observation_id), FRAGMENT_OBSERVATION_ID_SUFFIX => "")
+function fragment_observation_id(
+        observation_id::AbstractString;
+        strip_simple_dot_mates::Bool = false
+)::String
+    s = String(observation_id)
+    if strip_simple_dot_mates
+        return replace(s, FRAGMENT_OBSERVATION_ID_SUFFIX_SIMPLE_DOT => "")
+    end
+    # Avoid variable-length lookbehind: strip slash/_R first, then only
+    # `.<digits>.[12]` → `.<digits>` (lone `SRR123.1` unchanged).
+    s = replace(s, FRAGMENT_OBSERVATION_ID_SLASH_OR_R => "")
+    return replace(s, FRAGMENT_OBSERVATION_ID_DOT_SPOT_MATE => s"\1")
 end
 
 """
@@ -507,6 +534,13 @@ For each position `j` with molecule error probabilities `{p_m}`:
 
 with each `p_m` clamped into `(ε, 1-ε)` so the result is finite. Accumulation is
 log-space only (ADR §2.3). No UInt8 clamp.
+
+# Depth / competing-base caveat (H-11)
+Each supporting molecule adds a non-negative term when `p_m < 0.5` and there is
+**no term for competing bases** at the position. Consequently `Λ` **grows with
+read depth**: a recurring artifact seen often at moderate quality can score
+high — the same depth effect that made uncalibrated `:quality` coverage-driven.
+Comparing against the best alternative base at each position is deferred (P3+).
 """
 function _posterior_log_odds_from_molecule_errors(
         molecule_error_vectors::AbstractVector{<:AbstractVector{<:Real}};
@@ -567,6 +601,10 @@ end
 Scalar k-mer posterior log-odds `Λ(v)`: the **weakest** per-position score from
 `get_vertex_posterior_log_odds_scores` (conjunction semantics matching
 `_qualmer_joint_confidence` in `assembly.jl`).
+
+`Λ(v)` grows with molecule depth and has **no competing-base term** (see
+`_posterior_log_odds_from_molecule_errors`); do not treat a large `Λ` alone as
+proof against recurrent artifacts.
 
 Returns `nothing` when the vertex has no recoverable quality evidence.
 """
