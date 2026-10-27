@@ -625,10 +625,10 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test man["params"]["resolved_null_source"] == "reference"
     end
 
-    Test.@testset "I3 overwrite=:skip resume + graph-set errors file" begin
+    Test.@testset "graph-set slug collision refuses before BH" begin
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         set_root = mktempdir()
-        for (name, gid) in (("ok_a", "ok_a"), ("zz_bad", "/tmp/illegal-id"))
+        for (name, gid) in (("child_space", "a b"), ("child_under", "a_b"))
             dest = joinpath(set_root, name)
             mkpath(dest)
             cp(joinpath(fixture, "graph.gfa"), joinpath(dest, "graph.gfa"))
@@ -638,21 +638,118 @@ Test.@testset "gqc v0.1 helpers and packet" begin
                 JSON.print(io, meta, 2)
             end
         end
+        err = try
+            Mycelia.run_gqc(set_root, mktempdir();
+                ks=[5], n_shuffles=5, strand_mode=:single,
+                make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        msg = sprint(showerror, err)
+        Test.@test occursin("packet-dir collision", msg)
+        Test.@test occursin("cross-genus BH", msg)
+        Test.@test Mycelia._gqc_slug_graph_id("a b") == Mycelia._gqc_slug_graph_id("a_b")
+    end
+
+    Test.@testset "overwrite=:skip requires matching params_hash" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         out = mktempdir()
-        Mycelia.run_gqc(set_root, out;
-            ks=[5], n_shuffles=5, strand_mode=:single, null_source=:auto,
+        kwargs = (
+            ks=[5], n_shuffles=5, strand_mode=:single,
             make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
-            overwrite=:error)
+        )
+        packet = Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:error)
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        hash_auto = man["params_hash"]
+        ## Same params → skip resumes
+        packet2 = Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:skip)
+        Test.@test packet2 == packet
+        Test.@test JSON.parsefile(joinpath(packet, "manifest.json"))["params_hash"] == hash_auto
+        ## null_source change → refuse stale resume (no silent BH on wrong packet)
+        err = try
+            Mycelia.run_gqc(fixture, out; kwargs..., null_source=:segments, overwrite=:skip)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("params_hash mismatch", sprint(showerror, err))
+        Test.@test JSON.parsefile(joinpath(packet, "manifest.json"))["params"]["null_source"] == "auto"
+    end
+
+    Test.@testset "I3 graph-set fail-closed + clear stale errors + skip resume" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        set_root = mktempdir()
+        ## ok_a: valid child with a real reference
+        dest_ok = joinpath(set_root, "ok_a")
+        mkpath(dest_ok)
+        cp(joinpath(fixture, "graph.gfa"), joinpath(dest_ok, "graph.gfa"))
+        meta_ok = JSON.parsefile(joinpath(fixture, "metadata.json"))
+        meta_ok["graph_id"] = "ok_a"
+        open(joinpath(dest_ok, "metadata.json"), "w") do io
+            JSON.print(io, meta_ok, 2)
+        end
+        mkpath(joinpath(dest_ok, "reference"))
+        open(joinpath(dest_ok, "reference", "genome.fasta"), "w") do io
+            println(io, ">genome")
+            println(io, "ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA")
+        end
+        ## zz_bad: null_source=:reference but ships a non-gzip .fasta.gz → child throws
+        dest_bad = joinpath(set_root, "zz_bad")
+        mkpath(dest_bad)
+        cp(joinpath(fixture, "graph.gfa"), joinpath(dest_bad, "graph.gfa"))
+        meta_bad = JSON.parsefile(joinpath(fixture, "metadata.json"))
+        meta_bad["graph_id"] = "zz_bad"
+        open(joinpath(dest_bad, "metadata.json"), "w") do io
+            JSON.print(io, meta_bad, 2)
+        end
+        mkpath(joinpath(dest_bad, "reference"))
+        open(joinpath(dest_bad, "reference", "genome.fasta.gz"), "w") do io
+            println(io, ">not-gzip")
+            println(io, "ACGTACGTACGT")
+        end
+        out = mktempdir()
+        kwargs = (
+            ks=[5], n_shuffles=5, strand_mode=:single, null_source=:reference,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
+        )
+        err = try
+            Mycelia.run_gqc(set_root, out; kwargs..., overwrite=:error)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("fail-closed", sprint(showerror, err))
         Test.@test isfile(joinpath(out, "ok_a", "manifest.json"))
         Test.@test isfile(joinpath(out, "gqc_graph_set_errors.jsonl"))
+        Test.@test isfile(joinpath(out, "gqc_graph_set_status.json"))
+        status = JSON.parsefile(joinpath(out, "gqc_graph_set_status.json"))
+        Test.@test status["n_failed"] == 1
+        Test.@test status["n_ok"] == 1
+        Test.@test status["ok"] == false
         err_line = read(joinpath(out, "gqc_graph_set_errors.jsonl"), String)
-        Test.@test occursin("absolute or traversal", err_line)
-        ## resume: skip completed ok_a
-        Mycelia.run_gqc(set_root, out;
-            ks=[5], n_shuffles=5, strand_mode=:single, null_source=:segments,
-            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
-            overwrite=:skip)
-        Test.@test isfile(joinpath(out, "ok_a", "manifest.json"))
+        Test.@test occursin("Zlib", err_line) || occursin("gzip", lowercase(err_line)) ||
+                   occursin("incorrect header", err_line)
+        ## Matching params + :skip resumes ok_a; still fail-closed on zz_bad
+        err2 = try
+            Mycelia.run_gqc(set_root, out; kwargs..., overwrite=:skip)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err2 isa ErrorException
+        Test.@test occursin("fail-closed", sprint(showerror, err2))
+        ## Clean set (drop bad child): clears stale errors and writes n_failed=0
+        rm(joinpath(set_root, "zz_bad"); recursive=true, force=true)
+        Mycelia.run_gqc(set_root, out; kwargs..., overwrite=:skip)
+        Test.@test !isfile(joinpath(out, "gqc_graph_set_errors.jsonl"))
+        status2 = JSON.parsefile(joinpath(out, "gqc_graph_set_status.json"))
+        Test.@test status2["n_failed"] == 0
+        Test.@test status2["n_ok"] == 1
+        Test.@test status2["ok"] == true
     end
 
     Test.@testset "I4 slug paths and refuse absolute graph_id" begin
