@@ -1,7 +1,7 @@
-# gqc v0.1 — reusable graph QC packet
-# Spec: docs/gqc-v0.1-spec.md (in-repo). Semver 0.1.0.
+# gqc — reusable graph QC packet
+# Spec: docs/gqc-v0.1-spec.md (in-repo). Semver 0.2.0 (layout + seed scheme).
 
-const GQC_VERSION = "0.1.0"
+const GQC_VERSION = "0.2.0"
 const GQC_N_SHUFFLES = 100
 const GQC_SHUFFLE_SEED = 20261021
 const GQC_MIN_SHUFFLE_MEAN = 1.0
@@ -17,6 +17,8 @@ const GQC_NODE_TSV_COLUMNS = (
     "graph_id", "node_id", "index", "length", "depth",
     "degree", "in_degree", "out_degree", "sequence",
 )
+## Stable packet-layout id for the unified node TSV (BREAKING vs #472 / 0.1.0).
+const GQC_NODE_TSV_SCHEMA = "gqc-node-tsv-v1-unified"
 ## Frozen summary.csv column order (every field always emitted).
 ## Additive columns append at the end so prior names/positions stay stable.
 const GQC_SUMMARY_COLUMNS = (
@@ -2299,6 +2301,8 @@ function _run_gqc_one(input_dir::AbstractString,
     manifest_path = joinpath(out_dir, "manifest.json")
     manifest = Dict{String, Any}(
         "gqc_version" => gqc_version,
+        "seed_scheme" => GQC_SEED_SCHEME,
+        "node_tsv_schema" => GQC_NODE_TSV_SCHEMA,
         "commit" => _gqc_git_commit(),
         "params" => _gqc_canonicalize_params(params),
         "params_hash" => _gqc_params_hash(params),

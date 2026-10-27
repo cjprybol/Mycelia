@@ -1,6 +1,25 @@
-# gqc v0.1 specification
+# gqc specification
 
-Mycelia graph QC packet (`src/gqc.jl`). Semver **0.1.0**.
+Mycelia graph QC packet (`src/gqc.jl`). Semver **0.2.0** (packet layout +
+collision-free null seeds + unified node TSV). Filenames keep the `gqc-v0.1-*`
+prefix for continuity.
+
+## Packet layout version (0.2.0)
+
+Each packet’s `manifest.json` records:
+
+| Field | Value (0.2.0) |
+|-------|----------------|
+| `gqc_version` | `0.2.0` |
+| `seed_scheme` | `gqc-null-v1-sha256` (also under `params.seed_scheme`) |
+| `node_tsv_schema` | `gqc-node-tsv-v1-unified` |
+
+**Migration — packets from master between #472 (`f421063e`) and #483:** those
+packets use the legacy null-seed formula and the pre-unification node TSV layout,
+and they lack `params.seed_scheme` / `node_tsv_schema`. They are **not
+comparable** to 0.2.0 packets. Rerun with `overwrite=:replace` (do not
+`overwrite=:skip` — that refuses a `params_hash` mismatch when `seed_scheme` is
+absent).
 
 ## Input layout
 
@@ -87,6 +106,9 @@ formats/
 Graph-set failures append `output_root/gqc_graph_set_errors.jsonl` and continue.
 
 ## Node TSV schema (unified, BREAKING)
+
+Schema id: `Mycelia.GQC_NODE_TSV_SCHEMA` (`gqc-node-tsv-v1-unified`), also
+stored as top-level `manifest.node_tsv_schema`.
 
 `nodes/<slug>.tsv` and `formats/nodes.tsv` share one frozen header
 (`Mycelia.GQC_NODE_TSV_COLUMNS`):

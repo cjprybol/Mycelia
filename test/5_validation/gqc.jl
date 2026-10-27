@@ -245,7 +245,9 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             Test.@test r >= c
         end
         manifest = JSON.parsefile(joinpath(packet, "manifest.json"))
-        Test.@test manifest["gqc_version"] == "0.1.0"
+        Test.@test manifest["gqc_version"] == Mycelia.GQC_VERSION
+        Test.@test manifest["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test manifest["node_tsv_schema"] == Mycelia.GQC_NODE_TSV_SCHEMA
         Test.@test haskey(manifest, "input_sha256")
         Test.@test haskey(manifest, "params_hash")
         Test.@test manifest["params"]["bh_ks"] == [11]
@@ -775,6 +777,41 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test err isa ErrorException
         Test.@test occursin("params_hash mismatch", sprint(showerror, err))
         Test.@test JSON.parsefile(joinpath(packet, "manifest.json"))["params"]["null_source"] == "auto"
+    end
+
+    Test.@testset "overwrite=:skip refuses pre-seed_scheme (0.1.0-layout) packet" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        out = mktempdir()
+        kwargs = (
+            ks=[5], n_shuffles=5, strand_mode=:single,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
+        )
+        packet = Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:error)
+        man_path = joinpath(packet, "manifest.json")
+        man = JSON.parsefile(man_path)
+        Test.@test man["gqc_version"] == Mycelia.GQC_VERSION
+        Test.@test man["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test man["node_tsv_schema"] == Mycelia.GQC_NODE_TSV_SCHEMA
+        ## Simulate a #472-era packet: drop seed keys and rehash
+        params = Dict{String, Any}(man["params"])
+        delete!(params, "seed_scheme")
+        delete!(params, "seed_scheme_detail")
+        Test.@test !haskey(params, "seed_scheme")
+        man["params"] = params
+        man["params_hash"] = Mycelia._gqc_params_hash(params)
+        delete!(man, "seed_scheme")
+        delete!(man, "node_tsv_schema")
+        open(man_path, "w") do io
+            JSON.print(io, man, 2)
+        end
+        err = try
+            Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:skip)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("params_hash mismatch", sprint(showerror, err))
     end
 
     Test.@testset "I3 graph-set fail-closed + clear stale errors + skip resume" begin
