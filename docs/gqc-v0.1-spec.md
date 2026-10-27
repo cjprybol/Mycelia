@@ -24,7 +24,7 @@ Top-level `graph.gfa` always wins (single-graph mode).
 | Keyword | Default | Notes |
 |---------|---------|-------|
 | `null_source` | `:auto` | `:auto` / `:reference` / `:segments` |
-| `bh_ks` | `[11]` | Within-graph BH family only |
+| `bh_ks` | `[11]` | Within-graph BH **and** graph-set cross-genus BH (`gqc_cross_bh`) |
 | `strand_mode` | `nothing` → metadata → `:single` | `:single` / `:canonical` / `:double` |
 | `canonical` | `nothing` → derived | Explicit bool is honored |
 | `overwrite` | `:error` | `:skip` resume / `:replace` / `:error` |

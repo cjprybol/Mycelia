@@ -1614,11 +1614,16 @@ Packet directory under `output_root` using slugged `graph_id`.
 
 `overwrite`:
 - `:error` — refuse non-empty existing dir (default)
-- `:skip` — return existing dir if it has `manifest.json` + `CHECKSUMS.sha256`
+- `:skip` — return existing dir only if it has `manifest.json` + `CHECKSUMS.sha256`
+  **and** `manifest.params_hash` equals `expected_params_hash` (required for `:skip`)
 - `:replace` — remove and recreate
+
+When `:skip` finds a complete packet with a different `params_hash` (e.g. `null_source`
+changed), refuse — do not resume a stale packet into cross-genus BH / CHECKSUMS regen.
 """
 function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString;
-                         overwrite::Symbol=:error)
+                         overwrite::Symbol=:error,
+                         expected_params_hash::Union{Nothing, AbstractString}=nothing)
     overwrite in (:error, :skip, :replace) || error(
         "overwrite must be :error, :skip, or :replace; got $overwrite"
     )
@@ -1627,10 +1632,23 @@ function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString;
     if isdir(out_dir)
         entries = filter(name -> !startswith(name, '.'), readdir(out_dir))
         if !isempty(entries)
-            complete = isfile(joinpath(out_dir, "manifest.json")) &&
-                       isfile(joinpath(out_dir, "CHECKSUMS.sha256"))
+            man_path = joinpath(out_dir, "manifest.json")
+            complete = isfile(man_path) && isfile(joinpath(out_dir, "CHECKSUMS.sha256"))
             if overwrite === :skip && complete
-                return (dir=out_dir, slug=slug, skipped=true)
+                expected_params_hash === nothing && error(
+                    "overwrite=:skip requires expected_params_hash for $(repr(graph_id))"
+                )
+                man = JSON.parsefile(man_path)
+                stored = string(get(man, "params_hash", ""))
+                if stored == string(expected_params_hash)
+                    return (dir=out_dir, slug=slug, skipped=true)
+                end
+                error(
+                    "gqc packet params_hash mismatch; refusing overwrite=:skip resume for " *
+                    "graph_id=$(repr(graph_id)) slug=$slug at $out_dir " *
+                    "(stored=$(stored), expected=$(expected_params_hash)). " *
+                    "Pass overwrite=:replace to rebuild, or restore matching params."
+                )
             elseif overwrite === :replace
                 rm(out_dir; recursive=true, force=true)
             else
@@ -1643,6 +1661,106 @@ function _gqc_packet_dir(output_root::AbstractString, graph_id::AbstractString;
         end
     end
     return (dir=out_dir, slug=slug, skipped=false)
+end
+
+"""
+Read each child's `graph_id` and assert within-set uniqueness of both raw ids and
+filesystem slugs (e.g. `"a b"` vs `"a_b"` must not collide).
+"""
+function _gqc_assert_unique_graph_set_ids(dirs::AbstractVector{<:AbstractString})
+    length(dirs) <= 1 && return nothing
+    seen_raw = Dict{String, String}()
+    seen_slug = Dict{String, String}()
+    for d in dirs
+        meta = _gqc_read_metadata(joinpath(d, "metadata.json"))
+        gid = string(get(meta, "graph_id", basename(d)))
+        slug = _gqc_slug_graph_id(gid)
+        if haskey(seen_raw, gid)
+            error(
+                "gqc graph-set duplicate graph_id=$(repr(gid)): " *
+                "$(seen_raw[gid]) and $d"
+            )
+        end
+        if haskey(seen_slug, slug)
+            error(
+                "gqc graph-set packet-dir collision: graph_id=$(repr(gid)) and " *
+                "graph_id=$(repr(seen_slug[slug])) both slug to $(repr(slug)) " *
+                "($d vs prior). Distinct graph_id values that normalize to the same " *
+                "path would corrupt cross-genus BH (double-count / overwrite)."
+            )
+        end
+        seen_raw[gid] = d
+        seen_slug[slug] = gid
+    end
+    return nothing
+end
+
+"""
+Build the params dict stored in `manifest.json` / hashed for `:skip` resume.
+"""
+function _gqc_analysis_params(;
+        ks::AbstractVector{<:Integer},
+        n_shuffles::Int,
+        shuffle_seed::Int,
+        salt::Int,
+        genus_index::Int,
+        min_shuffle_mean::Float64,
+        bh_ks::AbstractVector{<:Integer},
+        circular::Bool,
+        canonical::Bool,
+        strand_mode::Symbol,
+        null_kinds::Tuple,
+        null_source::Symbol,
+        resolved_null_source::Symbol,
+        null_applicable::Bool,
+        null_source_reason::AbstractString,
+        reference_n_records::Int,
+        write_node_link_json::Bool,
+        make_plots::Bool)
+    ## Note: `overwrite` is intentionally excluded — write-mode must not change
+    ## params_hash, or overwrite=:skip could never resume a packet built under :error.
+    return Dict{String, Any}(
+        "ks" => collect(Int, ks),
+        "n_shuffles" => n_shuffles,
+        "shuffle_seed" => shuffle_seed,
+        "salt" => salt,
+        "genus_index" => genus_index,
+        "seed_scheme" => GQC_SEED_SCHEME,
+        "seed_scheme_detail" => GQC_SEED_SCHEME_DETAIL,
+        "min_shuffle_mean" => min_shuffle_mean,
+        "bh_ks" => collect(Int, bh_ks),
+        "circular" => circular,
+        "canonical" => canonical,
+        "strand_mode" => string(strand_mode),
+        "null_kinds" => sort(collect(string.(null_kinds))),
+        "null_source" => string(null_source),
+        "resolved_null_source" => string(resolved_null_source),
+        "null_applicable" => null_applicable,
+        "null_source_reason" => string(null_source_reason),
+        "reference_n_records" => reference_n_records,
+        "write_node_link_json" => write_node_link_json,
+        "make_plots" => make_plots,
+    )
+end
+
+function _gqc_write_graph_set_status(output_root::AbstractString;
+                                     n_ok::Int,
+                                     n_failed::Int,
+                                     n_total::Int,
+                                     packets::AbstractVector{<:AbstractString},
+                                     errors::AbstractVector)
+    status = Dict{String, Any}(
+        "n_ok" => n_ok,
+        "n_failed" => n_failed,
+        "n_total" => n_total,
+        "packets" => [basename(p) for p in packets],
+        "errors_file" => n_failed > 0 ? "gqc_graph_set_errors.jsonl" : nothing,
+        "ok" => n_failed == 0,
+    )
+    open(joinpath(output_root, "gqc_graph_set_status.json"), "w") do io
+        JSON.print(io, status, 2)
+    end
+    return status
 end
 
 function _gqc_git_commit()
@@ -1727,11 +1845,15 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
 - `null_source`: `:auto` (default; use reference records when present),
   `:reference`, or `:segments`. Uniform-length k-mer-node graphs with a segment
   source mark `null_applicable=false`.
-- `overwrite`: `:error` (default), `:skip` (resume complete packets), or `:replace`
+- `overwrite`: `:error` (default), `:skip` (resume complete packets **with matching
+  `params_hash`**), or `:replace`
 
 # Returns
 - Single-graph mode: absolute path to the packet directory `output_root/<slug>/`.
 - Graph-set mode: absolute path to `output_root` (each child under unique slug).
+  Fail-closed: if any child fails, writes `gqc_graph_set_errors.jsonl` +
+  `gqc_graph_set_status.json` and **throws** (does not return OK). A clean rerun
+  clears a stale errors file. Cross-genus BH runs only when every child succeeds.
 """
 function run_gqc(input_dir::AbstractString,
                  output_root::AbstractString;
@@ -1755,6 +1877,9 @@ function run_gqc(input_dir::AbstractString,
     resolved = resolve_gqc_input_dirs(input_dir)
     output_root = abspath(output_root)
     mkpath(output_root)
+    if resolved.mode === :graph_set
+        _gqc_assert_unique_graph_set_ids(resolved.dirs)
+    end
     packets = String[]
     errors = Dict{String, Any}[]
     for (i, graph_dir) in enumerate(resolved.dirs)
@@ -1789,23 +1914,39 @@ function run_gqc(input_dir::AbstractString,
             @error "gqc graph-set child failed; continuing" graph_dir exception=e
         end
     end
-    if !isempty(errors)
-        err_path = joinpath(output_root, "gqc_graph_set_errors.jsonl")
-        open(err_path, "w") do io
-            for rec in errors
-                println(io, JSON.json(rec))
+    err_path = joinpath(output_root, "gqc_graph_set_errors.jsonl")
+    n_total = length(resolved.dirs)
+    n_failed = length(errors)
+    n_ok = length(packets)
+    if resolved.mode === :graph_set
+        if n_failed > 0
+            open(err_path, "w") do io
+                for rec in errors
+                    println(io, JSON.json(rec))
+                end
             end
+            _gqc_write_graph_set_status(output_root;
+                n_ok=n_ok, n_failed=n_failed, n_total=n_total,
+                packets=packets, errors=errors)
+            error(
+                "gqc graph-set fail-closed: $n_failed of $n_total children failed; " *
+                "see $err_path and gqc_graph_set_status.json " *
+                "(n_failed=$n_failed). Cross-genus BH was not applied."
+            )
         end
+        ## Clean success: clear stale errors from a prior partial run.
+        isfile(err_path) && rm(err_path; force=true)
+        _gqc_write_graph_set_status(output_root;
+            n_ok=n_ok, n_failed=0, n_total=n_total,
+            packets=packets, errors=errors)
+        ## Cross-genus BH only when the full set succeeded (no double-count of stale).
+        bh_list = sort(unique(Int(k) for k in (bh_ks === nothing ? GQC_DEFAULT_BH_KS : bh_ks)))
+        if !isempty(packets)
+            _gqc_apply_cross_genus_bh!(packets; bh_ks=bh_list)
+        end
+        return output_root
     end
-    ## Cross-genus BH column (additive): fill from gqc_cross_bh over successful packets.
-    bh_list = sort(unique(Int(k) for k in (bh_ks === nothing ? GQC_DEFAULT_BH_KS : bh_ks)))
-    if resolved.mode === :graph_set && !isempty(packets)
-        _gqc_apply_cross_genus_bh!(packets; bh_ks=bh_list)
-    end
-    if resolved.mode === :single_graph
-        return only(packets)
-    end
-    return output_root
+    return only(packets)
 end
 
 function _run_gqc_one(input_dir::AbstractString,
@@ -1883,7 +2024,31 @@ function _run_gqc_one(input_dir::AbstractString,
         _gqc_resolve_null_sequences(null_source, ref_load, seg_seqs;
                                     graph_k=k_meta, ks=k_list, overlaps=overlaps)
 
-    packet_info = _gqc_packet_dir(output_root, graph_id; overwrite=overwrite)
+    params = _gqc_analysis_params(;
+        ks=k_list,
+        n_shuffles=n_shuffles,
+        shuffle_seed=shuffle_seed,
+        salt=salt,
+        genus_index=genus_index,
+        min_shuffle_mean=min_shuffle_mean,
+        bh_ks=bh_list,
+        circular=circ,
+        canonical=effective_canonical,
+        strand_mode=resolved_strand,
+        null_kinds=null_kinds,
+        null_source=null_source,
+        resolved_null_source=resolved_null_source,
+        null_applicable=null_applicable,
+        null_source_reason=null_reason,
+        reference_n_records=ref_load.n_records,
+        write_node_link_json=write_node_link_json,
+        make_plots=make_plots,
+    )
+    expected_params_hash = _gqc_params_hash(params)
+
+    packet_info = _gqc_packet_dir(output_root, graph_id;
+                                  overwrite=overwrite,
+                                  expected_params_hash=expected_params_hash)
     packet_info.skipped && return packet_info.dir
     out_dir = packet_info.dir
     slug = packet_info.slug
@@ -2108,29 +2273,6 @@ function _run_gqc_one(input_dir::AbstractString,
         println(io, "See `summary.csv`, `formats/`, and `plots/` for details.")
     end
 
-    params = Dict{String, Any}(
-        "ks" => k_list,
-        "n_shuffles" => n_shuffles,
-        "shuffle_seed" => shuffle_seed,
-        "salt" => salt,
-        "genus_index" => genus_index,
-        "seed_scheme" => GQC_SEED_SCHEME,
-        "seed_scheme_detail" => GQC_SEED_SCHEME_DETAIL,
-        "min_shuffle_mean" => min_shuffle_mean,
-        "bh_ks" => bh_list,
-        "circular" => circ,
-        "canonical" => effective_canonical,
-        "strand_mode" => string(resolved_strand),
-        "null_kinds" => sort(collect(string.(null_kinds))),
-        "null_source" => string(null_source),
-        "resolved_null_source" => string(resolved_null_source),
-        "null_applicable" => null_applicable,
-        "null_source_reason" => null_reason,
-        "reference_n_records" => ref_load.n_records,
-        "write_node_link_json" => write_node_link_json,
-        "make_plots" => make_plots,
-        "overwrite" => string(overwrite),
-    )
     input_hashes = Dict{String, String}("graph.gfa" => sha256_file(gfa_path))
     meta_path = joinpath(input_dir, "metadata.json")
     if isfile(meta_path)

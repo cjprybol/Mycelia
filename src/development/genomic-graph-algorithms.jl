@@ -44,7 +44,7 @@ struct PathReroutingResult{T}
 end
 
 """
-    genomic_dijkstra(graph::AbstractGraph, 
+    genomic_dijkstra(graph::Graphs.AbstractGraph, 
                      source::Int, 
                      target::Int,
                      kmers::Vector{T},
@@ -58,7 +58,7 @@ This implementation is specifically optimized for genomic k-mer graphs with:
 - **Biological constraints**: Only considers valid k-mer transitions (k-1 overlaps)
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `source::Int`: Source k-mer index
 - `target::Int`: Target k-mer index  
 - `kmers::Vector{T}`: Vector of k-mers corresponding to graph vertices
@@ -97,7 +97,7 @@ optimal_sequence = reconstruct_sequence(result.path, 31)
 Based on genomic Dijkstra implementation from:
 `2022-01-21-dijkstra-point-to-point.ipynb`
 """
-function genomic_dijkstra(graph::AbstractGraph,
+function genomic_dijkstra(graph::Graphs.AbstractGraph,
         source::Int,
         target::Int,
         kmers::Vector{T},
@@ -202,7 +202,7 @@ function genomic_dijkstra(graph::AbstractGraph,
 end
 
 """
-    bidirectional_genomic_dijkstra(graph::AbstractGraph,
+    bidirectional_genomic_dijkstra(graph::Graphs.AbstractGraph,
                                    source::Int,
                                    target::Int, 
                                    kmers::Vector{T},
@@ -210,11 +210,12 @@ end
 
 Find optimal path using bidirectional search optimized for genomic graphs.
 
-This algorithm simultaneously searches from source and target (reverse complement),
-meeting in the middle for significant performance improvements on long genomic paths.
+This algorithm simultaneously searches forward from source (along out-edges) and
+backward from target (along in-edges), returning the same optimal cost as
+`genomic_dijkstra`.
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `source::Int`: Source k-mer index
 - `target::Int`: Target k-mer index
 - `kmers::Vector{T}`: Vector of k-mers corresponding to graph vertices  
@@ -224,10 +225,15 @@ meeting in the middle for significant performance improvements on long genomic p
 `GenomicPathResult{T}`: Optimal path with performance metrics
 
 # Algorithm Details
-1. **Dual Search**: Forward search from source, reverse search from target
-2. **Intersection Detection**: Stops when search frontiers meet
-3. **Path Reconstruction**: Combines forward and reverse paths at meeting point
-4. **Strand Awareness**: Handles reverse complement sequences automatically
+1. **Dual Search**: Forward search from source, reverse search from target, always
+   expanding the side whose queue minimum is smaller
+2. **Edge Weights**: Identical to `genomic_dijkstra` — edge (u -> v) costs
+   `1 + (1 - coverage(v) / max_coverage)` in both directions
+3. **Termination**: Tracks the cost `mu` of the best complete path found while
+   relaxing edges and stops when `top(forward) + top(reverse) >= mu`
+   (an empty queue counts as Inf)
+4. **Path Reconstruction**: Joins the forward and reverse trees at the edge that
+   produced `mu`
 
 # Performance Characteristics
 - **Time Complexity**: O(b^(d/2)) vs O(b^d) for unidirectional search
@@ -248,7 +254,7 @@ speedup = uni_result.execution_time / result.execution_time
 Based on bidirectional genomic Dijkstra from:
 `2022-01-22-bidirectional-dijkstra-point-to-point.ipynb`
 """
-function bidirectional_genomic_dijkstra(graph::AbstractGraph,
+function bidirectional_genomic_dijkstra(graph::Graphs.AbstractGraph,
         source::Int,
         target::Int,
         kmers::Vector{T},
@@ -260,7 +266,15 @@ function bidirectional_genomic_dijkstra(graph::AbstractGraph,
         throw(ArgumentError("Source ($source) and target ($target) must be valid vertex indices"))
     end
 
-    ## Initialize forward search
+    ## Coverage normalization
+    max_coverage = maximum(values(kmer_coverage))
+
+    ## Same edge-weight definition as `genomic_dijkstra`: the cost of edge
+    ## (u -> v) depends only on the DESTINATION k-mer v. The reverse search
+    ## relaxes the same edge (u -> v) from v, so it charges `edge_cost(v)` too.
+    edge_cost = v -> 1.0 + (1.0 - kmer_coverage[kmers[v]] / max_coverage)
+
+    ## Forward search state (distances from source)
     forward_distances = fill(Inf, n_vertices)
     forward_predecessors = fill(-1, n_vertices)
     forward_distances[source] = 0.0
@@ -268,122 +282,118 @@ function bidirectional_genomic_dijkstra(graph::AbstractGraph,
     forward_pq[source] = 0.0
     forward_visited = Set{Int}()
 
-    ## Initialize reverse search
+    ## Reverse search state (distances to target); `reverse_successors[v]` is the
+    ## next vertex on the best known v -> target path.
     reverse_distances = fill(Inf, n_vertices)
-    reverse_predecessors = fill(-1, n_vertices)
+    reverse_successors = fill(-1, n_vertices)
     reverse_distances[target] = 0.0
     reverse_pq = DataStructures.PriorityQueue{Int, Float64}()
     reverse_pq[target] = 0.0
     reverse_visited = Set{Int}()
 
-    ## Coverage normalization
-    max_coverage = maximum(values(kmer_coverage))
+    ## Best complete source -> target path seen so far (`mu`): cost `best_cost`, joined
+    ## by `meeting_from` (reached by the forward search) and `meeting_to`
+    ## (reached by the reverse search). They are equal only when source == target.
+    best_cost = Inf
+    meeting_from = -1
+    meeting_to = -1
+    if source == target
+        best_cost = 0.0
+        meeting_from = source
+        meeting_to = target
+    end
+
     nodes_explored = 0
-    meeting_point = -1
 
     @debug "Starting bidirectional search from $source to $target"
 
-    ## Bidirectional search loop
-    while !isempty(forward_pq) && !isempty(reverse_pq)
-        ## Forward search step
-        if !isempty(forward_pq)
-            current = DataStructures.dequeue!(forward_pq)
-            nodes_explored += 1
-
-            if current in reverse_visited
-                meeting_point = current
-                @debug "Paths met at vertex $meeting_point after $nodes_explored explorations"
-                break
-            end
-
-            if !(current in forward_visited)
-                push!(forward_visited, current)
-
-                for neighbor in Graphs.neighbors(graph, current)
-                    if neighbor in forward_visited
-                        continue
-                    end
-
-                    neighbor_kmer = kmers[neighbor]
-                    coverage_weight = kmer_coverage[neighbor_kmer] / max_coverage
-                    edge_cost = 1.0 + (1.0 - coverage_weight)
-
-                    new_distance = forward_distances[current] + edge_cost
-
-                    if new_distance < forward_distances[neighbor]
-                        forward_distances[neighbor] = new_distance
-                        forward_predecessors[neighbor] = current
-                        forward_pq[neighbor] = new_distance
-                    end
-                end
-            end
+    ## Stop once no undiscovered path can beat `best_cost`: any such path must
+    ## leave both settled regions, so it costs at least top(forward) + top(reverse).
+    ## An empty queue contributes Inf: that side has settled every vertex it can
+    ## reach, and every path through those vertices has already been offered to
+    ## `best_cost`, so the search is complete (and "no path" is then correct).
+    while true
+        forward_top = isempty(forward_pq) ? Inf : first(forward_pq).second
+        reverse_top = isempty(reverse_pq) ? Inf : first(reverse_pq).second
+        if forward_top + reverse_top >= best_cost
+            break
         end
 
-        ## Reverse search step  
-        if !isempty(reverse_pq)
+        if forward_top <= reverse_top
+            ## Forward step: settle the closest unsettled vertex from source
+            current = DataStructures.dequeue!(forward_pq)
+            nodes_explored += 1
+            push!(forward_visited, current)
+
+            for neighbor in Graphs.outneighbors(graph, current)
+                candidate = forward_distances[current] + edge_cost(neighbor)
+
+                ## Offer the full path through edge (current -> neighbor)
+                if candidate + reverse_distances[neighbor] < best_cost
+                    best_cost = candidate + reverse_distances[neighbor]
+                    meeting_from = current
+                    meeting_to = neighbor
+                end
+
+                if !(neighbor in forward_visited) &&
+                   candidate < forward_distances[neighbor]
+                    forward_distances[neighbor] = candidate
+                    forward_predecessors[neighbor] = current
+                    forward_pq[neighbor] = candidate
+                end
+            end
+        else
+            ## Reverse step: settle the closest unsettled vertex to target,
+            ## scanning its incoming edges (predecessor -> current)
             current = DataStructures.dequeue!(reverse_pq)
             nodes_explored += 1
+            push!(reverse_visited, current)
 
-            if current in forward_visited
-                meeting_point = current
-                @debug "Paths met at vertex $meeting_point after $nodes_explored explorations"
-                break
-            end
+            for predecessor in Graphs.inneighbors(graph, current)
+                candidate = reverse_distances[current] + edge_cost(current)
 
-            if !(current in reverse_visited)
-                push!(reverse_visited, current)
+                ## Offer the full path through edge (predecessor -> current)
+                if forward_distances[predecessor] + candidate < best_cost
+                    best_cost = forward_distances[predecessor] + candidate
+                    meeting_from = predecessor
+                    meeting_to = current
+                end
 
-                ## For reverse search, traverse edges in opposite direction
-                for predecessor in 1:n_vertices
-                    if current in Graphs.neighbors(graph, predecessor) &&
-                       !(predecessor in reverse_visited)
-                        predecessor_kmer = kmers[predecessor]
-                        coverage_weight = kmer_coverage[predecessor_kmer] / max_coverage
-                        edge_cost = 1.0 + (1.0 - coverage_weight)
-
-                        new_distance = reverse_distances[current] + edge_cost
-
-                        if new_distance < reverse_distances[predecessor]
-                            reverse_distances[predecessor] = new_distance
-                            reverse_predecessors[predecessor] = current
-                            reverse_pq[predecessor] = new_distance
-                        end
-                    end
+                if !(predecessor in reverse_visited) &&
+                   candidate < reverse_distances[predecessor]
+                    reverse_distances[predecessor] = candidate
+                    reverse_successors[predecessor] = current
+                    reverse_pq[predecessor] = candidate
                 end
             end
         end
     end
 
-    ## Reconstruct path if meeting point found
-    if meeting_point == -1
+    if isinf(best_cost)
         @warn "No path found between vertices $source and $target"
         return GenomicPathResult{T}(
             T[], Inf, 0, 0.0, time() - start_time, nodes_explored
         )
     end
 
-    ## Build forward path (source to meeting point)
-    forward_path = Int[]
-    current = meeting_point
+    ## Forward half: source -> meeting_from
+    complete_path = Int[]
+    current = meeting_from
     while current != -1
-        pushfirst!(forward_path, current)
+        pushfirst!(complete_path, current)
         current = forward_predecessors[current]
     end
 
-    ## Build reverse path (meeting point to target)
-    reverse_path = Int[]
-    current = reverse_predecessors[meeting_point]  ## Skip meeting point to avoid duplication
+    ## Reverse half: meeting_to -> target (meeting_to == meeting_from only when
+    ## source == target, in which case the path is the single vertex)
+    current = meeting_to == meeting_from ? reverse_successors[meeting_to] : meeting_to
     while current != -1
-        push!(reverse_path, current)
-        current = reverse_predecessors[current]
+        push!(complete_path, current)
+        current = reverse_successors[current]
     end
 
-    ## Combine paths
-    complete_path = vcat(forward_path, reverse_path)
     path_kmers = [kmers[i] for i in complete_path]
-
-    ## Calculate total cost
-    total_cost = forward_distances[meeting_point] + reverse_distances[meeting_point]
+    total_cost = best_cost
 
     ## Calculate confidence score
     path_coverages = [kmer_coverage[kmer] for kmer in path_kmers]
@@ -406,7 +416,7 @@ function bidirectional_genomic_dijkstra(graph::AbstractGraph,
 end
 
 """
-    dynamic_path_rerouting(graph::AbstractGraph,
+    dynamic_path_rerouting(graph::Graphs.AbstractGraph,
                           original_path::Vector{Int},
                           kmers::Vector{T},
                           kmer_coverage::Dict{T, Int};
@@ -419,7 +429,7 @@ This algorithm identifies problematic nodes (low coverage k-mers) in a path and
 finds alternative routes that avoid these regions while maintaining biological validity.
 
 # Arguments
-- `graph::AbstractGraph`: K-mer de Bruijn graph
+- `graph::Graphs.AbstractGraph`: K-mer de Bruijn graph
 - `original_path::Vector{Int}`: Original path as vertex indices
 - `kmers::Vector{T}`: Vector of k-mers corresponding to vertices
 - `kmer_coverage::Dict{T, Int}`: Coverage counts for each k-mer
@@ -456,7 +466,7 @@ end
 Based on dynamic path rerouting from:
 `2021-12-22-rerouting.ipynb`
 """
-function dynamic_path_rerouting(graph::AbstractGraph,
+function dynamic_path_rerouting(graph::Graphs.AbstractGraph,
         original_path::Vector{Int},
         kmers::Vector{T},
         kmer_coverage::Dict{T, Int};

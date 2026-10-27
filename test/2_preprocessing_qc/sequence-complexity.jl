@@ -172,7 +172,7 @@ Test.@testset "Sequence Comparison Functions" begin
             # Test with custom alphabet - use subset of AA that has < 25 unique residues
             subset_aa = BioSequences.LongAA("ARNDCQEGHILKMF")  # 14 different AAs
             many_positions = repeat(subset_aa, 10)  # 140 positions, 14 unique k-mers for k=1  
-            richness_default = Mycelia.kmer_richness(many_positions, 1, normalize = true) # 14/min(140, 20) = 14/20
+            richness_default = Mycelia.kmer_richness(many_positions, 1, normalize = true) # 14/min(140, length(AA_ALPHABET))
             richness_custom = Mycelia.kmer_richness(many_positions, 1, alphabet = 25, normalize = true) # 14/min(140, 25) = 14/25
             Test.@test richness_custom != richness_default
         end
