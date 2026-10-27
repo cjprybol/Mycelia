@@ -159,6 +159,12 @@ include("rhizomorph/algorithms/batched-viterbi-kernel.jl")
 
 # Load remaining files in alphabetical order (no critical dependencies)
 # Using explicit include() statements enables full static analysis by ExplicitImports.jl
+# Intentionally deferred under src/development/ (commented stubs or unfinished ports):
+#   annealing-error-correction.jl, circular-genome-reconstruction.jl,
+#   cross-validation.jl, intelligent-assembly.jl, neo4jl.jl,
+#   pangenome-core-genome.jl, performance-benchmarks.jl,
+#   protein-clustering-pangenome.jl, reinforcement-learning*.jl,
+#   strain-resolved-types.jl, therapeutic-optimization.jl
 include("alignments-and-mapping.jl")
 include("amino-acid-analysis.jl")
 include("annotation.jl")
@@ -176,6 +182,7 @@ include("dimensionality-reduction.jl")
 include("distance-metrics.jl")
 include("foldseek.jl")
 include("genome-features.jl")
+include("development/genomic-graph-algorithms.jl")
 include("ggcat.jl")
 include("gqc.jl")
 include("graph-cleanup.jl")
