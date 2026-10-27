@@ -23,9 +23,18 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
   That rounding is an implementation detail, not part of the pre-registered rule (which rounds only inside the signed-rank test).
   The inputs carry 6 decimals, so no real difference is lost and float residue can no longer decide a gate's sign: no verdict, status or p-value changed, and one displayed fit-identity median moved from 0.001333 to 0.001334.
   Tracked outputs in `analysis/`: `report.md`, `td2rxh_cell_verdicts.csv`, `td2rxh_paired.csv`, `td2rxh_unpaired.csv` (empty).
-  Regenerate the figure locally (not committed):  
-  `julia --project=. benchmarking/td2rxh_paired_analysis.jl --csv shards/seed1.csv,...,shards/seed16.csv --output-dir analysis`  
-  writes `td2rxh_paired_deltas.{png,svg}`.
+  Regenerate figures locally (not committed). From the repo root, with all
+  paths relative to that root (also regenerates `report.md` and the CSVs —
+  `td2rxh_paired_analysis.jl` pre-deletes them):
+
+  ```bash
+  D=benchmarking/results/td2rxh-evidence/27118659
+  julia --project=. benchmarking/td2rxh_paired_analysis.jl \
+    --csv "$(ls "$D"/shards/seed*.csv | paste -sd,)" \
+    --output-dir "$D/analysis"
+  ```
+
+  That writes `td2rxh_paired_deltas.{png,svg}` under `$D/analysis`.
 
 ## Result
 

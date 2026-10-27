@@ -149,7 +149,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           # Suites, harness includes, gating, workflow, and project pins.
           # src/ changes are intentionally weekly-cron-only (see job comment).
-          TD2RXH_RE: '(^benchmarking/.*td2rxh)|(^benchmarking/(indel_reroute_evidence|rgv_paired_wilcoxon)\.jl$)|(^test/4_assembly/td2rxh_(evidence_analysis|sbatch_guard)_test\.jl$)|(^test/runtests\.jl$)|(^\.github/workflows/ci\.yml$)|(^(Project|Manifest)\.toml$)'
+          TD2RXH_RE: '(^benchmarking/.*td2rxh)|(^benchmarking/(indel_reroute_evidence|indel_benchmark_common|rgv_paired_wilcoxon)\.jl$)|(^test/4_assembly/td2rxh_(evidence_analysis|sbatch_guard)_test\.jl$)|(^test/runtests\.jl$)|(^\.github/workflows/ci\.yml$)|(^(Project|Manifest)\.toml$)'
         run: |
           set -euo pipefail
           # fetch-depth: 0 already has full history; never re-fetch with --depth
