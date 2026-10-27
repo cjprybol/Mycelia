@@ -3,6 +3,8 @@ import Mycelia
 import Random
 import JSON
 import CodecZlib
+import EzXML
+import OrderedCollections
 
 Test.@testset "gqc v0.1 helpers and packet" begin
 
@@ -243,7 +245,9 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             Test.@test r >= c
         end
         manifest = JSON.parsefile(joinpath(packet, "manifest.json"))
-        Test.@test manifest["gqc_version"] == "0.1.0"
+        Test.@test manifest["gqc_version"] == Mycelia.GQC_VERSION
+        Test.@test manifest["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test manifest["node_tsv_schema"] == Mycelia.GQC_NODE_TSV_SCHEMA
         Test.@test haskey(manifest, "input_sha256")
         Test.@test haskey(manifest, "params_hash")
         Test.@test manifest["params"]["bh_ks"] == [11]
@@ -254,6 +258,43 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test length(g.segments) == 5
         Test.@test length(g.links) == 4
         Test.@test g.segments["1"].depth == 10.0
+    end
+
+    Test.@testset "unified node TSV header matches spec" begin
+        expected = join(Mycelia.GQC_NODE_TSV_COLUMNS, '\t')
+        Test.@test expected ==
+            "graph_id\tnode_id\tindex\tlength\tdepth\tdegree\tin_degree\tout_degree\tsequence"
+        ## Spec documents the same frozen order
+        spec = read(joinpath(@__DIR__, "..", "..", "docs", "gqc-v0.1-spec.md"), String)
+        Test.@test occursin(expected, spec)
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        packet = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=5, strand_mode=:single, make_plots=false,
+            write_node_link_json=false, null_kinds=(:dinucleotide,))
+        fmt_header = first(readlines(joinpath(packet, "formats", "nodes.tsv")))
+        long_header = first(readlines(joinpath(packet, "nodes", "synth_ss_k5.tsv")))
+        Test.@test fmt_header == expected
+        Test.@test long_header == expected
+        ## Same body (schema-unified files are identical for a packet)
+        fmt_lines = readlines(joinpath(packet, "formats", "nodes.tsv"))
+        long_lines = readlines(joinpath(packet, "nodes", "synth_ss_k5.tsv"))
+        Test.@test fmt_lines == long_lines
+        ## Spot-check: index is 1-based and sequence column present
+        cols = split(fmt_lines[2], '\t')
+        Test.@test length(cols) == length(Mycelia.GQC_NODE_TSV_COLUMNS)
+        Test.@test cols[1] == "synth_ss_k5"  ## run graph_id (not empty)
+        Test.@test all(startswith(l, "synth_ss_k5\t") for l in fmt_lines[2:end])
+        Test.@test cols[3] == "1"            ## index
+        Test.@test !isempty(cols[end])       ## sequence
+        ## Standalone formats writer: empty kwarg → basename(dirname(g.path))
+        g = Mycelia.read_gfa_records(joinpath(fixture, "graph.gfa"))
+        formats_only = mktempdir()
+        Mycelia.gqc_write_formats(g, formats_only; write_node_link_json=false)
+        stand_cols = split(readlines(joinpath(formats_only, "nodes.tsv"))[2], '\t')
+        Test.@test stand_cols[1] == "gqc_synthetic"
+        Test.@test !isempty(stand_cols[1])
+        Test.@test Mycelia._gqc_resolve_node_tsv_graph_id(g; graph_id="explicit") == "explicit"
+        Test.@test Mycelia._gqc_resolve_node_tsv_graph_id(g; graph_id="") == "gqc_synthetic"
     end
 
     Test.@testset "C3 MTX golden with reverse-only link" begin
@@ -271,6 +312,65 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test (2, 1) in pairs
         Test.@test (3, 2) in pairs
         Test.@test (4, 3) in pairs
+    end
+
+    Test.@testset "GraphML XML-escapes special characters" begin
+        Test.@test Mycelia._gqc_xml_escape("a&b<c>d\"e'f") == "a&amp;b&lt;c&gt;d&quot;e&apos;f"
+        id_a = "n&1<'\">"
+        id_b = "n>2\"&'"
+        seq_a = "AC&GT<>'\""
+        overlap = "3M&<>'\""
+        segs = OrderedCollections.OrderedDict{String, Mycelia.GFASegment}()
+        segs[id_a] = Mycelia.GFASegment(id_a, seq_a, length(seq_a), 1.5, nothing, nothing)
+        segs[id_b] = Mycelia.GFASegment(id_b, "TGCA", 4, nothing, nothing, nothing)
+        links = Mycelia.GFALink[Mycelia.GFALink(id_a, true, id_b, false, overlap)]
+        g = Mycelia.GFAGraph(segs, links, String[], "special.gfa")
+        formats_dir = mktempdir()
+        Mycelia.gqc_write_formats(g, formats_dir; write_node_link_json=false)
+        xml = read(joinpath(formats_dir, "graph.graphml"), String)
+        ## Raw file must contain entities, not bare specials in attributes/content.
+        Test.@test occursin("&amp;", xml)
+        Test.@test occursin("&lt;", xml)
+        Test.@test occursin("&gt;", xml)
+        Test.@test occursin("&quot;", xml)
+        Test.@test occursin("&apos;", xml)
+        doc = EzXML.parsexml(xml)  ## round-trip through an XML parser
+        root = EzXML.root(doc)
+        graph = nothing
+        for child in EzXML.eachelement(root)
+            EzXML.nodename(child) == "graph" && (graph = child; break)
+        end
+        Test.@test graph !== nothing
+        nodes = Dict{String, EzXML.Node}()
+        edges = EzXML.Node[]
+        for child in EzXML.eachelement(graph)
+            name = EzXML.nodename(child)
+            if name == "node"
+                nodes[child["id"]] = child
+            elseif name == "edge"
+                push!(edges, child)
+            end
+        end
+        Test.@test haskey(nodes, id_a)
+        Test.@test haskey(nodes, id_b)
+        function data_by_key(parent, key)
+            for d in EzXML.eachelement(parent)
+                EzXML.nodename(d) == "data" && d["key"] == key && return d
+            end
+            return nothing
+        end
+        seq_node = data_by_key(nodes[id_a], "d_seq")
+        Test.@test seq_node !== nothing
+        Test.@test EzXML.nodecontent(seq_node) == seq_a
+        Test.@test length(edges) == 1
+        edge = only(edges)
+        Test.@test edge["source"] == id_a
+        Test.@test edge["target"] == id_b
+        ov = data_by_key(edge, "e_ov")
+        Test.@test ov !== nothing
+        Test.@test EzXML.nodecontent(ov) == overlap
+        Test.@test EzXML.nodecontent(data_by_key(edge, "e_fo")) == "+"
+        Test.@test EzXML.nodecontent(data_by_key(edge, "e_to")) == "-"
     end
 
     Test.@testset "C5 bh_ks defaults to [11] within-graph" begin
@@ -679,6 +779,41 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test JSON.parsefile(joinpath(packet, "manifest.json"))["params"]["null_source"] == "auto"
     end
 
+    Test.@testset "overwrite=:skip refuses pre-seed_scheme (0.1.0-layout) packet" begin
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        out = mktempdir()
+        kwargs = (
+            ks=[5], n_shuffles=5, strand_mode=:single,
+            make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,),
+        )
+        packet = Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:error)
+        man_path = joinpath(packet, "manifest.json")
+        man = JSON.parsefile(man_path)
+        Test.@test man["gqc_version"] == Mycelia.GQC_VERSION
+        Test.@test man["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test man["node_tsv_schema"] == Mycelia.GQC_NODE_TSV_SCHEMA
+        ## Simulate a #472-era packet: drop seed keys and rehash
+        params = Dict{String, Any}(man["params"])
+        delete!(params, "seed_scheme")
+        delete!(params, "seed_scheme_detail")
+        Test.@test !haskey(params, "seed_scheme")
+        man["params"] = params
+        man["params_hash"] = Mycelia._gqc_params_hash(params)
+        delete!(man, "seed_scheme")
+        delete!(man, "node_tsv_schema")
+        open(man_path, "w") do io
+            JSON.print(io, man, 2)
+        end
+        err = try
+            Mycelia.run_gqc(fixture, out; kwargs..., null_source=:auto, overwrite=:skip)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("params_hash mismatch", sprint(showerror, err))
+    end
+
     Test.@testset "I3 graph-set fail-closed + clear stale errors + skip resume" begin
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         set_root = mktempdir()
@@ -798,5 +933,59 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             Test.@test multi[k].observed_repeats == one.observed_repeats
             Test.@test multi[k].shuffle_p_upper ≈ one.shuffle_p_upper
         end
+    end
+
+    Test.@testset "null seeds unique for n=1000 across kinds and graphs" begin
+        n = 1000
+        seed = 20261021
+        salt = 0
+        kinds = (:dinucleotide, :codon)
+        graphs = 1:5
+        seeds = UInt64[]
+        for g in graphs, kind in kinds, rep in 1:n
+            push!(seeds, Mycelia.gqc_derive_null_seed(seed, salt, g, kind, rep))
+        end
+        Test.@test length(seeds) == n * length(kinds) * length(graphs)
+        Test.@test length(unique(seeds)) == length(seeds)
+        ## Legacy alias pair must not collide under the new scheme
+        Test.@test Mycelia.gqc_derive_null_seed(seed, 1, 1, :dinucleotide, 1) !=
+                   Mycelia.gqc_derive_null_seed(seed, 0, 1001, :dinucleotide, 1)
+        Test.@test Mycelia.gqc_derive_null_seed(seed, 0, 1, :dinucleotide, 1) !=
+                   Mycelia.gqc_derive_null_seed(seed, 0, 1, :codon, 1)
+    end
+
+    Test.@testset "null stats bit-identical on rerun; seed_scheme in manifest" begin
+        seqs = ["ATGCGATCGATCGTTACCGGATCCATGCGATTACGGCATGCGATCGATCGTTACCGGATCCAA"]
+        kwargs = (;
+            k=5, n_shuffles=40, shuffle_seed=20261021, salt=0, genus_index=1,
+            circular=false, canonical=true, null_kind=:dinucleotide,
+        )
+        a = Mycelia.gqc_repeat_null_stats(seqs; kwargs...)
+        b = Mycelia.gqc_repeat_null_stats(seqs; kwargs...)
+        Test.@test a.null_repeats == b.null_repeats
+        Test.@test a.shuffle_p_upper == b.shuffle_p_upper
+        ca = Mycelia.gqc_repeat_null_stats(seqs; kwargs..., null_kind=:codon)
+        cb = Mycelia.gqc_repeat_null_stats(seqs; kwargs..., null_kind=:codon)
+        Test.@test ca.null_repeats == cb.null_repeats
+        fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
+        packet = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=10, strand_mode=:single,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide, :codon))
+        man = JSON.parsefile(joinpath(packet, "manifest.json"))
+        Test.@test man["params"]["seed_scheme"] == Mycelia.GQC_SEED_SCHEME
+        Test.@test occursin("gqc-null-v1", man["params"]["seed_scheme_detail"])
+        Test.@test occursin("gqc-null-v1", man["seed_note"])
+        ## Same packet twice → bit-identical null TSV + summary null fields
+        packet2 = Mycelia.run_gqc(fixture, mktempdir();
+            ks=[5], n_shuffles=10, strand_mode=:single,
+            make_plots=false, write_node_link_json=false,
+            null_kinds=(:dinucleotide, :codon))
+        row1 = only(JSON.parsefile(joinpath(packet, "summary.json")))
+        row2 = only(JSON.parsefile(joinpath(packet2, "summary.json")))
+        Test.@test row1["dinucleotide_null_mean"] == row2["dinucleotide_null_mean"]
+        Test.@test row1["dinucleotide_shuffle_p_upper"] == row2["dinucleotide_shuffle_p_upper"]
+        Test.@test row1["codon_null_mean"] == row2["codon_null_mean"]
+        Test.@test row1["codon_shuffle_p_upper"] == row2["codon_shuffle_p_upper"]
     end
 end
