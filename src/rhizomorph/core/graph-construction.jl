@@ -1197,14 +1197,20 @@ function convert_to_canonical(singlestrand_graph)
             end
         end
 
-        # Add reverse complement evidence if it exists
+        # Add reverse complement evidence if it exists. A palindromic k-mer
+        # (rc_kmer == kmer == canon_kmer) is its own reverse complement: every
+        # observation is also an observation of the reverse strand, so it is
+        # recorded a second time with the strand flipped (coverage 2x).
+        # Re-adding the unflipped entry would be de-duplicated by the
+        # evidence Set and count the palindrome on one strand only.
         if haskey(singlestrand_graph, rc_kmer)
             rc_data = singlestrand_graph[rc_kmer]
+            is_palindrome = rc_kmer == kmer
             for (dataset_id, observations) in rc_data.evidence
                 for (obs_id, evidence_set) in observations
                     for evidence in evidence_set
                         # Flip strand for RC evidence
-                        final_evidence = if rc_kmer != canon_kmer
+                        final_evidence = if rc_kmer != canon_kmer || is_palindrome
                             flip_evidence_strand(evidence)
                         else
                             evidence
@@ -1233,6 +1239,11 @@ function convert_to_canonical(singlestrand_graph)
         # Add edge evidence
         edge_data = singlestrand_graph[src_kmer, dst_kmer]
         canon_edge = canonical_graph[canon_src, canon_dst]
+        # A self-reverse-complement edge (dst == rc(src)) is its own
+        # reverse-complement image, so each observation is also recorded with
+        # the strand flipped: the canonical self-loop weight is 2x, matching
+        # the palindromic-vertex rule above and the double-strand graph.
+        is_self_rc_edge = dst_kmer == BioSequences.reverse_complement(src_kmer)
 
         for (dataset_id, observations) in edge_data.evidence
             for (obs_id, evidence_set) in observations
@@ -1245,6 +1256,10 @@ function convert_to_canonical(singlestrand_graph)
                         evidence
                     end
                     add_evidence!(canon_edge, dataset_id, obs_id, final_evidence)
+                    if is_self_rc_edge
+                        add_evidence!(canon_edge, dataset_id, obs_id,
+                            flip_evidence_strand(final_evidence))
+                    end
                 end
             end
         end
