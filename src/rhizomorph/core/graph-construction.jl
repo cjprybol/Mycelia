@@ -1096,6 +1096,13 @@ Merges forward and reverse complement k-mers into their canonical forms.
 Evidence from both strands is combined. Creates an UNDIRECTED graph where
 edges represent bidirectional relationships.
 
+An observation that is its own reverse complement is counted on both strands,
+matching `convert_to_doublestrand`: a palindromic k-mer's coverage is twice its
+forward count, and a self-reverse-complement edge (`dst == rc(src)`) gives the
+canonical self-loop twice its forward edge count. The second copy is recorded
+with the strand flipped so the evidence Set keeps both entries. The input graph
+is not modified.
+
 Note: Canonical graphs require on-the-fly validation of traversal directions
 using find_valid_canonical_traversal() since edges are undirected.
 
