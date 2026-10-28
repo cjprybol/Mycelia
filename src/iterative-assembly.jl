@@ -453,6 +453,8 @@ const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
         :frontier_metric_sample_limit,
         :raw_frontier_evaluated,
         :cleaned_frontier_evaluated,
+        # Legacy name: the pass retained a window-source map; it does not mean
+        # any read was windowed (td-4mbg, `_frontier_decode_route`).
         :bounded_windowing_forced,
         :substitution_decode_memory_gated,
         :raw_frontier_metrics,
@@ -4405,6 +4407,66 @@ function _read_runs_indel_decode(
     return false
 end
 
+"""
+    _frontier_decode_route(read, k, use_windowed, force_indel_windowing,
+        indel_params, read_window_sources)
+        -> (windowed::Bool, indel_params, demoted_whole_read::Bool)
+
+Per-read decode route for `improve_read_set_likelihood` (td-4mbg).
+
+A `:frontier_budgeted` pass forces bounded windowing (`force_indel_windowing`)
+whenever its window-source map is non-empty, and the map also keeps reads whose
+every window was DEMOTED to `:substitution`. No window of such a read runs the
+pair-HMM, so it is decoded the way the substitution-only (`:illumina`) arm
+decodes it: windowed if the hard-window gate is active and the read is long
+(n_obs > `_AUTO_BEAM_EXACT_THRESHOLD`), otherwise whole-read with
+`indel_params = nothing`. Only SHORT demoted reads therefore differ from a
+forced route; long reads are windowed either way.
+
+The `nothing` matters in a partially admitted pass, where `indel_params` is
+non-`nothing` and would otherwise run an unbounded whole-read pair-HMM on a read
+the scheduler rejected. A long demoted read keeps the pass params; the windowed
+decode derives its substitution-only behaviour from the source map, so they pass
+through unused. `demoted_whole_read` is true exactly when a demoted read is
+decoded whole, and feeds `CorrectorDiagnostics.demoted_whole_read_routes`.
+
+Every other read is routed as the pass dictates. That includes a read with no
+map entry under a forced pass: the scheduler omits reads that are skipped or
+have no hard window of at least `k` bases, so the windowed decode has nothing to
+decode for it.
+
+Every source symbol is validated here, because a short demoted read never
+reaches `improve_read_likelihood_windowed_detail`, the only other place
+`_validate_indel_window_sources` runs. Without this, a misspelled source would
+count as "not admitted" and be decoded silently as substitution.
+"""
+function _frontier_decode_route(
+        read::FASTX.FASTQ.Record,
+        k::Int,
+        use_windowed::Bool,
+        force_indel_windowing::Bool,
+        indel_params::Union{Nothing, IndelDecodeParams},
+        read_window_sources::Union{
+            Nothing, AbstractDict{UnitRange{Int}, Symbol}},
+)
+    if read_window_sources !== nothing
+        for (window, source) in read_window_sources
+            source in _VALID_INDEL_WINDOW_SOURCES || throw(ArgumentError(
+                "invalid indel window source :$source for $window; expected one of " *
+                join(string.(_VALID_INDEL_WINDOW_SOURCES), ", ")))
+        end
+    end
+    demoted = force_indel_windowing && read_window_sources !== nothing &&
+              !_read_runs_indel_decode(indel_params, read_window_sources)
+    windowed = use_windowed &&
+               ((force_indel_windowing && !demoted) ||
+                _windowed_decode_read_is_long(read, k))
+    demoted_whole_read = demoted && !windowed
+    return (windowed = windowed,
+        indel_params = demoted_whole_read ? nothing : indel_params,
+        demoted_whole_read = demoted_whole_read)
+end
+
 function _merge_soft_edge_weights!(
         destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
         staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -4825,6 +4887,14 @@ parallel (`@threads`) read loop increments them race-free.
   anchor owned by the following window.
 - `window_divergences` : substitution windows rejected for violating the
   length-preserving splice contract.
+- `demoted_whole_read_routes` : reads in a `:frontier_budgeted` pass whose
+  every scheduled window was demoted to `:substitution` and that were therefore
+  decoded whole, with no indel params, instead of inside forced windows
+  (`_frontier_decode_route`). Counts one event per read per pass. A route
+  counter, not an error: it says how many reads the routing actually changed, so
+  a downstream difference can be attributed to it. Like
+  `parallel_decode_batches` and `frozen_reads_skipped`, it is not checkpointed:
+  after a resume it covers only the passes run since the resume.
 - `substitution_length_divergences` : substitution-mode whole-read decodes whose
   reconstruction diverged from the input length; the read FAILED OPEN to its
   original (uncorrected) sequence to keep the length-preserving contract, so it
@@ -4869,13 +4939,17 @@ mutable struct CorrectorDiagnostics
     # for improvement, so it must not be counted as "frozen"). Always 0 when
     # skip_frozen_reads=false (the default no-op path).
     frozen_reads_skipped::Threads.Atomic{Int}
+    # Reads whose scheduled windows were all demoted to :substitution and that
+    # were decoded whole instead of in forced windows (`_frontier_decode_route`).
+    # Not checkpointed: after a resume it covers only post-resume passes.
+    demoted_whole_read_routes::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -5348,8 +5422,11 @@ function _improve_read_set_likelihood_impl(
             :weighted_graph_out_of_memory,
             :cleaning_out_of_memory,
         )
-        # Retain the full map even when every pair-HMM window is rejected: those
-        # entries explicitly route the same bounded windows through substitution.
+        # Retain the full map even when every pair-HMM window is rejected.
+        # `bounded_windowing_forced` is a legacy name kept for checkpoint
+        # compatibility: it means the pass retained a window-source map, NOT that
+        # any read was windowed: a short read whose entries are all :substitution
+        # is decoded whole (`_frontier_decode_route`).
         scheduled_window_sources = decision.window_sources
         pass_indel_telemetry[:bounded_windowing_forced] =
             !isempty(scheduled_window_sources)
@@ -5393,8 +5470,10 @@ function _improve_read_set_likelihood_impl(
     needs_raw_weighted_graph = isempty(scheduled_sources) ||
                                :raw in scheduled_sources ||
                                :substitution in scheduled_sources
-    # A fully rejected frontier schedule still promises bounded substitution
-    # fallback, which needs one raw weighted copy. Honor the configured memory
+    # A fully rejected frontier schedule still needs a substitution fallback
+    # (bounded windows for long reads, whole-read for short ones; see
+    # `_frontier_decode_route`),
+    # which needs one raw weighted copy. Honor the configured memory
     # ceiling before allocating it. Explicit :unrestricted semantics and the
     # profile-disabled legacy path bypass this scheduler-specific gate.
     substitution_memory_gated =
@@ -5473,7 +5552,8 @@ function _improve_read_set_likelihood_impl(
     # check restricts windowing to reads long enough that whole-read decode is
     # expensive/bounded. Outside a frontier-scheduled indel pass, short reads keep
     # the cheap whole-read decode; an explicit schedule forces even short reads
-    # through its bounded per-window source map.
+    # through its bounded per-window source map, except reads whose windows were
+    # all demoted to :substitution (`_frontier_decode_route`, td-4mbg).
     use_windowed = windowed_decode && hard_vertices !== nothing
     force_indel_windowing = indel_schedule == :frontier_budgeted &&
                             !isempty(scheduled_window_sources)
@@ -5536,10 +5616,13 @@ function _improve_read_set_likelihood_impl(
                         if soft_weights !== nothing
                             batch_local[i] = local_sink
                         end
+                        route = _frontier_decode_route(
+                            read, k, use_windowed, force_indel_windowing,
+                            effective_indel_params, read_window_sources)
+                        route.demoted_whole_read && Threads.atomic_add!(
+                            diag.demoted_whole_read_routes, 1)
                         improved_read,
-                        was_improved = (use_windowed &&
-                                        (force_indel_windowing ||
-                                         _windowed_decode_read_is_long(read, k))) ?
+                        was_improved = route.windowed ?
                                        improve_read_likelihood_windowed(
                             read, decode_graph, k, hard_vertices;
                             graph_mode = graph_mode,
@@ -5553,7 +5636,7 @@ function _improve_read_set_likelihood_impl(
                             indel_window_sources = read_window_sources,
                             diagnostics = diag,
                             calibrated_gap_threshold = calibrated_gap_threshold,
-                            indel_params = effective_indel_params,
+                            indel_params = route.indel_params,
                             substitution_error_rate = substitution_error_rate,
                         ) : improve_read_likelihood(
                             read, decode_graph, k;
@@ -5563,7 +5646,7 @@ function _improve_read_set_likelihood_impl(
                             soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             diagnostics = diag,
-                            indel_params = effective_indel_params,
+                            indel_params = route.indel_params,
                             substitution_error_rate = substitution_error_rate,
                             calibrated_gap_threshold = calibrated_gap_threshold,
                         )
@@ -5664,10 +5747,13 @@ function _improve_read_set_likelihood_impl(
                 read_index = batch_start + i - 1
                 read_window_sources = get(
                     scheduled_window_sources, read_index, nothing)
+                route = _frontier_decode_route(
+                    read, k, use_windowed, force_indel_windowing,
+                    effective_indel_params, read_window_sources)
+                route.demoted_whole_read && Threads.atomic_add!(
+                    diag.demoted_whole_read_routes, 1)
                 improved_read,
-                was_improved = (use_windowed &&
-                                (force_indel_windowing ||
-                                 _windowed_decode_read_is_long(read, k))) ?
+                was_improved = route.windowed ?
                                improve_read_likelihood_windowed(
                     read, decode_graph, k, hard_vertices; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
@@ -5677,13 +5763,13 @@ function _improve_read_set_likelihood_impl(
                     indel_window_sources = read_window_sources,
                     diagnostics = diag,
                     calibrated_gap_threshold = calibrated_gap_threshold,
-                    indel_params = effective_indel_params,
+                    indel_params = route.indel_params,
                     substitution_error_rate = substitution_error_rate) :
                                improve_read_likelihood(
                     read, decode_graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag, indel_params = effective_indel_params,
+                    diagnostics = diag, indel_params = route.indel_params,
                     substitution_error_rate = substitution_error_rate,
                     calibrated_gap_threshold = calibrated_gap_threshold)
                 updated_reads[batch_start + i - 1] = improved_read
@@ -6694,6 +6780,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :substitution_length_divergences => 0,
             :parallel_decode_batches => 0,
             :frozen_reads_skipped => 0,
+            :demoted_whole_read_routes => 0,
         )
     else
         Dict(
@@ -6711,6 +6798,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
                 diagnostics.substitution_length_divergences[],
             :parallel_decode_batches => diagnostics.parallel_decode_batches[],
             :frozen_reads_skipped => diagnostics.frozen_reads_skipped[],
+            :demoted_whole_read_routes =>
+                diagnostics.demoted_whole_read_routes[],
         )
     end
 
