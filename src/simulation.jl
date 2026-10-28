@@ -187,7 +187,7 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 - `paired::Bool`: Whether to simulate paired-end reads (default: true). Some systems like MinS only support single-end.
 - `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
 - `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
-- `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
+- `rndSeed::Int`: Seed for ART reproducibility (default: `current_unix_datetime()`).
 
 # Outputs
 Generates gzipped FASTQ files in the working directory:
@@ -1023,6 +1023,7 @@ Follows the recommended PacBio HiFi simulation parameters from the Badread docum
 - `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
 - `outfile::String`: Output filepath for simulated reads. Defaults to input filename with PacBio HiFi suffix
 - `quiet::Bool=false`: If true, suppress badread output to stdout/stderr
+- `seed::Union{Nothing,Int}=nothing`: RNG seed for Badread; when `nothing` (default), Badread chooses its own seed
 
 # Returns
 - `String`: Path to the generated output file
