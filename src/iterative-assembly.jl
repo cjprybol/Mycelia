@@ -4890,9 +4890,11 @@ parallel (`@threads`) read loop increments them race-free.
 - `demoted_whole_read_routes` : reads in a `:frontier_budgeted` pass whose
   every scheduled window was demoted to `:substitution` and that were therefore
   decoded whole, with no indel params, instead of inside forced windows
-  (`_frontier_decode_route`). Counts (read x pass) events, like the counters
-  above. A route counter, not an error: it says how many reads the routing
-  actually changed, so a downstream difference can be attributed to it.
+  (`_frontier_decode_route`). Counts one event per read per pass. A route
+  counter, not an error: it says how many reads the routing actually changed, so
+  a downstream difference can be attributed to it. Like
+  `parallel_decode_batches` and `frozen_reads_skipped`, it is not checkpointed:
+  after a resume it covers only the passes run since the resume.
 - `substitution_length_divergences` : substitution-mode whole-read decodes whose
   reconstruction diverged from the input length; the read FAILED OPEN to its
   original (uncorrected) sequence to keep the length-preserving contract, so it
@@ -4939,6 +4941,7 @@ mutable struct CorrectorDiagnostics
     frozen_reads_skipped::Threads.Atomic{Int}
     # Reads whose scheduled windows were all demoted to :substitution and that
     # were decoded whole instead of in forced windows (`_frontier_decode_route`).
+    # Not checkpointed: after a resume it covers only post-resume passes.
     demoted_whole_read_routes::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
