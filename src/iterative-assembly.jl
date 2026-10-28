@@ -4405,6 +4405,47 @@ function _read_runs_indel_decode(
     return false
 end
 
+"""
+    _frontier_decode_route(read, k, use_windowed, force_indel_windowing,
+        indel_params, read_window_sources) -> (windowed::Bool, indel_params)
+
+Per-read decode route for `improve_read_set_likelihood` (td-4mbg fix 1).
+
+A `:frontier_budgeted` pass forces bounded windowing (`force_indel_windowing`)
+whenever its window-source map is non-empty, but the map also keeps reads whose
+every window was DEMOTED to `:substitution`. Forcing those reads into windows
+gains nothing, because no window runs the pair-HMM, and it costs corrections: a
+short read the `:illumina` arm decodes whole is instead decoded window by
+window, where the length-preserving kernel fails open far more often (td-4mbg
+measured 164 `substitution_length_divergences` vs 0 at 6000/1200/20x/err 0.01).
+
+So a read with a map entry but no admitted window takes the route the
+substitution-only arm takes: windowed only if it is long, otherwise whole-read
+with `indel_params = nothing`. The `nothing` matters: in a partially admitted
+pass `indel_params` is non-`nothing`, and passing it to the whole-read decode
+would run an unbounded whole-read pair-HMM on a read the scheduler rejected.
+
+Every other read keeps its previous route, including a read with no map entry
+under a forced pass.
+"""
+function _frontier_decode_route(
+        read::FASTX.FASTQ.Record,
+        k::Int,
+        use_windowed::Bool,
+        force_indel_windowing::Bool,
+        indel_params::Union{Nothing, IndelDecodeParams},
+        read_window_sources::Union{
+            Nothing, AbstractDict{UnitRange{Int}, Symbol}},
+)
+    demoted = force_indel_windowing && read_window_sources !== nothing &&
+              !_read_runs_indel_decode(indel_params, read_window_sources)
+    windowed = use_windowed &&
+               ((force_indel_windowing && !demoted) ||
+                _windowed_decode_read_is_long(read, k))
+    return (windowed = windowed,
+        indel_params = (demoted && !windowed) ? nothing : indel_params)
+end
+
 function _merge_soft_edge_weights!(
         destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
         staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -5348,8 +5389,10 @@ function _improve_read_set_likelihood_impl(
             :weighted_graph_out_of_memory,
             :cleaning_out_of_memory,
         )
-        # Retain the full map even when every pair-HMM window is rejected: those
-        # entries explicitly route the same bounded windows through substitution.
+        # Retain the full map even when every pair-HMM window is rejected. A read
+        # whose entries are all :substitution is NOT forced into windows by it
+        # (`_frontier_decode_route`, td-4mbg); this flag records only that the
+        # pass retained a map.
         scheduled_window_sources = decision.window_sources
         pass_indel_telemetry[:bounded_windowing_forced] =
             !isempty(scheduled_window_sources)
@@ -5473,7 +5516,8 @@ function _improve_read_set_likelihood_impl(
     # check restricts windowing to reads long enough that whole-read decode is
     # expensive/bounded. Outside a frontier-scheduled indel pass, short reads keep
     # the cheap whole-read decode; an explicit schedule forces even short reads
-    # through its bounded per-window source map.
+    # through its bounded per-window source map, except reads whose windows were
+    # all demoted to :substitution (`_frontier_decode_route`, td-4mbg).
     use_windowed = windowed_decode && hard_vertices !== nothing
     force_indel_windowing = indel_schedule == :frontier_budgeted &&
                             !isempty(scheduled_window_sources)
@@ -5536,10 +5580,11 @@ function _improve_read_set_likelihood_impl(
                         if soft_weights !== nothing
                             batch_local[i] = local_sink
                         end
+                        route = _frontier_decode_route(
+                            read, k, use_windowed, force_indel_windowing,
+                            effective_indel_params, read_window_sources)
                         improved_read,
-                        was_improved = (use_windowed &&
-                                        (force_indel_windowing ||
-                                         _windowed_decode_read_is_long(read, k))) ?
+                        was_improved = route.windowed ?
                                        improve_read_likelihood_windowed(
                             read, decode_graph, k, hard_vertices;
                             graph_mode = graph_mode,
@@ -5553,7 +5598,7 @@ function _improve_read_set_likelihood_impl(
                             indel_window_sources = read_window_sources,
                             diagnostics = diag,
                             calibrated_gap_threshold = calibrated_gap_threshold,
-                            indel_params = effective_indel_params,
+                            indel_params = route.indel_params,
                             substitution_error_rate = substitution_error_rate,
                         ) : improve_read_likelihood(
                             read, decode_graph, k;
@@ -5563,7 +5608,7 @@ function _improve_read_set_likelihood_impl(
                             soft_weights_sink = local_sink,
                             weighted_graph = pass_weighted_graph,
                             diagnostics = diag,
-                            indel_params = effective_indel_params,
+                            indel_params = route.indel_params,
                             substitution_error_rate = substitution_error_rate,
                             calibrated_gap_threshold = calibrated_gap_threshold,
                         )
@@ -5664,10 +5709,11 @@ function _improve_read_set_likelihood_impl(
                 read_index = batch_start + i - 1
                 read_window_sources = get(
                     scheduled_window_sources, read_index, nothing)
+                route = _frontier_decode_route(
+                    read, k, use_windowed, force_indel_windowing,
+                    effective_indel_params, read_window_sources)
                 improved_read,
-                was_improved = (use_windowed &&
-                                (force_indel_windowing ||
-                                 _windowed_decode_read_is_long(read, k))) ?
+                was_improved = route.windowed ?
                                improve_read_likelihood_windowed(
                     read, decode_graph, k, hard_vertices; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
@@ -5677,13 +5723,13 @@ function _improve_read_set_likelihood_impl(
                     indel_window_sources = read_window_sources,
                     diagnostics = diag,
                     calibrated_gap_threshold = calibrated_gap_threshold,
-                    indel_params = effective_indel_params,
+                    indel_params = route.indel_params,
                     substitution_error_rate = substitution_error_rate) :
                                improve_read_likelihood(
                     read, decode_graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag, indel_params = effective_indel_params,
+                    diagnostics = diag, indel_params = route.indel_params,
                     substitution_error_rate = substitution_error_rate,
                     calibrated_gap_threshold = calibrated_gap_threshold)
                 updated_reads[batch_start + i - 1] = improved_read

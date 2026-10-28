@@ -245,3 +245,73 @@ Test.@testset "td-4mbg: demoted schedule uses the substitution window partition"
     # That is a silent loss of coverage, so fail loudly instead.
     Test.@test partition_differs >= 1
 end
+
+Test.@testset "td-4mbg fix 1: fully demoted reads are not forced into windows" begin
+    # A `:frontier_budgeted` pass sets `force_indel_windowing` for EVERY read once
+    # its window-source map is non-empty. Before fix 1 that included reads whose
+    # windows were all demoted to :substitution: a short read the :illumina arm
+    # decodes whole was decoded window by window instead, where the
+    # length-preserving kernel fails open far more often (td-4mbg: 164
+    # substitution_length_divergences vs 0). `_frontier_decode_route` is the single
+    # per-read decision both decode loops now call.
+    profile = Mycelia.indel_error_profile(:nanopore)
+    params = Mycelia.IndelDecodeParams(
+        profile.base_error_rate, profile.insertion_fraction,
+        profile.deletion_fraction, profile.insertion_extend_probability,
+        profile.deletion_extend_probability, 3, 3, 16)
+    k = 13
+    threshold = Mycelia._AUTO_BEAM_EXACT_THRESHOLD
+    record(n) = FASTX.FASTQ.Record("r$(n)", repeat("A", n), repeat("I", n))
+    short = record(k + 10)
+    long = record(threshold + k + 10)
+    Test.@test !Mycelia._windowed_decode_read_is_long(short, k)
+    Test.@test Mycelia._windowed_decode_read_is_long(long, k)
+
+    demoted = Dict{UnitRange{Int}, Symbol}(
+        1:100 => :substitution, 90:200 => :substitution)
+    with_raw = Dict{UnitRange{Int}, Symbol}(
+        1:100 => :substitution, 90:200 => :raw)
+    route(read, use_windowed, force, indel_params, sources) =
+        Mycelia._frontier_decode_route(
+            read, k, use_windowed, force, indel_params, sources)
+
+    # THE FIX: a short, fully demoted read under a forced pass takes the
+    # whole-read route, and with no indel params. The second half matters in a
+    # partially admitted pass, where the pass-level params are non-nothing and
+    # would otherwise run an unbounded whole-read pair-HMM on a rejected read.
+    fixed = route(short, true, true, params, demoted)
+    Test.@test !fixed.windowed
+    Test.@test fixed.indel_params === nothing
+    # Same for an empty map entry, and for a wholly rejected pass (params nulled).
+    Test.@test route(short, true, true, params,
+        Dict{UnitRange{Int}, Symbol}()) == (windowed = false, indel_params = nothing)
+    Test.@test route(short, true, true, nothing, demoted) ==
+               (windowed = false, indel_params = nothing)
+
+    # A fully demoted LONG read is still windowed, as on the :illumina arm, and
+    # keeps the pass params so the windowed decode can apply the substitution
+    # partition (`_read_runs_indel_decode` is false inside it).
+    Test.@test route(long, true, true, params, demoted) ==
+               (windowed = true, indel_params = params)
+
+    # Unchanged routes. One admitted window keeps the forced windowing.
+    Test.@test route(short, true, true, params, with_raw) ==
+               (windowed = true, indel_params = params)
+    # A read with no map entry under a forced pass keeps its previous route.
+    Test.@test route(short, true, true, params, nothing) ==
+               (windowed = true, indel_params = params)
+    # No forced windowing (any non-frontier pass): length alone decides, and the
+    # params pass through untouched.
+    Test.@test route(short, true, false, params, nothing) ==
+               (windowed = false, indel_params = params)
+    Test.@test route(long, true, false, params, nothing) ==
+               (windowed = true, indel_params = params)
+    Test.@test route(short, true, false, nothing, nothing) ==
+               (windowed = false, indel_params = nothing)
+    # Without a hard-window gate nothing is windowed, but a demoted read still
+    # drops the indel params.
+    Test.@test route(long, false, true, params, demoted) ==
+               (windowed = false, indel_params = nothing)
+    Test.@test route(long, false, true, params, with_raw) ==
+               (windowed = false, indel_params = params)
+end
