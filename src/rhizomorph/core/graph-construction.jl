@@ -948,12 +948,58 @@ function build_qualmer_graph_canonical(
 end
 
 """
+    _empty_evidence_data(data)
+
+Return a new, evidence-free vertex or edge data object of the same type as `data`
+(the k-mer label is kept for vertex data).
+"""
+_empty_evidence_data(data::KmerVertexData)::KmerVertexData = KmerVertexData(data.Kmer)
+function _empty_evidence_data(data::QualmerVertexData)::QualmerVertexData
+    return QualmerVertexData(data.Kmer)
+end
+_empty_evidence_data(::KmerEdgeData)::KmerEdgeData = KmerEdgeData()
+_empty_evidence_data(::QualmerEdgeData)::QualmerEdgeData = QualmerEdgeData()
+
+"""
+    _copy_evidence_data(data)
+
+Structural copy of full-evidence vertex or edge data: every mutable evidence
+container (the dataset `Dict`, observation `Dict`, and evidence `Set`) is new,
+while the evidence entries themselves are shared. Entries are immutable structs
+whose quality vectors are never mutated after construction, so for callers that
+only add evidence to the copy this is equivalent to `deepcopy` without
+duplicating the quality vectors.
+"""
+function _copy_evidence_data(
+        data::T
+)::T where {T <: Union{KmerVertexData, QualmerVertexData, KmerEdgeData, QualmerEdgeData}}
+    dest = _empty_evidence_data(data)
+    for (dataset_id, observations) in data.evidence
+        observations_copy = sizehint!(empty(observations), length(observations))
+        for (obs_id, evidence_set) in observations
+            observations_copy[obs_id] = copy(evidence_set)
+        end
+        dest.evidence[dataset_id] = observations_copy
+    end
+    return dest
+end
+
+"""
     convert_to_doublestrand(singlestrand_graph)
 
 Convert a singlestrand graph to doublestrand representation.
 
 Replicates all vertices and edges in both forward and reverse complement orientations.
 Creates a DIRECTED graph with 2x vertices and 2x directed edges.
+
+Every observation is recorded on both strands: the reverse-complement vertex
+(or edge `rc(dst) → rc(src)`) receives the strand-flipped evidence of its
+forward image, and when that reverse-complement vertex or edge was itself
+observed, the two contributions are summed. An observation that is its own
+reverse complement — a palindromic k-mer (`rc(kmer) == kmer`) or a
+self-reverse-complement edge (`dst == rc(src)`) — therefore counts twice,
+matching `convert_to_canonical`. The input graph is not modified: forward
+evidence containers are copied, while the immutable evidence entries are shared.
 
 # Arguments
 - `singlestrand_graph`: Graph with strand-specific k-mers
@@ -1013,10 +1059,10 @@ function convert_to_doublestrand(singlestrand_graph)
         weight_function = compute_edge_weight
     )
 
-    # Add all forward vertices as independent copies, so merging
+    # Add all forward vertices with copied evidence containers, so merging
     # reverse-complement evidence below never mutates the input graph.
     for kmer in MetaGraphsNext.labels(singlestrand_graph)
-        doublestrand_graph[kmer] = deepcopy(singlestrand_graph[kmer])
+        doublestrand_graph[kmer] = _copy_evidence_data(singlestrand_graph[kmer])
     end
 
     # Add the reverse-complement image of every vertex's evidence. Evidence is
@@ -1048,10 +1094,11 @@ function convert_to_doublestrand(singlestrand_graph)
         end
     end
 
-    # Add all forward edges as independent copies
+    # Add all forward edges with copied evidence containers
     for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
-        forward_edge_data = singlestrand_graph[src_kmer, dst_kmer]
-        doublestrand_graph[src_kmer, dst_kmer] = deepcopy(forward_edge_data)
+        doublestrand_graph[src_kmer, dst_kmer] = _copy_evidence_data(
+            singlestrand_graph[src_kmer, dst_kmer]
+        )
     end
 
     # Add all reverse complement edges (with REVERSED direction), merging into
@@ -3223,7 +3270,13 @@ end
     _convert_to_doublestrand_reduced(singlestrand_graph)
 
 Convert a singlestrand reduced-type graph to doublestrand representation.
-Purely topological: creates RC vertices with copied counts, no evidence iteration.
+Count-based: no per-observation evidence is iterated. Each reverse-complement
+vertex or edge (`rc(dst) → rc(src)`) receives a copy of its forward image's
+counts (quality vectors reversed / swapped); when the reverse-complement vertex
+or edge was itself observed, the counts are summed. A palindromic k-mer or a
+self-reverse-complement edge (`dst == rc(src)`) therefore counts twice, matching
+`convert_to_doublestrand` on full-evidence graphs. The input graph is not
+modified: forward data is copied before any merge.
 """
 function _convert_to_doublestrand_reduced(singlestrand_graph)
     first_label = first(MetaGraphsNext.labels(singlestrand_graph))
