@@ -3267,15 +3267,13 @@ function _convert_to_doublestrand_reduced(singlestrand_graph)
     for kmer in MetaGraphsNext.labels(singlestrand_graph)
         rc_kmer = BioSequences.reverse_complement(kmer)
 
-        # Skip palindromes
-        if rc_kmer == kmer
-            continue
-        end
-
         vertex_data = singlestrand_graph[kmer]
 
         if haskey(doublestrand_graph, rc_kmer)
-            # RC already exists (was observed forward) — merge data
+            # RC already exists (observed forward, or a palindromic k-mer that
+            # is its own reverse complement) — merge data. A palindrome thus
+            # counts on both strands (coverage 2x), matching the full-evidence
+            # path and the self-RC edge rule below.
             _merge_reduced_vertex_into!(
                 doublestrand_graph[rc_kmer], vertex_data;
                 reverse_quality = true
@@ -3384,12 +3382,15 @@ function _convert_to_canonical_reduced(singlestrand_graph)
             reverse_quality = (kmer != canon_kmer)
         )
 
-        # Merge RC data if it exists in source graph
-        if rc_kmer != kmer && haskey(singlestrand_graph, rc_kmer)
+        # Merge RC data if it exists in source graph. A palindromic k-mer
+        # (rc_kmer == kmer) is its own reverse complement, so its data is
+        # merged a second time: every observation is also an observation of
+        # the reverse strand (coverage 2x), matching the full-evidence path.
+        if haskey(singlestrand_graph, rc_kmer)
             rc_data = singlestrand_graph[rc_kmer]
             _merge_reduced_vertex_into!(
                 canonical_graph[canon_kmer], rc_data;
-                reverse_quality = (rc_kmer != canon_kmer)
+                reverse_quality = (rc_kmer != canon_kmer || rc_kmer == kmer)
             )
         end
     end
@@ -3407,6 +3408,17 @@ function _convert_to_canonical_reduced(singlestrand_graph)
         else
             _merge_reduced_edge_into!(
                 canonical_graph[canon_src, canon_dst], edge_data
+            )
+        end
+
+        # A self-reverse-complement edge (dst == rc(src)) is its own
+        # reverse-complement image, so it is merged a second time with the
+        # quality swapped: the canonical self-loop weight is 2x, matching the
+        # palindromic-vertex rule above and the full-evidence path.
+        if dst_kmer == BioSequences.reverse_complement(src_kmer)
+            _merge_reduced_edge_into!(
+                canonical_graph[canon_src, canon_dst], edge_data;
+                swap_quality = true
             )
         end
     end
