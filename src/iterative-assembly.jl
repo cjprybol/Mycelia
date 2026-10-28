@@ -453,6 +453,8 @@ const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
         :frontier_metric_sample_limit,
         :raw_frontier_evaluated,
         :cleaned_frontier_evaluated,
+        # Legacy name: the pass retained a window-source map; it does not mean
+        # any read was windowed (td-4mbg, `_frontier_decode_route`).
         :bounded_windowing_forced,
         :substitution_decode_memory_gated,
         :raw_frontier_metrics,
@@ -4409,24 +4411,36 @@ end
     _frontier_decode_route(read, k, use_windowed, force_indel_windowing,
         indel_params, read_window_sources) -> (windowed::Bool, indel_params)
 
-Per-read decode route for `improve_read_set_likelihood` (td-4mbg fix 1).
+Per-read decode route for `improve_read_set_likelihood` (td-4mbg).
 
 A `:frontier_budgeted` pass forces bounded windowing (`force_indel_windowing`)
-whenever its window-source map is non-empty, but the map also keeps reads whose
+whenever its window-source map is non-empty, and the map also keeps reads whose
 every window was DEMOTED to `:substitution`. Forcing those reads into windows
-gains nothing, because no window runs the pair-HMM, and it costs corrections: a
-short read the `:illumina` arm decodes whole is instead decoded window by
-window, where the length-preserving kernel fails open far more often (td-4mbg
-measured 164 `substitution_length_divergences` vs 0 at 6000/1200/20x/err 0.01).
+gains nothing, because no window runs the pair-HMM, and it changes how a SHORT
+read is decoded: a read with n_obs <= `_AUTO_BEAM_EXACT_THRESHOLD`, which the
+`:illumina` arm decodes whole, was instead decoded only inside its truncated
+hard windows. What that costs in corrections has not been measured yet; the
+td-2rxh 1000 bp cells are the first measurement where this route differs.
+Long reads are unaffected, so td-4mbg's divergence counts from 1200 bp reads
+(164 before #450, 108 after) do not bear on this change.
 
-So a read with a map entry but no admitted window takes the route the
-substitution-only arm takes: windowed only if it is long, otherwise whole-read
-with `indel_params = nothing`. The `nothing` matters: in a partially admitted
-pass `indel_params` is non-`nothing`, and passing it to the whole-read decode
-would run an unbounded whole-read pair-HMM on a read the scheduler rejected.
+A read with a map entry but no admitted window therefore takes the route the
+substitution-only arm takes: windowed if the hard-window gate is active and the
+read is long, otherwise whole-read with `indel_params = nothing`. The `nothing`
+matters in a partially admitted pass, where `indel_params` is non-`nothing` and
+would otherwise run an unbounded whole-read pair-HMM on a read the scheduler
+rejected. A long demoted read keeps the pass params; the windowed decode then
+derives its substitution-only behaviour from the source map, so they pass
+through unused.
 
-Every other read keeps its previous route, including a read with no map entry
-under a forced pass.
+Every other read keeps its previous route. That includes a read with no map
+entry under a forced pass: the scheduler omits only reads with no hard window of
+at least `k` bases, so the windowed decode has nothing to decode for it.
+
+Every source symbol is validated here, because a short demoted read never
+reaches `improve_read_likelihood_windowed_detail`, the only other place
+`_validate_indel_window_sources` runs. Without this, a misspelled source would
+count as "not admitted" and be decoded silently as substitution.
 """
 function _frontier_decode_route(
         read::FASTX.FASTQ.Record,
@@ -4437,6 +4451,13 @@ function _frontier_decode_route(
         read_window_sources::Union{
             Nothing, AbstractDict{UnitRange{Int}, Symbol}},
 )
+    if read_window_sources !== nothing
+        for (window, source) in read_window_sources
+            source in _VALID_INDEL_WINDOW_SOURCES || throw(ArgumentError(
+                "invalid indel window source :$source for $window; expected one of " *
+                join(string.(_VALID_INDEL_WINDOW_SOURCES), ", ")))
+        end
+    end
     demoted = force_indel_windowing && read_window_sources !== nothing &&
               !_read_runs_indel_decode(indel_params, read_window_sources)
     windowed = use_windowed &&
@@ -5389,10 +5410,11 @@ function _improve_read_set_likelihood_impl(
             :weighted_graph_out_of_memory,
             :cleaning_out_of_memory,
         )
-        # Retain the full map even when every pair-HMM window is rejected. A read
-        # whose entries are all :substitution is NOT forced into windows by it
-        # (`_frontier_decode_route`, td-4mbg); this flag records only that the
-        # pass retained a map.
+        # Retain the full map even when every pair-HMM window is rejected.
+        # `bounded_windowing_forced` is a legacy name kept for checkpoint
+        # compatibility: it means the pass retained a window-source map, NOT that
+        # any read was windowed. Since td-4mbg a short read whose entries are all
+        # :substitution is decoded whole (`_frontier_decode_route`).
         scheduled_window_sources = decision.window_sources
         pass_indel_telemetry[:bounded_windowing_forced] =
             !isempty(scheduled_window_sources)
@@ -5436,8 +5458,9 @@ function _improve_read_set_likelihood_impl(
     needs_raw_weighted_graph = isempty(scheduled_sources) ||
                                :raw in scheduled_sources ||
                                :substitution in scheduled_sources
-    # A fully rejected frontier schedule still promises bounded substitution
-    # fallback, which needs one raw weighted copy. Honor the configured memory
+    # A fully rejected frontier schedule still needs a substitution fallback
+    # (bounded windows for long reads, whole-read for short ones since td-4mbg),
+    # which needs one raw weighted copy. Honor the configured memory
     # ceiling before allocating it. Explicit :unrestricted semantics and the
     # profile-disabled legacy path bypass this scheduler-specific gate.
     substitution_memory_gated =
