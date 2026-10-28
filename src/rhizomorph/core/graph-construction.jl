@@ -1013,94 +1013,75 @@ function convert_to_doublestrand(singlestrand_graph)
         weight_function = compute_edge_weight
     )
 
-    # Add all forward vertices
+    # Add all forward vertices as independent copies, so merging
+    # reverse-complement evidence below never mutates the input graph.
     for kmer in MetaGraphsNext.labels(singlestrand_graph)
-        doublestrand_graph[kmer] = singlestrand_graph[kmer]
+        doublestrand_graph[kmer] = deepcopy(singlestrand_graph[kmer])
     end
 
-    # Add all reverse complement vertices (merging evidence if RC already exists)
+    # Add the reverse-complement image of every vertex's evidence. Evidence is
+    # read from the unmodified input graph, so each forward observation is
+    # flipped exactly once. A palindromic k-mer (rc == kmer) receives its own
+    # flipped evidence: it is observed on both strands, so its coverage is 2x.
     for kmer in MetaGraphsNext.labels(singlestrand_graph)
         rc_kmer = BioSequences.reverse_complement(kmer)
-
-        # Skip if RC is same as forward (palindrome) - already added
-        if rc_kmer == kmer
-            continue
-        end
-
-        # Get the forward vertex data to flip
         vertex_data = singlestrand_graph[kmer]
 
-        # Check if RC vertex already exists (it may have been in the original graph)
-        if haskey(doublestrand_graph, rc_kmer)
-            # RC vertex exists - merge flipped evidence into existing vertex
-            existing_rc_vertex = doublestrand_graph[rc_kmer]
-            for (dataset_id, observations) in vertex_data.evidence
-                for (obs_id, evidence_set) in observations
-                    for evidence in evidence_set
-                        flipped_evidence = flip_evidence_strand(evidence)
-                        add_evidence!(existing_rc_vertex, dataset_id, obs_id, flipped_evidence)
-                    end
-                end
-            end
-        else
-            # RC vertex doesn't exist - create new one
-            rc_vertex_data = if VertexDataType <: KmerVertexData
+        if !haskey(doublestrand_graph, rc_kmer)
+            doublestrand_graph[rc_kmer] = if VertexDataType <: KmerVertexData
                 KmerVertexData(rc_kmer)
             elseif VertexDataType <: QualmerVertexData
                 QualmerVertexData(rc_kmer)
             else
                 error("Unsupported vertex data type: $(VertexDataType)")
             end
+        end
+        rc_vertex_data = doublestrand_graph[rc_kmer]
 
-            # Copy and flip all evidence from forward to RC
-            for (dataset_id, observations) in vertex_data.evidence
-                for (obs_id, evidence_set) in observations
-                    for evidence in evidence_set
-                        flipped_evidence = flip_evidence_strand(evidence)
-                        add_evidence!(rc_vertex_data, dataset_id, obs_id, flipped_evidence)
-                    end
+        for (dataset_id, observations) in vertex_data.evidence
+            for (obs_id, evidence_set) in observations
+                for evidence in evidence_set
+                    add_evidence!(rc_vertex_data, dataset_id, obs_id,
+                        flip_evidence_strand(evidence))
                 end
             end
-
-            doublestrand_graph[rc_kmer] = rc_vertex_data
         end
     end
 
-    # Add all forward edges
+    # Add all forward edges as independent copies
     for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
-        doublestrand_graph[src_kmer, dst_kmer] = singlestrand_graph[src_kmer, dst_kmer]
+        doublestrand_graph[src_kmer, dst_kmer] = deepcopy(singlestrand_graph[
+        src_kmer, dst_kmer])
     end
 
-    # Add all reverse complement edges (with reversed direction!)
+    # Add all reverse complement edges (with REVERSED direction), merging into
+    # the existing edge when the RC edge was itself observed or is the same
+    # edge (self-reverse-complement edge, dst == rc(src): weight becomes 2x).
     for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
         # RC edge: reverse_complement(dst) → reverse_complement(src)
-        # Note the REVERSED direction!
         rc_src = BioSequences.reverse_complement(dst_kmer)
         rc_dst = BioSequences.reverse_complement(src_kmer)
-
-        # Create RC edge with flipped evidence
         edge_data = singlestrand_graph[src_kmer, dst_kmer]
 
-        # Create new edge data for RC
-        rc_edge_data = if EdgeDataType <: KmerEdgeData
-            KmerEdgeData()
-        elseif EdgeDataType <: QualmerEdgeData
-            QualmerEdgeData()
-        else
-            error("Unsupported edge data type: $(EdgeDataType)")
+        if !haskey(doublestrand_graph, rc_src, rc_dst)
+            doublestrand_graph[rc_src, rc_dst] = if EdgeDataType <: KmerEdgeData
+                KmerEdgeData()
+            elseif EdgeDataType <: QualmerEdgeData
+                QualmerEdgeData()
+            else
+                error("Unsupported edge data type: $(EdgeDataType)")
+            end
         end
+        rc_edge_data = doublestrand_graph[rc_src, rc_dst]
 
-        # Copy and flip all evidence from forward edge to RC edge
         for (dataset_id, observations) in edge_data.evidence
             for (obs_id, evidence_set) in observations
                 for evidence in evidence_set
-                    flipped_evidence = flip_evidence_strand(evidence)
-                    add_evidence!(rc_edge_data, dataset_id, obs_id, flipped_evidence)
+                    add_evidence!(rc_edge_data, dataset_id, obs_id,
+                        flip_evidence_strand(evidence))
                 end
             end
         end
-
-        doublestrand_graph[rc_src, rc_dst] = rc_edge_data
     end
 
     return doublestrand_graph
