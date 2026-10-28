@@ -163,12 +163,13 @@ with options to choose either fold coverage (`--fcov`) or an absolute read count
 to enable amplicon mode, and to optionally generate a zero-error SAM file.
 
 # Arguments
-- `in_fasta::String`: Path to the input FASTA file.
+- `fasta::String`: Path to the input FASTA file.
 - `coverage::Union{Nothing,Number}`: Desired fold coverage (used with `--fcov`); if `nothing`
-  and `read_count` is provided then fold coverage is ignored. (Default: 20)
+  and `read_count` is provided then fold coverage is ignored. (Default: `nothing`)
 - `read_count::Union{Nothing,Number}`: Total number of reads (or read pairs) to generate
   (used with `--rcount` instead of fold coverage). (Default: `nothing`)
-- `outbase::String`: Output file prefix (default: "\$(in_fasta).art.\$(coverage)x.").
+- `outbase::String`: Output file prefix (default: `""`). When empty, auto-set to
+  `"\$(fasta).fcov_\$(coverage)x.art"` or `"\$(fasta).rcount_\$(read_count).art"`.
 - `read_length::Int`: Length of reads to simulate (default: 150).
 - `mflen::Int`: Mean fragment length for paired-end simulations (default: 500).
 - `sdev::Int`: Standard deviation of fragment lengths (default: 10).
@@ -188,6 +189,7 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 - `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
 - `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
 - `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
+- `quiet::Bool`: Suppress Bioconda/ART provisioning chatter (default: `true`).
 
 # Outputs
 Generates gzipped FASTQ files in the working directory:
