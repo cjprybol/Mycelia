@@ -30,12 +30,26 @@ Test.@testset "StrandOracle self-test (hand-derived expectations)" begin
 
         v, _ = StrandOracle.doublestrand_expected(["ACGT"], 4)
         Test.@test v == Dict("ACGT" => 2)
+
+        # Self-reverse-complement edge ACG -> CGT (rc(ACG) == CGT): its
+        # reverse-complement image is itself, so it counts twice.
+        Test.@test StrandOracle.doublestrand_expected(["ACGT"], 3) ==
+                   (Dict("ACG" => 2, "CGT" => 2), Dict(("ACG", "CGT") => 2))
     end
 
     Test.@testset "canonical_expected" begin
         v, e = StrandOracle.canonical_expected(["AAC"], 2)
         Test.@test v == Dict("AA" => 1, "AC" => 1)
         Test.@test e == Dict(("AA", "AC") => 1)
+
+        # k-mers ACG and CGT both canonicalize to ACG; the edge ACG -> CGT is
+        # self-reverse-complement, so the self-loop counts on both strands.
+        Test.@test StrandOracle.canonical_expected(["ACGT"], 3) ==
+                   (Dict("ACG" => 2), Dict(("ACG", "ACG") => 2))
+
+        # Palindromic k-mer ACGT at k = 4 counts on both strands.
+        v, _ = StrandOracle.canonical_expected(["ACGT"], 4)
+        Test.@test v == Dict("ACGT" => 2)
     end
 
     Test.@testset "random_non_rc_closed" begin

@@ -13,7 +13,11 @@
 #   Canonical (undirected): canon(x) = min(x, rc(x)); coverage(c) = fwd(c) +
 #     fwd(rc(c)) (palindromes: 2*fwd(c)); edges are sorted pairs
 #     (canon(a), canon(b)) with weights summed over forward edges; self-loops
-#     are allowed and a self-RC edge keeps weight fwdE(a,b).
+#     are allowed and a self-RC edge (b == rc(a)) has weight 2*fwdE(a,b).
+#
+# One convention for both modes: an observation that is its own reverse
+# complement (a palindromic k-mer, or a self-RC edge) counts twice, once per
+# strand, for vertices and edges alike.
 
 module StrandOracle
 
@@ -96,6 +100,11 @@ end
 
 Expected undirected canonical graph. Edge keys are sorted pairs `(min, max)`
 of canonical k-mers. Returns `(vertex_counts, edge_counts)`.
+
+Observations that are their own reverse complement are counted on both
+strands: a palindromic k-mer `x` (`rc(x) == x`) contributes `2 * fwd(x)` to its
+vertex, and a self-reverse-complement edge `(a, b)` with `b == rc(a)`
+contributes `2 * fwdE(a, b)` to the self-loop `(canon(a), canon(a))`.
 """
 function canonical_expected(seqs::Vector{String},
         k::Int)::Tuple{
@@ -105,13 +114,15 @@ function canonical_expected(seqs::Vector{String},
     edges = Dict{Tuple{String, String}, Int}()
     for (x, c) in fv
         cx = canon(x)
-        vertices[cx] = get(vertices, cx, 0) + c
+        multiplicity = revcomp(x) == x ? 2 : 1
+        vertices[cx] = get(vertices, cx, 0) + multiplicity * c
     end
     for ((a, b), c) in fe
         ca = canon(a)
         cb = canon(b)
         key = ca <= cb ? (ca, cb) : (cb, ca)
-        edges[key] = get(edges, key, 0) + c
+        multiplicity = b == revcomp(a) ? 2 : 1
+        edges[key] = get(edges, key, 0) + multiplicity * c
     end
     return vertices, edges
 end

@@ -12,12 +12,12 @@
 # `StrandOracle.doublestrand_expected`, which is computed with plain String
 # operations only.
 #
-# Self-reverse-complement edges (b == rc(a), e.g. ACG -> CGT) are counted twice
-# here: the forward observation and its reverse-complement image land on the
-# same directed edge, so its weight is 2 * fwdE(a, b). In the canonical
-# (undirected) oracle the same edge keeps weight fwdE(a, b), because the
-# canonical graph records each forward observation once. Palindromic k-mers are
-# likewise counted on both strands here (coverage 2 * fwd(x)).
+# One convention for both strand modes: an observation that is its own reverse
+# complement counts twice, once per strand. A self-reverse-complement edge
+# (b == rc(a), e.g. ACG -> CGT) has weight 2 * fwdE(a, b), because the forward
+# observation and its reverse-complement image land on the same directed edge,
+# and a palindromic k-mer has coverage 2 * fwd(x). The canonical oracle applies
+# the same rule to the self-loop (canon(a), canon(a)) and to palindromes.
 
 import Test
 import Random
