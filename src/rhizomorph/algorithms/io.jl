@@ -350,7 +350,7 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
         m = match(Regex("\\d+"), s)
         isnothing(m) && return 0
         try
-            return parse(Int, m.captures[1])
+            return parse(Int, m.match)
         catch
             return 0
         end
@@ -535,7 +535,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
         m = match(Regex("\\d+"), s)
         isnothing(m) && return 0
         try
-            return parse(Int, m.captures[1])
+            return parse(Int, m.match)
         catch
             return 0
         end
