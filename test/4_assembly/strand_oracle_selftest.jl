@@ -1,0 +1,48 @@
+# Self-test for the brute-force strand-mode oracle.
+# From the Mycelia base directory, run with:
+#
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/strand_oracle_selftest.jl")'
+# ```
+
+import Test
+import Random
+
+include(joinpath(@__DIR__, "strand_oracle.jl"))
+
+Test.@testset "StrandOracle self-test (hand-derived expectations)" begin
+    Test.@testset "fwd_counts" begin
+        v, e = StrandOracle.fwd_counts(["ACGTA"], 3)
+        Test.@test v == Dict("ACG" => 1, "CGT" => 1, "GTA" => 1)
+        Test.@test e == Dict(("ACG", "CGT") => 1, ("CGT", "GTA") => 1)
+    end
+
+    Test.@testset "revcomp and canon" begin
+        Test.@test StrandOracle.revcomp("ACCGT") == "ACGGT"
+        Test.@test StrandOracle.canon("TAC") == "GTA"
+        Test.@test StrandOracle.canon("ACG") == "ACG"
+    end
+
+    Test.@testset "doublestrand_expected" begin
+        v, e = StrandOracle.doublestrand_expected(["AAC"], 2)
+        Test.@test v == Dict("AA" => 1, "AC" => 1, "TT" => 1, "GT" => 1)
+        Test.@test e == Dict(("AA", "AC") => 1, ("GT", "TT") => 1)
+
+        v, _ = StrandOracle.doublestrand_expected(["ACGT"], 4)
+        Test.@test v == Dict("ACGT" => 2)
+    end
+
+    Test.@testset "canonical_expected" begin
+        v, e = StrandOracle.canonical_expected(["AAC"], 2)
+        Test.@test v == Dict("AA" => 1, "AC" => 1)
+        Test.@test e == Dict(("AA", "AC") => 1)
+    end
+
+    Test.@testset "random_non_rc_closed" begin
+        s = StrandOracle.random_non_rc_closed(Random.MersenneTwister(1), 30, 5)
+        Test.@test length(s) == 30
+        kmers, _ = StrandOracle.fwd_counts([s], 5)
+        S = Set(keys(kmers))
+        Test.@test any(x -> !(StrandOracle.revcomp(x) in S), S)
+    end
+end
