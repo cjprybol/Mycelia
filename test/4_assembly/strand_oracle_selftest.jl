@@ -8,7 +8,9 @@
 import Test
 import Random
 
-include(joinpath(@__DIR__, "strand_oracle.jl"))
+if !isdefined(Main, :StrandOracle)
+    include(joinpath(@__DIR__, "strand_oracle.jl"))
+end
 
 Test.@testset "StrandOracle self-test (hand-derived expectations)" begin
     Test.@testset "fwd_counts" begin

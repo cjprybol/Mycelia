@@ -32,7 +32,8 @@ function canonical_oracle_records(seqs::Vector{String})::Vector{FASTX.FASTA.Reco
     return [FASTX.FASTA.Record("oracle_read_$(i)", seq) for (i, seq) in enumerate(seqs)]
 end
 
-function build_canonical_oracle_graph(seqs::Vector{String}, k::Int)
+function build_canonical_oracle_graph(
+        seqs::Vector{String}, k::Int)::MetaGraphsNext.MetaGraph
     return Mycelia.Rhizomorph.build_kmer_graph(canonical_oracle_records(seqs), k;
         mode = :canonical)
 end
@@ -55,7 +56,8 @@ function test_canonical_oracle(seqs::Vector{String}, k::Int)::Nothing
     return nothing
 end
 
-function canonical_evidence_snapshot(graph)::Tuple{Dict, Dict}
+function canonical_evidence_snapshot(graph::MetaGraphsNext.MetaGraph)::Tuple{
+        Dict{String}, Dict{Tuple{String, String}}}
     vertex_evidence = Dict(string(label) => deepcopy(graph[label].evidence)
     for label in MetaGraphsNext.labels(graph))
     edge_evidence = Dict((string(src), string(dst)) => deepcopy(graph[src, dst].evidence)
@@ -63,7 +65,8 @@ function canonical_evidence_snapshot(graph)::Tuple{Dict, Dict}
     return vertex_evidence, edge_evidence
 end
 
-function unordered_label_pairs(graph)::Set{Tuple{String, String}}
+function unordered_label_pairs(
+        graph::MetaGraphsNext.MetaGraph)::Set{Tuple{String, String}}
     pairs = Set{Tuple{String, String}}()
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         s = string(src)
@@ -118,26 +121,31 @@ Test.@testset "Canonical k-mer graph matches brute-force oracle" begin
 
     Test.@testset "phiX174 reference" begin
         genome_info = Mycelia.get_test_genome_fasta(use_ncbi = true)
-        if genome_info.source != :ncbi
-            @warn "phiX174 download unavailable; got $(genome_info.source) genome, marking broken"
-            Test.@test_broken genome_info.source == :ncbi
-        else
-            seqs = String[]
-            for record in Mycelia.open_fastx(genome_info.fasta)
-                push!(seqs, uppercase(String(FASTX.sequence(record))))
+        try
+            if genome_info.source != :ncbi
+                @warn "phiX174 download unavailable; got $(genome_info.source) genome, marking broken"
+                Test.@test_broken genome_info.source == :ncbi
+            else
+                seqs = String[]
+                for record in Mycelia.open_fastx(genome_info.fasta)
+                    push!(seqs, uppercase(String(FASTX.sequence(record))))
+                end
+                Test.@test length(seqs) == 1
+                Test.@test all(seq -> all(c -> c in "ACGT", seq), seqs)
+                for k in (11, 21)
+                    test_canonical_oracle(seqs, k)
+                end
             end
-            Test.@test length(seqs) == 1
-            Test.@test all(seq -> all(c -> c in "ACGT", seq), seqs)
-            for k in (11, 21)
-                test_canonical_oracle(seqs, k)
-            end
+        finally
+            genome_info.cleanup()
         end
-        genome_info.cleanup()
     end
 
     Test.@testset "input single-strand graph is not mutated" begin
-        for seqs in (["ACCGTA", "TACGGT"], ["AACGTT"])
-            ss = Mycelia.Rhizomorph.build_kmer_graph(canonical_oracle_records(seqs), 3;
+        # (["AACGTT"], 4) has the palindromic k-mer ACGT, exercising the
+        # palindrome merge branch.
+        for (seqs, k) in ((["ACCGTA", "TACGGT"], 3), (["AACGTT"], 3), (["AACGTT"], 4))
+            ss = Mycelia.Rhizomorph.build_kmer_graph(canonical_oracle_records(seqs), k;
                 mode = :singlestrand)
             counts_before = StrandOracle.graph_counts(ss; undirected = false)
             evidence_before = canonical_evidence_snapshot(ss)

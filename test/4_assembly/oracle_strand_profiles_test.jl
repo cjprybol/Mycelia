@@ -89,7 +89,8 @@ function reduced_data_snapshot(data)::Vector{Any}
     return Any[deepcopy(getfield(data, name)) for name in fieldnames(typeof(data))]
 end
 
-function reduced_graph_snapshot(graph)::Tuple{Dict, Dict}
+function reduced_graph_snapshot(graph::MetaGraphsNext.MetaGraph)::Tuple{
+        Dict{String, Vector{Any}}, Dict{Tuple{String, String}, Vector{Any}}}
     vertex_data = Dict(string(label) => reduced_data_snapshot(graph[label])
     for label in MetaGraphsNext.labels(graph))
     edge_data = Dict((string(src), string(dst)) => reduced_data_snapshot(graph[src, dst])
@@ -130,8 +131,11 @@ Test.@testset "Reduced memory profiles match brute-force strand oracle" begin
 
     for profile in PROFILE_ORACLE_PROFILES
         Test.@testset "$(profile): input single-strand graph is not mutated" begin
-            for seqs in (["ACCGTA", "TACGGT"], ["AACGTT"])
-                ss = Mycelia.Rhizomorph.build_kmer_graph(profile_oracle_records(seqs), 3;
+            # (["AACGTT"], 4) has the palindromic k-mer ACGT, which merges into
+            # its own destination copy (palindrome self-merge).
+            for (seqs, k) in ((["ACCGTA", "TACGGT"], 3), (["AACGTT"], 3),
+                (["AACGTT"], 4))
+                ss = Mycelia.Rhizomorph.build_kmer_graph(profile_oracle_records(seqs), k;
                     mode = :singlestrand, memory_profile = profile)
                 counts_before = StrandOracle.graph_counts(ss; undirected = false)
                 data_before = reduced_graph_snapshot(ss)
