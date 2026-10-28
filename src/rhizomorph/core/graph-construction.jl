@@ -1050,8 +1050,8 @@ function convert_to_doublestrand(singlestrand_graph)
 
     # Add all forward edges as independent copies
     for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
-        doublestrand_graph[src_kmer, dst_kmer] = deepcopy(singlestrand_graph[
-        src_kmer, dst_kmer])
+        forward_edge_data = singlestrand_graph[src_kmer, dst_kmer]
+        doublestrand_graph[src_kmer, dst_kmer] = deepcopy(forward_edge_data)
     end
 
     # Add all reverse complement edges (with REVERSED direction), merging into
