@@ -1,7 +1,7 @@
 # td-4mbg: a frontier schedule whose windows were ALL demoted to `:substitution`
 # must decode with the SUBSTITUTION window partition, not the indel one.
-# (Since the later routing change, a SHORT fully demoted read is not windowed at
-# all; see the final testset and `_frontier_decode_route`.)
+# A SHORT fully demoted read is not windowed at all; the final testset pins that
+# route (`_frontier_decode_route`).
 #
 # Under `indel_schedule = :frontier_budgeted` the scheduler evaluates candidate
 # indel windows and demotes the rejected ones to `:substitution`, but it still
@@ -290,47 +290,58 @@ Test.@testset "td-4mbg: route fully demoted reads like the substitution-only arm
     changed = route(short, true, true, params, demoted)
     Test.@test !changed.windowed
     Test.@test changed.indel_params === nothing
+    Test.@test changed.demoted_whole_read
     # Same when the pass was wholly rejected (params already nulled).
     Test.@test route(short, true, true, nothing, demoted) ==
-               (windowed = false, indel_params = nothing)
+               (windowed = false, indel_params = nothing,
+                demoted_whole_read = true)
     # An empty per-read map counts as demoted: it has no admitted window. The
     # scheduler is not known to emit one; pinned so the helper is total.
     Test.@test route(short, true, true, params,
-        Dict{UnitRange{Int}, Symbol}()) == (windowed = false, indel_params = nothing)
+        Dict{UnitRange{Int}, Symbol}()) == (windowed = false, indel_params = nothing,
+                demoted_whole_read = true)
 
     # A fully demoted LONG read is still windowed, as on the :illumina arm. Its
     # params pass through unused: inside the windowed decode the source map alone
     # selects the substitution partition and per-window kernel, so nothing can
     # observe this value (passing `nothing` instead is behaviourally identical).
     Test.@test route(long, true, true, params, demoted) ==
-               (windowed = true, indel_params = params)
+               (windowed = true, indel_params = params,
+                demoted_whole_read = false)
 
     # Unchanged routes. One admitted window keeps the forced windowing.
     Test.@test route(short, true, true, params, with_raw) ==
-               (windowed = true, indel_params = params)
+               (windowed = true, indel_params = params,
+                demoted_whole_read = false)
     # A read with no map entry under a forced pass keeps its previous route.
     Test.@test route(short, true, true, params, nothing) ==
-               (windowed = true, indel_params = params)
+               (windowed = true, indel_params = params,
+                demoted_whole_read = false)
     # No forced windowing (any non-frontier pass): length alone decides, and the
     # params pass through untouched.
     Test.@test route(short, true, false, params, nothing) ==
-               (windowed = false, indel_params = params)
+               (windowed = false, indel_params = params,
+                demoted_whole_read = false)
     Test.@test route(long, true, false, params, nothing) ==
-               (windowed = true, indel_params = params)
+               (windowed = true, indel_params = params,
+                demoted_whole_read = false)
     Test.@test route(short, true, false, nothing, nothing) ==
-               (windowed = false, indel_params = nothing)
+               (windowed = false, indel_params = nothing,
+                demoted_whole_read = false)
     # Unreachable from `_improve_read_set_likelihood_impl`: a map exists only
     # when `windowed_decode && hard_vertices !== nothing`, so a forced pass
     # always has `use_windowed`. Pinned so the helper is total.
     Test.@test route(long, false, true, params, demoted) ==
-               (windowed = false, indel_params = nothing)
+               (windowed = false, indel_params = nothing,
+                demoted_whole_read = true)
     Test.@test route(long, false, true, params, with_raw) ==
-               (windowed = false, indel_params = params)
+               (windowed = false, indel_params = params,
+                demoted_whole_read = false)
 
     # Every source symbol is validated before routing. A short demoted read never
     # reaches the windowed decode, which was the only other validation site, so
     # without this a misspelled source would count as "not admitted" and decode
-    # silently as substitution (round-1 review).
+    # silently as substitution.
     bogus = Dict{UnitRange{Int}, Symbol}(1:100 => :substitution, 90:200 => :clean)
     Test.@test_throws r"invalid indel window source :clean" route(
         short, true, true, params, bogus)

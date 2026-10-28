@@ -805,9 +805,9 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
     # the frontier-budgeted schedule must still retain its rejected substitution
     # windows, and the pass reports `bounded_windowing_forced`. The read itself
     # would NOT be forced into windows (`_frontier_decode_route`, td-4mbg; pinned
-    # in indel_frontier_route_entry_test.jl, not here). Anchored overlaps require three windows;
-    # the fully branching graph makes every one unaffordable without relying on
-    # correction accuracy.
+    # in indel_frontier_route_entry_test.jl, not here). Anchored overlaps
+    # require three windows; the fully branching graph makes every one
+    # unaffordable without relying on correction accuracy.
     short_sequence = first(
         repeat(branch_cycle, cld(1_000, length(branch_cycle))), 1_000)
     short_read = indel_classifier_fastq("all_rejected_short", short_sequence)

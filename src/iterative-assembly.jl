@@ -4409,33 +4409,31 @@ end
 
 """
     _frontier_decode_route(read, k, use_windowed, force_indel_windowing,
-        indel_params, read_window_sources) -> (windowed::Bool, indel_params)
+        indel_params, read_window_sources)
+        -> (windowed::Bool, indel_params, demoted_whole_read::Bool)
 
 Per-read decode route for `improve_read_set_likelihood` (td-4mbg).
 
 A `:frontier_budgeted` pass forces bounded windowing (`force_indel_windowing`)
 whenever its window-source map is non-empty, and the map also keeps reads whose
-every window was DEMOTED to `:substitution`. Forcing those reads into windows
-gains nothing, because no window runs the pair-HMM, and it changes how a SHORT
-read is decoded: a read with n_obs <= `_AUTO_BEAM_EXACT_THRESHOLD`, which the
-`:illumina` arm decodes whole, was instead decoded only inside its truncated
-hard windows. What that costs in corrections has not been measured yet; the
-td-2rxh 1000 bp cells are the first measurement where this route differs.
-Long reads are unaffected, so td-4mbg's divergence counts from 1200 bp reads
-(164 before #450, 108 after) do not bear on this change.
+every window was DEMOTED to `:substitution`. No window of such a read runs the
+pair-HMM, so it is decoded the way the substitution-only (`:illumina`) arm
+decodes it: windowed if the hard-window gate is active and the read is long
+(n_obs > `_AUTO_BEAM_EXACT_THRESHOLD`), otherwise whole-read with
+`indel_params = nothing`. Only SHORT demoted reads therefore differ from a
+forced route; long reads are windowed either way.
 
-A read with a map entry but no admitted window therefore takes the route the
-substitution-only arm takes: windowed if the hard-window gate is active and the
-read is long, otherwise whole-read with `indel_params = nothing`. The `nothing`
-matters in a partially admitted pass, where `indel_params` is non-`nothing` and
-would otherwise run an unbounded whole-read pair-HMM on a read the scheduler
-rejected. A long demoted read keeps the pass params; the windowed decode then
-derives its substitution-only behaviour from the source map, so they pass
-through unused.
+The `nothing` matters in a partially admitted pass, where `indel_params` is
+non-`nothing` and would otherwise run an unbounded whole-read pair-HMM on a read
+the scheduler rejected. A long demoted read keeps the pass params; the windowed
+decode derives its substitution-only behaviour from the source map, so they pass
+through unused. `demoted_whole_read` is true exactly when a demoted read is
+decoded whole, and feeds `CorrectorDiagnostics.demoted_whole_read_routes`.
 
-Every other read keeps its previous route. That includes a read with no map
-entry under a forced pass: the scheduler omits only reads with no hard window of
-at least `k` bases, so the windowed decode has nothing to decode for it.
+Every other read is routed as the pass dictates. That includes a read with no
+map entry under a forced pass: the scheduler omits reads that are skipped or
+have no hard window of at least `k` bases, so the windowed decode has nothing to
+decode for it.
 
 Every source symbol is validated here, because a short demoted read never
 reaches `improve_read_likelihood_windowed_detail`, the only other place
@@ -4463,8 +4461,10 @@ function _frontier_decode_route(
     windowed = use_windowed &&
                ((force_indel_windowing && !demoted) ||
                 _windowed_decode_read_is_long(read, k))
+    demoted_whole_read = demoted && !windowed
     return (windowed = windowed,
-        indel_params = (demoted && !windowed) ? nothing : indel_params)
+        indel_params = demoted_whole_read ? nothing : indel_params,
+        demoted_whole_read = demoted_whole_read)
 end
 
 function _merge_soft_edge_weights!(
@@ -4887,6 +4887,12 @@ parallel (`@threads`) read loop increments them race-free.
   anchor owned by the following window.
 - `window_divergences` : substitution windows rejected for violating the
   length-preserving splice contract.
+- `demoted_whole_read_routes` : reads in a `:frontier_budgeted` pass whose
+  every scheduled window was demoted to `:substitution` and that were therefore
+  decoded whole, with no indel params, instead of inside forced windows
+  (`_frontier_decode_route`). Counts (read x pass) events, like the counters
+  above. A route counter, not an error: it says how many reads the routing
+  actually changed, so a downstream difference can be attributed to it.
 - `substitution_length_divergences` : substitution-mode whole-read decodes whose
   reconstruction diverged from the input length; the read FAILED OPEN to its
   original (uncorrected) sequence to keep the length-preserving contract, so it
@@ -4931,13 +4937,16 @@ mutable struct CorrectorDiagnostics
     # for improvement, so it must not be counted as "frozen"). Always 0 when
     # skip_frozen_reads=false (the default no-op path).
     frozen_reads_skipped::Threads.Atomic{Int}
+    # Reads whose scheduled windows were all demoted to :substitution and that
+    # were decoded whole instead of in forced windows (`_frontier_decode_route`).
+    demoted_whole_read_routes::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -5413,8 +5422,8 @@ function _improve_read_set_likelihood_impl(
         # Retain the full map even when every pair-HMM window is rejected.
         # `bounded_windowing_forced` is a legacy name kept for checkpoint
         # compatibility: it means the pass retained a window-source map, NOT that
-        # any read was windowed. Since td-4mbg a short read whose entries are all
-        # :substitution is decoded whole (`_frontier_decode_route`).
+        # any read was windowed: a short read whose entries are all :substitution
+        # is decoded whole (`_frontier_decode_route`).
         scheduled_window_sources = decision.window_sources
         pass_indel_telemetry[:bounded_windowing_forced] =
             !isempty(scheduled_window_sources)
@@ -5459,7 +5468,8 @@ function _improve_read_set_likelihood_impl(
                                :raw in scheduled_sources ||
                                :substitution in scheduled_sources
     # A fully rejected frontier schedule still needs a substitution fallback
-    # (bounded windows for long reads, whole-read for short ones since td-4mbg),
+    # (bounded windows for long reads, whole-read for short ones; see
+    # `_frontier_decode_route`),
     # which needs one raw weighted copy. Honor the configured memory
     # ceiling before allocating it. Explicit :unrestricted semantics and the
     # profile-disabled legacy path bypass this scheduler-specific gate.
@@ -5606,6 +5616,8 @@ function _improve_read_set_likelihood_impl(
                         route = _frontier_decode_route(
                             read, k, use_windowed, force_indel_windowing,
                             effective_indel_params, read_window_sources)
+                        route.demoted_whole_read && Threads.atomic_add!(
+                            diag.demoted_whole_read_routes, 1)
                         improved_read,
                         was_improved = route.windowed ?
                                        improve_read_likelihood_windowed(
@@ -5735,6 +5747,8 @@ function _improve_read_set_likelihood_impl(
                 route = _frontier_decode_route(
                     read, k, use_windowed, force_indel_windowing,
                     effective_indel_params, read_window_sources)
+                route.demoted_whole_read && Threads.atomic_add!(
+                    diag.demoted_whole_read_routes, 1)
                 improved_read,
                 was_improved = route.windowed ?
                                improve_read_likelihood_windowed(
@@ -6763,6 +6777,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :substitution_length_divergences => 0,
             :parallel_decode_batches => 0,
             :frozen_reads_skipped => 0,
+            :demoted_whole_read_routes => 0,
         )
     else
         Dict(
@@ -6780,6 +6795,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
                 diagnostics.substitution_length_divergences[],
             :parallel_decode_batches => diagnostics.parallel_decode_batches[],
             :frozen_reads_skipped => diagnostics.frozen_reads_skipped[],
+            :demoted_whole_read_routes =>
+                diagnostics.demoted_whole_read_routes[],
         )
     end
 
