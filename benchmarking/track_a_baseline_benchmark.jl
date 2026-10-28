@@ -147,13 +147,26 @@ const TRAVERSAL_WEIGHTING = let v = findfirst(==("--traversal-weighting"), ARGS)
     end
 end
 
+# Resolve the Mycelia checkout SHA stamped into every emitted row.
+# Same source as `benchmark_artifacts.jl` (`git rev-parse HEAD` at the repo root).
+# Empty string when git is unavailable — provenance-only, never a measurement.
+function resolve_benchmark_git_commit(repo_root::AbstractString = dirname(@__DIR__))
+    try
+        return chomp(read(`git -C $(repo_root) rev-parse HEAD`, String))
+    catch
+        return ""
+    end
+end
+
+const BENCHMARK_GIT_COMMIT = resolve_benchmark_git_commit()
+
 # Canonical row schema (fixed order so in-memory and JSON-reloaded rows align in the DataFrame).
 const ROW_KEYS = (
     :organism, :accession, :technology, :coverage, :seed, :decoder_arm, :k,
     :traversal_weighting,
     :n_reads, :n_contigs, :NGA50, :misassemblies, :genome_fraction,
     :duplication_ratio, :largest_contig, :wall_seconds, :peak_rss_bytes,
-    :rss_baseline_bytes, :peak_rss_method, :status
+    :rss_baseline_bytes, :peak_rss_method, :benchmark_git_commit, :status
 )
 const INT_KEYS = (
     :coverage, :seed, :k, :n_reads, :n_contigs, :largest_contig, :peak_rss_bytes,
@@ -162,7 +175,7 @@ const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
 const STR_KEYS = (
     :organism, :accession, :technology, :decoder_arm, :traversal_weighting,
-    :peak_rss_method, :status)
+    :peak_rss_method, :benchmark_git_commit, :status)
 
 # === Argument parsing ===
 
@@ -234,7 +247,9 @@ function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
         wall_seconds = round(Float64(wall_seconds); digits = 3),
         peak_rss_bytes = Int(peak_rss_bytes),
         rss_baseline_bytes = Int(rss_baseline_bytes),
-        peak_rss_method = String(peak_rss_method), status = String(status)
+        peak_rss_method = String(peak_rss_method),
+        benchmark_git_commit = BENCHMARK_GIT_COMMIT,
+        status = String(status)
     )
 end
 
@@ -261,9 +276,12 @@ end
 # written from here on carries the key explicitly, so the default can only ever apply to
 # a pre-option tree. That is the bar for adding a grouping key to this table — a default
 # that is provably the value, not merely a plausible one.
+#
+# `benchmark_git_commit` is provenance-only: legacy checkpoints predate the column, so
+# an empty string means "not recorded" rather than inventing a SHA for a past run.
 const OPTIONAL_KEY_DEFAULTS = Dict{Symbol, Any}(
     :peak_rss_method => "unknown", :rss_baseline_bytes => -1,
-    :traversal_weighting => "evidence")
+    :traversal_weighting => "evidence", :benchmark_git_commit => "")
 const OPTIONAL_KEYS = Tuple(sort(collect(keys(OPTIONAL_KEY_DEFAULTS))))
 
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).
