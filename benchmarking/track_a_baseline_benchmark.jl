@@ -147,22 +147,59 @@ const TRAVERSAL_WEIGHTING = let v = findfirst(==("--traversal-weighting"), ARGS)
     end
 end
 
+# Resolve Mycelia checkout provenance stamped into every emitted row.
+# Same source as `benchmark_artifacts.jl` (`git rev-parse HEAD` + dirty via
+# `git status --porcelain` at the repo root). Empty string when git is
+# unavailable — provenance-only, never a measurement. stderr is redirected so a
+# non-repo cwd does not spam `fatal: not a git repository` into harness logs.
+function resolve_benchmark_git_commit(repo_root::AbstractString = dirname(@__DIR__))
+    try
+        return chomp(read(pipeline(`git -C $(repo_root) rev-parse HEAD`;
+            stderr = Base.devnull), String))
+    catch
+        return ""
+    end
+end
+
+function resolve_benchmark_git_dirty(repo_root::AbstractString = dirname(@__DIR__))
+    try
+        # Exclude `benchmarking/results`: default `--output-dir` is
+        # `benchmarking/results/track_a_baseline`, and knowledge-tier files there
+        # (track_a_results.tsv, power_analysis_*, artifacts/) are tracked. Without
+        # the exclude, a prior run stamps dirty=true on an unchanged source tree and
+        # causes spurious cross-host merge collisions on `benchmark_git_dirty`.
+        status = chomp(read(pipeline(
+            `git -C $(repo_root) status --porcelain -- . ':(exclude)benchmarking/results'`;
+            stderr = Base.devnull), String))
+        return isempty(status) ? "false" : "true"
+    catch
+        return ""
+    end
+end
+
+const BENCHMARK_GIT_COMMIT = resolve_benchmark_git_commit()
+const BENCHMARK_GIT_DIRTY = resolve_benchmark_git_dirty()
+
 # Canonical row schema (fixed order so in-memory and JSON-reloaded rows align in the DataFrame).
 const ROW_KEYS = (
     :organism, :accession, :technology, :coverage, :seed, :decoder_arm, :k,
     :traversal_weighting,
     :n_reads, :n_contigs, :NGA50, :misassemblies, :genome_fraction,
     :duplication_ratio, :largest_contig, :wall_seconds, :peak_rss_bytes,
-    :rss_baseline_bytes, :peak_rss_method, :status
+    :rss_baseline_bytes, :peak_rss_method, :benchmark_git_commit,
+    :benchmark_git_dirty, :status
 )
 const INT_KEYS = (
     :coverage, :seed, :k, :n_reads, :n_contigs, :largest_contig, :peak_rss_bytes,
     :rss_baseline_bytes)
 const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
+# `benchmark_git_dirty` is a String ("true"/"false"/""), not Bool: STR_KEYS + legacy
+# absent sentinel "" need one type. Differs from benchmark_artifacts.jl's Bool/nothing
+# `is_dirty` on purpose.
 const STR_KEYS = (
     :organism, :accession, :technology, :decoder_arm, :traversal_weighting,
-    :peak_rss_method, :status)
+    :peak_rss_method, :benchmark_git_commit, :benchmark_git_dirty, :status)
 
 # === Argument parsing ===
 
@@ -234,7 +271,10 @@ function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
         wall_seconds = round(Float64(wall_seconds); digits = 3),
         peak_rss_bytes = Int(peak_rss_bytes),
         rss_baseline_bytes = Int(rss_baseline_bytes),
-        peak_rss_method = String(peak_rss_method), status = String(status)
+        peak_rss_method = String(peak_rss_method),
+        benchmark_git_commit = BENCHMARK_GIT_COMMIT,
+        benchmark_git_dirty = BENCHMARK_GIT_DIRTY,
+        status = String(status)
     )
 end
 
@@ -261,9 +301,15 @@ end
 # written from here on carries the key explicitly, so the default can only ever apply to
 # a pre-option tree. That is the bar for adding a grouping key to this table — a default
 # that is provably the value, not merely a plausible one.
+#
+# `benchmark_git_commit` / `benchmark_git_dirty` are provenance-only: legacy
+# checkpoints predate the columns, so an empty string means "not recorded" rather
+# than inventing a SHA or dirty bit for a past run. Dirty is "true"/"false" when
+# known — a SHA alone overstates provenance on an uncommitted tree.
 const OPTIONAL_KEY_DEFAULTS = Dict{Symbol, Any}(
     :peak_rss_method => "unknown", :rss_baseline_bytes => -1,
-    :traversal_weighting => "evidence")
+    :traversal_weighting => "evidence", :benchmark_git_commit => "",
+    :benchmark_git_dirty => "")
 const OPTIONAL_KEYS = Tuple(sort(collect(keys(OPTIONAL_KEY_DEFAULTS))))
 
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).

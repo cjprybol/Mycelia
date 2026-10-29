@@ -435,7 +435,8 @@ const TRACK_A_ROW_KEYS = String[
 "traversal_weighting",
 "n_reads", "n_contigs", "NGA50", "misassemblies", "genome_fraction",
 "duplication_ratio", "largest_contig", "wall_seconds", "peak_rss_bytes",
-"rss_baseline_bytes", "peak_rss_method", "status"
+"rss_baseline_bytes", "peak_rss_method", "benchmark_git_commit",
+"benchmark_git_dirty", "status"
 ]
 
 # Absent-value sentinels, MIRRORING OPTIONAL_KEY_DEFAULTS in the harness.
@@ -462,7 +463,8 @@ const TRACK_A_ROW_KEYS = String[
 # correct for genuinely-required columns — their absence is a defect, not a default.
 const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
     "peak_rss_method" => "unknown", "rss_baseline_bytes" => -1,
-    "traversal_weighting" => "evidence")
+    "traversal_weighting" => "evidence", "benchmark_git_commit" => "",
+    "benchmark_git_dirty" => "")
 
 # Read a `const` definition out of the harness source, failing closed.
 #

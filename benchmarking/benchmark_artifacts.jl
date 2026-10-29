@@ -256,7 +256,10 @@ function _benchmark_git_metadata(repo_root::AbstractString)
 end
 
 function _git_dirty(repo_root::AbstractString)
-    status = _git_output(repo_root, ["status", "--porcelain"])
+    # Match Track-A harness: exclude `benchmarking/results` so regenerable /
+    # knowledge-tier benchmark outputs do not mark the checkout dirty.
+    status = _git_output(repo_root,
+        ["status", "--porcelain", "--", ".", ":(exclude)benchmarking/results"])
     return isnothing(status) ? nothing : !isempty(status)
 end
 
