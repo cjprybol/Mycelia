@@ -163,7 +163,13 @@ end
 
 function resolve_benchmark_git_dirty(repo_root::AbstractString = dirname(@__DIR__))
     try
-        status = chomp(read(pipeline(`git -C $(repo_root) status --porcelain`;
+        # Exclude `benchmarking/results`: default `--output-dir` is
+        # `benchmarking/results/track_a_baseline`, and knowledge-tier files there
+        # (track_a_results.tsv, power_analysis_*, artifacts/) are tracked. Without
+        # the exclude, a prior run stamps dirty=true on an unchanged source tree and
+        # causes spurious cross-host merge collisions on `benchmark_git_dirty`.
+        status = chomp(read(pipeline(
+            `git -C $(repo_root) status --porcelain -- . ':(exclude)benchmarking/results'`;
             stderr = Base.devnull), String))
         return isempty(status) ? "false" : "true"
     catch
@@ -188,6 +194,9 @@ const INT_KEYS = (
     :rss_baseline_bytes)
 const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
+# `benchmark_git_dirty` is a String ("true"/"false"/""), not Bool: STR_KEYS + legacy
+# absent sentinel "" need one type. Differs from benchmark_artifacts.jl's Bool/nothing
+# `is_dirty` on purpose.
 const STR_KEYS = (
     :organism, :accession, :technology, :decoder_arm, :traversal_weighting,
     :peak_rss_method, :benchmark_git_commit, :benchmark_git_dirty, :status)

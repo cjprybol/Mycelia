@@ -89,6 +89,32 @@ Test.@testset "track A baseline benchmark helpers" begin
         Test.@test canonical(legacy).benchmark_git_dirty == ""
     end
 
+    # --- Dirty check ignores the default Track-A results tree --------------------
+    # Knowledge-tier files under benchmarking/results/track_a_baseline are tracked;
+    # without the pathspec exclude, a prior harness run would stamp dirty=true and
+    # collide in cross-host merge even when source is unchanged.
+    Test.@testset "dirty check excludes benchmarking/results" begin
+        mktempdir() do root
+            run(pipeline(`git -C $(root) init`; stdout = Base.devnull,
+                stderr = Base.devnull))
+            mkpath(joinpath(root, "benchmarking", "results", "track_a_baseline"))
+            write(joinpath(root, "src.jl"), "clean\n")
+            write(joinpath(root, "benchmarking", "results", "track_a_baseline",
+                    "track_a_results.tsv"), "old\n")
+            run(pipeline(`git -C $(root) add -A`; stdout = Base.devnull,
+                stderr = Base.devnull))
+            run(pipeline(`git -C $(root) -c user.email=t@t -c user.name=t commit -m init`;
+                stdout = Base.devnull, stderr = Base.devnull))
+
+            write(joinpath(root, "benchmarking", "results", "track_a_baseline",
+                    "track_a_results.tsv"), "new\n")
+            Test.@test resolve_benchmark_git_dirty(root) == "false"
+
+            write(joinpath(root, "src.jl"), "dirty\n")
+            Test.@test resolve_benchmark_git_dirty(root) == "true"
+        end
+    end
+
     # --- Default-k cell ids must not move ---------------------------------------
     # Interpolating k unconditionally renamed the default k=31 cells, orphaning the
     # 288 Lovelace + 144 LRC checkpoints written before --k existed and silently
