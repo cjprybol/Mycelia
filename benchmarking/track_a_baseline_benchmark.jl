@@ -147,18 +147,32 @@ const TRAVERSAL_WEIGHTING = let v = findfirst(==("--traversal-weighting"), ARGS)
     end
 end
 
-# Resolve the Mycelia checkout SHA stamped into every emitted row.
-# Same source as `benchmark_artifacts.jl` (`git rev-parse HEAD` at the repo root).
-# Empty string when git is unavailable — provenance-only, never a measurement.
+# Resolve Mycelia checkout provenance stamped into every emitted row.
+# Same source as `benchmark_artifacts.jl` (`git rev-parse HEAD` + dirty via
+# `git status --porcelain` at the repo root). Empty string when git is
+# unavailable — provenance-only, never a measurement. stderr is redirected so a
+# non-repo cwd does not spam `fatal: not a git repository` into harness logs.
 function resolve_benchmark_git_commit(repo_root::AbstractString = dirname(@__DIR__))
     try
-        return chomp(read(`git -C $(repo_root) rev-parse HEAD`, String))
+        return chomp(read(pipeline(`git -C $(repo_root) rev-parse HEAD`;
+            stderr = Base.devnull), String))
+    catch
+        return ""
+    end
+end
+
+function resolve_benchmark_git_dirty(repo_root::AbstractString = dirname(@__DIR__))
+    try
+        status = chomp(read(pipeline(`git -C $(repo_root) status --porcelain`;
+            stderr = Base.devnull), String))
+        return isempty(status) ? "false" : "true"
     catch
         return ""
     end
 end
 
 const BENCHMARK_GIT_COMMIT = resolve_benchmark_git_commit()
+const BENCHMARK_GIT_DIRTY = resolve_benchmark_git_dirty()
 
 # Canonical row schema (fixed order so in-memory and JSON-reloaded rows align in the DataFrame).
 const ROW_KEYS = (
@@ -166,7 +180,8 @@ const ROW_KEYS = (
     :traversal_weighting,
     :n_reads, :n_contigs, :NGA50, :misassemblies, :genome_fraction,
     :duplication_ratio, :largest_contig, :wall_seconds, :peak_rss_bytes,
-    :rss_baseline_bytes, :peak_rss_method, :benchmark_git_commit, :status
+    :rss_baseline_bytes, :peak_rss_method, :benchmark_git_commit,
+    :benchmark_git_dirty, :status
 )
 const INT_KEYS = (
     :coverage, :seed, :k, :n_reads, :n_contigs, :largest_contig, :peak_rss_bytes,
@@ -175,7 +190,7 @@ const FLOAT_KEYS = (
     :NGA50, :misassemblies, :genome_fraction, :duplication_ratio, :wall_seconds)
 const STR_KEYS = (
     :organism, :accession, :technology, :decoder_arm, :traversal_weighting,
-    :peak_rss_method, :benchmark_git_commit, :status)
+    :peak_rss_method, :benchmark_git_commit, :benchmark_git_dirty, :status)
 
 # === Argument parsing ===
 
@@ -249,6 +264,7 @@ function cell_row(org, acc, tech, cov, seed, arm; n_reads, n_contigs,
         rss_baseline_bytes = Int(rss_baseline_bytes),
         peak_rss_method = String(peak_rss_method),
         benchmark_git_commit = BENCHMARK_GIT_COMMIT,
+        benchmark_git_dirty = BENCHMARK_GIT_DIRTY,
         status = String(status)
     )
 end
@@ -277,11 +293,14 @@ end
 # a pre-option tree. That is the bar for adding a grouping key to this table — a default
 # that is provably the value, not merely a plausible one.
 #
-# `benchmark_git_commit` is provenance-only: legacy checkpoints predate the column, so
-# an empty string means "not recorded" rather than inventing a SHA for a past run.
+# `benchmark_git_commit` / `benchmark_git_dirty` are provenance-only: legacy
+# checkpoints predate the columns, so an empty string means "not recorded" rather
+# than inventing a SHA or dirty bit for a past run. Dirty is "true"/"false" when
+# known — a SHA alone overstates provenance on an uncommitted tree.
 const OPTIONAL_KEY_DEFAULTS = Dict{Symbol, Any}(
     :peak_rss_method => "unknown", :rss_baseline_bytes => -1,
-    :traversal_weighting => "evidence", :benchmark_git_commit => "")
+    :traversal_weighting => "evidence", :benchmark_git_commit => "",
+    :benchmark_git_dirty => "")
 const OPTIONAL_KEYS = Tuple(sort(collect(keys(OPTIONAL_KEY_DEFAULTS))))
 
 # Rebuild a canonical, type-coerced NamedTuple from a parsed JSON dict (resumed cells).

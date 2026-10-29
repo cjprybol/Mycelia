@@ -42,34 +42,43 @@ Test.@testset "track A baseline benchmark helpers" begin
         Test.@test Set(keys(row)) == Set(ROW_KEYS)
     end
 
-    # --- Every emitted row stamps the Mycelia checkout SHA -----------------------
+    # --- Every emitted row stamps the Mycelia checkout SHA + dirty bit ----------
     # Item J / Item U: pilot tables without a pinned SHA cannot answer "which commit
-    # produced this row". The field is provenance-only (OPTIONAL_KEY_DEFAULTS empty
-    # string for legacy checkpoints) and is populated via `git rev-parse HEAD` at
-    # harness load — same source as benchmark_artifacts.jl.
-    Test.@testset "emitted rows include benchmark_git_commit" begin
+    # produced this row". Provenance-only (OPTIONAL_KEY_DEFAULTS empty string for
+    # legacy checkpoints). SHA via `git rev-parse HEAD`; dirty via
+    # `git status --porcelain` non-empty — same source as benchmark_artifacts.jl.
+    # A SHA alone overstates provenance on an uncommitted tree.
+    Test.@testset "emitted rows include benchmark_git_commit and dirty" begin
         Test.@test :benchmark_git_commit in ROW_KEYS
         Test.@test :benchmark_git_commit in STR_KEYS
+        Test.@test :benchmark_git_dirty in ROW_KEYS
+        Test.@test :benchmark_git_dirty in STR_KEYS
         Test.@test OPTIONAL_KEY_DEFAULTS[:benchmark_git_commit] == ""
+        Test.@test OPTIONAL_KEY_DEFAULTS[:benchmark_git_dirty] == ""
 
         err = error_row("Lambda", "NC_001416", "ont", 10, 42, "kmer")
         Test.@test haskey(err, :benchmark_git_commit)
+        Test.@test haskey(err, :benchmark_git_dirty)
         Test.@test err.benchmark_git_commit == BENCHMARK_GIT_COMMIT
+        Test.@test err.benchmark_git_dirty == BENCHMARK_GIT_DIRTY
         # When git is available in CI / local checkouts, the stamp is a full SHA.
         # Empty is only legal when rev-parse itself failed (provenance gap, not a
         # silent drop of the column).
         Test.@test isempty(err.benchmark_git_commit) ||
                    occursin(r"^[0-9a-f]{40}$", err.benchmark_git_commit)
+        Test.@test err.benchmark_git_dirty in ("", "true", "false")
 
         ok = cell_row("Lambda", "NC_001416", "ont", 10, 42, "kmer";
             n_reads = 100, n_contigs = 1, wall_seconds = 1.0, peak_rss_bytes = 0,
             rss_baseline_bytes = -1, peak_rss_method = "unknown",
             metrics = empty_metrics(), status = "ok")
         Test.@test haskey(ok, :benchmark_git_commit)
+        Test.@test haskey(ok, :benchmark_git_dirty)
         Test.@test ok.benchmark_git_commit == BENCHMARK_GIT_COMMIT
+        Test.@test ok.benchmark_git_dirty == BENCHMARK_GIT_DIRTY
         Test.@test Set(keys(ok)) == Set(ROW_KEYS)
 
-        # Legacy checkpoints without the column still resume (empty sentinel).
+        # Legacy checkpoints without the columns still resume (empty sentinel).
         legacy = Dict("organism" => "Lambda", "accession" => "NC_001416",
             "technology" => "ont", "coverage" => 10, "seed" => 42,
             "decoder_arm" => "kmer", "k" => 31, "n_reads" => 100, "n_contigs" => 1,
@@ -77,6 +86,7 @@ Test.@testset "track A baseline benchmark helpers" begin
             "duplication_ratio" => 0.0, "largest_contig" => 0, "wall_seconds" => 1.0,
             "peak_rss_bytes" => 0, "status" => "ok")
         Test.@test canonical(legacy).benchmark_git_commit == ""
+        Test.@test canonical(legacy).benchmark_git_dirty == ""
     end
 
     # --- Default-k cell ids must not move ---------------------------------------
