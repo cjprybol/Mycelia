@@ -2,7 +2,7 @@
 
 Pre-registered paired measurement of PR #487 ("stop forcing fully demoted reads into indel windows") against its merge base, on the td2rxh grid.
 
-**Verdict: VOID.** A pre-registered control failed (nanopore rows differ between BASE and FIX in the 2000 bp cells, where every read is long and the PR's routing change should not apply).
+**Verdict: VOID.** A pre-registered control failed: nanopore rows differ between BASE and FIX in the 2000 bp cells, where every read is long and the pre-registration assumed the PR's routing change would not apply.
 The outcome statistic is therefore not a verdict; it is reported below descriptively only.
 
 ## What was run
@@ -15,20 +15,30 @@ The outcome statistic is therefore not a verdict; it is reported below descripti
 
 - Both checkouts used one byte-identical `Manifest.toml` (sha256 `85b75e3eb5c8…`, copied here). Both run labels carry the suffix `manifest85b75e3eb5c8`.
 - Grid: `run_td2rxh_evidence_lrc.sbatch` with `--cells td2rxh`: 6000 bp genome × read length {1000, 2000} × 20x × error {0.01, 0.02, 0.05}, seeds 1-16, arms `:illumina` and `:nanopore` on identical reads.
-- FIX seed 11 (27435671_11) failed on node n0018 while loading packages ("Unable to find compatible target in cached code image … runtime-disabled features"), with 0 rows written. It was rerun at the same commit, Manifest, and seed, excluding that node, as 27437121_11. Its logs are kept in `logs/`.
+- FIX seed 11 (27435671_11) failed on node n0018 while loading packages ("Unable to find compatible target in cached code image … runtime-disabled features"), with 0 rows written. It was rerun at the same commit, Manifest, and seed as 27437121_11, submitted from the FIX checkout's `benchmarking/` with `sbatch --array=11 --exclude=n0018.lr6 run_td2rxh_evidence_lrc.sbatch`; it ran on n0341. Both attempts' logs are kept in `logs/`.
 - All 32 seed tasks used for the analysis exited 0:0 with 12 data rows each (`sacct.txt`, `shard_line_counts.txt`).
 
-## Decision rule (fixed before the runs)
+## Decision rule
+
+The pre-registration and its amendments are kept in the project's tracking notes, not in this repository; what follows is a summary.
+Amendments 1-4 (the gates below, the BASE-vs-FIX design, the shared Manifest) were recorded on 2026-10-28, before any run.
+Amendment 5 was recorded on 2026-10-30 after the runs were launched and before any shard was analysed. It pinned the "identical" column rule and the one-sided test details, and recorded that the reroute counter is not exported by the harness.
 
 - **G0a**: illumina rows identical BASE vs FIX in all 6 cells.
 - **G0b**: nanopore rows identical BASE vs FIX in the three 2000 bp cells.
-- **G0c**: the fixed-toy oracle passes every gate at both commits, with equal illumina sha.
+- **G0c**: the fixed-toy oracle passes at both commits, with equal illumina sha between them.
+  - The pre-registration reads "19/19". The implementation gates on the 18 `gate` rows and reports the one `advisory` row (a host-load-dependent wall-clock check) without gating it.
+  - Within the gate rows, the one comparing against the historical prewiring sha is reported rather than gated, as amendment 4 specifies.
+  - In this run all 19 rows passed at both commits, so neither reading changes the result.
 - "Identical" means exact CSV field equality on every column except `label`, `wall_seconds`, `wall_seconds_per_read`.
 - Any G0 failure voids the comparison.
 - **G2** (outcome): at 1000 bp / err 0.01, per seed `d = nanopore − illumina` best-contig reference coverage in each run, `x = |d_BASE| − |d_FIX|`; exact one-sided sign-flip Wilcoxon signed-rank on the 16 `x`, alpha 0.05, H1: x > 0.
 - The fail-open counters are descriptive only. The new reroute counter is not exported by the harness, so it was not captured.
 
-The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was committed before any shard was analysed.
+The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed after the runs finished and before any shard was analysed.
+The oracle checks (G0c inputs) had already been read when it was committed.
+After code review the script was revised, again with the decision rule unchanged. The revision adds input validation, oracle provenance and shape checks, and the read-integrity checks of the earlier td2rxh analysis, and fixes report formatting and the figure.
+Re-running the revised script on these inputs reproduces the original verdict and every G0 and G2 number; the outputs in `analysis/` come from the revised script.
 
 ## Results
 
@@ -51,18 +61,52 @@ Descriptive only (not a verdict, because G0 failed):
 | 1000 bp / err 0.05 | 16 (1 zero) | 0.8738 | −0.0095 | 5 | 0.0203 | 0.0243 |
 
 At err 0.01, FIX moved the nanopore-minus-illumina delta away from 0 in 14 of 16 seeds.
-Nanopore wall time per read was lower under FIX in every cell (`analysis/td4mbg_descriptive_counters.csv`).
+
+Median nanopore wall time per read was lower under FIX in every cell, including the 2000 bp cells where the code path should be unchanged (`analysis/td4mbg_descriptive_counters.csv`).
+BASE and FIX tasks ran on different nodes, so this difference is confounded with node placement and is not attributable to the PR.
 
 Context (enters no gate): an earlier run on master (`../27118659/`) vs BASE.
 Illumina is identical in 16/16 seeds in every cell; nanopore is identical in 7-13 of 16 seeds per cell.
 
 ## Interpretation and caveats
 
-- Reading the routing code, PR #487 changes the route only for reads with at most 1024 k-mer observations. The 2000 bp reads are full-length fragments with at least 1970 observations at the k values used. So the G0b failure is not explained by the routing change as written.
-- The leading alternative is run-to-run nondeterminism in the nanopore arm. The context comparison is consistent with that, but it is not established: that comparison also spans a code and dependency change.
-- A BASE-vs-BASE replicate of seeds 2 and 10 at `ca9eb736` (same Manifest) was submitted to separate the two explanations. The reading of each outcome was fixed before it ran:
-  - If BASE does not reproduce itself, exact-identity G0b is unachievable and the protocol needs a determinism-controlled redesign.
-  - If it does, the PR changes long-read results through a path the code reading missed.
+- **The routing change, as written, does not explain G0b.**
+  - In PR #487, a read is "demoted" only in a pass that has a window-source map, and such a map exists only when bounded windowed decoding is active, which is the condition under which long reads are windowed anyway.
+  - So the new route differs from the old one only for reads with at most 1024 k-mer observations.
+  - The 2000 bp reads are full-length simulated fragments. Nanopore errors change their length by a few tens of bases, so at the k values used (at most 31) they have about 1970 observations, far above 1024.
+- **Three explanations remain, and they are not yet separated:**
+  - run-to-run nondeterminism in the nanopore arm;
+  - hardware-dependent numerics: the lr6 partition mixes CPU feature sets (the seed 11 failure on n0018 shows this), and no BASE/FIX pair of a seed ran on the same node;
+  - a path in the PR that this code reading missed.
+  The context comparison is consistent with either of the first two, but it also spans a code and dependency change.
+- A BASE-vs-BASE replicate of seeds 2 and 10 at `ca9eb736` (same Manifest, `--exclude=n0018.lr6`, job 27438474) was run to start separating them. It ran on n0230 (seed 2) and n0211 (seed 10); the original BASE tasks for those seeds ran on n0216 and n0375. The reading was fixed before it ran:
+  - If BASE does not reproduce itself, exact-identity G0b is unachievable as designed, and the protocol needs a determinism- and node-controlled redesign before the PR can be judged.
+  - If it does, the result is consistent with a PR effect on long reads, but a node-controlled comparison is still needed, because the replicate does not hold the CPU type fixed against the FIX tasks.
+
+## Replicate result: BASE does not reproduce itself
+
+Both replicate tasks completed 0:0 with 12 rows each (`replicate-27438474/`).
+Compared with the original BASE rows under the G0 field rule (`replicate-27438474/comparison.txt`, produced by `compare_replicate.py`):
+
+| Arm | Rows compared | Rows differing |
+| --- | --- | --- |
+| illumina | 12 | 0 |
+| nanopore | 12 | 3, all seed 10 |
+
+The three differing nanopore rows:
+
+- 1000 bp / err 0.01: `total_contig_bases` 26690 → 26691.
+- 1000 bp / err 0.05: `substitution_length_divergences` 587 → 585, `n_contigs` 2837 → 2836, `total_contig_bases` 66562 → 66552.
+- 2000 bp / err 0.01: `indel_engaged` 28 → 29, `n_contigs` 470 → 471, `total_contig_bases` 34871 → 34904.
+
+This is the first pre-registered outcome: the nanopore arm does not reproduce at the same commit and Manifest on this setup, so exact-identity G0b is unachievable as designed and the VOID stands.
+Because the replicate ran on different nodes, it does not separate run-to-run nondeterminism from node-dependent numerics.
+
+Descriptive and not pre-registered, from two seeds only:
+
+- Seed 2, including the 2000 bp / err 0.02 cell where BASE and FIX differed most (reassembly k 19 vs 17), reproduced exactly.
+- In all 12 replicated nanopore rows, best-contig reference coverage was unchanged; the differences were at most one contig and 33 bases.
+- That is small next to the BASE-vs-FIX coverage changes at 1000 bp / err 0.01 (median −0.19), but two seeds cannot bound the run-to-run variance.
 - Until then, these data support neither merging nor rejecting PR #487 on measured grounds.
 - Single genome size (6 kb), synthetic reads, one coverage; nothing here generalizes beyond the grid.
 
@@ -73,6 +117,7 @@ Illumina is identical in 16/16 seeds in every cell; nanopore is identical in 7-1
 - `analysis/`: `report.md`, G0/G2/descriptive/context CSVs, `td4mbg_g2_paired.{png,svg}`.
 - `logs/`: SLURM stdout/stderr for every task, including the failed FIX seed 11 attempt and its retry.
 - `provenance/`: the oracle sbatch and the Lawrencium setup script and log.
+- `replicate-27438474/`: the BASE replicate's shards, logs, `sacct.txt`, the comparison script and its output.
 - `Manifest.toml`, `sacct.txt`, `shard_line_counts.txt`.
 
 Reproduce the analysis from the repository root on a compute node:
