@@ -2368,6 +2368,8 @@ function _resolve_path_orientations(path::Vector{T}, graph) where {T}
     # combinations overlap, prefer the one that best matches the stored strands.
     best = nothing
     best_score = -1
+    # Palindromic vertices always have pref = missing (both strands stored);
+    # they rely on the (true, false) order plus the strict `>` to keep a_fwd = true.
     for a_fwd in (true, false), b_fwd in (true, false)
         if _kmers_overlap(_oriented_label(path[1], a_fwd),
                 _oriented_label(path[2], b_fwd), k)

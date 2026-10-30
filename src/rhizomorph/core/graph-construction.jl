@@ -1425,8 +1425,10 @@ function convert_to_singlestrand(doublestrand_graph)
                             # Palindrome (rc == kmer): add the Reverse entry
                             # unflipped to the same vertex. Flipping it would
                             # reproduce the Forward entry and collapse in the
-                            # Set, so keeping both preserves the 2x coverage of
-                            # a palindrome under the strand convention.
+                            # Set. Keeping both preserves the 2x palindrome
+                            # coverage, so singlestrand -> canonical ->
+                            # singlestrand gives a palindrome 2x coverage versus
+                            # the original 1x: this is not an exact inverse.
                             add_evidence!(singlestrand_graph[canon_kmer], dataset_id, obs_id, evidence)
                         end
                     end
@@ -3399,11 +3401,13 @@ graph.
 Each k-mer and its reverse complement (when observed) are merged into one
 fresh vertex `canon(kmer)` with summed counts, quality vectors reversed for
 the orientation that is not canonical. A palindromic k-mer is merged a second
-time (coverage 2x). Each edge `src → dst` is merged into the undirected edge
-`{canon(src), canon(dst)}`, so an edge and its observed reverse-complement
+time with quality reversed (coverage 2x). Each edge `src → dst` is merged
+into the undirected edge `{canon(src), canon(dst)}`, so an edge and its observed reverse-complement
 image sum on one canonical edge; a self-reverse-complement edge
 (`dst == rc(src)`) is merged a second time with quality swapped (self-loop
-weight 2x). This matches `convert_to_canonical` on full-evidence graphs. The
+weight 2x). This matches `convert_to_canonical` on full-evidence graphs in
+counts; quality orientation differs for a self-reverse-complement edge (the
+reduced path swaps from/to quality, `flip_evidence_strand` does not). The
 input graph is not modified: canonical vertices start empty and each canonical
 edge starts as a copy of the first contributing edge.
 """
