@@ -205,7 +205,10 @@ include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # end
 
 # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
-include_all_tests(joinpath(@__DIR__, "4_assembly"))
+# strand_oracle.jl defines the StrandOracle helper module; the oracle test files
+# include it behind an `isdefined` guard, so the sweep must not redefine it.
+include_all_tests(joinpath(@__DIR__, "4_assembly");
+    skip_files = Set(["strand_oracle.jl"]))
 # for file in [
 #         "test/4_assembly/aa_fasta_singlestrand_test.jl",
 #         "test/4_assembly/aa_fastq_singlestrand_test.jl",
