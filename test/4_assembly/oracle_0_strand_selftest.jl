@@ -2,8 +2,12 @@
 # From the Mycelia base directory, run with:
 #
 # ```bash
-# julia --project=. -e 'include("test/4_assembly/strand_oracle_selftest.jl")'
+# julia --project=. -e 'include("test/4_assembly/oracle_0_strand_selftest.jl")'
 # ```
+#
+# The `oracle_0_` prefix makes `include_all_tests` in test/runtests.jl (which
+# includes files in `sort(files)` order) run this self-test before the
+# `oracle_*_test.jl` files that rely on the oracle.
 
 import Test
 import Random
