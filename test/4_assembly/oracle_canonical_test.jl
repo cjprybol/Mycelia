@@ -119,22 +119,32 @@ Test.@testset "Canonical k-mer graph matches brute-force oracle" begin
         Test.@test isempty(failures)
     end
 
-    Test.@testset "phiX174 reference" begin
+    Test.@testset "seeded random 5 kb genome" begin
+        # Always runs (no network): a fixed-seed sequence whose k-mer set is not
+        # closed under reverse complement, at assembly-scale k.
+        for k in (21, 31)
+            rng = Random.MersenneTwister(20261030)
+            seq = StrandOracle.random_non_rc_closed(rng, 5000, k)
+            test_canonical_oracle([seq], k)
+        end
+    end
+
+    Test.@testset "phiX174 reference (or simulated fallback)" begin
+        # When the NCBI download is unavailable (e.g. CI without the
+        # ncbi-datasets-cli environment), get_test_genome_fasta returns a
+        # simulated genome of the same length; the oracle comparison runs on
+        # whichever genome was returned.
         genome_info = Mycelia.get_test_genome_fasta(use_ncbi = true)
         try
-            if genome_info.source != :ncbi
-                @warn "phiX174 download unavailable; got $(genome_info.source) genome, marking broken"
-                Test.@test_broken genome_info.source == :ncbi
-            else
-                seqs = String[]
-                for record in Mycelia.open_fastx(genome_info.fasta)
-                    push!(seqs, uppercase(String(FASTX.sequence(record))))
-                end
-                Test.@test length(seqs) == 1
-                Test.@test all(seq -> all(c -> c in "ACGT", seq), seqs)
-                for k in (11, 21)
-                    test_canonical_oracle(seqs, k)
-                end
+            @info "canonical oracle genome source" source=genome_info.source fasta=genome_info.fasta
+            seqs = String[]
+            for record in Mycelia.open_fastx(genome_info.fasta)
+                push!(seqs, uppercase(String(FASTX.sequence(record))))
+            end
+            Test.@test length(seqs) == 1
+            Test.@test all(seq -> all(c -> c in "ACGT", seq), seqs)
+            for k in (11, 21)
+                test_canonical_oracle(seqs, k)
             end
         finally
             genome_info.cleanup()
