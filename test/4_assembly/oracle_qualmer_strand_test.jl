@@ -63,3 +63,49 @@ Test.@testset "Qualmer strand modes match brute-force oracle (counts)" begin
         end
     end
 end
+
+"""
+    qualmer_varying_quality_records(seqs::Vector{String})::Vector{FASTX.FASTQ.Record}
+
+FASTQ records whose quality string varies along the read, so an in-place
+reversal of a stored quality vector would change the evidence snapshot.
+"""
+function qualmer_varying_quality_records(
+        seqs::Vector{String})::Vector{FASTX.FASTQ.Record}
+    return [FASTX.FASTQ.Record("qualmer_mutation_read_$(i)", seq,
+                String([Char(40 + (j % 30)) for j in 1:length(seq)]))
+            for (i, seq) in enumerate(seqs)]
+end
+
+function qualmer_graph_snapshot(graph::MetaGraphsNext.MetaGraph)::Tuple{
+        Set{String}, Set{Tuple{String, String}},
+        Dict{String}, Dict{Tuple{String, String}}}
+    vertex_labels = Set(string(label) for label in MetaGraphsNext.labels(graph))
+    edge_set = Set((string(src), string(dst))
+    for (src, dst) in MetaGraphsNext.edge_labels(graph))
+    vertex_evidence = Dict(string(label) => deepcopy(graph[label].evidence)
+    for label in MetaGraphsNext.labels(graph))
+    edge_evidence = Dict((string(src), string(dst)) => deepcopy(graph[src, dst].evidence)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph))
+    return vertex_labels, edge_set, vertex_evidence, edge_evidence
+end
+
+Test.@testset "Qualmer strand conversions do not mutate the input graph" begin
+    # (["AACGTT"], 3) has the self-reverse-complement edge ACG -> CGT and
+    # (["AACGTT"], 4) the palindromic k-mer ACGT, so both merge-into-self
+    # branches of the converters are exercised.
+    for (seqs, k) in ((["ACCGTA", "TACGGT"], 3), (["AACGTT"], 3), (["AACGTT"], 4))
+        ss = Mycelia.Rhizomorph.build_qualmer_graph(
+            qualmer_varying_quality_records(seqs), k; mode = :singlestrand)
+        counts_before = StrandOracle.graph_counts(ss; undirected = false)
+        snapshot_before = qualmer_graph_snapshot(ss)
+
+        Mycelia.Rhizomorph.convert_to_doublestrand(ss)
+        Test.@test StrandOracle.graph_counts(ss; undirected = false) == counts_before
+        Test.@test qualmer_graph_snapshot(ss) == snapshot_before
+
+        Mycelia.Rhizomorph.convert_to_canonical(ss)
+        Test.@test StrandOracle.graph_counts(ss; undirected = false) == counts_before
+        Test.@test qualmer_graph_snapshot(ss) == snapshot_before
+    end
+end
