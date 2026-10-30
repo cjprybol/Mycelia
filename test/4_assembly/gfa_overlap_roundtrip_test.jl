@@ -45,3 +45,28 @@ Test.@testset "GFA link overlaps survive a write/read round-trip" begin
         Test.@test overlap_lengths(restored) == [5, 5]
     end
 end
+
+Test.@testset "String GFA reader honours an explicit link overlap" begin
+    # Uniform-length String segments take the String branch of read_gfa_next,
+    # where an all-zero parse of the link overlaps falls back to the heuristic
+    # overlap (segment length - 1 = 4). The explicit 2M overlap (suffix "TA" of
+    # s1 is the prefix of s2) must be parsed as 2, not replaced by that default.
+    gfa_text = join(
+        [
+            "H\tVN:Z:1.0",
+            "S\ts1\tACGTA",
+            "S\ts2\tTACCG",
+            "L\ts1\t+\ts2\t+\t2M"
+        ],
+        "\n") * "\n"
+
+    mktempdir() do tmpdir
+        gfa_file = joinpath(tmpdir, "string_overlap.gfa")
+        write(gfa_file, gfa_text)
+
+        restored = Mycelia.Rhizomorph.read_gfa_next(gfa_file, String)
+        Test.@test Set(MetaGraphsNext.labels(restored)) == Set(["ACGTA", "TACCG"])
+        Test.@test collect(MetaGraphsNext.edge_labels(restored)) == [("ACGTA", "TACCG")]
+        Test.@test restored["ACGTA", "TACCG"].overlap_length == 2
+    end
+end
