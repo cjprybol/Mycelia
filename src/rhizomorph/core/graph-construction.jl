@@ -348,6 +348,10 @@ Build doublestrand k-mer de Bruijn graph from FASTA/FASTQ records.
 Creates a directed graph containing both forward and reverse complement k-mers
 as separate vertices. Each observed k-mer and its RC are added with properly
 oriented evidence. Edges are directed with RC edges having reversed direction.
+See `convert_to_doublestrand` for how observations are counted: every
+observation is recorded once on each strand, so an observation that is its own
+reverse complement (palindromic k-mer or self-reverse-complement edge) counts
+twice.
 
 # Arguments
 - `records::Vector{<:FASTX.Record}`: Input records
@@ -355,15 +359,18 @@ oriented evidence. Edges are directed with RC edges having reversed direction.
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 
 # Returns
-- `MetaGraphsNext.MetaGraph`: DoubleStrand k-mer graph (DiGraph with 2x vertices/edges)
+- `MetaGraphsNext.MetaGraph`: DoubleStrand k-mer graph (DiGraph holding each
+  observed k-mer and edge plus its reverse complement)
 
 # Example
 ```julia
 records = [FASTX.FASTA.Record("seq1", dna"ATGATG")]
 graph = build_kmer_graph_doublestrand(records, 3)
 
-# Graph contains: ATG, TGA, TG, CAT (rc ATG), TCA (rc TGA), CA (rc AT)
-# With directed edges in both orientations
+# Forward k-mers: ATG (seen twice), TGA, GAT
+# Reverse complements: CAT (rc ATG), TCA (rc TGA), ATC (rc GAT)
+# Coverage: ATG = CAT = 2, every other vertex = 1
+# Edges: ATG→TGA, TGA→GAT, GAT→ATG and their images TCA→CAT, ATC→TCA, CAT→ATC
 ```
 """
 function build_kmer_graph_doublestrand(
@@ -629,7 +636,9 @@ Build doublestrand qualmer de Bruijn graph from FASTQ records.
 
 Creates a directed graph containing both forward and reverse complement qualmers
 as separate vertices, preserving quality information. Each observed qualmer and its
-RC are added with properly oriented evidence and quality scores.
+RC are added with properly oriented evidence and quality scores. Observations
+are counted as in `convert_to_doublestrand`: once per strand, so a palindromic
+qualmer or a self-reverse-complement edge counts twice.
 
 # Arguments
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
@@ -637,7 +646,8 @@ RC are added with properly oriented evidence and quality scores.
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 
 # Returns
-- `MetaGraphsNext.MetaGraph`: DoubleStrand qualmer graph (DiGraph with 2x vertices/edges)
+- `MetaGraphsNext.MetaGraph`: DoubleStrand qualmer graph (DiGraph holding each
+  observed qualmer and edge plus its reverse complement)
 """
 function build_qualmer_graph_doublestrand(
         records::Vector{FASTX.FASTQ.Record},
@@ -963,12 +973,15 @@ _empty_evidence_data(::QualmerEdgeData)::QualmerEdgeData = QualmerEdgeData()
 """
     _copy_evidence_data(data)
 
-Structural copy of full-evidence vertex or edge data: every mutable evidence
-container (the dataset `Dict`, observation `Dict`, and evidence `Set`) is new,
-while the evidence entries themselves are shared. Entries are immutable structs
-whose quality vectors are never mutated after construction, so for callers that
-only add evidence to the copy this is equivalent to `deepcopy` without
-duplicating the quality vectors.
+Container copy of full-evidence vertex or edge data. Returns a new data object
+of the same type (vertex data keeps the k-mer label) whose evidence containers
+— the dataset `Dict`, each observation `Dict`, and each evidence `Set` — are
+new, while the evidence entries in those Sets are shared with `data`.
+
+Entries are immutable structs, but quality entries hold `Vector{UInt8}` fields
+that are not copied. Adding or removing evidence on the copy therefore never
+changes `data`; mutating a shared quality vector in place would. No caller does
+that: `flip_evidence_strand` allocates new reversed quality vectors.
 """
 function _copy_evidence_data(
         data::T
@@ -989,8 +1002,11 @@ end
 
 Convert a singlestrand graph to doublestrand representation.
 
-Replicates all vertices and edges in both forward and reverse complement orientations.
-Creates a DIRECTED graph with 2x vertices and 2x directed edges.
+Creates a DIRECTED graph holding every input vertex and edge plus its reverse
+complement: vertex `rc(kmer)` for each k-mer and edge `rc(dst) → rc(src)` for
+each edge `src → dst`. Vertex and edge counts are generally not 2x the input:
+a reverse complement that was itself observed, a palindromic k-mer, or a
+self-reverse-complement edge maps onto an existing vertex or edge.
 
 Every observation is recorded on both strands: the reverse-complement vertex
 (or edge `rc(dst) → rc(src)`) receives the strand-flipped evidence of its
@@ -1406,7 +1422,11 @@ function convert_to_singlestrand(doublestrand_graph)
                             flipped_evidence = flip_evidence_strand(evidence)
                             add_evidence!(singlestrand_graph[rc_kmer], dataset_id, obs_id, flipped_evidence)
                         else
-                            # Palindrome - keep as is
+                            # Palindrome (rc == kmer): add the Reverse entry
+                            # unflipped to the same vertex. Flipping it would
+                            # reproduce the Forward entry and collapse in the
+                            # Set, so keeping both preserves the 2x coverage of
+                            # a palindrome under the strand convention.
                             add_evidence!(singlestrand_graph[canon_kmer], dataset_id, obs_id, evidence)
                         end
                     end
@@ -3373,8 +3393,19 @@ end
     _convert_to_canonical_reduced(singlestrand_graph)
 
 Convert a singlestrand reduced-type graph to canonical representation.
-Merges forward and RC k-mers into canonical forms with combined counts.
-Creates an UNDIRECTED graph.
+Count-based: no per-observation evidence is iterated. Creates an UNDIRECTED
+graph.
+
+Each k-mer and its reverse complement (when observed) are merged into one
+fresh vertex `canon(kmer)` with summed counts, quality vectors reversed for
+the orientation that is not canonical. A palindromic k-mer is merged a second
+time (coverage 2x). Each edge `src → dst` is merged into the undirected edge
+`{canon(src), canon(dst)}`, so an edge and its observed reverse-complement
+image sum on one canonical edge; a self-reverse-complement edge
+(`dst == rc(src)`) is merged a second time with quality swapped (self-loop
+weight 2x). This matches `convert_to_canonical` on full-evidence graphs. The
+input graph is not modified: canonical vertices start empty and each canonical
+edge starts as a copy of the first contributing edge.
 """
 function _convert_to_canonical_reduced(singlestrand_graph)
     first_label = first(MetaGraphsNext.labels(singlestrand_graph))

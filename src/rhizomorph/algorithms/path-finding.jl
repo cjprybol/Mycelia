@@ -2299,12 +2299,17 @@ evidence the builder recorded (the observed-read strand, carried on each
 
 `convert_to_canonical` stores each observation's strand relative to the canonical
 label: `Forward` means the k-mer was observed as the canonical label itself,
-`Reverse` means it was observed as the label's reverse complement. So:
+`Reverse` means it was observed as the label's reverse complement. The one
+exception is a palindromic label (`rc(label) == label`): `convert_to_canonical`
+records every observation of it a second time with the strand flipped, so its
+evidence always holds both strands. So:
 
 - all evidence `Forward`  → `true`    (emit the label as-is)
 - all evidence `Reverse`  → `false`   (emit the reverse complement)
 - mixed / no strand data  → `missing` (orientation genuinely ambiguous here, e.g.
-  an inverted-repeat vertex that was observed in both orientations)
+  an inverted-repeat vertex that was observed in both orientations; always the
+  case for a palindromic vertex, where both orientations are the same sequence)
+- no `evidence` field (reduced memory profiles) or label absent → `missing`
 
 This is the same strand signal the DoubleStrand arm keeps as separate oriented
 vertices; here it is the tie-breaker used to disambiguate reverse-complement
