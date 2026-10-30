@@ -120,21 +120,38 @@ Test.@testset "Canonical k-mer graph matches brute-force oracle" begin
     end
 
     Test.@testset "seeded random 5 kb genome" begin
-        # Always runs (no network): a fixed-seed sequence whose k-mer set is not
-        # closed under reverse complement, at assembly-scale k.
+        # Always runs (no network), at assembly-scale k. A single random read
+        # never observes both strands, odd k has no palindromic k-mers, and a
+        # self-reverse-complement edge is ~1e-3 likely, so two pieces are added
+        # to make the case able to fail on the strand-counting defects:
+        #   - a palindromic (k + 1)-mer p * rc(p), length(p) = (k + 1) / 2,
+        #     spliced mid-sequence: its two k-mers form a guaranteed
+        #     self-reverse-complement edge (b == rc(a)), exercising the
+        #     "counts twice" rule for edges;
+        #   - a second read rc(seq[1001:2000]), so both strands of a 1 kb region
+        #     are observed, exercising summation of an observed edge/vertex with
+        #     its observed reverse-complement image.
+        # The remaining sequence stays non-RC-closed (fixed seeds).
         for k in (21, 31)
             rng = Random.MersenneTwister(20261030)
-            seq = StrandOracle.random_non_rc_closed(rng, 5000, k)
-            test_canonical_oracle([seq], k)
+            base = StrandOracle.random_non_rc_closed(rng, 5000, k)
+            p = String(rand(Random.MersenneTwister(20261031 + k), collect("ACGT"),
+                (k + 1) ÷ 2))
+            palindrome = p * StrandOracle.revcomp(p)
+            Test.@test length(palindrome) == k + 1
+            Test.@test StrandOracle.revcomp(palindrome) == palindrome
+            seq = base[1:2500] * palindrome * base[2501:end]
+            reads = [seq, StrandOracle.revcomp(seq[1001:2000])]
+            test_canonical_oracle(reads, k)
         end
     end
 
-    Test.@testset "phiX174 reference (or simulated fallback)" begin
-        # When the NCBI download is unavailable (e.g. CI without the
-        # ncbi-datasets-cli environment), get_test_genome_fasta returns a
-        # simulated genome of the same length; the oracle comparison runs on
-        # whichever genome was returned.
-        genome_info = Mycelia.get_test_genome_fasta(use_ncbi = true)
+    # When the NCBI download is unavailable (e.g. CI without the
+    # ncbi-datasets-cli environment), get_test_genome_fasta returns a simulated
+    # genome of the same length; the oracle comparison runs on whichever genome
+    # was returned, and the testset name records which one (:ncbi = real phiX).
+    genome_info = Mycelia.get_test_genome_fasta(use_ncbi = true)
+    Test.@testset "phiX174 genome ($(genome_info.source))" begin
         try
             @info "canonical oracle genome source" source=genome_info.source fasta=genome_info.fasta
             seqs = String[]
