@@ -1,0 +1,11 @@
+{
+  "graph_id": "synth_ss_k5",
+  "label": "gqc_synthetic",
+  "builder": "gqc-test",
+  "commit": "test",
+  "k": 5,
+  "strand_mode": "single",
+  "circular": false,
+  "alphabet": "DNA",
+  "role": "test"
+}

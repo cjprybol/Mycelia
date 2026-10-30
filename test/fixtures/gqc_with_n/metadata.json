@@ -1,0 +1,11 @@
+{
+  "graph_id": "synth_with_n",
+  "label": "gqc_with_n",
+  "builder": "gqc-test",
+  "commit": "test",
+  "k": 5,
+  "strand_mode": "single",
+  "circular": false,
+  "alphabet": "DNA",
+  "role": "test-ambiguous-base"
+}
