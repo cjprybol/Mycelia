@@ -32,9 +32,15 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     base_point = (name = "noskip+nogate", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = nothing)
-    gated_point = (name = "calibrated-gap-2.0", skip_solid = false, cheap_correct = true,
+    # Threshold calibrated to the strand-counting convention (an observation that
+    # is its own reverse complement counts twice). Under it this toy's gate first
+    # engages at 8 (it engaged from 0.5 before): it reverts nothing for thresholds
+    # 0.5-4 and engages identically for 8-32, so 16 sits mid-plateau and a small
+    # shift in gap scale does not flip assertion (3). Real-scale operating points are a benchmark question
+    # (assess_frontier_dominance), not this smoke test's.
+    gated_point = (name = "calibrated-gap-16.0", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
-        beam_width = nothing, calibrated_gap_threshold = 2.0)
+        beam_width = nothing, calibrated_gap_threshold = 16.0)
 
     # Permissive limit: gate engaged (records gaps) but reverts nothing.
     permissive_point = merge(base_point,
