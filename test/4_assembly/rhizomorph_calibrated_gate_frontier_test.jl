@@ -76,12 +76,14 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     Test.@test gated.recall <= base.recall + 1e-9
 
     # (3) GATE ENGAGED, in the frontier-improving direction: at err=0.10 the gate
-    # reverts real corrections (fewer total edits) and drives over-correction down.
+    # reverts some edits (fewer total edits) and drives over-correction down. This
+    # tightens (2) to strict on over-correction.
     # Whether a threshold RETAINS recall at real scale (full up-and-right dominance)
     # is measured by assess_frontier_dominance in the benchmark sweep. On this toy at
     # 16 recall was measured unchanged, so the recall check below is a toy-specific
-    # guard: it fails if the gate is inverted or reverts everything (which would
-    # otherwise pass every assertion by driving all three rates to zero).
+    # guard against the threshold reverting true fixes (e.g. the gap scale drifting
+    # so that 16 over-reverts). Code-level inversion or revert-everything is caught
+    # by the permissive byte-identity check (1).
     Test.@test gated.correction_rate < base.correction_rate
     Test.@test gated.over_rate < base.over_rate
     Test.@test gated.recall >= base.recall - 1e-9
