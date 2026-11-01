@@ -32,12 +32,13 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     base_point = (name = "noskip+nogate", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = nothing)
-    # Threshold calibrated to the strand-counting convention (an observation that
-    # is its own reverse complement counts twice). Under it this toy's gate first
-    # engages at 8 (it engaged from 0.5 before): it reverts nothing for thresholds
-    # 0.5-4 and engages identically for 8-32, so 16 sits mid-plateau and a small
-    # shift in gap scale does not flip assertion (3). Real-scale operating points are a benchmark question
-    # (assess_frontier_dominance), not this smoke test's.
+    # Threshold recalibrated after the doublestrand strand-counting fix (observed
+    # reverse-complement edge evidence is now summed, not overwritten). Measured on
+    # this toy (Perlmutter job 60661221): the gate reverts nothing for thresholds
+    # 0.5-4 and gives the same metrics for 8-32, so 16 is the geometric midpoint of
+    # that plateau. The engaged effect is small (about 2 reverted edits), so a decode
+    # change can flip assertion (3) independently of the threshold. Real-scale
+    # operating points are a benchmark question (assess_frontier_dominance).
     gated_point = (name = "calibrated-gap-16.0", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = 16.0)
@@ -76,9 +77,12 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
 
     # (3) GATE ENGAGED, in the frontier-improving direction: at err=0.10 the gate
     # reverts real corrections (fewer total edits) and drives over-correction down.
-    # (Whether a threshold RETAINS recall — full up-and-right dominance — is a
-    # real-scale, calibration-tuned question measured by assess_frontier_dominance
-    # in the benchmark sweep, not asserted on this single-pass toy.)
+    # Whether a threshold RETAINS recall at real scale (full up-and-right dominance)
+    # is measured by assess_frontier_dominance in the benchmark sweep. On this toy at
+    # 16 recall was measured unchanged, so the recall check below is a toy-specific
+    # guard: it fails if the gate is inverted or reverts everything (which would
+    # otherwise pass every assertion by driving all three rates to zero).
     Test.@test gated.correction_rate < base.correction_rate
-    Test.@test gated.over_rate <= base.over_rate
+    Test.@test gated.over_rate < base.over_rate
+    Test.@test gated.recall >= base.recall - 1e-9
 end
