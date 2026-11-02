@@ -7,6 +7,10 @@ on:
     tags: '*'
   # Any base branch (including stacked PR bases like cursor/gqc-v0.1), not only master.
   pull_request:
+  schedule:
+    # Weekly Sunday 06:17 UTC — td2rxh slow lane only (lint/test skipped below).
+    - cron: '17 6 * * 0'
+  workflow_dispatch:
 
 # Cancel superseded runs on a PR branch when a newer commit is pushed; never
 # cancel a master run (post-merge CI must always complete).
@@ -19,6 +23,8 @@ permissions:
 
 jobs:
   lint:
+    # Weekly schedule is for the td2rxh slow lane only.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -38,11 +44,19 @@ jobs:
 
       - name: Check for committed benchmark artifacts
         env:
-          BASE_REF: ${{ github.base_ref }}
+          # Prefer the PR base SHA; on push use the pre-push tip. Never re-fetch
+          # with --depth (checkout already has full history via fetch-depth: 0).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          base_ref="${BASE_REF:-master}"
-          git fetch --no-tags --depth=1 origin "${base_ref}" || true
-          artifacts=$(git diff --name-only "origin/${base_ref}"...HEAD -- results 2>/dev/null | grep -E '^results/.*\.(json|csv)$' || true)
+          set -euo pipefail
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            echo "No usable base SHA; skipping artifact check."
+            exit 0
+          fi
+          # Diff on its own so a git failure exits under -e; || true only for
+          # grep's no-match (rc 1), not for a failed git diff in a pipeline.
+          changed=$(git diff --name-only "${BASE_SHA}...HEAD" -- results)
+          artifacts=$(printf '%s\n' "${changed}" | grep -E '^results/.*\.(json|csv)$' || true)
           if [[ -n "${artifacts}" ]]; then
             echo "::error::Benchmark artifacts committed in results/:"
             echo "${artifacts}"
@@ -59,6 +73,8 @@ jobs:
           fi
 
   test:
+    # Weekly schedule is for the td2rxh slow lane only.
+    if: github.event_name != 'schedule'
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -101,3 +117,80 @@ jobs:
 
       - name: Run tests (4 threads)
         run: julia --color=yes --project=. --threads=4 -e 'import Pkg; Pkg.test();'
+
+  # Optional slow lane for td-2rxh suites (MYCELIA_RUN_SLOW). Not a required
+  # check. Runs on weekly schedule, manual dispatch, and PRs that touch the
+  # td2rxh suites / harness deps / gating or this workflow. Changes under
+  # src/ are left to the weekly cron by design (no path match required).
+  test-td2rxh-slow:
+    name: td2rxh-slow
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request'
+    env:
+      GKS_WSTYPE: "100"
+      GKSwstype: "100"
+      MYCELIA_RUN_EXTERNAL: "false"
+      MYCELIA_RUN_SLOW: "true"
+      MYCELIA_SHOW_PLOTS: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Path filter (pull_request only)
+        id: td2rxh_paths
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # Suites, harness includes, gating, workflow, and project pins.
+          # src/ changes are intentionally weekly-cron-only (see job comment).
+          TD2RXH_RE: '(^benchmarking/.*td2rxh)|(^benchmarking/(indel_reroute_evidence|indel_benchmark_common|rgv_paired_wilcoxon)\.jl$)|(^test/4_assembly/td2rxh_(evidence_analysis|sbatch_guard)_test\.jl$)|(^test/runtests\.jl$)|(^\.github/workflows/ci\.yml$)|(^(Project|Manifest)\.toml$)'
+        run: |
+          set -euo pipefail
+          # fetch-depth: 0 already has full history; never re-fetch with --depth
+          # (a shallow graft of an advanced base tip has no merge base with HEAD).
+          if ! changed="$(git diff --name-only "${BASE_SHA}...HEAD")"; then
+            echo "::warning::git diff failed; running slow lane (fail closed)."
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "Changed files:"
+          printf '%s\n' "${changed}"
+          if [[ -z "${changed}" ]]; then
+            echo "::warning::empty change list; running slow lane (fail closed)."
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if printf '%s\n' "${changed}" | grep -E "${TD2RXH_RE}"; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            echo "No td2rxh-related paths changed; skipping slow-lane body."
+          fi
+
+      - name: Set up Julia
+        if: github.event_name != 'pull_request' || steps.td2rxh_paths.outputs.run == 'true'
+        uses: julia-actions/setup-julia@v2.6.1
+        with:
+          version: 'lts'
+
+      - name: Cache Julia packages
+        if: github.event_name != 'pull_request' || steps.td2rxh_paths.outputs.run == 'true'
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        if: github.event_name != 'pull_request' || steps.td2rxh_paths.outputs.run == 'true'
+        run: julia --color=yes --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.build();'
+
+      - name: Run td2rxh slow suites
+        if: github.event_name != 'pull_request' || steps.td2rxh_paths.outputs.run == 'true'
+        run: |
+          julia --color=yes --project=. -e '
+            include("test/4_assembly/td2rxh_evidence_analysis_test.jl")
+            include("test/4_assembly/td2rxh_sbatch_guard_test.jl")
+          '
