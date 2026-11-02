@@ -1198,27 +1198,47 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
 
         # Known gap: on a reverse-complement-symmetric read (every 5-mer's reverse
         # complement is also in the read) whose doublestrand edges carry evidence on
-        # both strands, the indel decoder truncates although a full Forward path
-        # matching the read exists, so the likelihood calculator is never reached.
-        # The decode completed here only while the doublestrand conversion
-        # overwrote forward edge evidence with Reverse-only evidence. Remove
-        # @test_broken when the decoder is fixed.
+        # both strands, the indel decoder truncates although a Forward walk spelling
+        # the read is present in the graph, so the likelihood calculator is never
+        # reached. Change the @test_broken lines to @test when the decoder is fixed.
+        # The precondition check below pins the both-strand edge evidence, so an
+        # unexpected pass cannot come from edges reverting to single-strand evidence.
         symmetric_reference = indel_quality_record(
             "symmetric_ref", "ACGTACGTA", fill(40, 9))
         symmetric_graph = Mycelia.Rhizomorph.build_qualmer_graph(
             [symmetric_reference], 5; mode = :doublestrand)
+        symmetric_edge_strands = [
+            Set(entry.strand
+                for observations in values(symmetric_graph[src, dst].evidence)
+                for entries in values(observations)
+                for entry in entries)
+            for (src, dst) in MetaGraphsNext.edge_labels(symmetric_graph)]
+        Test.@test !isempty(symmetric_edge_strands)
+        Test.@test all(
+            strands -> strands == Set([
+                Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse]),
+            symmetric_edge_strands)
+        symmetric_diagnostics = Mycelia.CorrectorDiagnostics()
         symmetric_calculator_reached = Ref(false)
         Mycelia.try_viterbi_path_improvement(
             symmetric_reference,
             symmetric_graph,
             5;
             graph_mode = :doublestrand,
+            diagnostics = symmetric_diagnostics,
             indel_params = params,
             likelihood_calculator = (sequence, scores, graph, k; graph_mode) -> begin
                 symmetric_calculator_reached[] = true
                 0.0
             end,
         )
+        # These hold before and after a decoder fix: the read is attempted once and
+        # rejected for no structural or k-mer reason, so "still broken" below means
+        # "still truncating".
+        Test.@test symmetric_diagnostics.indel_attempts[] == 1
+        Test.@test symmetric_diagnostics.structural_errors[] == 0
+        Test.@test symmetric_diagnostics.unkmerizable_reads[] == 0
+        Test.@test_broken symmetric_diagnostics.indel_decodes[] == 1
         Test.@test_broken symmetric_calculator_reached[]
 
         empty_graph = deepcopy(graph)
