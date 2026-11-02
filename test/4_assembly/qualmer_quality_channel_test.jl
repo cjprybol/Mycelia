@@ -317,7 +317,8 @@ Test.@testset "Qualmer quality channel (td-4e19d.2)" begin
             error
         end
         Test.@test bad_weighting !== nothing
-        Test.@test occursin("traversal_weighting must be :evidence or :quality",
+        Test.@test occursin(
+            "traversal_weighting must be :evidence, :quality, or :posterior",
             sprint(showerror, bad_weighting))
 
         # The floor lives on the JOINT Phred scale [0, 255], not the single-observation

@@ -199,6 +199,295 @@ Test.@testset "Quality Functions" begin
         Test.@test isnothing(Mycelia.Rhizomorph.get_vertex_joint_quality(vertex_data, "nonexistent"))
         Test.@test isnothing(Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, "nonexistent"))
         Test.@test isnothing(Mycelia.Rhizomorph.get_vertex_min_quality(vertex_data, "nonexistent"))
+        Test.@test isnothing(Mycelia.Rhizomorph.get_vertex_posterior_log_odds(vertex_data, "nonexistent"))
+    end
+
+    Test.@testset "fragment_observation_id" begin
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragA/1") == "fragA"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragA/2") == "fragA"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragC_R1") == "fragC"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("fragC_R2") == "fragC"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("plain_read") == "plain_read"
+        # Only trailing suffixes strip; embedded `/1` mid-string is preserved.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("x/1y") == "x/1y"
+        # `_R1`/`_R2` are end-anchored only.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("sample_R1_lane") ==
+                   "sample_R1_lane"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("foo_R2bar") == "foo_R2bar"
+
+        # Default: SRA-style spot ids `SRR123.1` / `SRR123.2` stay DISTINCT
+        # (lone `.1`/`.2` are not mate suffixes).
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.1") == "SRR123.1"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.2") == "SRR123.2"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.1") !=
+                   Mycelia.Rhizomorph.fragment_observation_id("SRR123.2")
+        # Illumina-style acc.spot.mate still collapses mates.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.5.1") == "SRR123.5"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id("SRR123.5.2") == "SRR123.5"
+        # Lone `.1`/`.2` opt-in for callers who know they mean mates.
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id(
+            "fragB.1"; strip_simple_dot_mates = true) == "fragB"
+        Test.@test Mycelia.Rhizomorph.fragment_observation_id(
+            "fragB.2"; strip_simple_dot_mates = true) == "fragB"
+    end
+
+    Test.@testset "SRA-style ids stay distinct molecules under default strip" begin
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[30 + 33, 30 + 33, 30 + 33]
+        sra = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        groups = Mycelia.Rhizomorph.collapse_molecule_qualities(sra, "test")
+        Test.@test groups !== nothing
+        Test.@test length(groups) == 2  # two molecules, not one
+        Λ_sra = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(sra, "test")
+        one = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            one, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Λ_one = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(one, "test")
+        Test.@test Λ_sra > Λ_one
+    end
+
+    Test.@testset "AssemblyConfig.strip_simple_dot_mates reaches collapse" begin
+        # Public config surface: default false; true collapses lone `.1`/`.2`.
+        cfg_off = Mycelia.Rhizomorph.AssemblyConfig(; k = 11)
+        Test.@test cfg_off.strip_simple_dot_mates === false
+        cfg_on = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 11, traversal_weighting = :posterior, strip_simple_dot_mates = true)
+        Test.@test cfg_on.strip_simple_dot_mates === true
+        Test.@test cfg_on.traversal_weighting == :posterior
+
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[30 + 33, 30 + 33, 30 + 33]
+        sra = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            sra, "test", "SRR123.2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+
+        # Wire config flag into the collapse / Λ APIs (same path assembly uses).
+        groups_off = Mycelia.Rhizomorph.collapse_molecule_qualities(
+            sra, "test";
+            strip_simple_dot_mates = cfg_off.strip_simple_dot_mates,
+        )
+        groups_on = Mycelia.Rhizomorph.collapse_molecule_qualities(
+            sra, "test";
+            strip_simple_dot_mates = cfg_on.strip_simple_dot_mates,
+        )
+        Test.@test length(groups_off) == 2
+        Test.@test length(groups_on) == 1
+
+        Λ_off = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(
+            sra, "test";
+            strip_simple_dot_mates = cfg_off.strip_simple_dot_mates,
+        )
+        Λ_on = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(
+            sra, "test";
+            strip_simple_dot_mates = cfg_on.strip_simple_dot_mates,
+        )
+        Test.@test Λ_off > Λ_on  # two molecules vs one collapsed molecule
+
+        # assemble_genome records the flag in assembly_stats (forwarded through config).
+        seq = BioSequences.LongDNA{4}("ATGCATGCATG")
+        reads = [FASTX.FASTQ.Record("SRR1.1", seq, fill(UInt8(40), length(seq))),
+                 FASTX.FASTQ.Record("SRR1.2", seq, fill(UInt8(40), length(seq)))]
+        result = Mycelia.Rhizomorph.assemble_genome(
+            reads; k = 5, verbose = false, traversal_weighting = :posterior,
+            strip_simple_dot_mates = true)
+        Test.@test result.assembly_stats["strip_simple_dot_mates"] === true
+        Test.@test result.assembly_stats["traversal_weighting"] == "posterior"
+    end
+
+    Test.@testset "collapse_molecule_qualities - mean of error probabilities" begin
+        # Two entries, raw Q10 and Q20 at each position (Phred+33 encoded).
+        # mean_p = (10^(-1) + 10^(-2)) / 2 = 0.055
+        q10 = UInt8[10 + 33, 10 + 33, 10 + 33]
+        q20 = UInt8[20 + 33, 20 + 33, 20 + 33]
+        mean_p = Mycelia.Rhizomorph.collapse_molecule_qualities([q10, q20])
+        Test.@test length(mean_p) == 3
+        Test.@test all(p -> isapprox(p, 0.055; rtol = 1e-12), mean_p)
+
+        # Identical entries: mean_p equals single-entry p
+        single = Mycelia.Rhizomorph.collapse_molecule_qualities([q10])
+        cloned = Mycelia.Rhizomorph.collapse_molecule_qualities([q10, q10])
+        Test.@test single == cloned
+    end
+
+    Test.@testset ":quality joint path stays bit-identical (UInt8 sum)" begin
+        # Pin the pre-P1 UInt8 independence path. Additive posterior APIs must not
+        # change get_vertex_joint_quality / combine_phred_scores outputs.
+        seq = "ATGC"
+        qual1 = [20, 30, 25, 15]
+        qual_str1 = String([Char(q + 33) for q in qual1])
+        record1 = FASTX.FASTQ.Record("read_001", seq, qual_str1)
+
+        qual2 = [30, 20, 25, 35]
+        qual_str2 = String([Char(q + 33) for q in qual2])
+        record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
+
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(
+            [record1, record2], 3; dataset_id = "test"
+        )
+        kmer = Kmers.DNAKmer{3}("ATG")
+        vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
+
+        joint_qual = Mycelia.Rhizomorph.get_vertex_joint_quality(vertex_data, "test")
+        Test.@test joint_qual isa Vector{UInt8}
+        Test.@test joint_qual == UInt8[50, 50, 50]
+        Test.@test Mycelia.Rhizomorph.combine_phred_scores(UInt8[60, 60, 60, 60, 60]) ==
+                  UInt8(255)
+    end
+
+    Test.@testset "get_vertex_posterior_log_odds - finite, monotonic under constant Q" begin
+        seq = "ATGC"
+        qual = [40, 40, 40, 40]
+        qual_str = String([Char(q + 33) for q in qual])
+
+        records_1 = [FASTX.FASTQ.Record("mol_001", seq, qual_str)]
+        records_2 = [
+            FASTX.FASTQ.Record("mol_001", seq, qual_str),
+            FASTX.FASTQ.Record("mol_002", seq, qual_str),
+        ]
+        records_3 = [
+            FASTX.FASTQ.Record("mol_001", seq, qual_str),
+            FASTX.FASTQ.Record("mol_002", seq, qual_str),
+            FASTX.FASTQ.Record("mol_003", seq, qual_str),
+        ]
+
+        function lambda_for(records)
+            g = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(
+                records, 3; dataset_id = "test"
+            )
+            vd = Mycelia.Rhizomorph.get_vertex_data(g, Kmers.DNAKmer{3}("ATG"))
+            return Mycelia.Rhizomorph.get_vertex_posterior_log_odds(vd, "test")
+        end
+
+        Λ1 = lambda_for(records_1)
+        Λ2 = lambda_for(records_2)
+        Λ3 = lambda_for(records_3)
+
+        Test.@test Λ1 isa Float64
+        Test.@test isfinite(Λ1) && isfinite(Λ2) && isfinite(Λ3)
+        Test.@test !isnan(Λ1) && !isnan(Λ2) && !isnan(Λ3)
+        Test.@test Λ1 < Λ2 < Λ3
+
+        scores = let
+            g = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(
+                records_2, 3; dataset_id = "test"
+            )
+            vd = Mycelia.Rhizomorph.get_vertex_data(g, Kmers.DNAKmer{3}("ATG"))
+            Mycelia.Rhizomorph.get_vertex_posterior_log_odds_scores(vd, "test")
+        end
+        Test.@test scores isa Vector{Float64}
+        Test.@test length(scores) == 3
+        Test.@test all(isfinite, scores)
+        Test.@test minimum(scores) == Λ2
+    end
+
+    Test.@testset "duplicate-read invariance (same observation_id clone)" begin
+        # Cloning a second entry under the SAME observation_id (distinct position so
+        # Set keeps both) with identical qualities must leave Λ bit-identical.
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[40 + 33, 40 + 33, 40 + 33]
+
+        base = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            base,
+            "test",
+            "read_dup",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Λ_base = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(base, "test")
+
+        cloned = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            cloned,
+            "test",
+            "read_dup",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            cloned,
+            "test",
+            "read_dup",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(2, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Λ_cloned = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(cloned, "test")
+
+        Test.@test Λ_base isa Float64
+        Test.@test Λ_cloned isa Float64
+        Test.@test Λ_base === Λ_cloned  # bit-identical Float64
+
+        # :quality path still compounds every entry (unchanged semantics).
+        joint_base = Mycelia.Rhizomorph.get_vertex_joint_quality(base, "test")
+        joint_cloned = Mycelia.Rhizomorph.get_vertex_joint_quality(cloned, "test")
+        Test.@test joint_base == UInt8[40, 40, 40]
+        Test.@test joint_cloned == UInt8[80, 80, 80]
+    end
+
+    Test.@testset "PE fragment key: /1 and /2 collapse to one molecule" begin
+        kmer = Kmers.DNAKmer{3}("ATG")
+        qual = UInt8[30 + 33, 30 + 33, 30 + 33]
+
+        pe = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            pe,
+            "test",
+            "fragX/1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            pe,
+            "test",
+            "fragX/2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+
+        single = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            single,
+            "test",
+            "fragX",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+
+        Λ_pe = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(pe, "test")
+        Λ_single = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(single, "test")
+        Test.@test Λ_pe === Λ_single
+
+        # Distinct fragment ids still count as two molecules → higher Λ.
+        two_mol = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            two_mol,
+            "test",
+            "fragA/1",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Mycelia.Rhizomorph.add_evidence!(
+            two_mol,
+            "test",
+            "fragB/2",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(1, Mycelia.Rhizomorph.Forward, copy(qual)),
+        )
+        Λ_two = Mycelia.Rhizomorph.get_vertex_posterior_log_odds(two_mol, "test")
+        Test.@test Λ_two > Λ_pe
     end
 end
 
