@@ -1,0 +1,18 @@
+FIX  HEAD dae40feaf6973c087ce956d08a25a7f7a46d5bfd
+BASE HEAD ca9eb736636101e6a4b3e6adf87687574608466b
+    Updating registry at `/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot/registries/General.toml`
+  No Changes to `/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/Project.toml`
+  No Changes to `/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/Manifest.toml`
+        Info We haven't cleaned this depot up for a bit, running Pkg.gc()...
+      Active manifest files: 36 found
+      Active artifact files: 255 found
+      Active scratchspaces: 6 found
+     Deleted 30 package installations (43.676 MiB)
+  No Changes to `/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/Project.toml`
+  No Changes to `/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/Manifest.toml`
+INSTANTIATE_OK
+85b75e3eb5c8640fbfc9d9997fd8b4379e1ef8ae270da3aef642c9e7fadf09e6  /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/Manifest.toml
+85b75e3eb5c8640fbfc9d9997fd8b4379e1ef8ae270da3aef642c9e7fadf09e6  /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-base/Manifest.toml
+FIX dirty:  []
+BASE dirty: []
+SETUP_DONE

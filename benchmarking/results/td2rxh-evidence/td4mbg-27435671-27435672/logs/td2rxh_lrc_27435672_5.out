@@ -1,0 +1,28 @@
+=== td-2rxh evidence (Lawrencium) ===
+Job: 27435672_5  Node: n0223.lr6  CPUs: 16  Start: Fri Oct 30 09:53:19 PDT 2026
+Checkout: /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-base  label=td2rxh@ca9eb7366361+manifest85b75e3eb5c8
+TMPDIR=/tmp/td2rxh_27435672_5.TfS3dw (ext2/ext3)
+>>> RUN cells=td2rxh seed=5 -> results/td2rxh/27435672/seed5.csv  Fri Oct 30 09:53:20 PDT 2026
+# mycelia=/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-base/src/Mycelia.jl
+# indel reroute evidence cells=td2rxh
+# label=td2rxh@ca9eb7366361+manifest85b75e3eb5c8 project=/global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-base
+# seeds=5 cells=6 warmup=true
+# started=2026-10-30T10:41:17.332
+# warmup illumina 37.1s (discarded)
+# warmup nanopore 76.2s (discarded)
+  6000/1000/20x/e0.01 seed=5 illumina div=0 anchor=0 contigs=595 largest=5569 (0.928) cov=0.928 fit_id=1.0 s/read=0.272
+  6000/1000/20x/e0.01 seed=5 nanopore div=93 anchor=10 contigs=390 largest=3924 (0.654) cov=0.654 fit_id=1.0 s/read=5.62
+  6000/1000/20x/e0.02 seed=5 illumina div=0 anchor=0 contigs=1003 largest=2601 (0.434) cov=0.434 fit_id=1.0 s/read=0.22
+  6000/1000/20x/e0.02 seed=5 nanopore div=163 anchor=2 contigs=850 largest=2302 (0.384) cov=0.384 fit_id=1.0 s/read=5.126
+  6000/1000/20x/e0.05 seed=5 illumina div=0 anchor=0 contigs=1437 largest=555 (0.092) cov=0.092 fit_id=1.0 s/read=0.2
+  6000/1000/20x/e0.05 seed=5 nanopore div=574 anchor=0 contigs=2698 largest=721 (0.12) cov=0.12 fit_id=0.9972 s/read=6.007
+  6000/2000/20x/e0.01 seed=5 illumina div=0 anchor=0 contigs=584 largest=5152 (0.859) cov=0.859 fit_id=1.0 s/read=0.598
+  6000/2000/20x/e0.01 seed=5 nanopore div=49 anchor=23 contigs=469 largest=4265 (0.711) cov=0.711 fit_id=1.0 s/read=10.26
+  6000/2000/20x/e0.02 seed=5 illumina div=0 anchor=0 contigs=1034 largest=3357 (0.56) cov=0.56 fit_id=1.0 s/read=0.539
+  6000/2000/20x/e0.02 seed=5 nanopore div=111 anchor=8 contigs=1017 largest=3356 (0.559) cov=0.559 fit_id=1.0 s/read=9.88
+  6000/2000/20x/e0.05 seed=5 illumina div=0 anchor=0 contigs=1953 largest=568 (0.095) cov=0.095 fit_id=1.0 s/read=0.42
+  6000/2000/20x/e0.05 seed=5 nanopore div=507 anchor=3 contigs=3074 largest=974 (0.162) cov=0.162 fit_id=0.999 s/read=12.004
+# finished=2026-10-30T11:53:19.943
+# wrote results/td2rxh/27435672/seed5.csv (12 rows)
+julia_rc=0 rows=12 expected=12
+=== done rc=0 Fri Oct 30 11:53:20 PDT 2026 ===

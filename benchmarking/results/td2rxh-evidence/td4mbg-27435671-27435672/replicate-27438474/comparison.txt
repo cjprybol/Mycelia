@@ -1,0 +1,26 @@
+same 6000/1000/20x/e0.01 seed=2 illumina
+same 6000/1000/20x/e0.01 seed=2 nanopore
+same 6000/1000/20x/e0.02 seed=2 illumina
+same 6000/1000/20x/e0.02 seed=2 nanopore
+same 6000/1000/20x/e0.05 seed=2 illumina
+same 6000/1000/20x/e0.05 seed=2 nanopore
+same 6000/2000/20x/e0.01 seed=2 illumina
+same 6000/2000/20x/e0.01 seed=2 nanopore
+same 6000/2000/20x/e0.02 seed=2 illumina
+same 6000/2000/20x/e0.02 seed=2 nanopore
+same 6000/2000/20x/e0.05 seed=2 illumina
+same 6000/2000/20x/e0.05 seed=2 nanopore
+same 6000/1000/20x/e0.01 seed=10 illumina
+DIFF 6000/1000/20x/e0.01 seed=10 nanopore | total_contig_bases: 26690 -> 26691
+same 6000/1000/20x/e0.02 seed=10 illumina
+same 6000/1000/20x/e0.02 seed=10 nanopore
+same 6000/1000/20x/e0.05 seed=10 illumina
+DIFF 6000/1000/20x/e0.05 seed=10 nanopore | substitution_length_divergences: 587 -> 585 | n_contigs: 2837 -> 2836 | total_contig_bases: 66562 -> 66552
+same 6000/2000/20x/e0.01 seed=10 illumina
+DIFF 6000/2000/20x/e0.01 seed=10 nanopore | indel_engaged: 28 -> 29 | n_contigs: 470 -> 471 | total_contig_bases: 34871 -> 34904
+same 6000/2000/20x/e0.02 seed=10 illumina
+same 6000/2000/20x/e0.02 seed=10 nanopore
+same 6000/2000/20x/e0.05 seed=10 illumina
+same 6000/2000/20x/e0.05 seed=10 nanopore
+labels: ['td2rxh@ca9eb7366361+manifest85b75e3eb5c8']
+rows compared=24 differing=3

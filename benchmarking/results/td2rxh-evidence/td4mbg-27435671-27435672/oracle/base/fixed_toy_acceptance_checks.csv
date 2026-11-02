@@ -1,0 +1,20 @@
+check,severity,passed,detail
+reads_are_1000bp_plus,gate,true,observed range=1190-1214 bp
+nanopore_requested_indel_decode,gate,true,requested=208
+noninitial_rung_attempted_and_completed,gate,true,"initial_k=3, attempted=11, completed=11"
+nanopore_reference_coverage_beats_identical_read_illumina,gate,true,"best-contig reference coverage (CONTIGUITY, not sequence accuracy): nanopore=0.1615 from a 323 bp contig, illumina=0.0655 from a 131 bp contig, on a 2000 bp reference. Best-contig fit identity: nanopore=0.9603658536585366, illumina=0.9923664122137404"
+nanopore_under_120_seconds,advisory,true,"wall=114.905005013 s, budget=120.0 s (advisory: wall-clock is host-load dependent and gates nothing)"
+nanopore_decode_not_truncated,gate,true,truncated=0
+nanopore_substitution_window_contract_clean,gate,true,window_divergences=0
+illumina_all_indel_counters_zero,gate,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+default_oracle_all_indel_counters_zero,gate,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+illumina_byte_identical_to_default_oracle,gate,true,"illumina_bytes=24062, oracle_bytes=24062"
+illumina_byte_identical_to_prewiring_oracle,gate,true,"sha256=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311, origin_master=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311"
+per_rung_telemetry_schema_complete,gate,true,required keys=requested/attempted/completed/truncated/engaged
+per_rung_telemetry_values_valid,gate,true,all per-rung counters are exact nonnegative Int values with requested/attempted/completed/truncated/engaged inequalities satisfied
+nanopore_per_rung_totals_consistent,gate,true,"requested/attempted/completed/truncated/engaged: stats=208/11/11/0/6, telemetry=208/11/11/0/6"
+illumina_per_rung_totals_consistent,gate,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+default_oracle_per_rung_totals_consistent,gate,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+nanopore_attempts_all_classified,gate,true,"attempted=11, completed=11, truncated=0"
+nanopore_trace_contract_clean,gate,true,trace_contract_errors=0
+both_assemblies_nonempty,gate,true,"nanopore=369, illumina=526"
