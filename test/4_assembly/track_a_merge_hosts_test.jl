@@ -158,6 +158,8 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         # The two columns whose absence was the defect.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
         Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
+        Test.@test "benchmark_git_commit" in TRACK_A_ROW_KEYS
+        Test.@test "benchmark_git_dirty" in TRACK_A_ROW_KEYS
 
         # And the mirror holds for a non-default k in both directions.
         Test.@test track_a_cell_id("T4", "pacbio", 50, 123, "kmer"; k = 19) ==
@@ -207,6 +209,8 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         # is the only thing separating them.
         Test.@test "peak_rss_method" in TRACK_A_ROW_KEYS
         Test.@test "rss_baseline_bytes" in TRACK_A_ROW_KEYS
+        Test.@test "benchmark_git_commit" in TRACK_A_ROW_KEYS
+        Test.@test "benchmark_git_dirty" in TRACK_A_ROW_KEYS
     end
 
     Test.@testset "canonicalization: representation drift is not a collision" begin
