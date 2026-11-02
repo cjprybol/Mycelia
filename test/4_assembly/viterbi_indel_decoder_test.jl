@@ -59,18 +59,18 @@ function indel_no_path_correction_kernel(
         ::MetaGraphsNext.MetaGraph,
         ::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_indel_pair_hmm,
-        :reason => :no_surviving_path,
+        :reason => :no_surviving_path
     )
     path = Mycelia.Rhizomorph.ViterbiDecodingResult(
         nothing, -Inf, diagnostics)
     return Mycelia.ViterbiCorrectionResult(
         Any[nothing],
         Mycelia.Rhizomorph.ViterbiDecodingResult[path],
-        Dict{Symbol, Any}(),
+        Dict{Symbol, Any}()
     )
 end
 
@@ -78,7 +78,7 @@ function indel_empty_path_correction_kernel(
         ::MetaGraphsNext.MetaGraph,
         ::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_indel_pair_hmm,
@@ -88,7 +88,7 @@ function indel_empty_path_correction_kernel(
     return Mycelia.ViterbiCorrectionResult(
         Any[Any[]],
         Mycelia.Rhizomorph.ViterbiDecodingResult[path],
-        Dict{Symbol, Any}(),
+        Dict{Symbol, Any}()
     )
 end
 
@@ -96,7 +96,7 @@ function indel_partial_complete_correction_kernel(
         graph::MetaGraphsNext.MetaGraph,
         observations::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     @assert length(only(observations)) == 5
     diagnostics = Dict{Symbol, Any}(
@@ -106,7 +106,7 @@ function indel_partial_complete_correction_kernel(
         :decoded_read_index => 1,
         :move_trace => Symbol[:M],
         :read_index_trace => Int[1],
-        :move_counts => Dict{Symbol, Int}(:M => 1, :I => 0, :D => 0),
+        :move_counts => Dict{Symbol, Int}(:M => 1, :I => 0, :D => 0)
     )
     path = Mycelia.Rhizomorph.ViterbiDecodingResult(
         nothing, 0.0, diagnostics)
@@ -114,7 +114,7 @@ function indel_partial_complete_correction_kernel(
     return Mycelia.ViterbiCorrectionResult(
         Any[Any[partial_label]],
         Mycelia.Rhizomorph.ViterbiDecodingResult[path],
-        Dict{Symbol, Any}(),
+        Dict{Symbol, Any}()
     )
 end
 
@@ -123,21 +123,20 @@ function indel_corrupted_trace_correction_kernel(
         observations::AbstractVector,
         corruption::Symbol;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     result = Mycelia.correct_observations(
         graph,
         observations;
         config = config,
-        weighted_graph = weighted_graph,
+        weighted_graph = weighted_graph
     )
     path_result = only(result.paths)
     diagnostics = copy(path_result.diagnostics)
     if corruption == :trace_types
-        diagnostics[:move_trace] = Any[
-            move for move in diagnostics[:move_trace]]
-        diagnostics[:read_index_trace] = Any[
-            index for index in diagnostics[:read_index_trace]]
+        diagnostics[:move_trace] = Any[move for move in diagnostics[:move_trace]]
+        diagnostics[:read_index_trace] = Any[index
+                                             for index in diagnostics[:read_index_trace]]
     elseif corruption == :move_count_type
         diagnostics[:move_counts] = Dict{Symbol, Any}(
             move => count for (move, count) in diagnostics[:move_counts])
@@ -151,12 +150,12 @@ function indel_corrupted_trace_correction_kernel(
     corrupted_path = Mycelia.Rhizomorph.ViterbiDecodingResult(
         path_result.path,
         path_result.score,
-        diagnostics,
+        diagnostics
     )
     return Mycelia.ViterbiCorrectionResult(
         result.corrected_observations,
         Mycelia.Rhizomorph.ViterbiDecodingResult[corrupted_path],
-        result.diagnostics,
+        result.diagnostics
     )
 end
 
@@ -164,14 +163,14 @@ function indel_wrong_trace_types_correction_kernel(
         graph::MetaGraphsNext.MetaGraph,
         observations::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     return indel_corrupted_trace_correction_kernel(
         graph,
         observations,
         :trace_types;
         config = config,
-        weighted_graph = weighted_graph,
+        weighted_graph = weighted_graph
     )
 end
 
@@ -179,14 +178,14 @@ function indel_wrong_move_count_type_correction_kernel(
         graph::MetaGraphsNext.MetaGraph,
         observations::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     return indel_corrupted_trace_correction_kernel(
         graph,
         observations,
         :move_count_type;
         config = config,
-        weighted_graph = weighted_graph,
+        weighted_graph = weighted_graph
     )
 end
 
@@ -194,14 +193,14 @@ function indel_wrong_move_count_value_correction_kernel(
         graph::MetaGraphsNext.MetaGraph,
         observations::AbstractVector;
         config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
+        weighted_graph::Any = nothing
 )::Mycelia.ViterbiCorrectionResult
     return indel_corrupted_trace_correction_kernel(
         graph,
         observations,
         :move_count_value;
         config = config,
-        weighted_graph = weighted_graph,
+        weighted_graph = weighted_graph
     )
 end
 
@@ -210,7 +209,7 @@ function indel_throwing_likelihood_calculator(
         ::AbstractVector,
         ::MetaGraphsNext.MetaGraph,
         ::Int;
-        graph_mode::Symbol,
+        graph_mode::Symbol
 )::Float64
     error("forced post-soft-accumulation failure for transaction test")
 end
@@ -305,7 +304,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         records = [
             FASTX.FASTA.Record("branch_a_1", "ATGCGA"),
             FASTX.FASTA.Record("branch_a_2", "ATGCGA"),
-            FASTX.FASTA.Record("branch_b", "ATGCGT"),
+            FASTX.FASTA.Record("branch_b", "ATGCGT")
         ]
         raw_graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
             records, 5)
@@ -322,9 +321,9 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         function _legacy_scored_successors(
                 graph::MetaGraphsNext.MetaGraph,
                 vertex::V,
-                strand::Mycelia.Rhizomorph.StrandOrientation,
+                strand::Mycelia.Rhizomorph.StrandOrientation
         )::Vector{Tuple{
-            Tuple{V, Mycelia.Rhizomorph.StrandOrientation}, Float64
+                Tuple{V, Mycelia.Rhizomorph.StrandOrientation}, Float64
         }} where {V}
             transitions = Mycelia.Rhizomorph._get_valid_transitions(
                 graph, vertex, strand)
@@ -347,18 +346,19 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                         (
                             convert(V, transition[:target_vertex]),
                             Mycelia.Rhizomorph._normalize_strand(
-                                transition[:target_strand]),
+                                transition[:target_strand])
                         ),
-                        log(edge_weight / total_out),
-                    ),
+                        log(edge_weight / total_out)
+                    )
                 )
             end
             return successors
         end
 
         source = only(
-            label for label in MetaGraphsNext.labels(weighted_graph)
-            if string(label) == "ATGCG"
+            label
+        for label in MetaGraphsNext.labels(weighted_graph)
+        if string(label) == "ATGCG"
         )
         forward = Mycelia.Rhizomorph.Forward
         expected = _legacy_scored_successors(
@@ -381,7 +381,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             cache, weighted_graph, source, reverse)
         Test.@test reverse_lookup.successors ==
                    _legacy_scored_successors(
-                       weighted_graph, source, reverse)
+            weighted_graph, source, reverse)
         Test.@test reverse_lookup.enumerated_count == 0
         reverse_again = Mycelia._indel_decode_successors!(
             cache, weighted_graph, source, reverse)
@@ -389,8 +389,9 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test length(cache) == 2
 
         sink = only(
-            label for label in MetaGraphsNext.labels(weighted_graph)
-            if string(label) == "TGCGA"
+            label
+        for label in MetaGraphsNext.labels(weighted_graph)
+        if string(label) == "TGCGA"
         )
         sink_lookup = Mycelia._indel_decode_successors!(
             cache, weighted_graph, sink, forward)
@@ -403,7 +404,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test Set(keys(cache)) == Set([
             (source, forward),
             (source, reverse),
-            (sink, forward),
+            (sink, forward)
         ])
 
         observation = [source, sink]
@@ -411,13 +412,14 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             raw_graph,
             [observation];
             config = config,
-            weighted_graph = weighted_graph,
+            weighted_graph = weighted_graph
         )
         path_result = only(result.paths)
         diagnostics = path_result.diagnostics
         sink_loge = only(
-            loge for ((vertex, strand), loge) in expected
-            if vertex == sink && strand == forward
+            loge
+        for ((vertex, strand), loge) in expected
+        if vertex == sink && strand == forward
         )
         start_emission = Mycelia._call_viterbi_state_emission_logp(
             raw_graph,
@@ -426,7 +428,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             source,
             :DNA,
             :singlestrand;
-            count_length_penalty = false,
+            count_length_penalty = false
         )
         end_emission = Mycelia._call_viterbi_state_emission_logp(
             raw_graph,
@@ -435,7 +437,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             sink,
             :DNA,
             :singlestrand;
-            count_length_penalty = false,
+            count_length_penalty = false
         )
         match_transition = log(
             1.0 - config.error_rate * config.insertion_fraction -
@@ -446,9 +448,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
 
         Test.@test indel_decoded_label_strings(result) == ["ATGCG", "TGCGA"]
         Test.@test path_result.path !== nothing
-        Test.@test [
-            string(step.vertex_label) for step in path_result.path.steps
-        ] == ["ATGCG", "TGCGA"]
+        Test.@test [string(step.vertex_label) for step in path_result.path.steps] ==
+                   ["ATGCG", "TGCGA"]
         Test.@test all(
             step.strand == forward for step in path_result.path.steps)
         Test.@test path_result.score == expected_score
@@ -473,7 +474,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             vertex_data_type = Any,
             edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
             weight_function = Mycelia.Rhizomorph.edge_data_weight,
-            default_weight = 0.0,
+            default_weight = 0.0
         )
         for vertex in ("S", "A", "B", "T")
             directed[vertex] = nothing
@@ -486,7 +487,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             5.0, reverse, reverse)
         directed_cache = Dict{
             Tuple{String, Mycelia.Rhizomorph.StrandOrientation},
-            Mycelia._IndelDecodeSuccessorBatch{String},
+            Mycelia._IndelDecodeSuccessorBatch{String}
         }()
         directed_s = Mycelia._indel_decode_successors!(
             directed_cache, directed, "S", forward)
@@ -498,7 +499,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                    _legacy_scored_successors(directed, "S", forward)
         Test.@test directed_s.successors == [
             (("A", reverse), log(2.0 / 3.0)),
-            (("B", forward), log(1.0 / 3.0)),
+            (("B", forward), log(1.0 / 3.0))
         ]
         Test.@test directed_s.enumerated_count == 2
         Test.@test directed_a_reverse.successors ==
@@ -519,7 +520,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             vertex_data_type = Any,
             edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
             weight_function = Mycelia.Rhizomorph.edge_data_weight,
-            default_weight = 0.0,
+            default_weight = 0.0
         )
         for vertex in ("A", "B", "C")
             undirected[vertex] = nothing
@@ -530,17 +531,17 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             3.0, forward, forward)
         undirected_cache = Dict{
             Tuple{String, Mycelia.Rhizomorph.StrandOrientation},
-            Mycelia._IndelDecodeSuccessorBatch{String},
+            Mycelia._IndelDecodeSuccessorBatch{String}
         }()
         undirected_batches = Dict(
             vertex => Mycelia._indel_decode_successors!(
                 undirected_cache, undirected, vertex, forward)
-            for vertex in ("A", "B", "C")
+        for vertex in ("A", "B", "C")
         )
         for vertex in ("A", "B", "C")
             Test.@test undirected_batches[vertex].successors ==
                        _legacy_scored_successors(
-                           undirected, vertex, forward)
+                undirected, vertex, forward)
         end
         Test.@test undirected_batches["A"].successors ==
                    [(("B", forward), 0.0)]
@@ -550,7 +551,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test (
             undirected_batches["A"].enumerated_count,
             undirected_batches["B"].enumerated_count,
-            undirected_batches["C"].enumerated_count,
+            undirected_batches["C"].enumerated_count
         ) == (1, 1, 0)
         Test.@test Mycelia._indel_decode_successors!(
             undirected_cache, undirected, "C", forward).successors ===
@@ -701,16 +702,16 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         graph = Mycelia.Rhizomorph.build_fasta_graph_olc(
             [
                 FASTX.FASTA.Record("state_a", BioSequences.dna"ATGCG"),
-                FASTX.FASTA.Record("state_b", BioSequences.dna"GCGTA"),
+                FASTX.FASTA.Record("state_b", BioSequences.dna"GCGTA")
             ];
-            min_overlap = 3,
+            min_overlap = 3
         )
         observations = [
             BioSequences.dna"ATGCG",
             BioSequences.dna"GCGTA",
             BioSequences.dna"GCGTA",
             BioSequences.dna"AAAAA",
-            BioSequences.dna"GCGTA",
+            BioSequences.dna"GCGTA"
         ]
 
         function state_alias_emission(
@@ -718,14 +719,14 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                 _node::Any,
                 _alphabet::Symbol;
                 quality::Any = nothing,
-                error_rate::Float64 = 0.10,
+                error_rate::Float64 = 0.10
         )::Float64
             return string(observed_unit) == "AAAAA" ? -Inf : 0.0
         end
 
         function state_alias_insertion_emission(
                 _observed_unit::Any,
-                _alphabet::Symbol,
+                _alphabet::Symbol
         )::Float64
             return 0.0
         end
@@ -743,13 +744,13 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             max_insertion_run = 2,
             band_width = nothing,
             beam_width = typemax(Int),
-            insertion_emission_logp = state_alias_insertion_emission,
+            insertion_emission_logp = state_alias_insertion_emission
         )
 
         result = Mycelia.correct_observations(
             graph,
             [observations];
-            config = config,
+            config = config
         )
         path_result = only(result.paths)
         diagnostics = path_result.diagnostics
@@ -765,9 +766,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test diagnostics[:read_index_trace] == collect(eachindex(observations))
         Test.@test diagnostics[:move_counts] ==
                    Dict{Symbol, Int}(:M => 2, :I => 3, :D => 0)
-        Test.@test [
-            string(step.vertex_label) for step in path_result.path.steps
-        ] == ["ATGCG", "GCGTA"]
+        Test.@test [string(step.vertex_label) for step in path_result.path.steps] ==
+                   ["ATGCG", "GCGTA"]
     end
 
     Test.@testset "Milestone C: nanopore-style read decodes through the kernel" begin
@@ -1052,7 +1052,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             graph_mode = :doublestrand,
             diagnostics = no_path_diagnostics,
             indel_params = params,
-            correction_kernel = indel_no_path_correction_kernel,
+            correction_kernel = indel_no_path_correction_kernel
         )
         Test.@test no_path === nothing
         Test.@test no_path_diagnostics.indel_attempts[] == 1
@@ -1068,7 +1068,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             graph_mode = :doublestrand,
             diagnostics = empty_path_diagnostics,
             indel_params = params,
-            correction_kernel = indel_empty_path_correction_kernel,
+            correction_kernel = indel_empty_path_correction_kernel
         )
         Test.@test empty_path === nothing
         Test.@test empty_path_diagnostics.indel_attempts[] == 1
@@ -1093,7 +1093,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             diagnostics = partial_diagnostics,
             soft_weights = partial_soft_weights,
             indel_params = params,
-            correction_kernel = indel_partial_complete_correction_kernel,
+            correction_kernel = indel_partial_complete_correction_kernel
         )
         Test.@test partial_result === nothing
         Test.@test isempty(partial_soft_weights.weights)
@@ -1106,17 +1106,13 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             repeat("I", 9), Symbol[:M], Int[1], 5, 5) === nothing
 
         for (label, correction_kernel) in (
-                "wrong trace concrete types" =>
-                    indel_wrong_trace_types_correction_kernel,
-                "wrong move-count concrete type" =>
-                    indel_wrong_move_count_type_correction_kernel,
-                "inconsistent move-count values" =>
-                    indel_wrong_move_count_value_correction_kernel,
+            "wrong trace concrete types" => indel_wrong_trace_types_correction_kernel,
+            "wrong move-count concrete type" => indel_wrong_move_count_type_correction_kernel,
+            "inconsistent move-count values" => indel_wrong_move_count_value_correction_kernel
         )
             Test.@testset "$(label) fails closed" begin
                 malformed_diagnostics = Mycelia.CorrectorDiagnostics()
-                malformed_soft_weights =
-                    Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+                malformed_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
                 malformed_result = Mycelia.try_viterbi_path_improvement(
                     observed,
                     graph,
@@ -1125,7 +1121,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                     diagnostics = malformed_diagnostics,
                     soft_weights = malformed_soft_weights,
                     indel_params = params,
-                    correction_kernel = correction_kernel,
+                    correction_kernel = correction_kernel
                 )
                 Test.@test malformed_result === nothing
                 Test.@test isempty(malformed_soft_weights.weights)
@@ -1143,31 +1139,36 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         # Responsibilities are staged inside the direct read corrector too, not
         # only by the outer window splicer. A post-decode failure must therefore
         # classify as truncated without leaking partial soft-EM state.
-        expected_soft_weights =
-            Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        # The read must decode to completion so the throwing likelihood calculator
+        # is reached; it is chosen with no reverse-complement pairs among its 5-mers
+        # (see the reverse-complement-symmetric known gap below).
+        transaction_reference = indel_quality_record(
+            "transaction_ref", "ACGGTCATT", fill(40, 9))
+        transaction_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [transaction_reference], 5; mode = :doublestrand)
+        expected_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         Mycelia.accumulate_competing_paths!(
             expected_soft_weights,
-            partial_reference,
-            partial_graph,
+            transaction_reference,
+            transaction_graph,
             5;
-            graph_mode = :doublestrand,
+            graph_mode = :doublestrand
         )
         Test.@test !isempty(expected_soft_weights.weights)
 
         transaction_diagnostics = Mycelia.CorrectorDiagnostics()
-        transaction_soft_weights =
-            Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        transaction_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         transaction_error = nothing
         try
             Mycelia.try_viterbi_path_improvement(
-                partial_reference,
-                partial_graph,
+                transaction_reference,
+                transaction_graph,
                 5;
                 graph_mode = :doublestrand,
                 diagnostics = transaction_diagnostics,
                 soft_weights = transaction_soft_weights,
                 indel_params = params,
-                likelihood_calculator = indel_throwing_likelihood_calculator,
+                likelihood_calculator = indel_throwing_likelihood_calculator
             )
         catch error
             transaction_error = error
@@ -1176,7 +1177,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         if transaction_error isa ErrorException
             Test.@test Base.occursin(
                 "forced post-soft-accumulation failure for transaction test",
-                Base.sprint(Base.showerror, transaction_error),
+                Base.sprint(Base.showerror, transaction_error)
             )
         end
         Test.@test isempty(transaction_soft_weights.weights)
@@ -1189,6 +1190,32 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                    transaction_diagnostics.indel_decodes[] +
                    transaction_diagnostics.truncated_decodes[]
 
+        # Known gap: on a reverse-complement-symmetric read (every 5-mer's reverse
+        # complement is also in the read) whose doublestrand edges carry evidence on
+        # both strands, the indel decoder truncates although a full Forward path
+        # matching the read exists, so the likelihood calculator is never reached.
+        # The decode completed here only while the doublestrand conversion
+        # overwrote forward edge evidence with Reverse-only evidence. Remove
+        # @test_broken when the decoder is fixed.
+        symmetric_reference = indel_quality_record(
+            "symmetric_ref", "ACGTACGTA", fill(40, 9))
+        symmetric_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [symmetric_reference], 5; mode = :doublestrand)
+        symmetric_calculator_reached = Ref(false)
+        Mycelia.try_viterbi_path_improvement(
+            symmetric_reference,
+            symmetric_graph,
+            5;
+            graph_mode = :doublestrand,
+            indel_params = params,
+            likelihood_calculator = (sequence, scores, graph, k;
+                graph_mode) -> begin
+                symmetric_calculator_reached[] = true
+                0.0
+            end
+        )
+        Test.@test_broken symmetric_calculator_reached[]
+
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))
             MetaGraphsNext.rem_vertex!(empty_graph, 1)
@@ -1200,7 +1227,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             5;
             graph_mode = :doublestrand,
             diagnostics = exception_diagnostics,
-            indel_params = params,
+            indel_params = params
         )
         Test.@test exception_result === nothing
         Test.@test exception_diagnostics.indel_attempts[] == 1
