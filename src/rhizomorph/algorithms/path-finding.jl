@@ -301,12 +301,39 @@ function edge_quality_weight(edge_data)
 end
 
 """
+    _decode_transition_strand(evidence; default=Forward)
+
+Strand state a decoder should use to traverse one evidence-backed edge.
+
+A double-strand edge keeps the directed observation (Forward) and the flipped
+reverse-complement image (Reverse) in the same evidence set, and its weight is
+the sum of both. `first_evidence_strand` returns whichever entry the set yields
+first, so consecutive edges on one read flip between Forward and Reverse and
+the Viterbi walk dies mid-read. Mixed evidence is traversed as Forward, the
+orientation the read was observed in. Reverse-only edges (a synthetic
+reverse-complement image that was never observed forward) stay Reverse, so a
+read cannot walk an alternative that only the opposite strand observed.
+"""
+function _decode_transition_strand(evidence; default::StrandOrientation = Forward)
+    saw_reverse = false
+    for entry in collect_evidence_entries(evidence)
+        hasfield(typeof(entry), :strand) || continue
+        if _normalize_strand(entry.strand) == Forward
+            return Forward
+        end
+        saw_reverse = true
+    end
+    return saw_reverse ? Reverse : default
+end
+
+"""
     weighted_graph_from_rhizomorph(source_graph; default_weight=1e-10, edge_weight=count_evidence)
 
 Convert a Rhizomorph evidence graph into a weighted graph suitable for
 probabilistic path algorithms. Edge weights are derived from evidence counts
-by default, and strand orientation is inferred from the first evidence entry
-when present. Undirected graphs are expanded into bidirectional edges.
+by default. The transition strand comes from `_decode_transition_strand`:
+Forward when any Forward evidence is present, otherwise Reverse. Undirected
+graphs are expanded into bidirectional edges.
 
 # Arguments
 - `source_graph::MetaGraphsNext.MetaGraph`: Evidence-backed graph to convert
@@ -351,7 +378,9 @@ function weighted_graph_from_rhizomorph(
         strand = if edge_data isa AllReducedEdgeData  # TYPE-CHECK-AUDIT: super-union guard
             Forward  # Reduced types don't track strand
         else
-            first_evidence_strand(edge_data.evidence; default = Forward)
+            # Not first_evidence_strand: summed double-strand edges carry both
+            # orientations, and the set's first entry flips along a read.
+            _decode_transition_strand(edge_data.evidence; default = Forward)
         end
         weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
         if !is_directed

@@ -16,6 +16,7 @@
 import BioSequences
 import FASTX
 import Graphs
+import Kmers
 import Logging
 import MetaGraphsNext
 import Mycelia
@@ -341,6 +342,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                 edge_weight = Mycelia.Rhizomorph._edge_transition_weight(
                     transition[:edge_data])
                 edge_weight <= 0.0 && continue
+                background = Mycelia._viterbi_graph_label_type(graph) <: Kmers.Kmer ?
+                             Mycelia._INDEL_TRANSITION_BACKGROUND : 0.0
                 push!(
                     successors,
                     (
@@ -349,7 +352,7 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                             Mycelia.Rhizomorph._normalize_strand(
                                 transition[:target_strand]),
                         ),
-                        log(edge_weight / total_out),
+                        log(edge_weight / (total_out + background)),
                     ),
                 )
             end
@@ -368,7 +371,11 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test length(expected) == 2
         Test.@test first_lookup.successors == expected
         Test.@test first_lookup.enumerated_count == length(expected)
-        Test.@test sum(exp(last(successor)) for successor in expected) ≈ 1.0
+        source_total = Mycelia.Rhizomorph._total_outgoing_weight(
+            weighted_graph, source, forward)
+        Test.@test sum(exp(last(successor)) for successor in expected) ≈
+                   source_total /
+                   (source_total + Mycelia._INDEL_TRANSITION_BACKGROUND)
         Test.@test length(cache) == 1
 
         second_lookup = Mycelia._indel_decode_successors!(
@@ -1196,13 +1203,12 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                    transaction_diagnostics.indel_decodes[] +
                    transaction_diagnostics.truncated_decodes[]
 
-        # Known gap: on a reverse-complement-symmetric read (every 5-mer's reverse
-        # complement is also in the read) whose doublestrand edges carry evidence on
-        # both strands, the indel decoder truncates although a Forward walk spelling
-        # the read is present in the graph, so the likelihood calculator is never
-        # reached. Change the @test_broken lines to @test when the decoder is fixed.
-        # The precondition check below pins the both-strand edge evidence, so an
-        # unexpected pass cannot come from edges reverting to single-strand evidence.
+        # A reverse-complement-symmetric read (every 5-mer's reverse complement is
+        # also in the read) puts Forward evidence and the flipped image on the same
+        # double-strand edge. The decoder must traverse that edge from the read's
+        # orientation, complete the trace, and reach the likelihood calculator.
+        # The strand-set check pins the both-strand evidence so a pass cannot come
+        # from edges collapsing back to one strand.
         symmetric_reference = indel_quality_record(
             "symmetric_ref", "ACGTACGTA", fill(40, 9))
         symmetric_graph = Mycelia.Rhizomorph.build_qualmer_graph(
@@ -1232,14 +1238,11 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                 0.0
             end,
         )
-        # These hold before and after a decoder fix: the read is attempted once and
-        # rejected for no structural or k-mer reason, so "still broken" below means
-        # "still truncating".
         Test.@test symmetric_diagnostics.indel_attempts[] == 1
         Test.@test symmetric_diagnostics.structural_errors[] == 0
         Test.@test symmetric_diagnostics.unkmerizable_reads[] == 0
-        Test.@test_broken symmetric_diagnostics.indel_decodes[] == 1
-        Test.@test_broken symmetric_calculator_reached[]
+        Test.@test symmetric_diagnostics.indel_decodes[] == 1
+        Test.@test symmetric_calculator_reached[]
 
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))
@@ -1260,5 +1263,46 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test exception_diagnostics.truncated_decodes[] == 1
         Test.@test exception_diagnostics.trace_contract_errors[] == 1
         Test.@test exception_diagnostics.structural_errors[] == 1
+    end
+end
+
+# `_INDEL_TRANSITION_BACKGROUND = 8` makes a coverage-1 spur expensive. A true
+# edge of weight 2 or 3 then costs about -1.6 to -1.3 nats, near a nanopore
+# gap-extend (~-2.6). Forward-only copies keep the directed weight equal to the
+# copy count (the reverse-complement image is a different edge). A clean read
+# on that path must be spelled with zero gap moves.
+Test.@testset "coverage 2-3 true path is not rewritten as indels" begin
+    sequence = "ATGCTAGCTAGTCTAGCATGCTACGTACG"
+    k = 9
+    profile = Mycelia.indel_error_profile(:nanopore)
+    config = Mycelia.ViterbiCorrectionConfig(
+        alphabet = :DNA,
+        strand_mode = :doublestrand,
+        error_rate = profile.base_error_rate,
+        indel_moves = true,
+        insertion_fraction = profile.insertion_fraction,
+        deletion_fraction = profile.deletion_fraction,
+        insertion_extend_probability = profile.insertion_extend_probability,
+        deletion_extend_probability = profile.deletion_extend_probability,
+        deletion_max_run = 3,
+        max_insertion_run = 3,
+        band_width = 16,
+        beam_width = typemax(Int),
+    )
+    for copies in (2, 3)
+        quality = repeat("I", length(sequence))
+        records = [FASTX.FASTQ.Record("copy_$(copies)_$(i)", sequence, quality)
+                   for i in 1:copies]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(records, k; mode = :doublestrand)
+        kmers = collect(Kmers.FwDNAMers{k}(BioSequences.LongDNA{4}(sequence)))
+        Test.@test Mycelia.Rhizomorph.count_evidence(graph[kmers[1], kmers[2]]) == copies
+        result = Mycelia.correct_observations(graph, [kmers]; config = config)
+        path_result = only(result.paths)
+        moves = path_result.diagnostics[:move_counts]
+        Test.@test moves[:I] == 0
+        Test.@test moves[:D] == 0
+        Test.@test path_result.path !== nothing
+        labels = [step.vertex_label for step in path_result.path.steps]
+        Test.@test labels == kmers
     end
 end
