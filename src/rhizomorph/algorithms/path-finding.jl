@@ -301,50 +301,29 @@ function edge_quality_weight(edge_data)
 end
 
 """
-    _decode_transition_pairs(evidence; default=Forward)
+    _decode_transition_strand(evidence; default=Forward)
 
-Strand states that may traverse one evidence-backed edge.
+Strand state a decoder should use to traverse one evidence-backed edge.
 
 A double-strand edge keeps the directed observation (Forward) and the flipped
 reverse-complement image (Reverse) in the same evidence set, and its weight is
 the sum of both. `first_evidence_strand` returns whichever entry the set yields
 first, so consecutive edges on one read flip between Forward and Reverse and
 the Viterbi walk dies mid-read. Mixed evidence is traversed as Forward, the
-orientation the read was observed in. A synthetic reverse-complement image
-with no Forward evidence stays Reverse.
+orientation the read was observed in. Reverse-only edges (a synthetic
+reverse-complement image that was never observed forward) stay Reverse, so a
+read cannot walk an alternative that only the opposite strand observed.
 """
-function _decode_transition_pairs(
-        evidence; default::StrandOrientation = Forward,
-)::Vector{Tuple{StrandOrientation, StrandOrientation}}
-    saw_forward = false
+function _decode_transition_strand(evidence; default::StrandOrientation = Forward)
     saw_reverse = false
     for entry in collect_evidence_entries(evidence)
         hasfield(typeof(entry), :strand) || continue
         if _normalize_strand(entry.strand) == Forward
-            saw_forward = true
-        else
-            saw_reverse = true
+            return Forward
         end
-        saw_forward && saw_reverse && break
+        saw_reverse = true
     end
-    pairs = Tuple{StrandOrientation, StrandOrientation}[]
-    # One strand per edge. Mixed evidence prefers Forward so a read's observed
-    # edges stay on one state; offering Reverse as well splits the Viterbi
-    # margin and the calibrated gate can no longer separate true fixes from
-    # over-corrections. A synthetic reverse-complement image with no Forward
-    # evidence stays Reverse.
-    if saw_forward
-        push!(pairs, (Forward, Forward))
-    elseif saw_reverse
-        push!(pairs, (Reverse, Reverse))
-    else
-        push!(pairs, (default, default))
-    end
-    return pairs
-end
-
-function _decode_transition_strand(evidence; default::StrandOrientation = Forward)
-    return first(_decode_transition_pairs(evidence; default = default))[1]
+    return saw_reverse ? Reverse : default
 end
 
 """
@@ -352,7 +331,7 @@ end
 
 Convert a Rhizomorph evidence graph into a weighted graph suitable for
 probabilistic path algorithms. Edge weights are derived from evidence counts
-by default. The transition strand comes from `_decode_transition_pairs`:
+by default. The transition strand comes from `_decode_transition_strand`:
 Forward when any Forward evidence is present, otherwise Reverse. Undirected
 graphs are expanded into bidirectional edges.
 

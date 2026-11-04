@@ -1860,7 +1860,11 @@ end
 # about -0.6; a coverage-1 transition needs a denominator of at least ~8 before
 # walking that spur costs more than skipping it. Supported edges (weight ≳ 4)
 # stay cheaper than the gap-extend, so a covered path is not rewritten as
-# indels. The residual mass is not a successor.
+# indels. Coverage 2-3 is pinned by the indel decoder test
+# "coverage 2-3 true path is not rewritten as indels". Recalibrate this
+# constant with assess_frontier_dominance in
+# benchmarking/rhizomorph_correction_pr_curve.jl if the gap model changes.
+# The residual mass is not a successor.
 const _INDEL_TRANSITION_BACKGROUND = 8.0
 
 function _indel_decode_successors!(

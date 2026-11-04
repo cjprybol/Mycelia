@@ -1265,3 +1265,44 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test exception_diagnostics.structural_errors[] == 1
     end
 end
+
+# `_INDEL_TRANSITION_BACKGROUND = 8` makes a coverage-1 spur expensive. A true
+# edge of weight 2 or 3 then costs about -1.6 to -1.3 nats, near a nanopore
+# gap-extend (~-2.6). Forward-only copies keep the directed weight equal to the
+# copy count (the reverse-complement image is a different edge). A clean read
+# on that path must be spelled with zero gap moves.
+Test.@testset "coverage 2-3 true path is not rewritten as indels" begin
+    sequence = "ATGCTAGCTAGTCTAGCATGCTACGTACG"
+    k = 9
+    profile = Mycelia.indel_error_profile(:nanopore)
+    config = Mycelia.ViterbiCorrectionConfig(
+        alphabet = :DNA,
+        strand_mode = :doublestrand,
+        error_rate = profile.base_error_rate,
+        indel_moves = true,
+        insertion_fraction = profile.insertion_fraction,
+        deletion_fraction = profile.deletion_fraction,
+        insertion_extend_probability = profile.insertion_extend_probability,
+        deletion_extend_probability = profile.deletion_extend_probability,
+        deletion_max_run = 3,
+        max_insertion_run = 3,
+        band_width = 16,
+        beam_width = typemax(Int),
+    )
+    for copies in (2, 3)
+        quality = repeat("I", length(sequence))
+        records = [FASTX.FASTQ.Record("copy_$(copies)_$(i)", sequence, quality)
+                   for i in 1:copies]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(records, k; mode = :doublestrand)
+        kmers = collect(Kmers.FwDNAMers{k}(BioSequences.LongDNA{4}(sequence)))
+        Test.@test Mycelia.Rhizomorph.count_evidence(graph[kmers[1], kmers[2]]) == copies
+        result = Mycelia.correct_observations(graph, [kmers]; config = config)
+        path_result = only(result.paths)
+        moves = path_result.diagnostics[:move_counts]
+        Test.@test moves[:I] == 0
+        Test.@test moves[:D] == 0
+        Test.@test path_result.path !== nothing
+        labels = [step.vertex_label for step in path_result.path.steps]
+        Test.@test labels == kmers
+    end
+end
