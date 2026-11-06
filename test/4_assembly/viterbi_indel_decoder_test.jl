@@ -1196,13 +1196,13 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
                    transaction_diagnostics.indel_decodes[] +
                    transaction_diagnostics.truncated_decodes[]
 
-        # Known gap: on a reverse-complement-symmetric read (every 5-mer's reverse
-        # complement is also in the read) whose doublestrand edges carry evidence on
-        # both strands, the indel decoder truncates although a Forward walk spelling
-        # the read is present in the graph, so the likelihood calculator is never
-        # reached. Change the @test_broken lines to @test when the decoder is fixed.
-        # The precondition check below pins the both-strand edge evidence, so an
-        # unexpected pass cannot come from edges reverting to single-strand evidence.
+        # Regression (td-tg05): on a reverse-complement-symmetric read (every
+        # 5-mer's reverse complement is also in the read) the doublestrand edges
+        # carry evidence on both strands. The weighted decode graph used to take
+        # each edge's strand from its first evidence entry, so the labels were
+        # mixed and the decode truncated. The precondition check below pins the
+        # both-strand evidence, so a pass cannot come from edges reverting to
+        # single-strand evidence.
         symmetric_reference = indel_quality_record(
             "symmetric_ref", "ACGTACGTA", fill(40, 9))
         symmetric_graph = Mycelia.Rhizomorph.build_qualmer_graph(
@@ -1238,8 +1238,15 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test symmetric_diagnostics.indel_attempts[] == 1
         Test.@test symmetric_diagnostics.structural_errors[] == 0
         Test.@test symmetric_diagnostics.unkmerizable_reads[] == 0
-        Test.@test_broken symmetric_diagnostics.indel_decodes[] == 1
-        Test.@test_broken symmetric_calculator_reached[]
+        Test.@test symmetric_diagnostics.indel_decodes[] == 1
+        Test.@test symmetric_calculator_reached[]
+        # The weighted decode graph labels every both-strand edge Forward.
+        symmetric_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            symmetric_graph)
+        Test.@test all(
+            labels -> symmetric_weighted[labels...].src_strand ==
+                      Mycelia.Rhizomorph.Forward,
+            MetaGraphsNext.edge_labels(symmetric_weighted))
 
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))

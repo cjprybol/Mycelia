@@ -803,12 +803,15 @@ function _viterbi_graph_has_reverse_strand_evidence(graph::MetaGraphsNext.MetaGr
                 return true
             end
         elseif hasproperty(edge_data, :evidence)
-            strand = Rhizomorph.first_evidence_strand(
-                getproperty(edge_data, :evidence);
-                default = Rhizomorph.Forward
-            )
-            if Rhizomorph._normalize_strand(strand) == Rhizomorph.Reverse
-                return true
+            # Any Reverse entry counts, independent of evidence order.
+            for dataset_evidence in values(getproperty(edge_data, :evidence))
+                for observation_evidence in values(dataset_evidence)
+                    for entry in observation_evidence
+                        hasfield(typeof(entry), :strand) || continue
+                        Rhizomorph._normalize_strand(entry.strand) ==
+                        Rhizomorph.Reverse && return true
+                    end
+                end
             end
         end
     end
