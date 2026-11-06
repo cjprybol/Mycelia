@@ -467,6 +467,9 @@ edges of its own walk, so a single-strand view built with this rule keeps that
 walk traversable on one strand. Edges with evidence on only one strand resolve to that
 strand, exactly as with `first_evidence_strand`.
 
+One strand per edge cannot serve both orientations: a walk supported only by
+reverse-complement evidence dead-ends at any edge that was also observed forward.
+
 # Example
 ```julia
 strand = Mycelia.Rhizomorph.preferred_evidence_strand(edge_data.evidence)

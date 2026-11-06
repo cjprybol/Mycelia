@@ -307,8 +307,9 @@ Convert a Rhizomorph evidence graph into a weighted graph suitable for
 probabilistic path algorithms. Edge weights are derived from evidence counts
 by default. Each weighted edge carries one strand: `Forward` when any evidence
 entry is `Forward`, otherwise the evidence strand (see
-`preferred_evidence_strand`). Undirected graphs are expanded into bidirectional
-edges.
+`preferred_evidence_strand`). Reduced (lightweight/ultralight) edges, which
+carry no strand, are labelled `Forward`. Undirected graphs are expanded into
+bidirectional edges.
 
 # Arguments
 - `source_graph::MetaGraphsNext.MetaGraph`: Evidence-backed graph to convert

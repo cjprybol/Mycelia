@@ -1245,8 +1245,35 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             symmetric_graph)
         Test.@test all(
             labels -> symmetric_weighted[labels...].src_strand ==
-                      Mycelia.Rhizomorph.Forward,
+                      Mycelia.Rhizomorph.Forward &&
+                          symmetric_weighted[labels...].dst_strand ==
+                          Mycelia.Rhizomorph.Forward,
             MetaGraphsNext.edge_labels(symmetric_weighted))
+
+        # Strand-mode auto-detection counts a Reverse entry that is not first.
+        # Vector inner containers fix the order (Forward first), so the old
+        # first-entry rule would have resolved :singlestrand.
+        function strand_detection_graph(strands)
+            detection_graph = MetaGraphsNext.MetaGraph(
+                MetaGraphsNext.DiGraph(),
+                label_type = String,
+                vertex_data_type = Nothing,
+                edge_data_type = Any)
+            detection_graph["A"] = nothing
+            detection_graph["B"] = nothing
+            detection_graph["A", "B"] = (evidence = Dict("ds" => Dict(
+                "obs" => [(strand = s,) for s in strands])),)
+            return detection_graph
+        end
+        mixed_graph = strand_detection_graph(
+            [Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse])
+        Test.@test Mycelia._viterbi_graph_has_reverse_strand_evidence(mixed_graph)
+        Test.@test Mycelia._resolve_viterbi_strand_mode(
+            mixed_graph, :DNA, :auto) == :doublestrand
+        forward_graph = strand_detection_graph([Mycelia.Rhizomorph.Forward])
+        Test.@test !Mycelia._viterbi_graph_has_reverse_strand_evidence(forward_graph)
+        Test.@test Mycelia._resolve_viterbi_strand_mode(
+            forward_graph, :DNA, :auto) == :singlestrand
 
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))
