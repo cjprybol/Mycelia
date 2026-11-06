@@ -36,9 +36,9 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     # reverse-complement edge evidence is now summed, not overwritten). Measured on
     # this toy (Perlmutter job 60661221): the gate reverts nothing for thresholds
     # 0.5-4 and gives the same metrics for 8-32, so 16 is the geometric midpoint of
-    # that plateau. The engaged effect is small (about 2 reverted edits), so a decode
-    # change can flip assertion (3) independently of the threshold. Real-scale
-    # operating points are a benchmark question (assess_frontier_dominance).
+    # that plateau. The engaged effect was small (about 2 reverted edits), and after
+    # the td-tg05 decoder fix it is zero on this toy (see (3)). Real-scale operating
+    # points are a benchmark question (assess_frontier_dominance).
     gated_point = (name = "calibrated-gap-16.0", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = 16.0)
@@ -75,16 +75,16 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     Test.@test gated.over_rate <= base.over_rate + 1e-9
     Test.@test gated.recall <= base.recall + 1e-9
 
-    # (3) GATE ENGAGED, in the frontier-improving direction: at err=0.10 the gate
-    # reverts some edits (fewer total edits) and drives over-correction down. This
-    # tightens (2) to strict on over-correction.
-    # Whether a threshold RETAINS recall at real scale (full up-and-right dominance)
-    # is measured by assess_frontier_dominance in the benchmark sweep. On this toy at
-    # 16 recall was measured unchanged, so the recall check below is a toy-specific
-    # guard against the threshold reverting true fixes (e.g. the gap scale drifting
-    # so that 16 over-reverts). Code-level inversion or revert-everything is caught
-    # by the permissive byte-identity check (1).
-    Test.@test gated.correction_rate < base.correction_rate
-    Test.@test gated.over_rate < base.over_rate
+    # (3) NON-INFERIORITY. Since the weighted decode graph resolves both-strand
+    # edges consistently (td-tg05), the ungated run on this toy makes no
+    # over-corrections, so the gate has nothing to revert: gated and ungated give
+    # identical metrics (Perlmutter job 60910223: correction_rate 0.00217,
+    # over_rate 0.0). The earlier strict "gate engaged" check therefore cannot hold
+    # here. Whether the gate adds value at real scale is measured by
+    # assess_frontier_dominance; restoring a strict toy differential is td-4lbi.
+    # The recall check guards against the threshold reverting true fixes (e.g. the
+    # gap scale drifting so that 16 over-reverts). Code-level inversion or
+    # revert-everything is caught by the permissive byte-identity check (1).
+    Test.@test gated.correction_rate <= base.correction_rate + 1e-9
     Test.@test gated.recall >= base.recall - 1e-9
 end
