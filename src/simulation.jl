@@ -194,7 +194,7 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 # Outputs
 Generates gzipped FASTQ files in the working directory:
 - For paired-end: `\$(outbase)1.fq.gz` (forward) and `\$(outbase)2.fq.gz` (reverse).
-- For single-end: `\$(outbase)1.fq.gz`.
+- For single-end: `\$(outbase).fq.gz` (ART writes `\$(outbase).fq` without a mate suffix).
 
 SAM files are produced via ART's `--samout` option, and additional error-free
 SAM output is created when `--errfree` is enabled.
