@@ -90,6 +90,51 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
         Test.@test only(exact.paths).score >= only(beamed.paths).score - 1e-9
     end
 
+
+    # The existing bubble (observed k-mers unique to one branch) prunes under
+    # beam_width=1 but still recovers the exact path, because the matching
+    # branch is also the local best. td-63vh asks for a case where a too-narrow
+    # beam DIVERGES, and a wider beam still matches exact.
+    # Two paths share ATG then split (TGC vs TGA). The observed second k-mer
+    # is TGT — one substitution from BOTH — so the first branch is decided by
+    # coverage, not emission. The remaining observed k-mers uniquely match the
+    # lower-coverage path. Exact (and a beam wide enough to keep both branches)
+    # recovers that path; beam_width=1 keeps only the high-coverage decoy.
+    Test.@testset "too-narrow a beam on a branching graph diverges from exact" begin
+        trap_records = [
+            FASTX.FASTA.Record("true_path", BioSequences.dna"ATGAGTA"),
+            FASTX.FASTA.Record("decoy_1", BioSequences.dna"ATGCGTA"),
+            FASTX.FASTA.Record("decoy_2", BioSequences.dna"ATGCGTA"),
+        ]
+        trap_graph = Mycelia.Rhizomorph.build_kmer_graph(
+            trap_records, 3; dataset_id="beam_trap", mode=:singlestrand
+        )
+        trap_observed = [
+            Kmers.DNAKmer{3}("ATG"),
+            Kmers.DNAKmer{3}("TGT"),
+            Kmers.DNAKmer{3}("GAG"),
+            Kmers.DNAKmer{3}("AGT"),
+            Kmers.DNAKmer{3}("GTA"),
+        ]
+        exact = Mycelia.correct_observations(trap_graph, [trap_observed])
+        wide = Mycelia.correct_observations(
+            trap_graph, [trap_observed];
+            config = Mycelia.ViterbiCorrectionConfig(alphabet = :DNA, beam_width = 4),
+        )
+        narrow = Mycelia.correct_observations(
+            trap_graph, [trap_observed];
+            config = Mycelia.ViterbiCorrectionConfig(alphabet = :DNA, beam_width = 1),
+        )
+        exact_labels = beam_decoded_label_strings(exact)
+        Test.@test exact_labels == ["ATG", "TGA", "GAG", "AGT", "GTA"]
+        Test.@test beam_decoded_label_strings(wide) == exact_labels
+        Test.@test isapprox(only(wide.paths).score, only(exact.paths).score; atol = 1e-9)
+        Test.@test get(only(wide.paths).diagnostics, :beam_pruned, 0) == 0
+        Test.@test get(only(narrow.paths).diagnostics, :beam_pruned, 0) >= 1
+        Test.@test beam_decoded_label_strings(narrow) != exact_labels
+        Test.@test only(exact.paths).score > only(narrow.paths).score + 1e-9
+    end
+
     Test.@testset "beam_width must be positive" begin
         Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width=0)
         Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width=-4)
@@ -142,6 +187,31 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
     # An explicit beam_width override is honored verbatim by the per-read decoder
     # entry point: passing typemax(Int) forces EXACT decoding regardless of the
     # auto-default, and the correction still completes on a small read.
+
+    Test.@testset "_prune_correction_beam keeps the top-k competing states" begin
+        # Direct coverage of the width-beam helper (td-63vh). The integration
+        # tests above go through correct_observations; this pins the prune
+        # predicate itself: when more states compete than the width, only the
+        # highest-scoring k survive and the predecessor map stays aligned.
+        scores = Dict(:best => 0.0, :second => -1.0, :third => -2.0, :worst => -5.0)
+        predecessors = Dict(:best => :p0, :second => :p0, :third => :p1, :worst => :p1)
+        kept, kept_pred = Mycelia._prune_correction_beam(scores, predecessors, 2)
+        Test.@test Set(keys(kept)) == Set([:best, :second])
+        Test.@test kept[:best] == 0.0
+        Test.@test kept[:second] == -1.0
+        Test.@test kept_pred[:best] == :p0
+        Test.@test kept_pred[:second] == :p0
+        Test.@test !haskey(kept, :third)
+        Test.@test !haskey(kept_pred, :worst)
+
+        kept_all, kept_all_pred = Mycelia._prune_correction_beam(scores, predecessors, 8)
+        Test.@test kept_all == scores
+        Test.@test kept_all_pred == predecessors
+
+        kept1, _ = Mycelia._prune_correction_beam(scores, predecessors, 1)
+        Test.@test Set(keys(kept1)) == Set([:best])
+    end
+
     Test.@testset "explicit beam_width override forces exact on the decoder entry" begin
         records = [FASTX.FASTQ.Record("r", "ATGCGT", repeat("I", 6))]
         graph = Mycelia.Rhizomorph.build_qualmer_graph(

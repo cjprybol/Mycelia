@@ -15,8 +15,9 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
 
 - Data: Lawrencium array job 27118659, 16 tasks.
   Every task finished `COMPLETED` with exit 0 and 12/12 rows.
-  The single run label is `td2rxh@e984af449ac3+manifest6893ba277d71`, which is Mycelia HEAD plus the `Manifest.toml` hash.
+  The single run label is `td2rxh@e984af449ac3+manifest6893ba277d71`, which is Mycelia commit e984af449ac3 plus the `Manifest.toml` hash.
   Each task used a node-local TMPDIR.
+  Internal tracking IDs (`td-2rxh` / `td2rxh`) are left in this path and in the run label; they already name the committed folder.
 - Harness: `benchmarking/indel_reroute_evidence.jl --cells td2rxh`, launched by the hardened `benchmarking/run_td2rxh_evidence_lrc.sbatch` at e984af44 (mktemp, fs allowlist, trap).
 - Analysis: `benchmarking/td2rxh_paired_analysis.jl`, first run at Mycelia 498b2822 over `shards/seed*.csv`.
   `report.md` and `td2rxh_cell_verdicts.csv` were regenerated after review round 7, which rounds the median deltas to 1e-6 before the median gates.
@@ -65,7 +66,7 @@ The rule needs only ≥1 engaged run, so the cell is still COMPLETE.
 - The only cells where nanopore wins are at 5% error, where both arms are severely fragmented: the median best contig covers 7–15% of the genome.
   The gain is in the **single best contig**.
   At that error rate nanopore produces about twice as many contigs (median about 1,490 → 2,870 at 1000 bp and about 1,550 → 3,260 at 2000 bp) and about half the total contig bases.
-  In both arms the total contig bases are about 11–22× the genome length at this error rate (nanopore 10.7–13.5×, illumina 19.1–22.1×), so this is not a better assembly overall.
+  At 5% error the total contig bases are about 11–13× the genome length for nanopore (10.7–13.5× across seeds) and 19–22× for illumina (19.1–22.1×), so this is not a better assembly overall.
 - The fit-identity gate is a median.
   At 2000/e0.05 the median Δ is +0.0013, but two seeds lose 0.13–0.17 fit identity.
 - At 1% error, nanopore is significantly and substantially **worse** than illumina: the median paired coverage loss is 0.43 at 1000 bp and 0.19 at 2000 bp.

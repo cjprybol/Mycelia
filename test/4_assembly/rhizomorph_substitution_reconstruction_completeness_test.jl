@@ -30,7 +30,8 @@
 #     floor would be flaky; we assert completeness + that the guard fired, not a
 #     correction rate.
 #   * Indel mode (deliberately exempt from the guard) — this harness is
-#     substitution-only; indel-mode length-change survival is a separate test.
+#     substitution-only; indel-mode length-change survival is covered by
+#     `indel_length_change_survival_test.jl` (td-3qjd).
 #   * One geometry (500 bp genome, 150 bp reads, 10x, k=21, single pass, two error
 #     rates) — matches the bead's acceptance config; broader geometries not swept.
 #
