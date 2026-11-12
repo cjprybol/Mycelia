@@ -31,9 +31,11 @@ set -u
 TRACK="${MYCELIA_TEST_TRACK_DIR}"
 
 is_shard=1
+is_aggregate=0
 for arg in "$@"; do
     case "$arg" in
-        --seeds|--aggregate-only) is_shard=0 ;;
+        --seeds) is_shard=0 ;;
+        --aggregate-only) is_shard=0; is_aggregate=1 ;;
     esac
 done
 
@@ -53,8 +55,11 @@ sleep "${MYCELIA_TEST_SHARD_SECONDS:-0.4}"
 rmdir "${TRACK}/live/$$" 2>/dev/null || true
 
 if [ "$is_shard" = 1 ]; then exit "${MYCELIA_TEST_SHARD_EXIT:-0}"; fi
-if [ -n "${MYCELIA_TEST_AGG_MSG:-}" ]; then printf '%s\n' "${MYCELIA_TEST_AGG_MSG}"; fi
-exit "${MYCELIA_TEST_AGG_EXIT:-0}"
+if [ "$is_aggregate" = 1 ]; then
+    if [ -n "${MYCELIA_TEST_AGG_MSG:-}" ]; then printf '%s\n' "${MYCELIA_TEST_AGG_MSG}"; fi
+    exit "${MYCELIA_TEST_AGG_EXIT:-0}"
+fi
+exit 0
 """
 
 """
