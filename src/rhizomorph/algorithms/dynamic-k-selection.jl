@@ -369,11 +369,20 @@ function _quality_residual_error(reads)::Union{Float64, Nothing}
     return base_count == 0 ? nothing : clamp(total_error / base_count, 0.0, 0.499)
 end
 
+# Occupancy at which the small-k_ref scale model
+# (benchmarking/kmer_space_saturation_probe.jl) first returns exactly 0.0.
+# Alphabet-general: the space is |A|^k_ref from the observed alphabet, not 4^k.
+const _KMER_SPACE_SATURATION_LIMIT = 0.95
+
 # k-mer spectrum estimate: genomic k-mer positions (error-free) recur at ~coverage
 # and are "solid" (count >= solid_min); erroneous positions are singletons. The
 # solid FRACTION of k-mer occurrences approximates (1-e)^k_ref, so
 # e ≈ 1 - solid_fraction^(1/k_ref). Because an indel disrupts many downstream
 # k-mers, this (correctly) reports a higher effective error for indel-heavy reads.
+#
+# When distinct k-mers fill most of |A|^k_ref, unrelated loci share k-mers, the
+# solid fraction rises toward 1, and this formula silently returns 0.0. Refuse
+# rather than emit that number (td-jkuq).
 function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float64
     sequences = _collect_dynamic_k_sequences(reads)
     isempty(sequences) && return 0.0
@@ -390,6 +399,20 @@ function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float
         end
     end
     total_occurrences == 0 && return 0.0
+    alphabet_size = _dynamic_k_alphabet_size(sequences)
+    space = float(alphabet_size)^k_ref
+    occupancy = length(counts) / space
+    if occupancy >= _KMER_SPACE_SATURATION_LIMIT
+        space_display = (isfinite(space) && space < typemax(Int) && isinteger(space)) ?
+                        string(Int(space)) : string(space)
+        throw(ArgumentError(
+            "k-mer space is saturated at k_ref=$(k_ref): $(length(counts)) " *
+            "distinct k-mers occupy $(occupancy) of an |A|=$(alphabet_size) " *
+            "space of $(space_display) (|A|^k_ref). The residual-error " *
+            "estimator is undefined in this regime and would silently return " *
+            "0.0. Raise k_ref so |A|^k_ref dominates the observed " *
+            "distinct-k-mer count."))
+    end
     solid_occurrences = 0
     for occurrence_count in values(counts)
         if occurrence_count >= solid_min
@@ -432,6 +455,14 @@ direct callers/tests). Combines two signals and returns the more conservative
 - **per-base Q-values** (FASTQ input only): `mean(10^(-Q/10))`.
 
 `reads` may be FASTQ/FASTA records, strings, or `BioSequence`s.
+
+# Throws
+
+`ArgumentError` when observed distinct k-mers occupy at least
+`_KMER_SPACE_SATURATION_LIMIT` (0.95) of the alphabet-general space
+`|A|^k_ref`. In that regime collisions inflate counts and the estimator
+would silently return 0.0. The alphabet size `|A|` is taken from the
+observed characters (case-insensitive), not hard-coded to 4.
 """
 function estimate_residual_error(reads; k_ref::Int = 13, solid_min::Int = 2)::Float64
     kmer_error = _kmer_spectrum_residual_error(reads, k_ref, solid_min)
