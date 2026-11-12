@@ -51,6 +51,7 @@ case "${STUB_MODE}" in
   header_only) per_read; ladder; header > "$out/read_identity_summary.tsv" ;;
   no_version_col) per_read; ladder; printf 'organism\tsource\nLambda\tblast\n' > "$out/read_identity_summary.tsv" ;;
   good) per_read; ladder; summary_good ;;
+  empty_ladder) per_read; summary_good; : > "$out/kmer_survival_ladder.tsv" ;;
 esac
 exit "${STUB_EXIT:-0}"
 STUB
@@ -86,7 +87,12 @@ run_case "summary lacks version column" fail 109 STUB_MODE=no_version_col
 run_case "julia non-zero, TSVs all good" fail 110 STUB_MODE=good STUB_EXIT=3
 run_case "preflight fails" fail 111 STUB_MODE=good STUB_PREFLIGHT=fail
 run_case "good run" pass 112 STUB_MODE=good
-run_case "reused (non-empty) OUT_DIR" fail 112 STUB_MODE=good
+# Job 113 is isolated from the good run: pre-create a non-empty OUT_DIR
+# so the wrapper's reuse refusal is the only reason this case can fail.
+mkdir -p "${SCRATCH}/out/113"
+printf 'leftover\n' > "${SCRATCH}/out/113/leftover.txt"
+run_case "reused (non-empty) OUT_DIR" fail 113 STUB_MODE=good
+run_case "zero-byte ladder" fail 114 STUB_MODE=empty_ladder
 
 echo
 if [[ "${FAILURES}" -eq 0 ]]; then
