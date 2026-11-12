@@ -146,6 +146,21 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
     return outfile
 end
 
+# Permission bits a new file gets from `open(path, "w")` under the current
+# umask. `mktemp`/`mkstemp` creates mode 0600, and `mv` keeps that mode.
+function _plain_open_write_mode()
+    probe = tempname()
+    local mode
+    try
+        io = open(probe, "w")
+        close(io)
+        mode = filemode(probe) & 0o777
+    finally
+        isfile(probe) && rm(probe; force = true)
+    end
+    return mode
+end
+
 """
     write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString; segment_naming::Symbol=:numeric)
 
@@ -294,6 +309,7 @@ function write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractS
                 error("Edge $(u) -- $(v) has no valid $(overlap)-base overlap in any orientation")
         end
         close(tmpio)
+        chmod(tmpfile, _plain_open_write_mode())
         mv(tmpfile, outfile; force=true)
     catch
         isopen(tmpio) && close(tmpio)
