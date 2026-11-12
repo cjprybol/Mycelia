@@ -1370,6 +1370,29 @@ Test.@testset "ONT k-sweep helpers" begin
             cell_id = ["a", "a"], min_identity = [80, 80.5])
         Test.@test length(table_row_keys(mixed, (:cell_id, :min_identity))) == 2
     end
+
+    Test.@testset "--allow-shrink CLI parsing is pinned (td-6mzb)" begin
+        # Tests previously exercised only the allow_shrink KWARG. The process
+        # const is parsed from ARGS at include time, so the near-miss
+        # `--allow-shrink=true` was silently ignored (the token is not
+        # exactly "--allow-shrink"). Pin the parser so a misspelled form
+        # cannot pass as a disabled guard.
+        Test.@test allow_shrink_from_args(String[]) == false
+        Test.@test allow_shrink_from_args(["--smoke"]) == false
+        Test.@test allow_shrink_from_args(["--allow-shrink"]) == true
+        Test.@test allow_shrink_from_args(["--output-dir", "x", "--allow-shrink"]) == true
+        Test.@test allow_shrink_from_args(["--allow-shrink=true"]) == true
+        Test.@test allow_shrink_from_args(["--allow-shrink=false"]) == false
+        err = try
+            allow_shrink_from_args(["--allow-shrink=yesplease"])
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("unrecognised --allow-shrink value", err.msg)
+        Test.@test occursin("yesplease", err.msg)
+    end
 end
 
 end  # module
