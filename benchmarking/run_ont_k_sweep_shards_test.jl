@@ -53,7 +53,8 @@ sleep "${MYCELIA_TEST_SHARD_SECONDS:-0.4}"
 rmdir "${TRACK}/live/$$" 2>/dev/null || true
 
 if [ "$is_shard" = 1 ]; then exit "${MYCELIA_TEST_SHARD_EXIT:-0}"; fi
-exit 0
+if [ -n "${MYCELIA_TEST_AGG_MSG:-}" ]; then printf '%s\n' "${MYCELIA_TEST_AGG_MSG}"; fi
+exit "${MYCELIA_TEST_AGG_EXIT:-0}"
 """
 
 """
@@ -421,5 +422,33 @@ Test.@testset "run_ont_k_sweep_shards.sh concurrency cap" begin
         Test.@test code == 1
         Test.@test occursin("FAILURE", out)
         Test.@test occursin("exited non-zero", out)
+    end
+
+    Test.@testset "final aggregation failure names the cause (td-6mzb)" begin
+        # The non-zero branch used to have two causes — some cells not ok
+        # (tables written) and an uncaught guard refusal (tables not written)
+        # — and the message asserted only the first.
+        root, track = stage_sandbox()
+        out, code = run_driver(root, track; env = Dict(
+            "MAX_PARALLEL" => "2",
+            "MYCELIA_TEST_AGG_EXIT" => "1",
+            "MYCELIA_TEST_AGG_MSG" =>
+                "refusing to shrink /tmp/x: it currently has 3 key(s) that this write would drop",
+        ))
+        Test.@test code == 1
+        Test.@test occursin("guard refusal", out)
+        Test.@test !occursin("reported non-ok cells", out)
+
+        root, track = stage_sandbox()
+        out, code = run_driver(root, track; env = Dict(
+            "MAX_PARALLEL" => "2",
+            "MYCELIA_TEST_AGG_EXIT" => "1",
+            "MYCELIA_TEST_AGG_MSG" =>
+                "Aggregated 6 cells, 5 ok, 1 not ok.",
+        ))
+        Test.@test code == 1
+        Test.@test occursin("non-ok cells", out)
+        Test.@test occursin("tables were written", out)
+        Test.@test !occursin("guard refusal", out)
     end
 end
