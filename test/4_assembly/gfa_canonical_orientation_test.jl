@@ -264,4 +264,22 @@ Test.@testset "write_gfa_canonical link orientation" begin
                 sprint(showerror, err))
         end
     end
+
+    # mktemp/mkstemp creates the temp file at mode 0600, and mv keeps that
+    # mode. A plain open(path, "w") applies the process umask (usually 0644).
+    Test.@testset "written GFA mode matches open(path, \"w\")" begin
+        if Sys.iswindows()
+            Test.@test_skip "file mode follows the Unix umask; skipped on Windows"
+        else
+            mktempdir() do dir
+                normal = joinpath(dir, "normal.txt")
+                open(normal, "w") do io
+                    write(io, "x")
+                end
+                gfa = joinpath(dir, "mode.gfa")
+                Mycelia.Rhizomorph.write_gfa_canonical(canonical_graph("ACGTACGT", 5), gfa)
+                Test.@test (stat(gfa).mode & 0o777) == (stat(normal).mode & 0o777)
+            end
+        end
+    end
 end
