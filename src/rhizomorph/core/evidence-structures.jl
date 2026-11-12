@@ -48,16 +48,22 @@ Quality-aware evidence entry that includes per-base quality scores.
 # Fields
 - `position::Int`: Position in the observation
 - `strand::StrandOrientation`: Strand orientation
-- `quality_scores::Vector{UInt8}`: Phred quality scores (0-60 typical range)
+- `quality_scores::Vector{UInt8}`: Phred+33 encoded quality scores (ASCII bytes;
+  Q0 is 33, Q30 is 63; typical range 33-93)
 
 # Details
 Quality scores are stored as Vector{UInt8} to support variable-length sequences.
 For fixed-length k-mers in QualmerVertexData, these vectors will all have the same
 length (k), but the structure allows flexibility.
 
+These are Phred+33 encoded bytes, matching `FASTX.quality(record)`, not raw
+Phred values. Consumers such as `get_vertex_joint_quality` decode by subtracting
+33 and reject any byte below 33 rather than wrapping it under unsigned
+arithmetic (`UInt8(30) - UInt8(33) == 0xfd`).
+
 # Examples
 ```julia
-entry = QualityEvidenceEntry(10, Forward, UInt8[30, 35, 32, 28, 40])
+entry = QualityEvidenceEntry(10, Forward, UInt8[63, 68, 65, 61, 73])  # Q30, 35, 32, 28, 40
 ```
 """
 struct QualityEvidenceEntry
@@ -126,19 +132,20 @@ Quality-aware evidence entry for edges.
 - `from_position::Int`: Starting position
 - `to_position::Int`: Ending position
 - `strand::StrandOrientation`: Strand orientation
-- `from_quality::Vector{UInt8}`: Quality scores at source vertex
-- `to_quality::Vector{UInt8}`: Quality scores at target vertex
+- `from_quality::Vector{UInt8}`: Phred+33 encoded quality scores at source vertex
+- `to_quality::Vector{UInt8}`: Phred+33 encoded quality scores at target vertex
 
 # Details
 Stores quality information for both ends of the edge transition, enabling
-quality-aware path finding and assembly algorithms.
+quality-aware path finding and assembly algorithms. Encoding matches
+`QualityEvidenceEntry.quality_scores` (Phred+33 ASCII bytes, not raw Phred).
 
 # Examples
 ```julia
 entry = EdgeQualityEvidenceEntry(
     5, 6, Forward,
-    UInt8[30, 35, 32],  # Quality at source
-    UInt8[28, 40, 38]   # Quality at target
+    UInt8[63, 68, 65],  # Q30, 35, 32 at source
+    UInt8[61, 73, 71]   # Q28, 40, 38 at target
 )
 ```
 """
