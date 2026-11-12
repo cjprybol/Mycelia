@@ -122,6 +122,28 @@ Test.@testset "td2rxh evidence smoke" begin
     Test.@test Harness.CSV_HEADER == vcat(LEGACY_HEADER, NEW_COLUMNS)
 end
 
+# td-wmvp: pin the box-closable round-7 doc nits (source-level, default CI).
+Test.@testset "round-7 deferred doc nits (td-wmvp)" begin
+    root = joinpath(@__DIR__, "..", "..")
+    analysis = read(joinpath(root, "benchmarking", "td2rxh_paired_analysis.jl"), String)
+    readme = read(joinpath(root, "benchmarking", "results", "td2rxh-evidence",
+        "27118659", "README.md"), String)
+    test_header = read(@__FILE__, String)[1:800]
+    # Item 5: H1' is labelled as incremental cost, an upper bound, not bare
+    # "decode cost".
+    Test.@test occursin("H1' (incremental cost", analysis)
+    # Item 1: the exact-n cap is labelled defence-in-depth (n <= 16 through main).
+    Test.@test occursin("defence-in-depth", analysis)
+    # Item 4: the >=1-engaged rule can still include unengaged seeds in the H1' median.
+    Test.@test occursin("unengaged", analysis)
+    # Item 6: the committed evidence was launched by the hardened sbatch at e984af44.
+    Test.@test occursin("at e984af44", readme)
+    # Item 18: most analysis guards are reached through the test-side analyse() mirror.
+    Test.@test occursin("analyse() helper", test_header) ||
+               occursin("analyse() mirrors", test_header) ||
+               occursin("test-side analyse()", test_header)
+end
+
 if !RUN_SLOW
     @info "Skipping remaining td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
 else
