@@ -1428,6 +1428,43 @@ Test.@testset "ONT k-sweep helpers" begin
             Test.@test n_warn == 1
         end
     end
+
+    Test.@testset "save_cell_json publishes atomically (td-6mzb)" begin
+        # save_cell_json is the one remaining non-atomic write in the sweep.
+        # It feeds the shrink guard: a crash mid-write leaves a truncated
+        # checkpoint that load_all_checkpoints warn-skips, producing a
+        # refusal that kills the shard. A mid-write failure must leave the
+        # existing checkpoint intact (and leave no partial file when the
+        # path is new).
+        mktempdir() do dir
+            target = joinpath(dir, "cell_result.json")
+            good = cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = merge(empty_metrics(),
+                    (; NGA50 = 4000.0, genome_fraction = 99.0,
+                        quast_contigs = 1.0)),
+                nga50_status = "measured", outcome = "partial",
+                wall_seconds = 1.0, status = "ok")
+            save_cell_json(target, good)
+            before = read(target, String)
+
+            err = try
+                save_cell_json(target, (; boom = ExplodingCell()))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa Exception
+            # JSON.print does not call Base.show; it refuses the unserialisable
+            # value itself. Either wording is a mid-write failure.
+            msg = sprint(showerror, err)
+            Test.@test occursin("serialis", msg) || occursin("serialize", msg) ||
+                       occursin("simulated serialisation failure", msg)
+            Test.@test isfile(target)
+            Test.@test read(target, String) == before
+            Test.@test isempty(filter(f -> occursin(".tmp.", f), readdir(dir)))
+        end
+    end
 end
 
 end  # module
