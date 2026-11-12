@@ -534,6 +534,33 @@ Test.@testset "ONT k-sweep helpers" begin
                                UInt8[0x00, 0xff, 0xfe, 0x00, 0x01, 0x02]
                 end
             end
+
+            Test.@testset "a non-ArgumentError read failure is still corruption (td-6mzb)" begin
+                # The binary-input fixture above reaches the corruption
+                # branch via CSV.jl's ArgumentError. The generic path —
+                # a read failure that is not an ArgumentError — was still
+                # unexercised. A permission-denied file makes CSV.read throw
+                # SystemError, which is the path this pins.
+                mktempdir() do dir
+                    target = joinpath(dir, results_name)
+                    CSV.write(target, DataFrames.DataFrame(full);
+                        delim = '\t', missingstring = "NA")
+                    before = read(target)
+                    chmod(target, 0o000)
+                    err = try
+                        guarded_error(() -> write_table_guarded(
+                            target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                    finally
+                        chmod(target, 0o644)
+                    end
+                    Test.@test err isa ErrorException
+                    Test.@test occursin("could not be read", err.msg)
+                    Test.@test occursin("git checkout", err.msg)
+                    Test.@test !occursin("schema change", err.msg)
+                    Test.@test occursin("Permission denied", err.msg)
+                    Test.@test read(target) == before
+                end
+            end
         end
 
         Test.@testset "a Float64 key round-trips rather than reading as lost" begin
