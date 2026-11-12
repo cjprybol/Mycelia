@@ -144,3 +144,30 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         Test.@test k_on >= gfloor    # select_reassembly_k actually applies the floor (wiring)
     end
 end
+
+# td-etyf: canonical window hash must be case-insensitive so soft-masked
+# (lowercase) input does not split a locus from its reverse complement.
+Test.@testset "canonical k-mer hash is case-insensitive (td-etyf)" begin
+    R = Mycelia.Rhizomorph
+    k = 11
+    upper = collect("ACGTAAACCGTTAGC")
+    lower = collect("acgtaaaccgttagc")
+    mixed = collect("acGTAAAccgTTAgc")
+
+    Test.@test R._dynamic_k_canonical_window_hash(upper, 1, k) ==
+               R._dynamic_k_canonical_window_hash(lower, 1, k)
+    Test.@test R._dynamic_k_canonical_window_hash(upper, 1, k) ==
+               R._dynamic_k_canonical_window_hash(mixed, 1, k)
+    # A k-mer and its reverse complement must hash identically even when
+    # one side is lowercased. The current helper uppercases only the
+    # reverse-complement half, so this fails on soft-masked input.
+    window = "ACGTAAACCGT"
+    rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(window)))
+    Test.@test R._dynamic_k_canonical_window_hash(collect(lowercase(window)), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(rc), 1, k)
+    Test.@test R._dynamic_k_canonical_window_hash(collect(window), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(lowercase(rc)), 1, k)
+    # Uppercase-only input stays self-consistent (no regression on the live path).
+    Test.@test R._dynamic_k_canonical_window_hash(collect(window), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(rc), 1, k)
+end
