@@ -1342,6 +1342,34 @@ Test.@testset "ONT k-sweep helpers" begin
         with_null["NGA50"] = nothing
         Test.@test ismissing(canonical(with_null).NGA50)
     end
+
+    Test.@testset "Int and Float64 forms of a key are the same key (td-6mzb)" begin
+        # Documented in table_row_keys: Int 30 on disk vs Float64 30.0 in
+        # memory used to render "30" against "30.0" and the guard reported a
+        # phantom loss. Fails closed today, but a CSV.jl inference change on a
+        # key column would then refuse a rewrite of an unchanged table.
+        on_disk = DataFrames.DataFrame(cell_id = ["a", "b"],
+            coverage = [30, 50], value = [1, 2])
+        in_memory = DataFrames.DataFrame(cell_id = ["a", "b"],
+            coverage = [30.0, 50.0], value = [1, 2])
+        Test.@test table_row_keys(on_disk, (:cell_id, :coverage)) ==
+                   table_row_keys(in_memory, (:cell_id, :coverage))
+
+        mktempdir() do dir
+            target = joinpath(dir, "keys.tsv")
+            CSV.write(target, on_disk; delim = '\t', missingstring = "NA")
+            # Must not refuse: this is the same table, only the Julia type of
+            # coverage changed (the situation CSV.jl produces when it infers
+            # Float64).
+            write_table_guarded(target, in_memory, (:cell_id, :coverage))
+            Test.@test DataFrames.nrow(read_tsv(target)) == 2
+        end
+
+        # Non-integer floats stay distinct from nearby ints.
+        mixed = DataFrames.DataFrame(
+            cell_id = ["a", "a"], min_identity = [80, 80.5])
+        Test.@test length(table_row_keys(mixed, (:cell_id, :min_identity))) == 2
+    end
 end
 
 end  # module
