@@ -36,10 +36,13 @@
 #      inner kernel. (ADR §Decision item 4.)
 #
 # Byte-identical guarantee. Every scoring/topology primitive is the SAME function
-# the scalar decoder calls (`_call_viterbi_state_emission_logp`,
+# the scalar decoder calls (`_call_viterbi_state_emission_logp` or, on k-mer
+# graphs with the default emission, `_call_viterbi_new_base_emission_logp`;
 # `Rhizomorph._get_valid_transitions`, `Rhizomorph._total_outgoing_weight`,
 # `Rhizomorph._edge_transition_weight`), and the arithmetic is evaluated in the
-# same associativity: `next = (state_score + log(edge_w/total_out)) + emission`.
+# same associativity: `next = (state_score + log(edge_w/(total_out+bg))) + emission`,
+# where `bg` is `_viterbi_kmer_transition_background` (8 on k-mer graphs, 0
+# otherwise).
 # Best-state selection and path reconstruction reuse the scalar helpers verbatim
 # (`_best_correction_state`, `_best_correction_target_state`,
 # `_reconstruct_correction_path`), so tie-breaks are identical. The
@@ -65,10 +68,11 @@
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 One precomputed out-edge of the shared, immutable decode graph, in the batched
-structure-of-arrays layout. `log_transition_prob = log(edge_weight / total_out)`
-is graph-only (read-independent) and is therefore hoisted out of the per-read
-inner loop; `next_vertex` is retained so the per-read emission term can be scored
-against the destination label exactly as the scalar decoder does.
+structure-of-arrays layout. `log_transition_prob = log(edge_weight / (total_out + bg))`
+is graph-only (read-independent; `bg` is 8 on k-mer graphs and 0 otherwise) and
+is therefore hoisted out of the per-read inner loop; `next_vertex` is retained so
+the per-read emission term can be scored against the destination label exactly as
+the scalar decoder does.
 """
 struct BatchedOutEdge{L}
     next_state_id::Int
@@ -100,8 +104,9 @@ out-edge structure-of-arrays for `graph`. State ids enumerate every graph label
 crossed with both strand orientations (`Forward`, `Reverse`) in label order, so
 the map is stable and dense. Every topology/weight query uses the same Rhizomorph
 primitives the scalar decoder calls, and `log_transition_prob` is computed with
-the identical `log(edge_w / total_out)` expression, so the precomputation is
-byte-identical to the scalar per-step arithmetic.
+the identical `log(edge_w / (total_out + bg))` expression (`bg` from
+`_viterbi_kmer_transition_background`), so the precomputation is byte-identical
+to the scalar per-step arithmetic.
 """
 function build_batched_decode_graph(
         graph::MetaGraphsNext.MetaGraph,
@@ -121,6 +126,7 @@ function build_batched_decode_graph(
     end
 
     out_edges = [Vector{BatchedOutEdge{L}}() for _ in 1:length(states)]
+    transition_background = _viterbi_kmer_transition_background(L)
     for sid in 1:length(states)
         vertex, strand = states[sid]
         transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
@@ -132,7 +138,7 @@ function build_batched_decode_graph(
             next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
             edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
             edge_w <= 0.0 && continue
-            transition_prob = edge_w / total_out
+            transition_prob = edge_w / (total_out + transition_background)
             log_transition_prob = log(transition_prob)
             next_sid = state_id[(next_vertex, next_strand)]
             push!(
@@ -228,6 +234,7 @@ function _batched_decode_bin(
     states = decode_graph.states
     state_id = decode_graph.state_id
     out_edges = decode_graph.out_edges
+    per_base_emission = _viterbi_uses_per_base_emission(L, config)
     n = length(bin_observations)
     n_states = length(states)
     observation_length = length(bin_observations[1])
@@ -327,7 +334,11 @@ function _batched_decode_bin(
                 edges = out_edges[sid]
                 isempty(edges) && continue
                 for edge in edges
-                    emission_score = _call_viterbi_state_emission_logp(
+                    emission_score = per_base_emission ?
+                                     _call_viterbi_new_base_emission_logp(
+                        quality_graph, config, observed_unit, edge.next_vertex,
+                        alphabet, strand_mode) :
+                                     _call_viterbi_state_emission_logp(
                         quality_graph, config, observed_unit, edge.next_vertex,
                         alphabet, strand_mode)
                     candidate = state_score + edge.log_transition_prob + emission_score

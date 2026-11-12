@@ -93,6 +93,22 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         Test.@test ms(_rk_clean, 21) > ms(_rk_n05, 21)
     end
 
+    Test.@testset "survival S(k) drives the level-set selector" begin
+        R = Mycelia.Rhizomorph
+        sv(reads, k) = R.solid_kmer_survival(reads, k)
+        # Clean reads: nearly every read window recurs, at the ceiling too.
+        Test.@test sv(_rk_clean, 21) >= 0.5
+        # Shattered raw reads: most windows at the ceiling are singleton errors.
+        Test.@test sv(_rk_n05, 21) < 0.5
+        Test.@test sv(_rk_n10, 21) < 0.5
+        # Non-increasing in k on the noisy sets (the level-set premise).
+        Test.@test sv(_rk_n05, 7) >= sv(_rk_n05, 13) >= sv(_rk_n05, 21)
+        Test.@test sv(_rk_n10, 7) >= sv(_rk_n10, 13) >= sv(_rk_n10, 21)
+        # Legacy criterion still reachable and still drops on shattered reads.
+        Test.@test R.select_reassembly_k(_rk_n05, 21; criterion = :median_solid) < 21
+        Test.@test_throws ArgumentError R.select_reassembly_k(_rk_clean, 21; criterion = :bogus)
+    end
+
     Test.@testset "effective_kmer_coverage (secondary diagnostic) shows error-driven decay" begin
         # effective_kmer_coverage (mean over ALL distinct canonical k-mers, singletons
         # included) is retained as an interpretable cross-check: it decays smoothly with

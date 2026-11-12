@@ -15,8 +15,9 @@
 # associativity, (c) the relax test is the SAME strict `>` (first-seen wins on a
 # tie, so predecessors match), and (d) every value the kernel reads — the CSR
 # transition arrays and the `emission[read, state, depth]` table — is precomputed
-# on the host with the SAME `_call_viterbi_state_emission_logp` /
-# `log(edge_w/total_out)` the scalar decoder uses. Start-init, per-depth
+# on the host with the SAME step emission (`_call_viterbi_new_base_emission_logp`
+# on default-emission k-mer graphs, otherwise `_call_viterbi_state_emission_logp`)
+# and `log(edge_w/(total_out+bg))` the scalar decoder uses. Start-init, per-depth
 # predecessor materialization + best-state selection, and path reconstruction stay
 # host-side and reuse the scalar tie-break helpers verbatim, exactly as the PoC.
 
@@ -130,13 +131,18 @@ function _build_emission_table(
     n_states = length(states)
     n_depths = max(observation_length - 1, 0)
     emission = fill(-Inf, n, n_states, n_depths)
+    label_type = n_states == 0 ? Any : typeof(states[1][1])
+    per_base_emission = Mycelia._viterbi_uses_per_base_emission(label_type, config)
     for depth in 1:n_depths
         for r in 1:n
             observed_unit = bin_observations[r][depth + 1]
             for sid in 1:n_states
                 vertex = states[sid][1]
-                emission[r, sid, depth] = Mycelia._call_viterbi_state_emission_logp(
-                    quality_graph, config, observed_unit, vertex, alphabet, strand_mode)
+                emission[r, sid, depth] = per_base_emission ?
+                    Mycelia._call_viterbi_new_base_emission_logp(
+                        quality_graph, config, observed_unit, vertex, alphabet, strand_mode) :
+                    Mycelia._call_viterbi_state_emission_logp(
+                        quality_graph, config, observed_unit, vertex, alphabet, strand_mode)
             end
         end
     end

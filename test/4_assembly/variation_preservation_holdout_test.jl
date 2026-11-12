@@ -312,8 +312,10 @@ end
 # never fires there. That left the score margin's interaction with variation
 # UNTESTED (PR #388 review). This holdout closes the gap: it builds a DENSE graph
 # (nv >> 256 -> the finite beam + score margin ENGAGE) carrying a SKEWED-coverage
-# variant, and asserts a read from the RARE haplotype is still corrected onto its
-# OWN (rare) allele — i.e. the margin prunes WRONG paths, not merely RARE ones.
+# variant. The margin must not drop a rare allele that the exact decoder keeps.
+# Per-base emission scores the SNP once, so a long k=21 bubble's coverage-weighted
+# transitions can outvote that one base: extreme skew is no longer forced onto the
+# rare allele. Balanced coverage and the shorter k=9 bubble still keep it.
 #
 # It is decode-level on purpose (asserts the corrected READ, not the final contig),
 # isolating the Viterbi score-margin from the downstream soft-EM / defrag so a
@@ -360,8 +362,7 @@ end
 # Decode one read through the SHIPPING corrector config (size-aware beam + the
 # td-plqi generation bounds wired exactly as `try_viterbi_path_improvement` does)
 # and return the uppercased vertex-label strings of the corrected path.
-function _vph_decode_labels(graph, weighted, read, k::Int)
-    R = Mycelia.Rhizomorph
+function _vph_decode_labels(graph, weighted, read, k::Int; exact::Bool = false)
     seqstr = FASTX.sequence(String, read)
     seq = Mycelia.extract_typed_sequence(
         read, Mycelia.alphabet_to_biosequence_type(Mycelia.detect_alphabet(seqstr)))
@@ -374,7 +375,8 @@ function _vph_decode_labels(graph, weighted, read, k::Int)
         hi = clamp(i + k - 1, 1, nq)
         obs[i] = Mycelia.QualityObservation(km, UInt8.(@view qs[lo:hi]))
     end
-    beam = Mycelia._auto_beam_width(length(obs), Graphs.nv(graph.graph))
+    beam = exact ? typemax(Int) :
+           Mycelia._auto_beam_width(length(obs), Graphs.nv(graph.graph))
     beam_is_exact = beam == typemax(Int)
     cfg = Mycelia.ViterbiCorrectionConfig(
         alphabet = :DNA, strand_mode = :doublestrand, max_steps = length(obs) - 1,
@@ -390,7 +392,7 @@ end
 Test.@testset "DENSE-regime rare-allele retention under score margin (td-plqi)" begin
     R = Mycelia.Rhizomorph
     # (background/majority coverage, minority coverage, k). Spans balanced, mild-skew,
-    # and EXTREME-skew (33:1) cases, at k=21 and k=9 (smaller emission advantage).
+    # and EXTREME-skew (33:1) cases, at k=21 and at k=9.
     for (bg, minr, k) in ((15, 15, 21), (20, 4, 21), (100, 3, 21), (20, 4, 9))
         Test.@testset "dense skew bg=$(bg)x min=$(minr)x k=$k: minority allele retained" begin
             fx = _vph_build_dense_skewed_fixture(; min_cov = minr, bg_cov = bg, k = k)
@@ -405,25 +407,36 @@ Test.@testset "DENSE-regime rare-allele retention under score margin (td-plqi)" 
 
             kmer_b = fx.kmer_b
             kmer_b_rc = _vph_revcomp(kmer_b)
-            retained = 0
-            total = 0
-            beam = 0
-            for r in fx.minority_reads
-                labels, beam = _vph_decode_labels(graph, weighted, r, k)
-                isempty(labels) && continue
-                total += 1
-                any(l -> l == kmer_b || uppercase(l) == uppercase(kmer_b_rc), labels) &&
-                    (retained += 1)
+            function _count_retained(; exact::Bool)
+                retained = 0
+                total = 0
+                beam = 0
+                for r in fx.minority_reads
+                    labels, beam = _vph_decode_labels(graph, weighted, r, k; exact = exact)
+                    isempty(labels) && continue
+                    total += 1
+                    any(l -> l == kmer_b || uppercase(l) == uppercase(kmer_b_rc), labels) &&
+                        (retained += 1)
+                end
+                return retained, total, beam
             end
+            retained, total, beam = _count_retained(; exact = false)
+            retained_exact, total_exact, _ = _count_retained(; exact = true)
 
-            @info "dense-regime rare-allele retention" bg minr k nv beam retained total
+            @info "dense-regime rare-allele retention" bg minr k nv beam retained total retained_exact
 
-            # KEY INVARIANT: every decoded minority read keeps its OWN rare allele.
-            # A margin that penalized rarity (coverage-driven transition penalty)
-            # rather than wrongness (emission) would drop it here — the emission
-            # exemption prevents that.
+            # The score margin must not drop a rare allele the exact decoder keeps.
             Test.@test total >= 1
-            Test.@test retained == total
+            Test.@test total == total_exact
+            Test.@test retained == retained_exact
+            # One SNP is one emission. On a k=21 bubble that is not enough to
+            # outvote a large coverage skew; balanced coverage and k=9 still keep
+            # every minority read on its own allele.
+            if k < 21 || bg == minr
+                Test.@test retained == total
+            else
+                Test.@test retained < total
+            end
         end
     end
 end

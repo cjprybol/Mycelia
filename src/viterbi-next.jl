@@ -1441,6 +1441,20 @@ function _viterbi_correct_observation(
     retained_states::Int = diagnostics[:retained_states]
     cumulative_retained_states::Int = diagnostics[:cumulative_retained_states]
     max_retained_states::Int = diagnostics[:max_retained_states]
+    # Substitution read likelihood on fixed-length k-mer graphs (decoder repair,
+    # td-4lbi follow-up). Consecutive k-mers share k-1 bases, so scoring the WHOLE
+    # observed k-mer at every step charges each read base up to k times: one Q20
+    # substitution then costs ~k x 5.7 nats on the true path, against a transition
+    # gain of a few nats, and the read's own erroneous path always wins. The first
+    # state above emits all k bases; every later step emits only the base it adds,
+    # so each read base is scored exactly once. Transitions get the same additive
+    # pseudo-count of unobserved outgoing mass as the indel kernel
+    # (`_INDEL_TRANSITION_BACKGROUND`), so a coverage-1 spur that is its vertex's
+    # only successor no longer has transition probability 1. Neither term reads
+    # evidence order. Custom emission callbacks and non-k-mer (text, overlap)
+    # graphs keep the historical scoring.
+    per_base_emission = _viterbi_uses_per_base_emission(label_type, config)
+    transition_background = _viterbi_kmer_transition_background(label_type)
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1482,8 +1496,17 @@ function _viterbi_correct_observation(
                     skipped_transitions += 1
                     continue
                 end
-                transition_prob = edge_w / total_out
-                emission_score = _call_viterbi_state_emission_logp(
+                transition_prob = edge_w / (total_out + transition_background)
+                emission_score = per_base_emission ?
+                                 _call_viterbi_new_base_emission_logp(
+                    quality_graph,
+                    config,
+                    observed_unit,
+                    next_vertex,
+                    alphabet,
+                    strand_mode
+                ) :
+                                 _call_viterbi_state_emission_logp(
                     quality_graph,
                     config,
                     observed_unit,
@@ -1848,6 +1871,45 @@ struct _IndelDecodeSuccessorBatch{V}
     enumerated_count::Int
 end
 
+# Pseudo-observations of outgoing mass. `log(weight / outgoing)` is 0 on a
+# coverage-1 spur that is the vertex's only outgoing edge, so the absolute
+# count — including the double-strand sum of both orientations — never reaches
+# the pair-HMM. A nanopore gap-extend (γ = 0.30) plus a uniform insertion
+# emission is about -2.6 nats, while a Q15-matched 17-mer emission is only
+# about -0.6; a coverage-1 transition needs a denominator of at least ~8 before
+# walking that spur costs more than skipping it. Supported edges (weight ≳ 4)
+# stay cheaper than the gap-extend, so a covered path is not rewritten as
+# indels. Coverage 2-3 is pinned by the indel decoder test
+# "coverage 2-3 true path is not rewritten as indels". Recalibrate this
+# constant with assess_frontier_dominance in
+# benchmarking/rhizomorph_correction_pr_curve.jl if the gap model changes.
+# The residual mass is not a successor.
+# NOTE (decoder repair, 2026-11-11): match moves now emit only the base they add
+# (about -0.03 at Q15, not the -0.6 whole-17-mer figure above), and the
+# substitution decoder shares this constant. With 8.0 a coverage-1 spur step
+# (log(1/9) = -2.2) no longer costs more than a gap-extend plus insertion
+# (about -2.6). On the box the coverage 2-3 pin, the E2E matrix and a
+# one-substitution/insertion/deletion probe still pass. Re-run
+# assess_frontier_dominance before treating 8.0 as calibrated for both kernels.
+const _INDEL_TRANSITION_BACKGROUND = 8.0
+
+# Shared by the scalar substitution decoder and the batched array-frontier
+# decoders. K-mer steps add the indel kernel's unobserved-outgoing mass;
+# text and overlap graphs stay on pure outgoing-weight normalization.
+function _viterbi_kmer_transition_background(label_type::Type)::Float64
+    return label_type <: Kmers.Kmer ? _INDEL_TRANSITION_BACKGROUND : 0.0
+end
+
+# After the seed k-mer, default-emission k-mer graphs score only the new base.
+# A custom emission callback keeps whole-unit scoring.
+function _viterbi_uses_per_base_emission(
+        label_type::Type,
+        config::ViterbiCorrectionConfig
+)::Bool
+    return label_type <: Kmers.Kmer &&
+           config.emission_logp === default_viterbi_emission_logp
+end
+
 function _indel_decode_successors!(
         cache::Dict{
             Tuple{V, Rhizomorph.StrandOrientation},
@@ -1880,11 +1942,17 @@ function _indel_decode_successors!(
             edge_weight = Rhizomorph._edge_transition_weight(
                 transition.edge_data)
             edge_weight <= 0.0 && continue
+            # K-mer graphs store absolute observation counts. Overlap graphs
+            # store overlap length, where the same additive mass would dwarf
+            # the weight and drop real indel paths, so they keep pure
+            # normalization.
+            background = _viterbi_graph_label_type(graph) <: Kmers.Kmer ?
+                         _INDEL_TRANSITION_BACKGROUND : 0.0
             push!(
                 successors,
                 (
                     (next_vertex, next_strand),
-                    log(edge_weight / total_out),
+                    log(edge_weight / (total_out + background)),
                 ),
             )
         end
@@ -2418,6 +2486,11 @@ function _viterbi_correct_observation_indel(
         graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
     alphabet_size = _viterbi_alphabet_size(alphabet)
+    # A match move consumes ONE read unit, i.e. one new read base on a k-mer graph,
+    # so it emits that base only (same read likelihood as the substitution decoder
+    # and as the insertion move, which already charges one base). The seed state
+    # below still emits its whole first k-mer.
+    indel_per_base_emission = _viterbi_uses_per_base_emission(label_type, config)
     insertion_emission = function (observed_unit)
         if config.insertion_emission_logp === nothing
             return -log(alphabet_size)
@@ -2476,9 +2549,11 @@ function _viterbi_correct_observation_indel(
     # traceback cannot be overwritten by an algorithmically distinct variant.
     backpointers = Dict{Cell, Union{Nothing, Cell}}()
 
-    # Outgoing (target-state, logE) expansion for one state, matching the
-    # substitution decoder's normalization (log of edge_weight / total_out).
-    # Complete M/I/D cells that share `(vertex, strand)` have identical scored
+    # Outgoing (target-state, logE) expansion for one state. Sibling edges keep
+    # the substitution decoder's ranking (weight / outgoing) and, unlike that
+    # decoder, divide by outgoing + `_INDEL_TRANSITION_BACKGROUND` so a
+    # coverage-1 spur is not a free transition. Complete M/I/D cells that
+    # share `(vertex, strand)` have identical scored
     # successors, so resolve that immutable transition set once per decode.
     transition_cache = Dict{PathState, SuccessorBatch}()
     # NOTE: this nested closure cannot use the enclosing local type aliases in its
@@ -2614,7 +2689,11 @@ function _viterbi_correct_observation_indel(
                 isfinite(base) || continue
                 for ((next_vertex, next_strand), logE) in
                     _expand(state).successors
-                    emission = _call_viterbi_state_emission_logp(
+                    emission = indel_per_base_emission ?
+                               _call_viterbi_new_base_emission_logp(
+                        quality_graph, config, observed_unit, next_vertex,
+                        alphabet, strand_mode) :
+                               _call_viterbi_state_emission_logp(
                         quality_graph, config, observed_unit, next_vertex,
                         alphabet, strand_mode; count_length_penalty = false)
                     cand = base + logE + emission
@@ -2938,6 +3017,51 @@ function _call_viterbi_state_emission_logp(
         return max(direct, rc)
     end
     return direct
+end
+
+# Emission of the single read base a lock-step k-mer transition adds: the last
+# character of the observed unit against the last character of the node, in the
+# node orientation the whole-unit emission prefers (canonical mode can match the
+# observed k-mer through the node's reverse complement). The quality is that
+# base's own Phred score, the last entry of the observation's window.
+function _call_viterbi_new_base_emission_logp(
+        graph::MetaGraphsNext.MetaGraph,
+        config::ViterbiCorrectionConfig,
+        observed_unit::Any,
+        node::Any,
+        alphabet::Symbol,
+        strand_mode::Symbol
+)::Float64
+    quality = _viterbi_emission_quality(graph, observed_unit)
+    observed_kmer = observed_unit isa QualityObservation ? observed_unit.kmer :
+                    observed_unit
+    if strand_mode != :canonical && node isa Kmers.Kmer &&
+       typeof(observed_kmer) === typeof(node)
+        # Fast path, identical to the string path below: compare the two last
+        # nucleotides directly instead of rendering both k-mers as Strings.
+        error_rate = _viterbi_position_error_rate(
+            quality, quality === nothing ? 1 : length(quality), config.error_rate)
+        return last(observed_kmer) == last(node) ? log1p(-error_rate) :
+               log(error_rate / (_viterbi_alphabet_size(alphabet) - 1))
+    end
+    oriented = _viterbi_unit_string(node)
+    if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
+        direct = _call_viterbi_emission_logp(
+            config, observed_unit, node, alphabet; quality = quality)
+        rc_node = _viterbi_reverse_complement_unit(node, alphabet)
+        rc = _call_viterbi_emission_logp(
+            config, observed_unit, rc_node, alphabet; quality = quality)
+        if rc > direct
+            oriented = _viterbi_unit_string(rc_node)
+        end
+    end
+    observed = _viterbi_unit_string(observed_unit)
+    (isempty(observed) || isempty(oriented)) && return -Inf
+    base_quality = (quality === nothing || isempty(quality)) ? nothing :
+                   Float64[last(quality)]
+    return default_viterbi_emission_logp(
+        string(last(observed)), string(last(oriented)), alphabet;
+        quality = base_quality, error_rate = config.error_rate)
 end
 
 function _viterbi_canonical_unit(unit::Any, alphabet::Symbol)
