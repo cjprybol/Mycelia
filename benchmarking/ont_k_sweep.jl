@@ -1260,14 +1260,28 @@ function write_aggregate(root, rows)
     # empty tree means a mistyped --output-dir far more often than it means a
     # genuinely empty run, and the opaque form of this failure sends the reader
     # to the wrong place.
-    if isempty(rows) && isempty(load_all_checkpoints(root))
+    #
+    # Take the first cells/ scan here and reuse it on the first `build()`, so
+    # an unreadable checkpoint does not warn twice (once in this empty check
+    # and once in the union). A retry via retry_once_on_shrink MUST rescan —
+    # that is the whole point of the retry — so later `build()` calls load
+    # again rather than reusing this snapshot.
+    first_scan = load_all_checkpoints(root)
+    reuse_first_scan = Ref(true)
+    if isempty(rows) && isempty(first_scan)
         error("no cells found under $(joinpath(root, "cells")) and no rows in " *
               "memory — nothing to aggregate. Check --output-dir.")
     end
     key(r) = Tuple(getproperty(r, c) for c in RESULTS_KEYCOLS)
     build() = begin
+        disk = if reuse_first_scan[]
+            reuse_first_scan[] = false
+            first_scan
+        else
+            load_all_checkpoints(root)
+        end
         d = Dict{Tuple, Any}()
-        for r in load_all_checkpoints(root)
+        for r in disk
             d[key(r)] = r
         end
         for r in rows          # current run supersedes disk
