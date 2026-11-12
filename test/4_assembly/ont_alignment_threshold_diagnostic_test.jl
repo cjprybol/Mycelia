@@ -319,6 +319,46 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             end
         end
     end
+
+    Test.@testset "assert_reference_matches_organism fails loud on a mismatch" begin
+        # td-19c7. The per-organism reference map (1866533b) stopped the
+        # hardcoded Lambda FASTA, but a wrong file still produces well-formed
+        # all-NA rows that the interpretation block reads as an assembler
+        # defect. The helper must compare the cell organism to the reference
+        # accession (basename) and error on mismatch.
+        lambda_ref = joinpath("refs", "NC_001416.fna")
+        t4_ref = joinpath("refs", "NC_000866.fna")
+        Test.@test assert_reference_matches_organism("Lambda", lambda_ref) === nothing
+        Test.@test assert_reference_matches_organism("T4", t4_ref) === nothing
+
+        err = try
+            assert_reference_matches_organism("T4", lambda_ref)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("T4", err.msg)
+        Test.@test occursin("NC_001416", err.msg)
+        Test.@test occursin("NC_000866", err.msg)
+
+        err_unknown = try
+            assert_reference_matches_organism("phi29", lambda_ref)
+            nothing
+        catch e
+            e
+        end
+        Test.@test err_unknown isa ErrorException
+        Test.@test occursin("phi29", err_unknown.msg)
+
+        # The helper must actually be called on the reference passed to rescore,
+        # otherwise a unit-tested function can sit unused next to the old bug.
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                "ont_alignment_threshold_diagnostic.jl"), String)
+        Test.@test occursin("function assert_reference_matches_organism", src)
+        Test.@test occursin(r"assert_reference_matches_organism\(\s*organism\s*,\s*references\[organism\]", src)
+    end
+
 end
 
 end  # module
