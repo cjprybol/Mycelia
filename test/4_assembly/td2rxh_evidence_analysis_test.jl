@@ -122,6 +122,30 @@ Test.@testset "td2rxh evidence smoke" begin
     Test.@test Harness.CSV_HEADER == vcat(LEGACY_HEADER, NEW_COLUMNS)
 end
 
+# td-8ihz: child-julia cache-key flags, Manifest skip, and Dep2 mismatch.
+# These helpers are also used by the slow subprocess test below.
+Test.@testset "subprocess julia flags and Manifest skip (td-8ihz)" begin
+    filtered = child_julia_cmd(Cmd([
+        "julia",
+        "--track-allocation=user",
+        "--inline=no",
+        "--code-coverage=@user",
+        "--pkgimages=no",
+        "--check-bounds=yes",
+        "--color=yes",
+    ]))
+    Test.@test filtered.exec == ["julia", "--color=yes"]
+
+    mktempdir() do dir
+        reason = missing_root_manifest_skip_reason(dir)
+        Test.@test reason isa AbstractString
+        Test.@test occursin("Manifest.toml", reason)
+        Test.@test occursin("instantiate", lowercase(reason))
+        write(joinpath(dir, "Manifest.toml"), "manifest_format = \"2.0\"\n")
+        Test.@test missing_root_manifest_skip_reason(dir) === nothing
+    end
+end
+
 if !RUN_SLOW
     @info "Skipping remaining td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
 else
