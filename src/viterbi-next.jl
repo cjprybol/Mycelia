@@ -1848,6 +1848,21 @@ struct _IndelDecodeSuccessorBatch{V}
     enumerated_count::Int
 end
 
+# Pseudo-observations of outgoing mass. `log(weight / outgoing)` is 0 on a
+# coverage-1 spur that is the vertex's only outgoing edge, so the absolute
+# count — including the double-strand sum of both orientations — never reaches
+# the pair-HMM. A nanopore gap-extend (γ = 0.30) plus a uniform insertion
+# emission is about -2.6 nats, while a Q15-matched 17-mer emission is only
+# about -0.6; a coverage-1 transition needs a denominator of at least ~8 before
+# walking that spur costs more than skipping it. Supported edges (weight ≳ 4)
+# stay cheaper than the gap-extend, so a covered path is not rewritten as
+# indels. Coverage 2-3 is pinned by the indel decoder test
+# "coverage 2-3 true path is not rewritten as indels". Recalibrate this
+# constant with assess_frontier_dominance in
+# benchmarking/rhizomorph_correction_pr_curve.jl if the gap model changes.
+# The residual mass is not a successor.
+const _INDEL_TRANSITION_BACKGROUND = 8.0
+
 function _indel_decode_successors!(
         cache::Dict{
             Tuple{V, Rhizomorph.StrandOrientation},
@@ -1880,11 +1895,17 @@ function _indel_decode_successors!(
             edge_weight = Rhizomorph._edge_transition_weight(
                 transition.edge_data)
             edge_weight <= 0.0 && continue
+            # K-mer graphs store absolute observation counts. Overlap graphs
+            # store overlap length, where the same additive mass would dwarf
+            # the weight and drop real indel paths, so they keep pure
+            # normalization.
+            background = _viterbi_graph_label_type(graph) <: Kmers.Kmer ?
+                         _INDEL_TRANSITION_BACKGROUND : 0.0
             push!(
                 successors,
                 (
                     (next_vertex, next_strand),
-                    log(edge_weight / total_out),
+                    log(edge_weight / (total_out + background)),
                 ),
             )
         end
@@ -2476,9 +2497,11 @@ function _viterbi_correct_observation_indel(
     # traceback cannot be overwritten by an algorithmically distinct variant.
     backpointers = Dict{Cell, Union{Nothing, Cell}}()
 
-    # Outgoing (target-state, logE) expansion for one state, matching the
-    # substitution decoder's normalization (log of edge_weight / total_out).
-    # Complete M/I/D cells that share `(vertex, strand)` have identical scored
+    # Outgoing (target-state, logE) expansion for one state. Sibling edges keep
+    # the substitution decoder's ranking (weight / outgoing) and, unlike that
+    # decoder, divide by outgoing + `_INDEL_TRANSITION_BACKGROUND` so a
+    # coverage-1 spur is not a free transition. Complete M/I/D cells that
+    # share `(vertex, strand)` have identical scored
     # successors, so resolve that immutable transition set once per decode.
     transition_cache = Dict{PathState, SuccessorBatch}()
     # NOTE: this nested closure cannot use the enclosing local type aliases in its
