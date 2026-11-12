@@ -464,10 +464,18 @@ _dna_complement_char(c::Char)::Char = c == 'A' ? 'T' :
 # k-adaptation on well-covered reads (the reuse-oracle regime).
 function _dynamic_k_canonical_window_hash(
         characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
-    forward_hash = _dynamic_k_window_hash(characters, start_index, k)
+    # Normalize case before both halves so a soft-masked (lowercase) window
+    # and its uppercase / reverse-complement forms share one canonical hash
+    # (td-etyf). The reverse-complement half already uppercased; the forward
+    # half previously hashed raw characters and the two were incomparable.
+    normalized = Vector{Char}(undef, k)
+    for offset in 0:(k - 1)
+        normalized[offset + 1] = uppercase(characters[start_index + offset])
+    end
+    forward_hash = _dynamic_k_window_hash(normalized, 1, k)
     revcomp = Vector{Char}(undef, k)
     for offset in 0:(k - 1)
-        revcomp[k - offset] = _dna_complement_char(uppercase(characters[start_index + offset]))
+        revcomp[k - offset] = _dna_complement_char(normalized[offset + 1])
     end
     reverse_hash = UInt64(hash(revcomp))
     return min(forward_hash, reverse_hash)
