@@ -18975,9 +18975,11 @@ Run metaMDBG assembler for metagenomic long-read assembly.
 - `graph_k::Int`: Strictly positive graph resolution requested from
   `metaMDBG gfa` (default: 21).
 
-Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
-`--in-hifi` and `--in-ont`; mixed HiFi-plus-ONT assembly is therefore excluded
-from this wrapper rather than advertised as a false combined-input contract.
+Exactly one input technology is required. The wrapper emits exactly one of
+`--in-hifi` and `--in-ont`, and rejects a call supplying both, consistent with
+its reuse contract, which binds a single input technology. Mixed HiFi-plus-ONT
+assembly is therefore excluded rather than advertised as a combined-input
+contract the wrapper cannot deliver.
 
 # Returns
 Synchronous execution and complete reuse return `status = :complete`, `outdir`,
