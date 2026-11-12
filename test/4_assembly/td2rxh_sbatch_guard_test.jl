@@ -10,6 +10,8 @@ module Td2rxhSbatchGuardTest
 # exit, unknown cell set, --seeds/--label/--cells passthrough, MYCELIA_PROJECT
 # cleared, symlinked TMPDIR base,
 # TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
+# Capture: stdout and stderr must both be complete (td-iobuf); a shared
+# IOBuffer plus take! can drop the EXIT-trap "kept TMPDIR" line.
 # Not covered: the "julia not runnable", "not in benchmarking/" and mktemp-failure
 # branches, and the SIGTERM path. Round-1 review reproduced two
 # of these as fail-open on the first draft (a stale CSV passing the row guard, and
@@ -93,10 +95,20 @@ function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
         # not leave directories in the host's /tmp.
         "TD2RXH_TMP_BASE" => mktempdir())
     merge!(env, extra_env)
-    out = IOBuffer()
+    # Separate stdout/stderr pipes, read to completion, then wait. A single
+    # shared IOBuffer plus take! races the async copier and can drop the
+    # EXIT-trap "kept TMPDIR" line (and sometimes the provenance label).
+    out = Pipe()
+    err = Pipe()
     proc = run(pipeline(ignorestatus(Cmd(`bash $SBATCH`; env = env));
-        stdout = out, stderr = out))
-    return proc.exitcode, String(take!(out))
+            stdout = out, stderr = err);
+        wait = false)
+    close(out.in)
+    close(err.in)
+    stdout_s = read(out, String)
+    stderr_s = read(err, String)
+    wait(proc)
+    return proc.exitcode, stdout_s * stderr_s
 end
 
 Test.@testset "td2rxh sbatch fail-closed guards" begin
@@ -272,6 +284,24 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             rm(joinpath(repo, "Manifest.toml"))
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
             Test.@test rc == 1 && occursin("Manifest.toml missing", log)
+        end
+        Test.@testset "run_sbatch captures late EXIT-trap stderr across repeats (td-iobuf)" begin
+            # The EXIT trap writes "kept TMPDIR" to stderr after stdout is
+            # done. Sharing one IOBuffer for both streams, then take!, races
+            # the async copier and drops that line (and sometimes the
+            # provenance label). Repeat enough times that a flake is a
+            # failure, not a lucky pass.
+            for _ in 1:20
+                repo, home, bindir = fixture()
+                base = mktempdir()
+                rc, log = run_sbatch(repo, home, bindir;
+                    extra_env = Dict("STUB_ROWS" => "12", "STUB_RC" => "3",
+                        "TD2RXH_TMP_BASE" => base))
+                Test.@test rc == 1
+                Test.@test occursin("kept TMPDIR", log)
+                Test.@test occursin("label=td2rxh@", log) &&
+                           occursin("+manifestabcdef012345", log)
+            end
         end
         Test.@testset "smoke cell set expects 4 rows; unknown set fails" begin
             repo, home, bindir = fixture()
