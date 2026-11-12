@@ -1393,6 +1393,41 @@ Test.@testset "ONT k-sweep helpers" begin
         Test.@test occursin("unrecognised --allow-shrink value", err.msg)
         Test.@test occursin("yesplease", err.msg)
     end
+
+    Test.@testset "write_aggregate warns once per unreadable checkpoint (td-6mzb)" begin
+        # load_all_checkpoints was called twice per write_aggregate: once in
+        # the isempty-guard and once in the union body. Every unreadable
+        # checkpoint therefore warned twice, and the tree was parsed twice.
+        # Use a first write (no on-disk table, so the guard does not refuse)
+        # with one good checkpoint and one truncated one.
+        import Logging
+        mktempdir() do dir
+            cells = joinpath(dir, "cells")
+            good = cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = merge(empty_metrics(),
+                    (; NGA50 = 4000.0, genome_fraction = 99.0,
+                        quast_contigs = 1.0)),
+                nga50_status = "measured", outcome = "partial",
+                wall_seconds = 1.0, status = "ok")
+            gid = cell_id_for("Lambda", "ont", 21, 30, 42)
+            mkpath(joinpath(cells, gid))
+            save_cell_json(joinpath(cells, gid, "cell_result.json"), good)
+
+            bid = cell_id_for("Lambda", "ont", 31, 30, 42)
+            mkpath(joinpath(cells, bid))
+            write(joinpath(cells, bid, "cell_result.json"), "{ truncated")
+
+            buf = IOBuffer()
+            df = Logging.with_logger(Logging.SimpleLogger(buf, Logging.Warn)) do
+                write_aggregate(dir, NamedTuple[])
+            end
+            Test.@test DataFrames.nrow(df) == 1
+            n_warn = length(collect(eachmatch(r"unreadable checkpoint",
+                String(take!(buf)))))
+            Test.@test n_warn == 1
+        end
+    end
 end
 
 end  # module
