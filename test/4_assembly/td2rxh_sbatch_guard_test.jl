@@ -95,10 +95,20 @@ function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
         # not leave directories in the host's /tmp.
         "TD2RXH_TMP_BASE" => mktempdir())
     merge!(env, extra_env)
-    out = IOBuffer()
+    # Separate stdout/stderr pipes, read to completion, then wait. A single
+    # shared IOBuffer plus take! races the async copier and can drop the
+    # EXIT-trap "kept TMPDIR" line (and sometimes the provenance label).
+    out = Pipe()
+    err = Pipe()
     proc = run(pipeline(ignorestatus(Cmd(`bash $SBATCH`; env = env));
-        stdout = out, stderr = out))
-    return proc.exitcode, String(take!(out))
+            stdout = out, stderr = err);
+        wait = false)
+    close(out.in)
+    close(err.in)
+    stdout_s = read(out, String)
+    stderr_s = read(err, String)
+    wait(proc)
+    return proc.exitcode, stdout_s * stderr_s
 end
 
 Test.@testset "td2rxh sbatch fail-closed guards" begin
