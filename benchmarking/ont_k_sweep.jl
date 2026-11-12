@@ -700,8 +700,16 @@ end
 cell_id_for(org, tech, k, cov, seed) = "$(org)__$(tech)__k$(k)__$(cov)x__seed$(seed)"
 
 function save_cell_json(path, row)
-    open(path, "w") do io
-        JSON.print(io, Dict(string(key) => value for (key, value) in pairs(row)), 2)
+    # Atomic: a crash mid-write used to leave a truncated checkpoint that
+    # load_all_checkpoints warn-skips, after which the shrink guard refuses
+    # and kills the shard. publish_atomically leaves the existing file
+    # unchanged (and leaves no partial file when the path is new).
+    mkpath(dirname(path))
+    payload = Dict(string(key) => value for (key, value) in pairs(row))
+    publish_atomically(path) do tmp
+        open(tmp, "w") do io
+            JSON.print(io, payload, 2)
+        end
     end
     return path
 end
