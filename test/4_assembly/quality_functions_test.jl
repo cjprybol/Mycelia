@@ -185,6 +185,32 @@ Test.@testset "Quality Functions" begin
         Test.@test !(Kmers.DNAKmer{3}("GTA") in high_qual)
     end
 
+    Test.@testset "get_vertex_joint_quality - rejects a sub-33 byte instead of wrapping" begin
+        # QualityEvidenceEntry is documented as storing raw Phred (0-60), and
+        # evidence_structures_test.jl constructs entries that way. The consumer
+        # get_vertex_joint_quality subtracts UInt8(33). A raw Q30 therefore
+        # wraps: UInt8(30) - UInt8(33) == 0xfd (253), the "essentially certain"
+        # band. A low-confidence symbol must not become near-maximum confidence.
+        Test.@test (UInt8(30) - UInt8(33)) == 0xfd
+
+        kmer = Kmers.DNAKmer{3}("ATG")
+        vertex = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            vertex, "test", "read_001",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, UInt8[30, 30, 30]))
+
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.get_vertex_joint_quality(vertex, "test")
+
+        # A valid Phred+33 encoding of the same Q30 scores is accepted.
+        ok_vertex = Mycelia.Rhizomorph.QualmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(
+            ok_vertex, "test", "read_001",
+            Mycelia.Rhizomorph.QualityEvidenceEntry(
+                1, Mycelia.Rhizomorph.Forward, UInt8[63, 63, 63]))
+        Test.@test Mycelia.Rhizomorph.get_vertex_joint_quality(ok_vertex, "test") == UInt8[30, 30, 30]
+    end
+
     Test.@testset "Quality Functions - Nonexistent Dataset" begin
         seq = "ATGC"
         qual = [30, 30, 30, 30]
