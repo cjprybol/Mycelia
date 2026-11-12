@@ -15,7 +15,9 @@ module Td2rxhEvidenceAnalysisTest
 # regression, a raw-significant-but-not-after-Holm cell, a missing cell, an
 # undefined cell, an unengaged treatment, duplicate and mixed-label shards), so a
 # rule that always says yes, or always says no, fails. Several controls exist
-# because a review-round mutant survived without them; each says which.
+# because a review-round mutant survived without them; each says which. Most
+# analysis guards are reached through the test-side analyse() helper, which
+# mirrors main.
 #
 # The harness failure path is tested without an assembly through an injected
 # `runner`: failed arms (even one) are counted, logged with a backtrace, reported
@@ -128,7 +130,9 @@ Test.@testset "round-7 deferred doc nits (td-wmvp)" begin
     analysis = read(joinpath(root, "benchmarking", "td2rxh_paired_analysis.jl"), String)
     readme = read(joinpath(root, "benchmarking", "results", "td2rxh-evidence",
         "27118659", "README.md"), String)
-    test_header = read(@__FILE__, String)[1:800]
+    source = read(@__FILE__, String)
+    header_end = findfirst("import Test", source)
+    test_header = source[1:(first(header_end) - 1)]
     # Item 5: H1' is labelled as incremental cost, an upper bound, not bare
     # "decode cost".
     Test.@test occursin("H1' (incremental cost", analysis)
@@ -219,6 +223,9 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         undefined = Analysis.signflip_signed_rank_test(zeros(4))
         Test.@test undefined.n == 0 && isnan(undefined.pvalue)
         Test.@test_throws ArgumentError Analysis.signflip_signed_rank_test([1.0, NaN])
+        # Defence-in-depth cap (td-wmvp item 1): unreachable through main (n=16).
+        Test.@test_throws ArgumentError Analysis.signflip_signed_rank_test(
+            collect(1.0:(Analysis.TD2RXH_MAX_EXACT_N + 1)))
         # Symmetric: sign reversal leaves the two-sided p unchanged.
         Test.@test Analysis.signflip_signed_rank_test(-collect(1.0:8.0)).pvalue ≈ 2 / 256
         # Mixed signs WITH a tie, hand-enumerated. |d| = (1, 1, 2) gets average
@@ -420,6 +427,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test !r.verdicts[1, :h2_holds]
         Test.@test Analysis._engaged("3") && !Analysis._engaged("") &&
                    !Analysis._engaged(missing) && !Analysis._engaged(0)
+        # Real branch (td-wmvp item 16): 0 hits the Integer method, so a
+        # >= 1 -> >= 0 mutant on the Real branch would survive without these.
+        Test.@test Analysis._engaged(1.0) && !Analysis._engaged(0.5) &&
+                   !Analysis._engaged(0.0)
     end
 
     Test.@testset "empty assembly: NaN fit identity is excluded, not scored 0" begin
@@ -765,8 +776,11 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
             push!(paths, path)
         end
         out = joinpath(dir, "analysis")
-        Test.@test Analysis.td2rxh_analysis_main(
-            ["--csv", join(paths, ","), "--output-dir", out]) == 0
+        # Do not print the full report to CI stdout (td-wmvp item 19).
+        Test.@test redirect_stdout(devnull) do
+            Analysis.td2rxh_analysis_main(
+                ["--csv", join(paths, ","), "--output-dir", out])
+        end == 0
         report = read(joinpath(out, "report.md"), String)
         Test.@test occursin("td-2rxh ACCEPTANCE: MET", report)
         Test.@test occursin("H1': HOLDS", report)

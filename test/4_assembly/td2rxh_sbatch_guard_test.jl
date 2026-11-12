@@ -10,7 +10,7 @@ module Td2rxhSbatchGuardTest
 # exit, unknown cell set, --seeds/--label/--cells passthrough, MYCELIA_PROJECT
 # cleared, symlinked TMPDIR base,
 # TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
-# Not covered: the "julia not runnable", "not in benchmarking/" and mktemp-failure
+# Not covered: the "julia not runnable", "not in benchmarking/"
 # branches, and the SIGTERM path. Round-1 review reproduced two
 # of these as fail-open on the first draft (a stale CSV passing the row guard, and
 # a failing git passing the dirty guard).
@@ -283,6 +283,27 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             log2 = run_sbatch(repo, home, bindir;
                 extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_CELLS" => "td2rhx"))
             Test.@test rc2 == 1 && occursin("unknown TD2RXH_CELLS=td2rhx", log2)
+        end
+        Test.@testset "all cell set expects 6 rows (td-wmvp item 17)" begin
+            # A mutant `all) expected=0` would still pass a 6-row success;
+            # zero rows must fail and the log must show expected=6.
+            repo, home, bindir = fixture()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "6", "TD2RXH_CELLS" => "all"))
+            Test.@test rc == 0 && occursin("expected=6", log)
+            rc0,
+            log0 = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "0", "TD2RXH_CELLS" => "all"))
+            Test.@test rc0 == 1 && occursin("0 of 6", log0)
+        end
+        Test.@testset "mktemp-failure guard fires (td-wmvp item 11)" begin
+            repo, home, bindir = fixture()
+            not_a_dir = joinpath(repo, "not_a_tmp_base")
+            write(not_a_dir, "this is a file")
+            rc, log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => not_a_dir))
+            Test.@test rc == 1 && occursin("cannot create a TMPDIR", log)
         end
     end
 end
