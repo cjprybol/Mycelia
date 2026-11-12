@@ -502,6 +502,11 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # seed-4 illumina value comes from re-assembly k selection: its corrected
         # reads are closer to the truth, but residual systematic indels become
         # solid k-mers and select_reassembly_k drops k from 17 to 7.
+        # With the level-set selector (S(k) = solid_kmer_survival >= 0.5; box,
+        # 2026-11-11) every arm keeps k = 17 and the means are 0.9868 vs 0.9768.
+        # Per seed np/il: 1.0/0.9833, 0.9672/0.9672, 1.0/0.9667, 0.9667/0.9667,
+        # 1.0/1.0: nanopore wins strictly on seeds 1 and 3 (seed-3 illumina was
+        # 1.0 at the old selector's k = 7).
         Test.@test mean_np > mean_il
         # Nanopore wins or ties the majority of seeds (corroborates the mean).
         Test.@test wins >= 3
