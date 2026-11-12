@@ -171,3 +171,48 @@ Test.@testset "canonical k-mer hash is case-insensitive (td-etyf)" begin
     Test.@test R._dynamic_k_canonical_window_hash(collect(window), 1, k) ==
                R._dynamic_k_canonical_window_hash(collect(rc), 1, k)
 end
+
+# td-etyf: the canonical window helper folds case, but the other hash and
+# equality paths in dynamic-k-selection.jl still split soft-masked bases
+# from uppercase. That includes the raw window hash (at every start index,
+# because the hash mixes in the window axes), the observed-k-mer set, the
+# singleton split, the residual-error spectrum, the non-canonical count
+# spectrum, and the DNA complement.
+Test.@testset "dynamic-k hashes and complements are case-insensitive (td-etyf)" begin
+    window = collect("ACGTACGT")
+    lower = collect("acgtacgt")
+    mixed = collect("AcGtAcGt")
+    k = 4
+    for start_index in (1, 5)
+        Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(window, start_index, k) ==
+                   Mycelia.Rhizomorph._dynamic_k_window_hash(lower, start_index, k)
+        Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(window, start_index, k) ==
+                   Mycelia.Rhizomorph._dynamic_k_window_hash(mixed, start_index, k)
+    end
+
+    # Observed-k-mer set: a lowercase twin must not look like a second k-mer.
+    alphabet = 2
+    one = Mycelia.Rhizomorph._dynamic_k_character_sequences(["AC"])
+    both = Mycelia.Rhizomorph._dynamic_k_character_sequences(["AC", "ac"])
+    Test.@test Mycelia.Rhizomorph._calculate_dynamic_k_sparsity(one, alphabet, 2) ==
+               Mycelia.Rhizomorph._calculate_dynamic_k_sparsity(both, alphabet, 2)
+
+    # Six uppercase copies plus one lowercase twin are one k-mer, not a singleton split.
+    reads = ["ACGT", "ACGT", "ACGT", "ACGT", "ACGT", "ACGT", "acgt"]
+    Test.@test Mycelia.Rhizomorph._dynamic_k_errors_are_singletons(
+        Mycelia.Rhizomorph._dynamic_k_character_sequences(reads), 4;
+        singleton_threshold = 1) == false
+
+    # The lowercase copy is the observation that makes the k-mer solid.
+    Test.@test Mycelia.Rhizomorph._kmer_spectrum_residual_error(["ACGT", "acgt"], 4, 2) == 0.0
+
+    Test.@test Mycelia.Rhizomorph._kmer_count_spectrum(["ACGT", "acgt"], 4; canonical = false) ==
+               Mycelia.Rhizomorph._kmer_count_spectrum(["ACGT", "ACGT"], 4; canonical = false)
+
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('a') ==
+               Mycelia.Rhizomorph._dna_complement_char('A')
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('c') ==
+               Mycelia.Rhizomorph._dna_complement_char('C')
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('n') ==
+               Mycelia.Rhizomorph._dna_complement_char('N')
+end
