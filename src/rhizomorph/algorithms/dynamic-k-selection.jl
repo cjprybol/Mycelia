@@ -52,7 +52,9 @@ function _collect_dynamic_k_sequences(observations)
 end
 
 function _dynamic_k_character_sequences(sequences::Vector{String})::Vector{Vector{Char}}
-    return [collect(sequence) for sequence in sequences]
+    # Fold case once so every downstream hash, spectrum, and canonical count
+    # treats a soft-masked base as the same k-mer as its uppercase form (td-etyf).
+    return [collect(uppercase(sequence)) for sequence in sequences]
 end
 
 function _dynamic_k_search_space(min_k::Int, max_k::Int)::Vector{Int}
@@ -90,7 +92,27 @@ function _dynamic_k_alphabet_size(sequences::Vector{String})::Int
 end
 
 function _dynamic_k_window_hash(characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
-    return UInt64(hash(view(characters, start_index:(start_index + k - 1))))
+    # Case-insensitive, but the hash of an AbstractArray includes the window's
+    # axes. A 1-based copy would not match the uppercase view at the same
+    # start index, so a lowercase window is folded into a carrier that keeps
+    # those axes (td-etyf). Already-uppercase windows take the original path.
+    last = start_index + k - 1
+    needs_fold = false
+    for index in start_index:last
+        character = characters[index]
+        if character != uppercase(character)
+            needs_fold = true
+            break
+        end
+    end
+    if !needs_fold
+        return UInt64(hash(view(characters, start_index:last)))
+    end
+    carrier = Vector{Char}(undef, last)
+    for index in start_index:last
+        carrier[index] = uppercase(characters[index])
+    end
+    return UInt64(hash(view(carrier, start_index:last)))
 end
 
 function _calculate_dynamic_k_sparsity(
@@ -206,23 +228,23 @@ end
 # of the registered collision floor `k >= ceil(log_|A|(G/p))` should lift from
 # here rather than re-derive.
 #
-# THREE DEFECTS must be fixed before that machinery is relied upon. All three
-# are silent -- none raises -- but by three DIFFERENT mechanisms; only defect 2
-# involves the `clamp`:
+# THREE DEFECTS were recorded before that machinery can be relied upon. Defect 2
+# is fixed (td-etyf): |A| and the window hash now both fold case, so they count
+# the same alphabet. Defects 1 and 3 remain. Both are silent -- neither raises:
 #   1. `float(|A|)^k` overflows to Inf for |A| >= 1128, so sparsity = 1 - n/Inf
 #      is exactly 1.0 -- maximally sparse regardless of data. In range, so the
 #      clamp does nothing. Reachable here because this function's OWN
 #      `max_search_k` defaults to 101 (not, as an earlier note said, because of
 #      `dynamic_k_prime_pattern`'s default -- that is called after this loop
 #      with an explicit `max_k`).
-#   2. |A| is measured after uppercasing while the window hash does NOT fold
-#      case, so numerator and denominator are counted over different spaces;
-#      sparsity can go negative and `clamp` returns exactly 0.0 -- maximally
-#      dense. This is the clamp-boundary case.
+#   2. FIXED (td-etyf). |A| was measured after uppercasing while the window hash
+#      did not fold case, so the numerator and denominator were counted over
+#      different spaces and `clamp` could return exactly 0.0. Both sides now
+#      fold case.
 #   3. FORWARD-LOOKING, not a present defect: the denominator is `|A|^k` with no
-#      reverse-complement adjustment. This function hashes raw character windows
-#      and takes no `graph_mode`, so it is never in Canonical mode today. It
-#      matters only if this machinery is lifted into a strand-aware caller,
+#      reverse-complement adjustment. This function hashes case-folded character
+#      windows and takes no `graph_mode`, so it is never in Canonical mode today.
+#      It matters only if this machinery is lifted into a strand-aware caller,
 #      where `|A|^k` would overstate the space ~2x.
 """
     select_dynamic_kmer_plan(
@@ -449,12 +471,15 @@ function _largest_prime_at_most(n::Int)::Int
 end
 
 # --- k-mer count spectrum over reads (shared by both connectivity measures) -----
-_dna_complement_char(c::Char)::Char = c == 'A' ? 'T' :
-                                      c == 'T' ? 'A' :
-                                      c == 'C' ? 'G' :
-                                      c == 'G' ? 'C' :
-                                      c == 'a' ? 't' :
-                                      c == 't' ? 'a' : c == 'c' ? 'g' : c == 'g' ? 'c' : c
+# Uppercase first so a soft-masked base and its uppercase form share one
+# complement (td-etyf). Non-ACGT characters are returned uppercased unchanged.
+function _dna_complement_char(c::Char)::Char
+    upper = uppercase(c)
+    return upper == 'A' ? 'T' :
+           upper == 'T' ? 'A' :
+           upper == 'C' ? 'G' :
+           upper == 'G' ? 'C' : upper
+end
 
 # Canonical hash of a k-length window: min(hash(window), hash(revcomp(window))). The
 # corrected-read RE-ASSEMBLY runs on a DOUBLESTRAND (canonical) de Bruijn graph, so
