@@ -34,7 +34,8 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
         beam_width = nothing, calibrated_gap_threshold = nothing)
     # Threshold recalibrated after the doublestrand strand-counting fix (observed
     # reverse-complement edge evidence is now summed, not overwritten). Measured on
-    # this toy (Perlmutter job 60661221): the gate reverts nothing for thresholds
+    # this toy before the td-tg05 decoder fix (Perlmutter job 60661221, historical):
+    # the gate reverts nothing for thresholds
     # 0.5-4 and gives the same metrics for 8-32, so 16 is the geometric midpoint of
     # that plateau. The engaged effect was small (about 2 reverted edits), and after
     # the td-tg05 decoder fix it is zero on this toy (see (3)). Real-scale operating

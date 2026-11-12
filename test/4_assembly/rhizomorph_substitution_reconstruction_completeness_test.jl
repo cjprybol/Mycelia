@@ -135,15 +135,20 @@ Test.@testset "substitution fail-open guard fires on a short decode (forced)" be
     read = FASTX.FASTQ.Record("r", sequence, repeat("I", length(sequence)))
     graph = Mycelia.Rhizomorph.build_qualmer_graph([read], 5; mode = :doublestrand)
 
-    # Control: the real kernel on a read the graph was built from spans the read,
-    # so the guard does not fire.
+    # Control: the real kernel on a read the graph was built from returns a
+    # full-length decode, so the guard does not fire. TTGCA/TGCAA are reverse
+    # complements, so the decode crosses a both-strand edge (the td-tg05 case).
     control = Mycelia.CorrectorDiagnostics()
-    Mycelia.try_viterbi_path_improvement(
+    control_result = Mycelia.try_viterbi_path_improvement(
         read, graph, 5; graph_mode = :doublestrand, diagnostics = control)
+    Test.@test control_result !== nothing
+    Test.@test length(FASTX.sequence(String, first(control_result))) == length(sequence)
     Test.@test control.substitution_length_divergences[] == 0
+    Test.@test control.structural_errors[] == 0
 
-    # Forced truncation: the read fails open (`nothing` -> caller keeps the
-    # original record) and the divergence is counted exactly once.
+    # Forced truncation: the decode returns `nothing` (the fail-open signal; the
+    # caller keeping the original record is checked by code review, see header)
+    # and the divergence is counted exactly once.
     forced = Mycelia.CorrectorDiagnostics()
     result = Mycelia.try_viterbi_path_improvement(
         read, graph, 5; graph_mode = :doublestrand, diagnostics = forced,

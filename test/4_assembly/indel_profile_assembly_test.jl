@@ -492,14 +492,17 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # NON-INFERIORITY: indel-aware correction lands at least as close to the
         # truth as substitution-only on the SAME nanopore reads, on average. This was
         # a strict differential until the td-tg05 decoder fix; both arms improved and
-        # now reach the same identity on every seed (Perlmutter job 60910223: 0.9701
-        # vs 0.9701; base ca9eb7366 was 0.9468 vs 0.9334). Restoring a strict
-        # differential is td-4lbi.
+        # now reach the same identity on every seed (Perlmutter job 60910223: mean
+        # identity 0.9701 vs 0.9701, equal per seed; base ca9eb7366 means were 0.9468
+        # vs 0.9334). Restoring a strict differential is td-4lbi.
         Test.@test mean_np >= mean_il
-        # Nanopore wins or ties the majority of seeds (corroborates the mean).
+        # Nanopore wins or ties the majority of seeds. While the arms tie this holds
+        # trivially (ties count as wins); it bites again once a differential returns.
         Test.@test wins >= 3
-        # Nanopore recovers most of the reference (proves indels were corrected, not
-        # merely that the arm ran) — a substantial-identity floor with margin.
+        # Substantial-identity floor for the nanopore arm. The substitution-only arm
+        # now reaches the same identity, so this no longer shows indel moves did the
+        # work; the indel_decodes / indel_engaged checks above are what pin that the
+        # indel path ran and engaged.
         Test.@test mean_np > 0.80
     end
 end
