@@ -495,10 +495,13 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # decoder fix alone left both arms at 0.9701 (Perlmutter job 60910223; base
         # ca9eb7366 was 0.9468 vs 0.9334). With the indel transition background the
         # means were 0.9734 vs 0.9701 (seed 1 0.9667 vs 0.9500, seeds 2-5 tied).
-        # After the substitution decoder repair (box, 2026-11-11) the means are
-        # 0.9501 vs 0.9368: seeds 1, 2, 3, 5 tie (0.9833, 0.9672, 1.0, 1.0) and
-        # seed 4 is 0.8000 vs 0.7333, with both arms fragmenting on that seed. The
-        # margin still rests on one seed (td-4lbi tracks a wider differential).
+        # After the decoder repair (box, 2026-11-11: each read base emitted once in
+        # both the substitution and the indel kernels) the means are 0.9868 vs
+        # 0.9368. Per seed np/il: 1.0/0.9833, 0.9672/0.9672, 1.0/1.0,
+        # 0.9667/0.7333, 1.0/1.0, so nanopore wins strictly on seeds 1 and 4. The
+        # seed-4 illumina value comes from re-assembly k selection: its corrected
+        # reads are closer to the truth, but residual systematic indels become
+        # solid k-mers and select_reassembly_k drops k from 17 to 7.
         Test.@test mean_np > mean_il
         # Nanopore wins or ties the majority of seeds (corroborates the mean).
         Test.@test wins >= 3
