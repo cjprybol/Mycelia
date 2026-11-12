@@ -240,10 +240,18 @@ Test.@testset "write_gfa_canonical link orientation" begin
             g[Kmers.DNAKmer{5}("AAAAA")] = nothing
             g[Kmers.DNAKmer{5}("CCGCC")] = nothing
             g[Kmers.DNAKmer{5}("AAAAA"), Kmers.DNAKmer{5}("CCGCC")] = nothing
-            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(
-                g, joinpath(dir, "no_overlap.gfa")))
+            no_overlap = joinpath(dir, "no_overlap.gfa")
+            # Sentinel: a pre-existing outfile must stay intact if the write fails.
+            write(no_overlap, "SENTINEL\n")
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(g, no_overlap))
             Test.@test err isa ErrorException
             Test.@test occursin("no valid 4-base overlap", sprint(showerror, err))
+            Test.@test isfile(no_overlap) && read(no_overlap, String) == "SENTINEL\n"
+
+            missing_out = joinpath(dir, "missing_no_overlap.gfa")
+            err = thrown(() -> Mycelia.Rhizomorph.write_gfa_canonical(g, missing_out))
+            Test.@test err isa ErrorException
+            Test.@test !isfile(missing_out)
 
             h = MetaGraphsNext.MetaGraph(Graphs.Graph();
                 label_type = String, vertex_data_type = Nothing,
