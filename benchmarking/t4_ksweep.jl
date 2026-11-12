@@ -1,9 +1,16 @@
-# Real Genome Benchmark — Rhizomorph on real viral/viroid sequences
-# Compares Rhizomorph assembly against reference genomes using QUAST metrics
+# T4 k-sweep — Rhizomorph k-mer size sweep on real viral sequences
+# (`benchmarking/t4_ksweep.jl`).
 #
-# Usage: julia --project=. benchmarking/real_genome_benchmark.jl [--tier N]
+# Usage: julia --project=. benchmarking/t4_ksweep.jl [--tier N]
 #
-# Tiers: 1=viroids only (fast), 2=+phages, 3=+RNA viruses (full)
+# --tier N selects genomes whose registry tier is <= N. The committed
+# registry currently lists T4 as tier 1; other entries are commented out.
+#
+# The size_ratio column is total_length/ref_size*100. It can exceed 100%
+# for a fragmented or over-assembled result (it is not QUAST aligned
+# genome fraction). Best-k is chosen by n50/n_contigs, not argmax of
+# size_ratio. Committed CSVs still use the old genome_fraction header;
+# see benchmarking/results/real_genome_benchmark_SIZE_RATIO_CAVEAT.md.
 
 import Pkg
 if isinteractive()
@@ -62,7 +69,7 @@ println("Working directory: $benchmark_dir")
 
 # === Phase 1: Download reference genomes ===
 
-function download_reference(name, accession, workdir)
+function download_reference(name::AbstractString, accession::AbstractString, workdir::AbstractString)
     println("  Downloading $name ($accession)...")
     genome_dir = joinpath(workdir, name)
     mkpath(genome_dir)
@@ -91,7 +98,7 @@ println("Successfully downloaded: $(length(genome_refs))/$(length(selected_genom
 
 # === Phase 2: Rhizomorph assembly ===
 
-function run_rhizomorph_assembly(name, ref_path, k, workdir)
+function run_rhizomorph_assembly(name::AbstractString, ref_path::AbstractString, k::Integer, workdir::AbstractString)
     # Load reference as reads (self-assembly: can we reconstruct from the sequence itself?)
     records = open(FASTX.FASTA.Reader, ref_path) do reader
         collect(reader)
@@ -193,12 +200,28 @@ end
 
 println("\nAssembly results: $(DataFrames.nrow(assembly_results)) runs completed")
 
+
+"Assembly size ratio in percent: total_length/ref_size*100. Can exceed 100%."
+function assembly_size_ratio(total_length::Integer, ref_size::Integer)::Float64
+    ref_size <= 0 ? 0.0 : round(Float64(total_length) / Float64(ref_size) * 100; digits = 1)
+end
+
+"Higher is better. Zero or negative contig counts score as 0."
+function assembly_quality_score(n50::Integer, n_contigs::Integer)::Float64
+    n_contigs <= 0 ? 0.0 : Float64(n50) / Float64(n_contigs)
+end
+
+function best_k_row(subset::DataFrames.AbstractDataFrame)
+    scores = [assembly_quality_score(row.n50, row.n_contigs) for row in eachrow(subset)]
+    return subset[argmax(scores), :]
+end
+
 # === Phase 3: Quality assessment ===
 
 println("\n--- Phase 3: Quality assessment ---")
 
 # Add quality columns
-assembly_results[!, :genome_fraction] = fill(0.0, DataFrames.nrow(assembly_results))
+assembly_results[!, :size_ratio] = fill(0.0, DataFrames.nrow(assembly_results))
 assembly_results[!, :largest_contig] = fill(0, DataFrames.nrow(assembly_results))
 assembly_results[!, :n50] = fill(0, DataFrames.nrow(assembly_results))
 assembly_results[!, :gc_content] = fill(0.0, DataFrames.nrow(assembly_results))
@@ -213,9 +236,9 @@ for row_idx in 1:DataFrames.nrow(assembly_results)
             assembly_results[row_idx, :largest_contig] = metrics.largest_contig
             assembly_results[row_idx, :n50] = metrics.n50
             assembly_results[row_idx, :gc_content] = round(metrics.gc_content; digits = 3)
-            # Genome fraction: total assembled / reference size
-            assembly_results[row_idx, :genome_fraction] = round(
-                assembly_results[row_idx, :total_length] / ref_size * 100; digits = 1)
+            # Size ratio (not QUAST genome fraction): total assembled / reference size.
+            assembly_results[row_idx, :size_ratio] = assembly_size_ratio(
+                assembly_results[row_idx, :total_length], ref_size)
         catch e
             @warn "Metrics failed for row $row_idx" exception = e
         end
@@ -228,7 +251,7 @@ println("\n--- Results Summary ---")
 
 # Select display columns
 display_cols = [:genome, :ref_size, :k, :n_contigs, :total_length,
-    :largest_contig, :n50, :gc_content, :genome_fraction, :runtime_s]
+    :largest_contig, :n50, :gc_content, :size_ratio, :runtime_s]
 summary_df = assembly_results[:, display_cols]
 println(summary_df)
 
@@ -238,14 +261,14 @@ csv_path = joinpath(results_dir, "real_genome_benchmark_$(timestamp).csv")
 CSV.write(csv_path, summary_df)
 println("\nResults saved to: $csv_path")
 
-# Best k per genome
-println("\n--- Best k per genome (by genome fraction) ---")
+# Best k per genome (n50/n_contigs, not argmax of the size ratio).
+println("\n--- Best k per genome (by n50/n_contigs) ---")
 for gname in unique(assembly_results.genome)
     subset = filter(r -> r.genome == gname, assembly_results)
     if DataFrames.nrow(subset) > 0
-        best_idx = argmax(subset.genome_fraction)
-        best = subset[best_idx, :]
-        println("  $gname: k=$(best.k) -> $(best.n_contigs) contigs, $(best.genome_fraction)% coverage, $(best.runtime_s)s")
+        best = best_k_row(subset)
+        println("  $gname: k=$(best.k) -> $(best.n_contigs) contigs, n50=$(best.n50), " *
+                "size_ratio=$(best.size_ratio)%, $(best.runtime_s)s")
     end
 end
 
