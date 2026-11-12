@@ -22,6 +22,8 @@
 module OntReadIdentityTest
 
 import Test
+import CSV
+import DataFrames
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_read_identity.jl"))
 
@@ -130,6 +132,82 @@ Test.@testset "ONT read-identity helpers" begin
             sleep(1.1)          # mtime has 1-second granularity on some filesystems
             write(a, "@r1\nACGTACGT\n+\nIIIIIIII\n")
             Test.@test reads_cache_tag(a) != before
+        end
+    end
+
+    Test.@testset "coverage-50 cannot silently overwrite a coverage-30 identity table" begin
+        # td-jwpl: --coverage/--seed change which measurement is produced but
+        # leave the table the same shape, so a bare CSV.write into the default
+        # results directory would replace the committed coverage-30 tables with
+        # a coverage-50 measurement and leave no record of the swap.
+        provenance_30 = (
+            run_coverage = 30,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_30x_seed42.fq.gz",
+        )
+        provenance_50 = (
+            run_coverage = 50,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_50x_seed42.fq.gz",
+        )
+        rows = DataFrames.DataFrame(k = [11, 11], coverage = [10, 30], value = [1.0, 3.0])
+
+        mktempdir() do dir
+            path = joinpath(dir, "kmer_survival_ladder.tsv")
+            written = write_identity_table(path, rows, provenance_30)
+            Test.@test isfile(path)
+            Test.@test all(written.run_coverage .== 30)
+            Test.@test all(written.run_seed .== 42)
+            Test.@test identity_table_provenance(written) == provenance_30
+
+            # Same provenance may refresh the file.
+            write_identity_table(path, rows, provenance_30)
+            before = read(path)
+
+            Test.@test_throws ArgumentError write_identity_table(path, rows, provenance_50)
+            Test.@test read(path) == before
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_30
+
+            # An explicit override is required to replace a different measurement.
+            write_identity_table(path, rows, provenance_50; overwrite = true)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_50
+        end
+
+        # Committed ladder/per-read tables have no provenance columns today.
+        # A coverage-50 write must still be refused, and the file must not change.
+        mktempdir() do dir
+            path = joinpath(dir, "no_provenance.tsv")
+            CSV.write(path, rows; delim = '\t')
+            before = read(path)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) === nothing
+            Test.@test_throws ArgumentError write_identity_table(path, rows, provenance_50)
+            Test.@test read(path) == before
+        end
+
+        # The committed summary already records coverage/seed/version. Those
+        # legacy columns are enough to refuse a coverage-50 replacement.
+        mktempdir() do dir
+            path = joinpath(dir, "read_identity_summary.tsv")
+            legacy = DataFrames.DataFrame(
+                organism = ["Lambda"],
+                coverage = [30],
+                seed = [42],
+                badread_version = ["Badread v0.4.1"],
+                read_source = ["simulated"],
+                reads_file = ["ont_30x_seed42.fq.gz"],
+            )
+            CSV.write(path, legacy; delim = '\t')
+            before = read(path)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_30
+            Test.@test_throws ArgumentError write_identity_table(path, legacy, provenance_50)
+            Test.@test read(path) == before
         end
     end
 
