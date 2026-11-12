@@ -808,18 +808,35 @@ columns:
 
   * a key value whose text is literally the `missingstring` ("NA") writes as
     `NA`, reads back as `missing`, and normalises to `"missing"`;
-  * a key column whose type differs across the round trip in a way `string()`
-    renders differently — an `Int` 30 on disk against a `Float64` 30.0 in
-    memory gives `"30"` against `"30.0"`. Note this is the one place typed
-    tuples would be more forgiving than strings, since `isequal(30, 30.0)` is
-    true. Keep key columns typed consistently at their source.
+  * a key column whose type differs across the round trip in a way a naive
+    `string()` would render differently. An `Int` 30 on disk against a
+    `Float64` 30.0 in memory used to give `"30"` against `"30.0"` and the
+    guard reported a phantom loss. Integer-valued finite floats are now
+    rendered as integers, so that case compares equal. Non-integer floats
+    (the identity ladder's 80.5) stay in decimal form and stay distinct.
+    Other type mismatches that still render differently continue to fail
+    CLOSED. Keep key columns typed consistently at their source.
 """
+function _canonical_key_text(value)
+    # Integer-valued floats must match the Int form CSV.jl may have written
+    # on a previous run (30 and 30.0 are the same key). Non-integer floats,
+    # strings, missings, and other values keep `string(value)`.
+    if value isa Integer
+        return string(value)
+    elseif value isa AbstractFloat && isfinite(value) && isinteger(value) &&
+           typemin(Int) <= value <= typemax(Int)
+        return string(Int(value))
+    else
+        return string(value)
+    end
+end
+
 function table_row_keys(df, keycols; label = "table")
     missing_cols = [c for c in keycols if !(String(c) in DataFrames.names(df))]
     isempty(missing_cols) ||
         throw(ArgumentError("$(label) is missing key column(s): " *
                             join(missing_cols, ", ")))
-    row_key(row) = join((string(row[c]) for c in keycols), _KEY_SEP)
+    row_key(row) = join((_canonical_key_text(row[c]) for c in keycols), _KEY_SEP)
     return Set(row_key(row) for row in DataFrames.eachrow(df))
 end
 
