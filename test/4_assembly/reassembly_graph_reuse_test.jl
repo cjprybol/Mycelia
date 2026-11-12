@@ -87,7 +87,7 @@ end
 Test.@testset "re-assembly graph reuse (td-04tb)" begin
     Random.seed!(42)
     reads = _converging_reads()
-    k = 21  # >= 13 ⇒ max_k == 21 == reassembly_k, so reuse is parameter-eligible
+    k = 21  # >= 13 ⇒ the corrector's final pass is at max_k == 21
 
     result, corrected, max_k = _run_corrector(reads, k)
     reusable = result[:metadata][:final_graph_reusable]
@@ -132,23 +132,25 @@ Test.@testset "re-assembly graph reuse (td-04tb)" begin
 
     Test.@testset "end-to-end corrector output == from-scratch rebuild" begin
         # THE invariant that must hold whether or not reuse fired: the corrector's
-        # assembled contigs equal a from-scratch rebuild of the corrected reads.
-        # corrector=:iterative now defaults dedup_revcomp ON (td-47di) AND
-        # graph_cleanup ON (td-969e), so the honest baseline holds BOTH of those
-        # corrector-default policies constant — this isolates the reuse variable
-        # (graph reuse is a pure-performance change) from the orthogonal dedup- and
-        # cleanup-policy variables. Both sides therefore run the same tip/bubble
-        # cleanup and emit the canonical (RC-deduped) contig set, and must still
-        # match: cleanup is deterministic on the byte-identical reused/rebuilt graph
-        # (the td-04tb reuse==rebuild identity is proven cleanup-OFF above).
+        # assembled contigs equal a from-scratch rebuild of the corrected reads at
+        # the k `select_reassembly_k` actually chose. corrector=:iterative now
+        # defaults dedup_revcomp ON (td-47di) AND graph_cleanup ON (td-969e), so
+        # the honest baseline holds BOTH of those corrector-default policies
+        # constant. The default criterion is survival S(k) >= 0.5. On this 5%
+        # residual fixture S(21) is about 0.41, so reassembly k drops to 13 and
+        # graph reuse (which needs reassembly_k == final_graph_k) does not fire.
+        # The median-solid criterion would have kept 21; that is no longer the
+        # default. Contig identity is at the chosen k, not at the ceiling.
         asm = R.assemble_genome(reads; k = k, corrector = :iterative, strategy = :scalable)
-        rebuild = R.assemble_genome(corrected; k = k, corrector = :none,
+        re_k = asm.assembly_stats["reassembly_k"]
+        rebuild = R.assemble_genome(corrected; k = re_k, corrector = :none,
             dedup_revcomp = true, graph_cleanup = true)
         Test.@test sort(asm.contigs) == sort(rebuild.contigs)
         Test.@test _n50(length.(asm.contigs)) == _n50(length.(rebuild.contigs))
-        # Provenance flag is present and (in this converging regime) true.
         Test.@test haskey(asm.assembly_stats, "reassembly_graph_reused")
-        Test.@test asm.assembly_stats["reassembly_graph_reused"] == reusable
+        Test.@test re_k == R.select_reassembly_k(corrected, k)
+        Test.@test asm.assembly_stats["reassembly_graph_reused"] ==
+                   (reusable && re_k == max_k)
     end
 
     Test.@testset "reuse guard is conservative on k / mode mismatch" begin
