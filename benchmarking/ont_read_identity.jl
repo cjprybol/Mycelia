@@ -71,6 +71,7 @@
 #   julia --project=. benchmarking/ont_read_identity.jl --coverage 30 --seed 42
 #   julia --project=. benchmarking/ont_read_identity.jl --reads path/to/ont.fq.gz
 #   julia --project=. benchmarking/ont_read_identity.jl --output-dir /scratch/ident
+#   julia --project=. benchmarking/ont_read_identity.jl --coverage 50 --overwrite
 
 import Pkg
 if isinteractive()
@@ -100,6 +101,7 @@ const SEED = something(tryparse(Int, something(arg_value("--seed"), "42")), 42)
 const READS_OVERRIDE = arg_value("--reads")
 const OUTPUT_DIR = something(arg_value("--output-dir"),
     joinpath(@__DIR__, "results", "ont_read_identity"))
+const ALLOW_OVERWRITE = "--overwrite" in ARGS
 
 # === CIGAR / SAM parsing ===
 
@@ -348,6 +350,97 @@ function sanitize_for_filename(name::AbstractString)
     replace(String(name), r"[^A-Za-z0-9._-]" => "_")
 end
 
+
+# === Identity-table provenance (td-jwpl) ===
+#
+# --coverage/--seed/--reads change WHICH measurement a run produces, but the
+# three committed TSVs keep the same shape, so a bare CSV.write into the
+# default results directory would silently replace a coverage-30 table with a
+# coverage-50 one. Stamp the run's provenance onto every emitted table, and
+# refuse a write whose provenance differs from the on-disk table unless
+# --overwrite is passed.
+
+const IDENTITY_PROVENANCE_FIELDS = (
+    :run_coverage, :run_seed, :badread_version, :read_source, :reads_file)
+
+function _provenance_column(df, run_name::Symbol, fallback::Union{Symbol, Nothing})
+    if hasproperty(df, run_name)
+        return df[!, run_name]
+    elseif fallback !== nothing && hasproperty(df, fallback)
+        return df[!, fallback]
+    else
+        return nothing
+    end
+end
+
+function _unique_provenance_value(values)
+    values === nothing && return nothing
+    uniques = unique(values)
+    length(uniques) == 1 || return nothing
+    return only(uniques)
+end
+
+"""
+    identity_table_provenance(df) -> NamedTuple or nothing
+
+Read a single provenance record from an identity table. Prefers the stamped
+`run_coverage` / `run_seed` columns; falls back to the legacy `coverage` /
+`seed` columns on `read_identity_summary.tsv`. Returns `nothing` when the
+table has no provenance, or when a provenance column is mixed across rows.
+"""
+function identity_table_provenance(df)
+    run_coverage = _unique_provenance_value(_provenance_column(df, :run_coverage, :coverage))
+    run_seed = _unique_provenance_value(_provenance_column(df, :run_seed, :seed))
+    badread_version = _unique_provenance_value(_provenance_column(df, :badread_version, nothing))
+    read_source = _unique_provenance_value(_provenance_column(df, :read_source, nothing))
+    reads_file = _unique_provenance_value(_provenance_column(df, :reads_file, nothing))
+    if any(v -> v === nothing, (run_coverage, run_seed, badread_version, read_source, reads_file))
+        return nothing
+    end
+    return (
+        run_coverage = run_coverage,
+        run_seed = run_seed,
+        badread_version = badread_version,
+        read_source = read_source,
+        reads_file = reads_file,
+    )
+end
+
+function stamp_identity_provenance(df, provenance)
+    stamped = copy(df)
+    n = DataFrames.nrow(stamped)
+    for field in IDENTITY_PROVENANCE_FIELDS
+        stamped[!, field] = fill(getfield(provenance, field), n)
+    end
+    return stamped
+end
+
+"""
+    write_identity_table(path, df, provenance; overwrite = false)
+
+Stamp `provenance` onto `df` and write it as a TSV. If `path` already exists
+and its recorded provenance differs — or is missing — throw `ArgumentError`
+unless `overwrite` is true. The on-disk file is left unchanged on refusal.
+A same-provenance refresh is allowed.
+"""
+function write_identity_table(path, df, provenance; overwrite::Bool = false)
+    stamped = stamp_identity_provenance(df, provenance)
+    if isfile(path)
+        existing = CSV.read(path, DataFrames.DataFrame; delim = '\t')
+        existing_provenance = identity_table_provenance(existing)
+        if !isequal(existing_provenance, provenance) && !overwrite
+            existing_text = existing_provenance === nothing ?
+                            "is missing or mixed" : string(existing_provenance)
+            throw(ArgumentError(
+                "refusing to overwrite $(path): on-disk provenance " *
+                "$(existing_text) differs from this run $(provenance). " *
+                "Pass --overwrite to replace it."))
+        end
+    end
+    CSV.write(path, stamped; delim = '\t')
+    return stamped
+end
+
 # === Main ===
 
 if abspath(PROGRAM_FILE) == @__FILE__
@@ -510,6 +603,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # remains the right number when the question is about alignable reads; the
     # all-reads column is the one to use for provisioning coverage, because raw
     # coverage is what the operator buys.
+    table_provenance = (
+        run_coverage = reported_coverage,
+        run_seed = reported_seed,
+        badread_version = badread_version,
+        read_source = read_source,
+        reads_file = basename(reads_path),
+    )
+
     if blast_summary !== nothing
         error_rate = 1 - blast_summary.mean
         println("\n--- Implied k-mer survival at measured e = $(fmt(error_rate)) ---")
@@ -534,13 +635,15 @@ if abspath(PROGRAM_FILE) == @__FILE__
                         error_free_kmer_coverage_all_reads = c * p_all))
             end
         end
-        CSV.write(joinpath(OUTPUT_DIR, "kmer_survival_ladder.tsv"),
-            DataFrames.DataFrame(ladder_rows); delim = '\t')
+        write_identity_table(joinpath(OUTPUT_DIR, "kmer_survival_ladder.tsv"),
+            DataFrames.DataFrame(ladder_rows), table_provenance;
+            overwrite = ALLOW_OVERWRITE)
     end
 
     # --- Persist ---------------------------------------------------------------------
-    CSV.write(joinpath(OUTPUT_DIR, "per_read_identity.tsv"),
-        DataFrames.DataFrame(alignment.rows); delim = '\t')
+    write_identity_table(joinpath(OUTPUT_DIR, "per_read_identity.tsv"),
+        DataFrames.DataFrame(alignment.rows), table_provenance;
+        overwrite = ALLOW_OVERWRITE)
 
     summary_rows = NamedTuple[]
     for (source, summary) in (("blast_identity_aligned", blast_summary),
@@ -563,8 +666,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 scored_read_bases = alignment.scored_read_bases,
                 aligned_base_fraction = aligned_base_fraction))
     end
-    CSV.write(joinpath(OUTPUT_DIR, "read_identity_summary.tsv"),
-        DataFrames.DataFrame(summary_rows); delim = '\t')
+    write_identity_table(joinpath(OUTPUT_DIR, "read_identity_summary.tsv"),
+        DataFrames.DataFrame(summary_rows), table_provenance;
+        overwrite = ALLOW_OVERWRITE)
 
     println("\nWrote: $(OUTPUT_DIR)")
     println("End: $(Dates.now())")
