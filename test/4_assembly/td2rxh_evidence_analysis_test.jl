@@ -594,8 +594,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test check(a, src(a), [proj(a)]; packages = ok_pkgs) == src(realpath(a))
         Test.@test_throws r"package Dep was loaded from .* but the project resolves it" check(
             a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, dep_here)])
+        # ok_pkgs first so a check that only inspects the first package cannot
+        # pass this (td-wj2s: nothing-check-first-only).
         Test.@test_throws r"package Dep is loaded .* cannot resolve it" check(
-            a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, nothing)])
+            a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, nothing)])
 
         # Through script_main with a REAL refusal: the check runs before anything,
         # so no arm runs and no CSV is written (round 9: checking after main()
@@ -645,7 +647,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test length(preloaded) == 1
         Test.@test only(preloaded)[3] === nothing
         Test.@test_throws r"package FakeDepTd2rxh is loaded" check(
-            a, src(a), [proj(a)]; packages = preloaded)
+            a, src(a), [proj(a)]; packages = [ok_pkgs; preloaded])
     end
 
     Test.@testset "the script itself: default provenance check, real entry point" begin
