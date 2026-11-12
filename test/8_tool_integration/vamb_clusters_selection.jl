@@ -193,8 +193,13 @@ Test.@testset "VAMB clusters table selection" begin
                     threads = 2)
                 Test.@test vamb_result.clusters_tsv ==
                            joinpath(vamb_outdir, "vae_clusters_split.tsv")
-                Test.@test occursin("bin default",
-                    read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                vamb_args = read(joinpath(vamb_outdir, "vamb_args.txt"), String)
+                Test.@test occursin("bin default", vamb_args)
+                Test.@test occursin("-p 2", vamb_args)
+                Test.@test occursin("-m 2000", vamb_args)
+                Test.@test occursin("--fasta $(contigs)", vamb_args)
+                Test.@test Mycelia.parse_bin_assignments(vamb_result.clusters_tsv).contig == ["contig1"]
+                Test.@test Mycelia.parse_bin_assignments(vamb_result.clusters_tsv).bin == ["bin_1"]
 
                 taxvamb_outdir = joinpath(root, "out", "taxvamb")
                 taxvamb_result = Mycelia.run_taxvamb(
@@ -202,8 +207,13 @@ Test.@testset "VAMB clusters table selection" begin
                     taxonomy_file = taxonomy, outdir = taxvamb_outdir, threads = 2)
                 Test.@test taxvamb_result.clusters_tsv ==
                            joinpath(taxvamb_outdir, "vaevae_clusters_split.tsv")
-                Test.@test occursin("bin taxvamb",
-                    read(joinpath(taxvamb_outdir, "vamb_args.txt"), String))
+                taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                Test.@test occursin("bin taxvamb", taxvamb_args)
+                Test.@test occursin("-p 2", taxvamb_args)
+                Test.@test occursin("--fasta $(contigs)", taxvamb_args)
+                Test.@test occursin("--taxonomy $(taxonomy)", taxvamb_args)
+                Test.@test Mycelia.parse_bin_assignments(taxvamb_result.clusters_tsv).contig == ["contig1"]
+                Test.@test Mycelia.parse_bin_assignments(taxvamb_result.clusters_tsv).bin == ["bin_1"]
             end
         end
     end

@@ -494,6 +494,17 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test df_custom.bin[2] == "BinB"
         Test.@test df_custom.contig[1] == "aaa"
 
+        # VAMB writes clustername / contigname; defaults must still parse it.
+        tmp_vamb = tempname()
+        open(tmp_vamb, "w") do io
+            write(io, "clustername\tcontigname\n")
+            write(io, "bin_1\tcontig1\n")
+            write(io, "bin_2\tcontig2\n")
+        end
+        Test.@test DataFrames.nrow(Mycelia.parse_bin_assignments(tmp_vamb)) == 2
+        Test.@test Mycelia.parse_bin_assignments(tmp_vamb).contig == ["contig1", "contig2"]
+        Test.@test Mycelia.parse_bin_assignments(tmp_vamb).bin == ["bin_1", "bin_2"]
+
         # dRep cluster table
         tmp_drep = tempname()
         open(tmp_drep, "w") do io
