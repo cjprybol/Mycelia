@@ -1425,13 +1425,12 @@ function write_summary(root, df)
     # and genome_fraction=missing, which is shaped exactly like a genuinely
     # degenerate cell — so leaving it in would let a transient infrastructure
     # failure count as evidence for degeneracy, the very thing the sweep is
-    # measuring. `n_seeds` then reports how many cells actually contributed,
-    # so a stratum thinned by a failure is visible rather than silently averaged.
-    # Excludes BOTH infrastructure failures (error, quast_failed) and
-    # `empty_assembly`. The first two are not measurements; the third is, but
-    # it carries no scorable metric, and `nga50_status == "no_contigs"` records
-    # it losslessly in the results table. `n_seeds` below then reports how many
-    # cells actually contributed, so a thinned stratum is visible.
+    # measuring. The filter drops both infrastructure failures (error,
+    # quast_failed) and `empty_assembly`. The first two are not measurements;
+    # the third is, but it carries no scorable metric, and
+    # `nga50_status == "no_contigs"` records it losslessly in the results
+    # table. `n_seeds` then reports how many cells actually contributed, so a
+    # stratum thinned by a failure is visible rather than silently averaged.
     df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
     for g in DataFrames.groupby(df, collect(SUMMARY_KEYCOLS))
