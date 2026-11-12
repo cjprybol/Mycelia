@@ -76,4 +76,15 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     flat_labels = [true, false, true, false, true, false, true, false, true, false]
     bm = fit_binned_map(flat, flat_labels)
     Test.@test all(isapprox(0.5), predict_binned(bm, flat))
+
+    # --- L2 regularization: slope is well-defined on separable data (td-ufsu) -
+    # Without L2, gradient descent on a linearly separable problem lets |b|
+    # grow with the iteration cap (measured: 1.16 at 200 iters, 2.11 at 2000).
+    # Regularization must keep the 200-iter and 2000-iter slopes close.
+    sep_scores = vcat(fill(0.0, 50), fill(5.0, 50))
+    sep_labels = vcat(fill(false, 50), fill(true, 50))
+    b_short = fit_logistic_map(sep_scores, sep_labels; iters = 200).b
+    b_long = fit_logistic_map(sep_scores, sep_labels; iters = 2000).b
+    Test.@test isfinite(b_short) && isfinite(b_long)
+    Test.@test isapprox(b_short, b_long; rtol = 0.1)
 end
