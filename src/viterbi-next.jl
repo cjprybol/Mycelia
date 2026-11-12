@@ -1453,10 +1453,8 @@ function _viterbi_correct_observation(
     # only successor no longer has transition probability 1. Neither term reads
     # evidence order. Custom emission callbacks and non-k-mer (text, overlap)
     # graphs keep the historical scoring.
-    per_base_emission = label_type <: Kmers.Kmer &&
-                        config.emission_logp === default_viterbi_emission_logp
-    transition_background = label_type <: Kmers.Kmer ?
-                            _INDEL_TRANSITION_BACKGROUND : 0.0
+    per_base_emission = _viterbi_uses_per_base_emission(label_type, config)
+    transition_background = _viterbi_kmer_transition_background(label_type)
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1894,6 +1892,23 @@ end
 # one-substitution/insertion/deletion probe still pass. Re-run
 # assess_frontier_dominance before treating 8.0 as calibrated for both kernels.
 const _INDEL_TRANSITION_BACKGROUND = 8.0
+
+# Shared by the scalar substitution decoder and the batched array-frontier
+# decoders. K-mer steps add the indel kernel's unobserved-outgoing mass;
+# text and overlap graphs stay on pure outgoing-weight normalization.
+function _viterbi_kmer_transition_background(label_type::Type)::Float64
+    return label_type <: Kmers.Kmer ? _INDEL_TRANSITION_BACKGROUND : 0.0
+end
+
+# After the seed k-mer, default-emission k-mer graphs score only the new base.
+# A custom emission callback keeps whole-unit scoring.
+function _viterbi_uses_per_base_emission(
+        label_type::Type,
+        config::ViterbiCorrectionConfig
+)::Bool
+    return label_type <: Kmers.Kmer &&
+           config.emission_logp === default_viterbi_emission_logp
+end
 
 function _indel_decode_successors!(
         cache::Dict{
@@ -2475,8 +2490,7 @@ function _viterbi_correct_observation_indel(
     # so it emits that base only (same read likelihood as the substitution decoder
     # and as the insertion move, which already charges one base). The seed state
     # below still emits its whole first k-mer.
-    indel_per_base_emission = label_type <: Kmers.Kmer &&
-                              config.emission_logp === default_viterbi_emission_logp
+    indel_per_base_emission = _viterbi_uses_per_base_emission(label_type, config)
     insertion_emission = function (observed_unit)
         if config.insertion_emission_logp === nothing
             return -log(alphabet_size)
