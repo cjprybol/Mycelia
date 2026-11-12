@@ -143,4 +143,65 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         Test.@test k_on > 7          # never collapses to the k=7 fallback
         Test.@test k_on >= gfloor    # select_reassembly_k actually applies the floor (wiring)
     end
+
+    Test.@testset "k_ref saturation refuses instead of returning 0.0 (td-jkuq)" begin
+        R = Mycelia.Rhizomorph
+        # Scale model from benchmarking/kmer_space_saturation_probe.jl: hold a
+        # 20 kb genome and shrink k_ref so the same occupancy ratio is cheap.
+        # At k_ref=5 the 4-letter space has 1024 slots, saturates, and the
+        # unguarded estimator returned exactly 0.0 for reads that carry 5% error.
+        rng = Random.MersenneTwister(42)
+        bases = ['A', 'C', 'G', 'T']
+        genome_length = 20_000
+        read_length = 5_000
+        coverage = 30
+        true_error = 0.05
+        genome = String([rand(rng, bases) for _ in 1:genome_length])
+        read_count = cld(coverage * genome_length, read_length)
+        reads = String[]
+        for _ in 1:read_count
+            start_index = rand(rng, 1:(genome_length - read_length + 1))
+            fragment = genome[start_index:(start_index + read_length - 1)]
+            observed = Char[]
+            sizehint!(observed, read_length)
+            for character in fragment
+                if rand(rng) < true_error
+                    push!(observed, rand(rng, filter(b -> b != character, bases)))
+                else
+                    push!(observed, character)
+                end
+            end
+            push!(reads, String(observed))
+        end
+
+        saturated = Test.@test_throws ArgumentError R.estimate_residual_error(reads; k_ref = 5)
+        Test.@test occursin("saturat", lowercase(saturated.value.msg))
+        Test.@test occursin("k_ref=5", saturated.value.msg)
+
+        # Unsaturated default k_ref=13 on this small genome still returns a
+        # finite, non-zero estimate (the validation harness lives in this regime).
+        estimate_13 = R.estimate_residual_error(reads; k_ref = 13)
+        Test.@test 0.0 < estimate_13 < 0.499
+        Test.@test isfinite(estimate_13)
+
+        # Alphabet-general: a binary alphabet fills 2^8 = 256 long before
+        # 4^8 = 65536. A hard-coded log4 / 4^k_ref rule would miss this and
+        # return 0.0 (every 8-mer is solid).
+        binary_reads = String[]
+        for i in 0:255
+            chars = Char[]
+            x = i
+            for _ in 1:8
+                pushfirst!(chars, iseven(x) ? 'A' : 'B')
+                x >>= 1
+            end
+            push!(binary_reads, String(chars))
+        end
+        append!(binary_reads, copy(binary_reads))
+        binary = Test.@test_throws ArgumentError R.estimate_residual_error(
+            binary_reads; k_ref = 8)
+        Test.@test occursin("saturat", lowercase(binary.value.msg))
+        Test.@test occursin("|A|=2", binary.value.msg)
+        Test.@test occursin("256", binary.value.msg)
+    end
 end
