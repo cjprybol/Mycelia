@@ -1886,6 +1886,13 @@ end
 # constant with assess_frontier_dominance in
 # benchmarking/rhizomorph_correction_pr_curve.jl if the gap model changes.
 # The residual mass is not a successor.
+# NOTE (decoder repair, 2026-11-11): match moves now emit only the base they add
+# (about -0.03 at Q15, not the -0.6 whole-17-mer figure above), and the
+# substitution decoder shares this constant. With 8.0 a coverage-1 spur step
+# (log(1/9) = -2.2) no longer costs more than a gap-extend plus insertion
+# (about -2.6). On the box the coverage 2-3 pin, the E2E matrix and a
+# one-substitution/insertion/deletion probe still pass. Re-run
+# assess_frontier_dominance before treating 8.0 as calibrated for both kernels.
 const _INDEL_TRANSITION_BACKGROUND = 8.0
 
 function _indel_decode_successors!(
@@ -2464,6 +2471,12 @@ function _viterbi_correct_observation_indel(
         graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
     alphabet_size = _viterbi_alphabet_size(alphabet)
+    # A match move consumes ONE read unit, i.e. one new read base on a k-mer graph,
+    # so it emits that base only (same read likelihood as the substitution decoder
+    # and as the insertion move, which already charges one base). The seed state
+    # below still emits its whole first k-mer.
+    indel_per_base_emission = label_type <: Kmers.Kmer &&
+                              config.emission_logp === default_viterbi_emission_logp
     insertion_emission = function (observed_unit)
         if config.insertion_emission_logp === nothing
             return -log(alphabet_size)
@@ -2662,7 +2675,11 @@ function _viterbi_correct_observation_indel(
                 isfinite(base) || continue
                 for ((next_vertex, next_strand), logE) in
                     _expand(state).successors
-                    emission = _call_viterbi_state_emission_logp(
+                    emission = indel_per_base_emission ?
+                               _call_viterbi_new_base_emission_logp(
+                        quality_graph, config, observed_unit, next_vertex,
+                        alphabet, strand_mode) :
+                               _call_viterbi_state_emission_logp(
                         quality_graph, config, observed_unit, next_vertex,
                         alphabet, strand_mode; count_length_penalty = false)
                     cand = base + logE + emission
@@ -3002,6 +3019,17 @@ function _call_viterbi_new_base_emission_logp(
         strand_mode::Symbol
 )::Float64
     quality = _viterbi_emission_quality(graph, observed_unit)
+    observed_kmer = observed_unit isa QualityObservation ? observed_unit.kmer :
+                    observed_unit
+    if strand_mode != :canonical && node isa Kmers.Kmer &&
+       typeof(observed_kmer) === typeof(node)
+        # Fast path, identical to the string path below: compare the two last
+        # nucleotides directly instead of rendering both k-mers as Strings.
+        error_rate = _viterbi_position_error_rate(
+            quality, quality === nothing ? 1 : length(quality), config.error_rate)
+        return last(observed_kmer) == last(node) ? log1p(-error_rate) :
+               log(error_rate / (_viterbi_alphabet_size(alphabet) - 1))
+    end
     oriented = _viterbi_unit_string(node)
     if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
         direct = _call_viterbi_emission_logp(

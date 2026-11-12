@@ -435,14 +435,15 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             :singlestrand;
             count_length_penalty = false,
         )
-        end_emission = Mycelia._call_viterbi_state_emission_logp(
+        # A match move emits only the read base it adds (decoder repair); the seed
+        # state above still emits its whole first k-mer.
+        end_emission = Mycelia._call_viterbi_new_base_emission_logp(
             raw_graph,
             config,
             sink,
             sink,
             :DNA,
-            :singlestrand;
-            count_length_penalty = false,
+            :singlestrand,
         )
         match_transition = log(
             1.0 - config.error_rate * config.insertion_fraction -
