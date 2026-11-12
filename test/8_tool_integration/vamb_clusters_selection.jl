@@ -75,6 +75,8 @@ mkdir "$outdir"
 printf '%s\n' "${args[*]}" > "$outdir/vamb_args.txt"
 model="vae"
 [[ "$mode" == "taxvamb" ]] && model="vaevae"
+# The metadata-file line is load-bearing. Without it, the old name-sorted
+# lookup also returns the split table, and the wiring test stops discriminating.
 printf 'name\tradius\n' > "$outdir/${model}_clusters_metadata.tsv"
 printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_unsplit.tsv"
 printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_split.tsv"
