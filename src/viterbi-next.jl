@@ -1441,6 +1441,22 @@ function _viterbi_correct_observation(
     retained_states::Int = diagnostics[:retained_states]
     cumulative_retained_states::Int = diagnostics[:cumulative_retained_states]
     max_retained_states::Int = diagnostics[:max_retained_states]
+    # Substitution read likelihood on fixed-length k-mer graphs (decoder repair,
+    # td-4lbi follow-up). Consecutive k-mers share k-1 bases, so scoring the WHOLE
+    # observed k-mer at every step charges each read base up to k times: one Q20
+    # substitution then costs ~k x 5.7 nats on the true path, against a transition
+    # gain of a few nats, and the read's own erroneous path always wins. The first
+    # state above emits all k bases; every later step emits only the base it adds,
+    # so each read base is scored exactly once. Transitions get the same additive
+    # pseudo-count of unobserved outgoing mass as the indel kernel
+    # (`_INDEL_TRANSITION_BACKGROUND`), so a coverage-1 spur that is its vertex's
+    # only successor no longer has transition probability 1. Neither term reads
+    # evidence order. Custom emission callbacks and non-k-mer (text, overlap)
+    # graphs keep the historical scoring.
+    per_base_emission = label_type <: Kmers.Kmer &&
+                        config.emission_logp === default_viterbi_emission_logp
+    transition_background = label_type <: Kmers.Kmer ?
+                            _INDEL_TRANSITION_BACKGROUND : 0.0
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1482,8 +1498,17 @@ function _viterbi_correct_observation(
                     skipped_transitions += 1
                     continue
                 end
-                transition_prob = edge_w / total_out
-                emission_score = _call_viterbi_state_emission_logp(
+                transition_prob = edge_w / (total_out + transition_background)
+                emission_score = per_base_emission ?
+                                 _call_viterbi_new_base_emission_logp(
+                    quality_graph,
+                    config,
+                    observed_unit,
+                    next_vertex,
+                    alphabet,
+                    strand_mode
+                ) :
+                                 _call_viterbi_state_emission_logp(
                     quality_graph,
                     config,
                     observed_unit,
@@ -2961,6 +2986,40 @@ function _call_viterbi_state_emission_logp(
         return max(direct, rc)
     end
     return direct
+end
+
+# Emission of the single read base a lock-step k-mer transition adds: the last
+# character of the observed unit against the last character of the node, in the
+# node orientation the whole-unit emission prefers (canonical mode can match the
+# observed k-mer through the node's reverse complement). The quality is that
+# base's own Phred score, the last entry of the observation's window.
+function _call_viterbi_new_base_emission_logp(
+        graph::MetaGraphsNext.MetaGraph,
+        config::ViterbiCorrectionConfig,
+        observed_unit::Any,
+        node::Any,
+        alphabet::Symbol,
+        strand_mode::Symbol
+)::Float64
+    quality = _viterbi_emission_quality(graph, observed_unit)
+    oriented = _viterbi_unit_string(node)
+    if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
+        direct = _call_viterbi_emission_logp(
+            config, observed_unit, node, alphabet; quality = quality)
+        rc_node = _viterbi_reverse_complement_unit(node, alphabet)
+        rc = _call_viterbi_emission_logp(
+            config, observed_unit, rc_node, alphabet; quality = quality)
+        if rc > direct
+            oriented = _viterbi_unit_string(rc_node)
+        end
+    end
+    observed = _viterbi_unit_string(observed_unit)
+    (isempty(observed) || isempty(oriented)) && return -Inf
+    base_quality = (quality === nothing || isempty(quality)) ? nothing :
+                   Float64[last(quality)]
+    return default_viterbi_emission_logp(
+        string(last(observed)), string(last(oriented)), alphabet;
+        quality = base_quality, error_rate = config.error_rate)
 end
 
 function _viterbi_canonical_unit(unit::Any, alphabet::Symbol)
