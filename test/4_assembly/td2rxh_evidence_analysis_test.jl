@@ -122,6 +122,39 @@ Test.@testset "td2rxh evidence smoke" begin
     Test.@test Harness.CSV_HEADER == vcat(LEGACY_HEADER, NEW_COLUMNS)
 end
 
+# td-wj2s: the header and check_provenance "Not covered" lists must stay one
+# list, and the documented gaps (including those that need a label-format
+# decision) have to appear in that list.
+Test.@testset "check_provenance Not-covered list is unified (td-wj2s)" begin
+    source = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+        "indel_reroute_evidence.jl"), String)
+    header_end = findfirst("import Pkg", source)
+    Test.@test header_end !== nothing
+    header = source[1:(first(header_end) - 1)]
+    doc_start = findfirst("check_provenance(project; loaded", source)
+    doc_fn = findfirst("function check_provenance", source)
+    Test.@test doc_start !== nothing && doc_fn !== nothing
+    docstring = source[first(doc_start):(first(doc_fn) - 1)]
+    # One list: the docstring defers to the header instead of repeating a
+    # shorter, divergent set of gaps.
+    Test.@test occursin("file header", lowercase(docstring))
+    required = (
+        "Overrides.toml",
+        "LocalPreferences.toml",
+        "precompile cache",
+        "path =",
+        "run label",
+    )
+    for phrase in required
+        Test.@test occursin(phrase, header)
+    end
+    # Hashing Overrides.toml or LocalPreferences into the run label is a
+    # format decision, not something this pass invents.
+    Test.@test occursin("format decision", lowercase(header)) ||
+               occursin("label-format", lowercase(header)) ||
+               occursin("not decided", lowercase(header))
+end
+
 if !RUN_SLOW
     @info "Skipping remaining td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
 else
