@@ -636,10 +636,47 @@ function parse_dnadiff_report(report_file::String)
     sections = Dict{Symbol, Dict{Symbol, Any}}()
     current_section = Symbol("global")
 
+    # Real MUMmer dnadiff tokens look like "48454(99.90%)". Return
+    # (count, percent) or nothing if the token is not in that compact form.
+    function parse_count_pct(token)
+        m = match(r"^([+-]?\d+)\(([+-]?\d+(?:\.\d+)?)%\)$", token)
+        m === nothing && return nothing
+        return (parse(Int, m.captures[1]), parse(Float64, m.captures[2]))
+    end
+
+    function record_count_pct!(section_metrics, fields, numbers;
+            bases_ref::Symbol, bases_query::Symbol,
+            pct_ref::Symbol, pct_query::Symbol)
+        compact = [parse_count_pct(t) for t in fields[2:end]]
+        if length(compact) >= 2 && compact[1] !== nothing && compact[2] !== nothing
+            section_metrics[bases_ref] = compact[1][1]
+            section_metrics[pct_ref] = compact[1][2]
+            section_metrics[bases_query] = compact[2][1]
+            section_metrics[pct_query] = compact[2][2]
+            return true
+        elseif length(numbers) >= 4
+            section_metrics[bases_ref] = Int(round(numbers[1]))
+            section_metrics[bases_query] = Int(round(numbers[2]))
+            section_metrics[pct_ref] = Float64(numbers[3])
+            section_metrics[pct_query] = Float64(numbers[4])
+            return true
+        end
+        return false
+    end
+
     open(report_file) do io
         for raw_line in eachline(io)
             line = strip(raw_line)
             isempty(line) && continue
+
+            # [Bases], [SNPs], [Feature Estimates], etc. are report-level
+            # blocks that sit outside the 1-to-1 / M-to-M subsections.
+            # Reset to :global so TotalSNPs/TotalIndels (which appear after
+            # M-to-M) still merge into the summary NamedTuple.
+            if startswith(line, "[") && endswith(line, "]")
+                current_section = Symbol("global")
+                continue
+            end
 
             first_token = first(split(line))
             if occursin(r"^[A-Za-z0-9]+-to-[A-Za-z0-9]+$", line) ||
@@ -657,32 +694,33 @@ function parse_dnadiff_report(report_file::String)
                 value === nothing && continue
                 push!(numbers, value)
             end
-            isempty(numbers) && continue
+            isempty(numbers) && key != "AlignedBases" && key != "UnalignedBases" && continue
 
             section_metrics = get!(sections, current_section, Dict{Symbol, Any}())
 
             if key == "TotalBases" && length(numbers) >= 2
                 section_metrics[:total_bases_ref] = Int(round(numbers[1]))
                 section_metrics[:total_bases_query] = Int(round(numbers[2]))
-            elseif key == "AlignedBases" && length(numbers) >= 4
-                section_metrics[:aligned_bases_ref] = Int(round(numbers[1]))
-                section_metrics[:aligned_bases_query] = Int(round(numbers[2]))
-                section_metrics[:aligned_pct_ref] = Float64(numbers[3])
-                section_metrics[:aligned_pct_query] = Float64(numbers[4])
-            elseif key == "UnalignedBases" && length(numbers) >= 4
-                section_metrics[:unaligned_bases_ref] = Int(round(numbers[1]))
-                section_metrics[:unaligned_bases_query] = Int(round(numbers[2]))
-                section_metrics[:unaligned_pct_ref] = Float64(numbers[3])
-                section_metrics[:unaligned_pct_query] = Float64(numbers[4])
+            elseif key == "AlignedBases"
+                record_count_pct!(section_metrics, fields, numbers;
+                    bases_ref = :aligned_bases_ref, bases_query = :aligned_bases_query,
+                    pct_ref = :aligned_pct_ref, pct_query = :aligned_pct_query)
+            elseif key == "UnalignedBases"
+                record_count_pct!(section_metrics, fields, numbers;
+                    bases_ref = :unaligned_bases_ref, bases_query = :unaligned_bases_query,
+                    pct_ref = :unaligned_pct_ref, pct_query = :unaligned_pct_query)
             elseif key == "AvgIdentity" && length(numbers) >= 1
                 section_metrics[:avg_identity] = Float64(numbers[1])
             elseif startswith(key, "AvgIdentity(") && length(numbers) >= 1
                 section_metrics[:avg_identity_aligned] = Float64(numbers[1])
-            elseif key == "SNPs" && length(numbers) >= 1
+            elseif (key == "SNPs" || key == "TotalSNPs") && length(numbers) >= 1
                 section_metrics[:snps] = Int(round(numbers[1]))
-            elseif key == "Indels" && length(numbers) >= 1
+            elseif (key == "Indels" || key == "TotalIndels") && length(numbers) >= 1
                 section_metrics[:indels] = Int(round(numbers[1]))
-                if length(numbers) >= 2
+                # Bare "Indels N M" in the synthetic fixtures uses M as indel
+                # bases. Real "TotalIndels N M" uses M as the query-side count,
+                # so only the bare token writes :indel_bases.
+                if key == "Indels" && length(numbers) >= 2
                     section_metrics[:indel_bases] = Int(round(numbers[2]))
                 end
             end
