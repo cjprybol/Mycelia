@@ -307,7 +307,32 @@ const AGGREGATE_ONLY = "--aggregate-only" in ARGS
 # schema change — and prefer pointing `--output-dir` at a scratch directory when
 # it is not. Note it disables the guard for the WHOLE process, so on the shard
 # driver it covers the pre-warm and all shards, not one invocation.
-const ALLOW_SHRINK = "--allow-shrink" in ARGS
+# Parsed from ARGS at include time. `"--allow-shrink" in ARGS` silently
+# ignored the near-miss `--allow-shrink=true`, which looks like it enables
+# the override and does not. The parser is a function so a test can pin
+# the tokens without re-including this file under a fake ARGS.
+function allow_shrink_from_args(args)
+    enabled = false
+    for token in args
+        if token == "--allow-shrink"
+            enabled = true
+        elseif startswith(token, "--allow-shrink=")
+            raw = split(token, '='; limit = 2)[2]
+            value = lowercase(strip(raw))
+            if value in ("true", "1", "yes")
+                enabled = true
+            elseif value in ("false", "0", "no")
+                enabled = false
+            else
+                error("unrecognised --allow-shrink value $(repr(raw)); " *
+                      "use --allow-shrink or --allow-shrink=true")
+            end
+        end
+    end
+    return enabled
+end
+
+const ALLOW_SHRINK = allow_shrink_from_args(ARGS)
 
 # Cached rows with these statuses are RECOMPUTED rather than reused. Both are
 # infrastructure failures that produce a well-formed, degenerate-looking row;
