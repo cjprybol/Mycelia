@@ -305,8 +305,11 @@ end
 
 Convert a Rhizomorph evidence graph into a weighted graph suitable for
 probabilistic path algorithms. Edge weights are derived from evidence counts
-by default, and strand orientation is inferred from the first evidence entry
-when present. Undirected graphs are expanded into bidirectional edges.
+by default. Each weighted edge carries one strand: `Forward` when any evidence
+entry is `Forward`, otherwise the evidence strand (see
+`preferred_evidence_strand`). Reduced (lightweight/ultralight) edges, which
+carry no strand, are labelled `Forward`. Undirected graphs are expanded into
+bidirectional edges.
 
 # Arguments
 - `source_graph::MetaGraphsNext.MetaGraph`: Evidence-backed graph to convert
@@ -351,7 +354,10 @@ function weighted_graph_from_rhizomorph(
         strand = if edge_data isa AllReducedEdgeData  # TYPE-CHECK-AUDIT: super-union guard
             Forward  # Reduced types don't track strand
         else
-            first_evidence_strand(edge_data.evidence; default = Forward)
+            # Not first_evidence_strand: on an edge with evidence on both
+            # strands that picks by Dict order, and a mixed labelling breaks the
+            # single-strand walk the decoders follow (td-tg05).
+            preferred_evidence_strand(edge_data.evidence; default = Forward)
         end
         weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
         if !is_directed
@@ -2299,12 +2305,17 @@ evidence the builder recorded (the observed-read strand, carried on each
 
 `convert_to_canonical` stores each observation's strand relative to the canonical
 label: `Forward` means the k-mer was observed as the canonical label itself,
-`Reverse` means it was observed as the label's reverse complement. So:
+`Reverse` means it was observed as the label's reverse complement. The one
+exception is a palindromic label (`rc(label) == label`): `convert_to_canonical`
+records every observation of it a second time with the strand flipped, so its
+evidence always holds both strands. So:
 
 - all evidence `Forward`  → `true`    (emit the label as-is)
 - all evidence `Reverse`  → `false`   (emit the reverse complement)
 - mixed / no strand data  → `missing` (orientation genuinely ambiguous here, e.g.
-  an inverted-repeat vertex that was observed in both orientations)
+  an inverted-repeat vertex that was observed in both orientations; always the
+  case for a palindromic vertex, where both orientations are the same sequence)
+- no `evidence` field (reduced memory profiles) or label absent → `missing`
 
 This is the same strand signal the DoubleStrand arm keeps as separate oriented
 vertices; here it is the tie-breaker used to disambiguate reverse-complement
@@ -2363,6 +2374,8 @@ function _resolve_path_orientations(path::Vector{T}, graph) where {T}
     # combinations overlap, prefer the one that best matches the stored strands.
     best = nothing
     best_score = -1
+    # Palindromic vertices always have pref = missing (both strands stored);
+    # they rely on the (true, false) order plus the strict `>` to keep a_fwd = true.
     for a_fwd in (true, false), b_fwd in (true, false)
         if _kmers_overlap(_oriented_label(path[1], a_fwd),
                 _oriented_label(path[2], b_fwd), k)
