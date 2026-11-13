@@ -176,18 +176,22 @@ function predict_isotonic(model::NamedTuple,
 end
 
 """
-    fit_logistic_map(scores, labels; iters=500, lr=0.1) -> NamedTuple
+    fit_logistic_map(scores, labels; iters=500, lr=0.1, l2=0.05) -> NamedTuple
 
 Fit a Platt-style single-feature logistic probability map
 `P(true | score) = 1 / (1 + exp(-(a + b*score)))` by gradient descent on the
 standardized score, folded back to raw-score space. Returns `(a, b)` — the
-raw-space intercept and slope. Mirrors the standardize→fit→unfold structure of
-the repo's `fit_logistic_fusion`, but with a single feature and no Mycelia
-dependency. Two parameters, strictly monotone, so it inverts cleanly to a single
-raw gap cutoff (see `logistic_gap_for_probability`).
+raw-space intercept and slope. L2 regularization (`l2`, default 0.05) is
+applied to the slope only, so the intercept can still match an imbalanced
+base rate. It keeps the slope well-defined on linearly separable data, where
+an unregularized fit otherwise grows with the iteration cap. Mirrors the standardize→fit→unfold
+structure of the repo's `fit_logistic_fusion`, but with a single feature and no
+Mycelia dependency. Two parameters, strictly monotone, so it inverts cleanly to
+a single raw gap cutoff (see `logistic_gap_for_probability`).
 """
 function fit_logistic_map(scores::AbstractVector{<:Real},
-        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1)::NamedTuple
+        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1,
+        l2::Float64 = 0.05)::NamedTuple
     length(scores) == length(labels) ||
         throw(ArgumentError("scores and labels must have equal length"))
     isempty(scores) && throw(ArgumentError("scores and labels must be non-empty"))
@@ -209,8 +213,10 @@ function fit_logistic_map(scores::AbstractVector{<:Real},
             gα += err
             gβ += err * z[i]
         end
-        α -= lr * gα / n
-        β -= lr * gβ / n
+        # Penalize the slope only. Shrinking the intercept pulls probabilities
+        # toward 0.5 when the labels are imbalanced (td-ufsu).
+        α -= lr * (gα / n)
+        β -= lr * (gβ / n + l2 * β)
     end
     # Fold the standardized (α, β) back to raw-score space:
     # α + β*(x-μ)/σ = (α - β*μ/σ) + (β/σ)*x.
