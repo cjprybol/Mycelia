@@ -78,7 +78,7 @@ kmer = DNAKmer{3}("ATG")
 vertex = QualmerVertexData(kmer)
 
 add_evidence!(vertex, "dataset_01", "read_001",
-             QualityEvidenceEntry(5, Forward, UInt8[30, 35, 32]))
+             QualityEvidenceEntry(5, Forward, UInt8[63, 68, 65]))  # Q30, 35, 32
 ```
 """
 struct QualmerVertexData{T}
@@ -140,7 +140,7 @@ sequence = LongDNA{4}("ATGATGATG")
 vertex = QualityBioSequenceVertexData(sequence)
 
 add_evidence!(vertex, "dataset_01", "read_001",
-             QualityEvidenceEntry(1, Forward, UInt8[30, 35, 32, 28, 40, 38, 35, 32, 30]))
+             QualityEvidenceEntry(1, Forward, UInt8[63, 68, 65, 61, 73, 71, 68, 65, 63]))  # Q30, 35, 32, 28, 40, 38, 35, 32, 30
 ```
 """
 struct QualityBioSequenceVertexData{T}
@@ -198,7 +198,7 @@ Vertex data for quality-aware string graphs.
 vertex = QualityStringVertexData("ATG")
 
 add_evidence!(vertex, "dataset_01", "text_001",
-             QualityEvidenceEntry(5, Forward, UInt8[30, 35, 32]))
+             QualityEvidenceEntry(5, Forward, UInt8[63, 68, 65]))  # Q30, 35, 32
 ```
 """
 struct QualityStringVertexData
