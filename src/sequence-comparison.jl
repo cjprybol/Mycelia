@@ -679,6 +679,14 @@ function topological_entropy(seq; alphabet = nothing, step_size::Int = 1)
     return entropy_sum / window_count
 end
 
+function _merge_and_map_file_token(path::AbstractString)
+    abs_path = abspath(string(path))
+    isfile(abs_path) || throw(ArgumentError(
+        "merge_and_map fingerprint requires an existing file, got $(abs_path)"))
+    file_stat = stat(abs_path)
+    return string(abs_path, "\t", file_stat.size, "\t", file_stat.mtime)
+end
+
 """
     merge_and_map_single_end_samples(; 
         fasta_reference::AbstractString, 
@@ -696,7 +704,12 @@ Merge and map single-end sequencing samples, then output results in one or more 
 - `fastq_list`: Vector of paths to input FASTQ files to be merged.
 - `minimap_index`: Path to the minimap2 index file (.mmi).
 - `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
-- `outbase`: Base name (optionally including path) for output files (default: `Mycelia.normalized_current_date() * ".joint-minimap-mapping-results"`).
+- `outbase`: Base name (optionally including path) for output files. The default
+  is a SHA-1 fingerprint of the input FASTQ list (order-insensitive, absolute
+  paths plus each file's size and mtime), the reference, the minimap index, and
+  the mapping type. Different input sets do not collide, and an in-place change
+  to a FASTQ, the reference, or the index invalidates the cache key. Pass
+  `outbase` explicitly to keep a chosen path.
 - `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
 
 # Description
@@ -709,15 +722,50 @@ This function merges provided FASTQ files and assigns unique UUIDs to reads, map
 # Returns
 - The joined results as a `DataFrames.DataFrame`.
 """
+function merge_and_map_default_outbase(fastq_list;
+        fasta_reference::AbstractString = "",
+        minimap_index::AbstractString = "",
+        mapping_type::AbstractString = "")
+    fastq_paths = sort(abspath.(string.(fastq_list)))
+    fastq_payload = join((_merge_and_map_file_token(path) for path in fastq_paths), "\n")
+    fingerprint = create_sha1_hash(
+        string(
+            "fasta_reference=", _merge_and_map_file_token(fasta_reference), "\n",
+            "minimap_index=", _merge_and_map_file_token(minimap_index), "\n",
+            "mapping_type=", mapping_type, "\n",
+            "fastq_list=", fastq_payload, "\n",
+        );
+        encoding = :hex,
+        encoded_length = 12,
+        normalize_case = false,
+        allow_truncation = true,
+    )
+    return "joint-minimap-mapping-results." * fingerprint
+end
+
+function resolve_merge_and_map_outbase(outbase, fastq_list;
+        fasta_reference::AbstractString = "",
+        minimap_index::AbstractString = "",
+        mapping_type::AbstractString = "")
+    outbase === nothing || return outbase
+    return merge_and_map_default_outbase(fastq_list;
+        fasta_reference = fasta_reference,
+        minimap_index = minimap_index,
+        mapping_type = mapping_type)
+end
+
 function merge_and_map_single_end_samples(;
         fasta_reference::AbstractString,
         fastq_list::Vector{<:AbstractString},
         minimap_index::AbstractString,
         mapping_type::AbstractString,
-        outbase::AbstractString = Mycelia.normalized_current_date() *
-                                  ".joint-minimap-mapping-results",
+        outbase::Union{Nothing, AbstractString} = nothing,
         outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
 )
+    outbase = resolve_merge_and_map_outbase(outbase, fastq_list;
+        fasta_reference = fasta_reference,
+        minimap_index = minimap_index,
+        mapping_type = mapping_type)
     # Join FASTQ files
     fastq_out = outbase * ".fq.gz"
     tsv_out = outbase * ".uuid-map.tsv.gz"
@@ -730,29 +778,15 @@ function merge_and_map_single_end_samples(;
         fastq = fastq_out,
         index_file = minimap_index
     )
-    # NOT swept unconditionally here, unlike minimap_merge_map_and_split.
-    #
-    # `outbase` defaults to `normalized_current_date() * "..."`, which is
-    # DATE-ONLY. Every call on a given day from a given working directory
-    # therefore derives the SAME split prefix regardless of `fastq_list`, and
-    # the default `dirname` is "" -> the process CWD. Two concurrent runs under
-    # that default share a prefix, so an unconditional sweep at function entry
-    # would delete a peer's IN-FLIGHT chunks -- turning a disk-space bug into a
-    # truncated-output bug. The shape anchor cannot help: the peer's chunks
-    # match the left anchor too, because the prefix is genuinely the same.
-    #
-    # Sweeping only when we are about to map keeps the peer's no-op path a
-    # no-op. It does leave one hole: a run killed AFTER writing `outfile` keeps
-    # its chunks, since this branch is then skipped forever. That is a leak,
-    # and a leak is strictly better than deleting a file another process is
-    # still writing.
-    #
-    # The real defect is the colliding default; fixing it is a behaviour change
-    # beyond this PR's scope (same-day reuse of `fastq_out`/`tsv_out` is also
-    # wrong under it) and is tracked separately.
+    # Unconditional pre-run sweep, matching minimap_merge_map_and_split.
+    # The default outbase is unique per input set, so concurrent same-CWD
+    # runs no longer share a split prefix. `skip_if_owner_live` still
+    # protects an explicit-outbase caller who chose a colliding path.
+    # Hoisting closes the leak where a run killed after writing `outfile`
+    # would otherwise skip this branch forever and leave its chunks behind.
+    Mycelia.cleanup_minimap_split_temps(
+        minimap_result.split_prefix; skip_if_owner_live = true)
     if !isfile(minimap_result.outfile)
-        Mycelia.cleanup_minimap_split_temps(
-            minimap_result.split_prefix; skip_if_owner_live = true)
         # `finally`, because minimap2 leaves its --split-prefix chunks behind
         # only when it is killed mid-run; on a clean exit it removes them itself.
         #
