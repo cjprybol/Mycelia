@@ -144,3 +144,89 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         Test.@test k_on >= gfloor    # select_reassembly_k actually applies the floor (wiring)
     end
 end
+
+# td-etyf: canonical window hash must be case-insensitive so soft-masked
+# (lowercase) input does not split a locus from its reverse complement.
+Test.@testset "canonical k-mer hash is case-insensitive (td-etyf)" begin
+    R = Mycelia.Rhizomorph
+    k = 11
+    upper = collect("ACGTAAACCGTTAGC")
+    lower = collect("acgtaaaccgttagc")
+    mixed = collect("acGTAAAccgTTAgc")
+
+    Test.@test R._dynamic_k_canonical_window_hash(upper, 1, k) ==
+               R._dynamic_k_canonical_window_hash(lower, 1, k)
+    Test.@test R._dynamic_k_canonical_window_hash(upper, 1, k) ==
+               R._dynamic_k_canonical_window_hash(mixed, 1, k)
+    # A k-mer and its reverse complement must hash identically even when
+    # one side is lowercased. The current helper uppercases only the
+    # reverse-complement half, so this fails on soft-masked input.
+    window = "ACGTAAACCGT"
+    rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(window)))
+    Test.@test R._dynamic_k_canonical_window_hash(collect(lowercase(window)), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(rc), 1, k)
+    Test.@test R._dynamic_k_canonical_window_hash(collect(window), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(lowercase(rc)), 1, k)
+    # Uppercase-only input stays self-consistent (no regression on the live path).
+    Test.@test R._dynamic_k_canonical_window_hash(collect(window), 1, k) ==
+               R._dynamic_k_canonical_window_hash(collect(rc), 1, k)
+end
+
+# td-etyf: every hash and equality path in dynamic-k-selection.jl folds case,
+# including the raw window hash. A UnitRange view is 1-based (`Base.OneTo(k)`),
+# so a lowercase window folded into a k-length buffer matches the uppercase
+# view at the same start index, including indexes far from 1. Also covered:
+# the observed-k-mer set, the singleton split, the residual-error spectrum,
+# the non-canonical count spectrum, and the DNA complement.
+Test.@testset "dynamic-k hashes and complements are case-insensitive (td-etyf)" begin
+    window = collect("ACGTACGT")
+    lower = collect("acgtacgt")
+    mixed = collect("AcGtAcGt")
+    k = 4
+    for start_index in (1, 5)
+        Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(window, start_index, k) ==
+                   Mycelia.Rhizomorph._dynamic_k_window_hash(lower, start_index, k)
+        Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(window, start_index, k) ==
+                   Mycelia.Rhizomorph._dynamic_k_window_hash(mixed, start_index, k)
+    end
+
+    # A lowercase window at a large start index must match its uppercase twin.
+    # Folding into a k-length buffer is enough; the view axes are 1-based.
+    k_far = 5
+    start_far = 10_000
+    motif = collect("ACGTA")
+    upper_far = fill('N', start_far + k_far - 1)
+    lower_far = fill('n', start_far + k_far - 1)
+    for offset in 1:k_far
+        upper_far[start_far + offset - 1] = motif[offset]
+        lower_far[start_far + offset - 1] = lowercase(motif[offset])
+    end
+    Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(upper_far, start_far, k_far) ==
+               Mycelia.Rhizomorph._dynamic_k_window_hash(lower_far, start_far, k_far)
+
+    # Observed-k-mer set: a lowercase twin must not look like a second k-mer.
+    alphabet = 2
+    one = Mycelia.Rhizomorph._dynamic_k_character_sequences(["AC"])
+    both = Mycelia.Rhizomorph._dynamic_k_character_sequences(["AC", "ac"])
+    Test.@test Mycelia.Rhizomorph._calculate_dynamic_k_sparsity(one, alphabet, 2) ==
+               Mycelia.Rhizomorph._calculate_dynamic_k_sparsity(both, alphabet, 2)
+
+    # Six uppercase copies plus one lowercase twin are one k-mer, not a singleton split.
+    reads = ["ACGT", "ACGT", "ACGT", "ACGT", "ACGT", "ACGT", "acgt"]
+    Test.@test Mycelia.Rhizomorph._dynamic_k_errors_are_singletons(
+        Mycelia.Rhizomorph._dynamic_k_character_sequences(reads), 4;
+        singleton_threshold = 1) == false
+
+    # The lowercase copy is the observation that makes the k-mer solid.
+    Test.@test Mycelia.Rhizomorph._kmer_spectrum_residual_error(["ACGT", "acgt"], 4, 2) == 0.0
+
+    Test.@test Mycelia.Rhizomorph._kmer_count_spectrum(["ACGT", "acgt"], 4; canonical = false) ==
+               Mycelia.Rhizomorph._kmer_count_spectrum(["ACGT", "ACGT"], 4; canonical = false)
+
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('a') ==
+               Mycelia.Rhizomorph._dna_complement_char('A')
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('c') ==
+               Mycelia.Rhizomorph._dna_complement_char('C')
+    Test.@test Mycelia.Rhizomorph._dna_complement_char('n') ==
+               Mycelia.Rhizomorph._dna_complement_char('N')
+end
