@@ -190,17 +190,22 @@ provenance cannot be reconstructed later.
 arguments: `UnicyclerHybridConfig` selects independent short- and long-read
 correction followed by a three-FASTQ Unicycler assembly, while
 `AutocyclerPolishConfig` selects a corrected long-read Autocycler consensus
-polished with Polypolish and then careful Pypolca. Both subtype
-`AbstractPairedShortLongAssemblyConfig`, and both do their validation in the
-constructor. `short_read_tech` and `long_read_tech` must name technologies the
-OLC taxonomy recognises; `autocycler_read_type` must be one of `:ont_r9`,
-`:ont_r10`, `:pacbio_clr`, or `:pacbio_hifi` *and* must be compatible with
-`long_read_tech`, so PacBio CLR and HiFi never share a correction model. Options
-the route itself owns — input paths, output directories, thread counts,
-executor handles, and the Autocycler chemistry flag — are rejected outright if
-passed through `correction_options` or `assembler_options`, as is any key
-outside the supported set. `threads` and `input_snapshot_byte_ceiling` must be
-positive. An invalid combination therefore throws an `ArgumentError` from the
+polished with Polypolish (default `--careful`) and then careful Pypolca. Both
+subtype `AbstractPairedShortLongAssemblyConfig`, and both do their validation
+in the constructor. `short_read_tech` and `long_read_tech` must name
+technologies the OLC taxonomy recognises; `autocycler_read_type` must be one
+of `:ont_r9`, `:ont_r10`, `:pacbio_clr`, or `:pacbio_hifi` *and* must be
+compatible with `long_read_tech`, so PacBio CLR and HiFi never share a
+correction model. Route-owned keys are rejected by two mechanisms. A denylist
+(`_reject_route_managed_options`) refuses input paths, output directories,
+and — depending on the bag — thread counts, executor handles, and the
+Autocycler chemistry flag. An allowlist
+(`_reject_unsupported_hybrid_options`) then refuses any remaining key outside
+the supported set. The two option bags reject different subsets and produce
+different exception texts; `:executor`, for example, is not in the Autocycler
+denylist and is rejected by the allowlist instead. `threads` must be
+positive, and `input_snapshot_byte_ceiling` must be positive and defaults to
+1 TB. An invalid combination therefore throws an `ArgumentError` from the
 config constructor, which is a much cheaper place to discover the mistake than
 several hours into a long-read assembly.
 
@@ -212,10 +217,11 @@ those lifecycle-retained snapshots, never the caller's files directly, so a
 source that is rewritten mid-run cannot silently change the assembled bytes.
 Result provenance retains both the original-source and the consumed-snapshot
 hashes, which is what makes an assembly reconstructible after the fact.
-`input_snapshot_byte_ceiling` bounds the cumulative bytes copied across the
-whole workflow and is checked before the next correction or assembler side
-effect, so a run that would exhaust the budget fails before it starts the stage
-that would have overrun it. Both config types are immutable, so `output_dir` is
+`input_snapshot_byte_ceiling` (default 1 TB) bounds the cumulative bytes
+copied across the whole workflow and is checked before the next correction or
+assembler side effect, so a run that would exhaust the budget fails before it
+starts the stage that would have overrun it. Both config types are immutable,
+so `output_dir` is
 set at construction rather than assigned afterwards: pass `output_dir = nothing`
 for ephemeral artifacts, or give it a new, empty persistent directory when you
 want to keep the corrected FASTQs and tool outputs. Any non-empty output
@@ -225,8 +231,9 @@ directory is refused rather than merged into.
 
 `Mycelia.run_metamdbg` accepts either one or more HiFi FASTQs *or* one or more
 ONT FASTQs, never both. The wrapper emits exactly one of `--in-hifi` and
-`--in-ont`, and rejects a call supplying both, because its reuse contract binds a
-single input technology: a mixed invocation has no one technology flag to record,
+`--in-ont`, and rejects a call supplying both, because its reuse
+contract binds a single input technology: a mixed invocation has no
+one technology flag to record,
 so it could never be checked for reuse. Mixed input is therefore excluded rather
 than advertised as a combined-input contract the wrapper cannot deliver. ONT
 input additionally requires the explicit `ont_r10_4_plus = true`
