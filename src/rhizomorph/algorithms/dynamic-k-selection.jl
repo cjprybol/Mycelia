@@ -92,10 +92,10 @@ function _dynamic_k_alphabet_size(sequences::Vector{String})::Int
 end
 
 function _dynamic_k_window_hash(characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
-    # Case-insensitive, but the hash of an AbstractArray includes the window's
-    # axes. A 1-based copy would not match the uppercase view at the same
-    # start index, so a lowercase window is folded into a carrier that keeps
-    # those axes (td-etyf). Already-uppercase windows take the original path.
+    # Case-insensitive. A view over a UnitRange has 1-based axes
+    # (`Base.OneTo(k)`), so `hash` of that view equals `hash` of a k-length
+    # `Vector{Char}` with the same contents. A lowercase window is folded into
+    # that k-length buffer (td-etyf). Already-uppercase windows hash the view.
     last = start_index + k - 1
     needs_fold = false
     for index in start_index:last
@@ -108,11 +108,11 @@ function _dynamic_k_window_hash(characters::AbstractVector{Char}, start_index::I
     if !needs_fold
         return UInt64(hash(view(characters, start_index:last)))
     end
-    carrier = Vector{Char}(undef, last)
-    for index in start_index:last
-        carrier[index] = uppercase(characters[index])
+    folded = Vector{Char}(undef, k)
+    for offset in 1:k
+        folded[offset] = uppercase(characters[start_index + offset - 1])
     end
-    return UInt64(hash(view(carrier, start_index:last)))
+    return UInt64(hash(folded))
 end
 
 function _calculate_dynamic_k_sparsity(
