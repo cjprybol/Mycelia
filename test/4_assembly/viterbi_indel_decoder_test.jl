@@ -1143,12 +1143,19 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         # Responsibilities are staged inside the direct read corrector too, not
         # only by the outer window splicer. A post-decode failure must therefore
         # classify as truncated without leaking partial soft-EM state.
+        # The read must decode to completion so the throwing likelihood calculator
+        # is reached; it is chosen with no reverse-complement pairs among its 5-mers
+        # (see the reverse-complement-symmetric known gap below).
+        transaction_reference = indel_quality_record(
+            "transaction_ref", "ACGGTCATT", fill(40, 9))
+        transaction_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [transaction_reference], 5; mode = :doublestrand)
         expected_soft_weights =
             Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         Mycelia.accumulate_competing_paths!(
             expected_soft_weights,
-            partial_reference,
-            partial_graph,
+            transaction_reference,
+            transaction_graph,
             5;
             graph_mode = :doublestrand,
         )
@@ -1160,8 +1167,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         transaction_error = nothing
         try
             Mycelia.try_viterbi_path_improvement(
-                partial_reference,
-                partial_graph,
+                transaction_reference,
+                transaction_graph,
                 5;
                 graph_mode = :doublestrand,
                 diagnostics = transaction_diagnostics,
@@ -1188,6 +1195,85 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test transaction_diagnostics.indel_attempts[] ==
                    transaction_diagnostics.indel_decodes[] +
                    transaction_diagnostics.truncated_decodes[]
+
+        # Regression (td-tg05): on a reverse-complement-symmetric read (every
+        # 5-mer's reverse complement is also in the read) the doublestrand edges
+        # carry evidence on both strands. The weighted decode graph used to take
+        # each edge's strand from its first evidence entry, so the labels were
+        # mixed and the decode truncated. The precondition check below pins the
+        # both-strand evidence, so a pass cannot come from edges reverting to
+        # single-strand evidence.
+        symmetric_reference = indel_quality_record(
+            "symmetric_ref", "ACGTACGTA", fill(40, 9))
+        symmetric_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [symmetric_reference], 5; mode = :doublestrand)
+        symmetric_edge_strands = [
+            Set(entry.strand
+                for observations in values(symmetric_graph[src, dst].evidence)
+                for entries in values(observations)
+                for entry in entries)
+            for (src, dst) in MetaGraphsNext.edge_labels(symmetric_graph)]
+        Test.@test !isempty(symmetric_edge_strands)
+        Test.@test all(
+            strands -> strands == Set([
+                Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse]),
+            symmetric_edge_strands)
+        symmetric_diagnostics = Mycelia.CorrectorDiagnostics()
+        symmetric_calculator_reached = Ref(false)
+        Mycelia.try_viterbi_path_improvement(
+            symmetric_reference,
+            symmetric_graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = symmetric_diagnostics,
+            indel_params = params,
+            likelihood_calculator = (sequence, scores, graph, k; graph_mode) -> begin
+                symmetric_calculator_reached[] = true
+                0.0
+            end,
+        )
+        # These hold before and after a decoder fix: the read is attempted once and
+        # rejected for no structural or k-mer reason, so "still broken" below means
+        # "still truncating".
+        Test.@test symmetric_diagnostics.indel_attempts[] == 1
+        Test.@test symmetric_diagnostics.structural_errors[] == 0
+        Test.@test symmetric_diagnostics.unkmerizable_reads[] == 0
+        Test.@test symmetric_diagnostics.indel_decodes[] == 1
+        Test.@test symmetric_calculator_reached[]
+        # The weighted decode graph labels every both-strand edge Forward.
+        symmetric_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            symmetric_graph)
+        Test.@test all(
+            labels -> symmetric_weighted[labels...].src_strand ==
+                      Mycelia.Rhizomorph.Forward &&
+                          symmetric_weighted[labels...].dst_strand ==
+                          Mycelia.Rhizomorph.Forward,
+            MetaGraphsNext.edge_labels(symmetric_weighted))
+
+        # Strand-mode auto-detection counts a Reverse entry that is not first.
+        # Vector inner containers fix the order (Forward first), so the old
+        # first-entry rule would have resolved :singlestrand.
+        function strand_detection_graph(strands)
+            detection_graph = MetaGraphsNext.MetaGraph(
+                MetaGraphsNext.DiGraph(),
+                label_type = String,
+                vertex_data_type = Nothing,
+                edge_data_type = Any)
+            detection_graph["A"] = nothing
+            detection_graph["B"] = nothing
+            detection_graph["A", "B"] = (evidence = Dict("ds" => Dict(
+                "obs" => [(strand = s,) for s in strands])),)
+            return detection_graph
+        end
+        mixed_graph = strand_detection_graph(
+            [Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse])
+        Test.@test Mycelia._viterbi_graph_has_reverse_strand_evidence(mixed_graph)
+        Test.@test Mycelia._resolve_viterbi_strand_mode(
+            mixed_graph, :DNA, :auto) == :doublestrand
+        forward_graph = strand_detection_graph([Mycelia.Rhizomorph.Forward])
+        Test.@test !Mycelia._viterbi_graph_has_reverse_strand_evidence(forward_graph)
+        Test.@test Mycelia._resolve_viterbi_strand_mode(
+            forward_graph, :DNA, :auto) == :singlestrand
 
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))

@@ -25,6 +25,19 @@ module Td2rxhEvidenceAnalysisTest
 # elsewhere or unresolvable) and is shown, through script_main, to refuse before
 # any arm runs or any CSV is written. A subprocess test runs the script itself,
 # so the entry point and the default check against the live state are executed.
+# That subprocess test skips with a reason when the root Manifest.toml is
+# missing (the file is gitignored; CI instantiates it, a fresh local clone
+# may not). The child julia command drops session flags that change the 1.10
+# cache key or force pkgimages off: --code-coverage, --pkgimages,
+# --check-bounds, --track-allocation, and --inline.
+#
+# Deferred, not closed here (need an LRC or CI timing measurement, or are
+# won't-fix history): (1) hpc-setup.sh precompiles with the default load path
+# while sbatch sets JULIA_LOAD_PATH="@:@stdlib" — check the first array task's
+# wall time on the next LRC run; (2) whether CI's child reuses the cache built
+# by "Install dependencies" — compare test (lts) time on a post-filter head
+# against the ~2 h baseline; (3) round-9/10 commit-message Minor counts are
+# recorded on the PR and history is not rewritten.
 
 import Test
 import CSV
@@ -104,6 +117,24 @@ cell_index(cell) = findfirst(==(cell), PREREGISTERED_CELLS)
 rate_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).error_rate
 readlen_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).read_length
 
+# Flags that change the Julia 1.10 precompile cache key, or that force
+# pkgimages off (cold compile). The child julia in the subprocess provenance
+# test must drop these if they were inherited from the parent session.
+const CHILD_JULIA_SESSION_FLAGS = (
+    "--code-coverage", "--pkgimages", "--check-bounds",
+    "--track-allocation", "--inline",
+)
+
+function child_julia_cmd(julia_cmd = Base.julia_cmd())
+    return Cmd(filter(arg -> !any(startswith(arg, flag) for flag in
+        CHILD_JULIA_SESSION_FLAGS), julia_cmd.exec))
+end
+
+function missing_root_manifest_skip_reason(root::AbstractString)
+    isfile(joinpath(root, "Manifest.toml")) && return nothing
+    return "root Manifest.toml is missing (gitignored; run Pkg.instantiate() before this subprocess test)"
+end
+
 # Ungated smoke: a few seconds, pure Julia contract checks for default CI.
 Test.@testset "td2rxh evidence smoke" begin
     cells = Harness.select_cells("td2rxh")
@@ -153,6 +184,30 @@ Test.@testset "check_provenance Not-covered list is unified (td-wj2s)" begin
     Test.@test occursin("format decision", lowercase(header)) ||
                occursin("label-format", lowercase(header)) ||
                occursin("not decided", lowercase(header))
+end
+
+# td-8ihz: child-julia cache-key flags, Manifest skip, and Dep2 mismatch.
+# These helpers are also used by the slow subprocess test below.
+Test.@testset "subprocess julia flags and Manifest skip (td-8ihz)" begin
+    filtered = child_julia_cmd(Cmd([
+        "julia",
+        "--track-allocation=user",
+        "--inline=no",
+        "--code-coverage=@user",
+        "--pkgimages=no",
+        "--check-bounds=yes",
+        "--color=yes",
+    ]))
+    Test.@test filtered.exec == ["julia", "--color=yes"]
+
+    mktempdir() do dir
+        reason = missing_root_manifest_skip_reason(dir)
+        Test.@test reason isa AbstractString
+        Test.@test occursin("Manifest.toml", reason)
+        Test.@test occursin("instantiate", lowercase(reason))
+        write(joinpath(dir, "Manifest.toml"), "manifest_format = \"2.0\"\n")
+        Test.@test missing_root_manifest_skip_reason(dir) === nothing
+    end
 end
 
 if !RUN_SLOW
@@ -594,6 +649,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test check(a, src(a), [proj(a)]; packages = ok_pkgs) == src(realpath(a))
         Test.@test_throws r"package Dep was loaded from .* but the project resolves it" check(
             a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, dep_here)])
+        # Distinct name (Dep2): a first-wins de-dup by name cannot drop this
+        # mismatch behind the good "Dep" row in ok_pkgs (td-8ihz).
+        Test.@test_throws r"package Dep2 was loaded from .* but the project resolves it" check(
+            a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep2", dep_elsewhere, dep_here)])
         # ok_pkgs first so a check that only inspects the first package cannot
         # pass this (td-wj2s: nothing-check-first-only).
         Test.@test_throws r"package Dep is loaded .* cannot resolve it" check(
@@ -656,31 +715,36 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # executed (round 10: a no-op default survived every in-process test).
         # `--cells nonexistent` stops a run right after a PASSED check, so no
         # assembly runs either way. The child drops this session's coverage,
-        # pkgimages and bounds-check flags: under Pkg.test(coverage=true) they
-        # made it compile every package from scratch (round 11: ~36 min).
+        # pkgimages, bounds-check, track-allocation and inline flags: under
+        # Pkg.test(coverage=true) they made it compile every package from
+        # scratch (round 11: ~36 min). --track-allocation forces pkgimages off;
+        # --inline is part of the 1.10 cache key (td-8ihz).
         root = realpath(joinpath(@__DIR__, "..", ".."))
-        script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
-        session_only = ("--code-coverage", "--pkgimages", "--check-bounds")
-        julia = Cmd(filter(arg -> !any(startswith(arg, f) for f in session_only),
-            Base.julia_cmd().exec))
-        function run_script(load_path::String)
-            out, err = IOBuffer(), IOBuffer()
-            proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
-                "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
-                run(pipeline(
-                    ignorestatus(`$(julia) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
-                    stdout = out, stderr = err))
+        skip_reason = missing_root_manifest_skip_reason(root)
+        if skip_reason !== nothing
+            Test.@test_skip skip_reason
+        else
+            script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
+            julia = child_julia_cmd()
+            function run_script(load_path::String)
+                out, err = IOBuffer(), IOBuffer()
+                proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
+                    "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
+                    run(pipeline(
+                        ignorestatus(`$(julia) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
+                        stdout = out, stderr = err))
+                end
+                return proc.exitcode, String(take!(out)), String(take!(err))
             end
-            return proc.exitcode, String(take!(out)), String(take!(err))
+            rc, out, err = run_script("@:@stdlib")
+            Test.@test occursin("# mycelia=$(joinpath(root, "src", "Mycelia.jl"))", out)
+            Test.@test rc == 1 && occursin("unknown --cells", err)
+            # An environment ahead of the project: refused before anything else runs.
+            rc2, out2, err2 = run_script(mktempdir() * ":@:@stdlib")
+            Test.@test rc2 == 1
+            Test.@test !occursin("# mycelia=", out2)
+            Test.@test occursin("not first on the load path", err2)
         end
-        rc, out, err = run_script("@:@stdlib")
-        Test.@test occursin("# mycelia=$(joinpath(root, "src", "Mycelia.jl"))", out)
-        Test.@test rc == 1 && occursin("unknown --cells", err)
-        # An environment ahead of the project: refused before anything else runs.
-        rc2, out2, err2 = run_script(mktempdir() * ":@:@stdlib")
-        Test.@test rc2 == 1
-        Test.@test !occursin("# mycelia=", out2)
-        Test.@test occursin("not first on the load path", err2)
     end
 
     Test.@testset "H1' threshold and three states" begin
