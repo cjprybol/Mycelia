@@ -307,7 +307,32 @@ const AGGREGATE_ONLY = "--aggregate-only" in ARGS
 # schema change — and prefer pointing `--output-dir` at a scratch directory when
 # it is not. Note it disables the guard for the WHOLE process, so on the shard
 # driver it covers the pre-warm and all shards, not one invocation.
-const ALLOW_SHRINK = "--allow-shrink" in ARGS
+# Parsed from ARGS at include time. `"--allow-shrink" in ARGS` silently
+# ignored the near-miss `--allow-shrink=true`, which looks like it enables
+# the override and does not. The parser is a function so a test can pin
+# the tokens without re-including this file under a fake ARGS.
+function allow_shrink_from_args(args)
+    enabled = false
+    for token in args
+        if token == "--allow-shrink"
+            enabled = true
+        elseif startswith(token, "--allow-shrink=")
+            raw = split(token, '='; limit = 2)[2]
+            value = lowercase(strip(raw))
+            if value in ("true", "1", "yes")
+                enabled = true
+            elseif value in ("false", "0", "no")
+                enabled = false
+            else
+                error("unrecognised --allow-shrink value $(repr(raw)); " *
+                      "use --allow-shrink or --allow-shrink=true")
+            end
+        end
+    end
+    return enabled
+end
+
+const ALLOW_SHRINK = allow_shrink_from_args(ARGS)
 
 # Cached rows with these statuses are RECOMPUTED rather than reused. Both are
 # infrastructure failures that produce a well-formed, degenerate-looking row;
@@ -675,8 +700,16 @@ end
 cell_id_for(org, tech, k, cov, seed) = "$(org)__$(tech)__k$(k)__$(cov)x__seed$(seed)"
 
 function save_cell_json(path, row)
-    open(path, "w") do io
-        JSON.print(io, Dict(string(key) => value for (key, value) in pairs(row)), 2)
+    # Atomic: a crash mid-write used to leave a truncated checkpoint that
+    # load_all_checkpoints warn-skips, after which the shrink guard refuses
+    # and kills the shard. publish_atomically leaves the existing file
+    # unchanged (and leaves no partial file when the path is new).
+    mkpath(dirname(path))
+    payload = Dict(string(key) => value for (key, value) in pairs(row))
+    publish_atomically(path) do tmp
+        open(tmp, "w") do io
+            JSON.print(io, payload, 2)
+        end
     end
     return path
 end
@@ -808,18 +841,35 @@ columns:
 
   * a key value whose text is literally the `missingstring` ("NA") writes as
     `NA`, reads back as `missing`, and normalises to `"missing"`;
-  * a key column whose type differs across the round trip in a way `string()`
-    renders differently — an `Int` 30 on disk against a `Float64` 30.0 in
-    memory gives `"30"` against `"30.0"`. Note this is the one place typed
-    tuples would be more forgiving than strings, since `isequal(30, 30.0)` is
-    true. Keep key columns typed consistently at their source.
+  * a key column whose type differs across the round trip in a way a naive
+    `string()` would render differently. An `Int` 30 on disk against a
+    `Float64` 30.0 in memory used to give `"30"` against `"30.0"` and the
+    guard reported a phantom loss. Integer-valued finite floats are now
+    rendered as integers, so that case compares equal. Non-integer floats
+    (the identity ladder's 80.5) stay in decimal form and stay distinct.
+    Other type mismatches that still render differently continue to fail
+    CLOSED. Keep key columns typed consistently at their source.
 """
+function _canonical_key_text(value)
+    # Integer-valued floats must match the Int form CSV.jl may have written
+    # on a previous run (30 and 30.0 are the same key). Non-integer floats,
+    # strings, missings, and other values keep `string(value)`.
+    if value isa Integer
+        return string(value)
+    elseif value isa AbstractFloat && isfinite(value) && isinteger(value) &&
+           typemin(Int) <= value <= typemax(Int)
+        return string(Int(value))
+    else
+        return string(value)
+    end
+end
+
 function table_row_keys(df, keycols; label = "table")
     missing_cols = [c for c in keycols if !(String(c) in DataFrames.names(df))]
     isempty(missing_cols) ||
         throw(ArgumentError("$(label) is missing key column(s): " *
                             join(missing_cols, ", ")))
-    row_key(row) = join((string(row[c]) for c in keycols), _KEY_SEP)
+    row_key(row) = join((_canonical_key_text(row[c]) for c in keycols), _KEY_SEP)
     return Set(row_key(row) for row in DataFrames.eachrow(df))
 end
 
@@ -1218,14 +1268,28 @@ function write_aggregate(root, rows)
     # empty tree means a mistyped --output-dir far more often than it means a
     # genuinely empty run, and the opaque form of this failure sends the reader
     # to the wrong place.
-    if isempty(rows) && isempty(load_all_checkpoints(root))
+    #
+    # Take the first cells/ scan here and reuse it on the first `build()`, so
+    # an unreadable checkpoint does not warn twice (once in this empty check
+    # and once in the union). A retry via retry_once_on_shrink MUST rescan —
+    # that is the whole point of the retry — so later `build()` calls load
+    # again rather than reusing this snapshot.
+    first_scan = load_all_checkpoints(root)
+    reuse_first_scan = Ref(true)
+    if isempty(rows) && isempty(first_scan)
         error("no cells found under $(joinpath(root, "cells")) and no rows in " *
               "memory — nothing to aggregate. Check --output-dir.")
     end
     key(r) = Tuple(getproperty(r, c) for c in RESULTS_KEYCOLS)
     build() = begin
+        disk = if reuse_first_scan[]
+            reuse_first_scan[] = false
+            first_scan
+        else
+            load_all_checkpoints(root)
+        end
         d = Dict{Tuple, Any}()
-        for r in load_all_checkpoints(root)
+        for r in disk
             d[key(r)] = r
         end
         for r in rows          # current run supersedes disk
@@ -1361,13 +1425,12 @@ function write_summary(root, df)
     # and genome_fraction=missing, which is shaped exactly like a genuinely
     # degenerate cell — so leaving it in would let a transient infrastructure
     # failure count as evidence for degeneracy, the very thing the sweep is
-    # measuring. `n_seeds` then reports how many cells actually contributed,
-    # so a stratum thinned by a failure is visible rather than silently averaged.
-    # Excludes BOTH infrastructure failures (error, quast_failed) and
-    # `empty_assembly`. The first two are not measurements; the third is, but
-    # it carries no scorable metric, and `nga50_status == "no_contigs"` records
-    # it losslessly in the results table. `n_seeds` below then reports how many
-    # cells actually contributed, so a thinned stratum is visible.
+    # measuring. The filter drops both infrastructure failures (error,
+    # quast_failed) and `empty_assembly`. The first two are not measurements;
+    # the third is, but it carries no scorable metric, and
+    # `nga50_status == "no_contigs"` records it losslessly in the results
+    # table. `n_seeds` then reports how many cells actually contributed, so a
+    # stratum thinned by a failure is visible rather than silently averaged.
     df = df[df.status .== "ok", :]
     summary_rows = NamedTuple[]
     for g in DataFrames.groupby(df, collect(SUMMARY_KEYCOLS))
