@@ -8,9 +8,10 @@
 #
 # The size_ratio column is total_length/ref_size*100. It can exceed 100%
 # for a fragmented or over-assembled result (it is not QUAST aligned
-# genome fraction). Best-k is chosen by n50/n_contigs, not argmax of
-# size_ratio. Committed CSVs still use the old genome_fraction header;
-# see benchmarking/results/real_genome_benchmark_SIZE_RATIO_CAVEAT.md.
+# genome fraction). The most contiguous k is chosen by n50/n_contigs, not
+# by accuracy and not by argmax of size_ratio. Committed CSVs still use
+# the old genome_fraction header; see
+# benchmarking/results/real_genome_benchmark_SIZE_RATIO_CAVEAT.md.
 
 import Pkg
 if isinteractive()
@@ -206,13 +207,14 @@ function assembly_size_ratio(total_length::Integer, ref_size::Integer)::Float64
     ref_size <= 0 ? 0.0 : round(Float64(total_length) / Float64(ref_size) * 100; digits = 1)
 end
 
-"Higher is better. Zero or negative contig counts score as 0."
-function assembly_quality_score(n50::Integer, n_contigs::Integer)::Float64
+"Contiguity score n50/n_contigs. Higher is more contiguous, not more accurate. Zero or negative contig counts score as 0."
+function most_contiguous_score(n50::Integer, n_contigs::Integer)::Float64
     n_contigs <= 0 ? 0.0 : Float64(n50) / Float64(n_contigs)
 end
 
-function best_k_row(subset::DataFrames.AbstractDataFrame)
-    scores = [assembly_quality_score(row.n50, row.n_contigs) for row in eachrow(subset)]
+"Row with the most contiguous k (highest n50/n_contigs), not the most accurate k."
+function most_contiguous_k_row(subset::DataFrames.AbstractDataFrame)
+    scores = [most_contiguous_score(row.n50, row.n_contigs) for row in eachrow(subset)]
     return subset[argmax(scores), :]
 end
 
@@ -261,13 +263,13 @@ csv_path = joinpath(results_dir, "real_genome_benchmark_$(timestamp).csv")
 CSV.write(csv_path, summary_df)
 println("\nResults saved to: $csv_path")
 
-# Best k per genome (n50/n_contigs, not argmax of the size ratio).
-println("\n--- Best k per genome (by n50/n_contigs) ---")
+# Most contiguous k per genome (n50/n_contigs, not accuracy and not argmax of the size ratio).
+println("\n--- Most contiguous k per genome (by n50/n_contigs) ---")
 for gname in unique(assembly_results.genome)
     subset = filter(r -> r.genome == gname, assembly_results)
     if DataFrames.nrow(subset) > 0
-        best = best_k_row(subset)
-        println("  $gname: k=$(best.k) -> $(best.n_contigs) contigs, n50=$(best.n50), " *
+        best = most_contiguous_k_row(subset)
+        println("  $gname: most contiguous k=$(best.k) -> $(best.n_contigs) contigs, n50=$(best.n50), " *
                 "size_ratio=$(best.size_ratio)%, $(best.runtime_s)s")
     end
 end
