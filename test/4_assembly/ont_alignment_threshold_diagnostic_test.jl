@@ -319,6 +319,79 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
             end
         end
     end
+
+    Test.@testset "assert_reference_matches_organism fails loud on a mismatch" begin
+        # td-19c7. The path is built from the organism's own accession, so a
+        # filename check cannot see a file that contains the wrong genome.
+        # The helper checks the FASTA header accession and the sequence length
+        # against ORGANISMS' size.
+        organisms = [("Lambda", "NC_001416", 8), ("T4", "NC_000866", 12)]
+        mktempdir() do dir
+            lambda_ref = joinpath(dir, "NC_001416.fna")
+            t4_ref = joinpath(dir, "NC_000866.fna")
+            write(lambda_ref, ">NC_001416.1 Escherichia phage Lambda\nACGTACGT\n")
+            write(t4_ref, ">NC_000866.4 Enterobacteria phage T4\nACGTACGTACGT\n")
+            Test.@test assert_reference_matches_organism(
+                "Lambda", lambda_ref; organisms = organisms) === nothing
+            Test.@test assert_reference_matches_organism(
+                "T4", t4_ref; organisms = organisms) === nothing
+
+            err = try
+                assert_reference_matches_organism("T4", lambda_ref; organisms = organisms)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ErrorException
+            Test.@test occursin("T4", err.msg)
+            Test.@test occursin("NC_001416", err.msg)
+            Test.@test occursin("NC_000866", err.msg)
+
+            # Right filename, wrong genome: Lambda's sequence stored at T4's path.
+            wrong = joinpath(dir, "placed", "NC_000866.fna")
+            mkpath(dirname(wrong))
+            write(wrong, ">NC_001416.1 Escherichia phage Lambda\nACGTACGT\n")
+            err_header = try
+                assert_reference_matches_organism("T4", wrong; organisms = organisms)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err_header isa ErrorException
+            Test.@test occursin("FASTA header", err_header.msg)
+            Test.@test occursin("NC_000866", err_header.msg)
+
+            # Right header accession, wrong length.
+            write(t4_ref, ">NC_000866.4 Enterobacteria phage T4\nACGT\n")
+            err_len = try
+                assert_reference_matches_organism("T4", t4_ref; organisms = organisms)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err_len isa ErrorException
+            Test.@test occursin("sequence length", err_len.msg)
+            Test.@test occursin("4", err_len.msg)
+            Test.@test occursin("12", err_len.msg)
+        end
+
+        err_unknown = try
+            assert_reference_matches_organism("phi29", joinpath("refs", "NC_001416.fna"))
+            nothing
+        catch e
+            e
+        end
+        Test.@test err_unknown isa ErrorException
+        Test.@test occursin("phi29", err_unknown.msg)
+
+        # The helper must actually be called on the reference passed to rescore,
+        # otherwise a unit-tested function can sit unused next to the old bug.
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                "ont_alignment_threshold_diagnostic.jl"), String)
+        Test.@test occursin("function assert_reference_matches_organism", src)
+        Test.@test occursin(r"assert_reference_matches_organism\(\s*organism\s*,\s*references\[organism\]", src)
+    end
+
 end
 
 end  # module
