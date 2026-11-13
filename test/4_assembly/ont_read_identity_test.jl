@@ -211,6 +211,83 @@ Test.@testset "ONT read-identity helpers" begin
         end
     end
 
+    Test.@testset "provenance is preflighted for every table before any write" begin
+        # td-jwpl review: checking one file at persist time can replace the
+        # ladder and then refuse the summary, leaving mixed provenance after
+        # the simulate/align run has already been paid for.
+        provenance_30 = (
+            run_coverage = 30,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_30x_seed42.fq.gz",
+        )
+        provenance_50 = (
+            run_coverage = 50,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_50x_seed42.fq.gz",
+        )
+        rows = DataFrames.DataFrame(k = [11], coverage = [30], value = [1.0])
+
+        mktempdir() do dir
+            Test.@test preflight_identity_tables(dir, provenance_30) === nothing
+
+            ladder = joinpath(dir, "kmer_survival_ladder.tsv")
+            per_read = joinpath(dir, "per_read_identity.tsv")
+            summary = joinpath(dir, "read_identity_summary.tsv")
+            write_identity_table(ladder, rows, provenance_30)
+            write_identity_table(per_read, rows, provenance_30)
+            CSV.write(summary, DataFrames.DataFrame(
+                coverage = [50],
+                seed = [42],
+                badread_version = ["Badread v0.4.1"],
+                read_source = ["simulated"],
+                reads_file = ["ont_50x_seed42.fq.gz"],
+            ); delim = '\t')
+            before = (read(ladder), read(per_read), read(summary))
+
+            err = try
+                preflight_identity_tables(dir, provenance_30)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ArgumentError
+            Test.@test occursin("read_identity_summary.tsv", err.msg)
+            Test.@test occursin("refusing to overwrite", err.msg)
+            Test.@test (read(ladder), read(per_read), read(summary)) == before
+            Test.@test preflight_identity_tables(dir, provenance_30; overwrite = true) === nothing
+            Test.@test (read(ladder), read(per_read), read(summary)) == before
+
+            # A same-provenance directory is not a refusal.
+            write_identity_table(summary, rows, provenance_30; overwrite = true)
+            Test.@test preflight_identity_tables(dir, provenance_30) === nothing
+            # And a different measurement is still refused without touching bytes.
+            matched = (read(ladder), read(per_read), read(summary))
+            err2 = try
+                preflight_identity_tables(dir, provenance_50)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err2 isa ArgumentError
+            Test.@test (read(ladder), read(per_read), read(summary)) == matched
+        end
+
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_read_identity.jl"), String)
+        preflight_at = findfirst("preflight_identity_tables(", src)
+        simulate_at = findfirst("simulate_nanopore_reads(", src)
+        align_at = findfirst("minimap2 -ax map-ont", src)
+        Test.@test preflight_at !== nothing && simulate_at !== nothing && align_at !== nothing
+        Test.@test first(preflight_at) < first(simulate_at)
+        Test.@test first(preflight_at) < first(align_at)
+        for write_at in findall("write_identity_table(joinpath", src)
+            Test.@test first(preflight_at) < first(write_at)
+        end
+    end
+
     Test.@testset "cache tags are filesystem-safe" begin
         Test.@test sanitize_for_filename("ont reads (run#3).fq.gz") ==
                    "ont_reads__run_3_.fq.gz"

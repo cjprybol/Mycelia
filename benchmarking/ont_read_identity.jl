@@ -423,20 +423,47 @@ and its recorded provenance differs — or is missing — throw `ArgumentError`
 unless `overwrite` is true. The on-disk file is left unchanged on refusal.
 A same-provenance refresh is allowed.
 """
-function write_identity_table(path, df, provenance; overwrite::Bool = false)
-    stamped = stamp_identity_provenance(df, provenance)
-    if isfile(path)
-        existing = CSV.read(path, DataFrames.DataFrame; delim = '\t')
-        existing_provenance = identity_table_provenance(existing)
-        if !isequal(existing_provenance, provenance) && !overwrite
-            existing_text = existing_provenance === nothing ?
-                            "is missing or mixed" : string(existing_provenance)
-            throw(ArgumentError(
-                "refusing to overwrite $(path): on-disk provenance " *
-                "$(existing_text) differs from this run $(provenance). " *
-                "Pass --overwrite to replace it."))
-        end
+function assert_identity_table_provenance(path, provenance; overwrite::Bool = false)
+    isfile(path) || return nothing
+    existing = CSV.read(path, DataFrames.DataFrame; delim = '\t')
+    existing_provenance = identity_table_provenance(existing)
+    if isequal(existing_provenance, provenance) || overwrite
+        return nothing
     end
+    existing_text = existing_provenance === nothing ?
+                    "is missing or mixed" : string(existing_provenance)
+    throw(ArgumentError(
+        "refusing to overwrite $(path): on-disk provenance " *
+        "$(existing_text) differs from this run $(provenance). " *
+        "Pass --overwrite to replace it."))
+end
+
+# All three tables are one measurement. Check every path before writing any,
+# so a refusal on a later table cannot leave the earlier tables replaced.
+const IDENTITY_TABLE_NAMES = (
+    "kmer_survival_ladder.tsv",
+    "per_read_identity.tsv",
+    "read_identity_summary.tsv",
+)
+
+"""
+    preflight_identity_tables(output_dir, provenance; overwrite = false)
+
+Refuse when any of the three identity tables already records a different
+provenance. Call this once provenance is known and before simulation,
+alignment, or any write.
+"""
+function preflight_identity_tables(output_dir, provenance; overwrite::Bool = false)
+    for name in IDENTITY_TABLE_NAMES
+        assert_identity_table_provenance(
+            joinpath(output_dir, name), provenance; overwrite = overwrite)
+    end
+    return nothing
+end
+
+function write_identity_table(path, df, provenance; overwrite::Bool = false)
+    assert_identity_table_provenance(path, provenance; overwrite = overwrite)
+    stamped = stamp_identity_provenance(df, provenance)
     CSV.write(path, stamped; delim = '\t')
     return stamped
 end
@@ -458,6 +485,31 @@ if abspath(PROGRAM_FILE) == @__FILE__
         @warn "could not read badread --version" exception = e
         "unknown"
     end
+
+    # Coverage, seed, and the reads filename are flags. badread_version was just
+    # read. That is the whole provenance record, so refuse a mismatched table
+    # before --help, the reference download, simulation, or alignment. A check
+    # at persist time can write one table and then refuse the next.
+    # COVERAGE and SEED describe the reads only when this script generated them.
+    # Under --reads they are whatever the flags happened to default to and have no
+    # relationship to the file supplied, so they are reported as NA rather than
+    # stamped onto someone else's read set as though they were provenance.
+    read_source = READS_OVERRIDE === nothing ? "simulated" : "override"
+    reported_coverage = READS_OVERRIDE === nothing ? COVERAGE : missing
+    reported_seed = READS_OVERRIDE === nothing ? SEED : missing
+    reads_file = READS_OVERRIDE === nothing ?
+                 "ont_$(COVERAGE)x_seed$(SEED).fq.gz" : basename(READS_OVERRIDE)
+    provenance = READS_OVERRIDE === nothing ?
+                 "$(COVERAGE)x / seed $(SEED)" : "--reads $(reads_file)"
+    table_provenance = (
+        run_coverage = reported_coverage,
+        run_seed = reported_seed,
+        badread_version = badread_version,
+        read_source = read_source,
+        reads_file = reads_file,
+    )
+    preflight_identity_tables(OUTPUT_DIR, table_provenance; overwrite = ALLOW_OVERWRITE)
+
     badread_help = try
         read(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --help`,
@@ -502,9 +554,11 @@ if abspath(PROGRAM_FILE) == @__FILE__
         # nothing here asserts that they match.
         Mycelia.simulate_nanopore_reads(
             fasta = ref_path, quantity = "$(COVERAGE)x",
-            outfile = joinpath(reads_dir, "ont_$(COVERAGE)x_seed$(SEED).fq.gz"),
+            outfile = joinpath(reads_dir, reads_file),
             seed = SEED, quiet = true)
     end
+    basename(String(reads_path)) == reads_file || error(
+        "reads path $(reads_path) does not match the preflighted filename $(reads_file)")
     println("Reads:     $(reads_path)")
 
     # --- Align ---------------------------------------------------------------------
@@ -554,16 +608,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
               "denominator, which biases aligned_base_fraction OPTIMISTIC" alignment.n_missing_seq
     end
 
-    # COVERAGE and SEED describe the reads only when this script generated them.
-    # Under --reads they are whatever the flags happened to default to and have no
-    # relationship to the file supplied, so they are reported as NA rather than
-    # stamped onto someone else's read set as though they were provenance.
-    read_source = READS_OVERRIDE === nothing ? "simulated" : "override"
-    reported_coverage = READS_OVERRIDE === nothing ? COVERAGE : missing
-    reported_seed = READS_OVERRIDE === nothing ? SEED : missing
-    provenance = READS_OVERRIDE === nothing ?
-                 "$(COVERAGE)x / seed $(SEED)" : "--reads $(basename(reads_path))"
-
     println("\n--- Observed read identity (Lambda / ONT / $(provenance)) ---")
     println("  reads (primary records):   $(n_reads_total)")
     println("  primary alignments scored: $(n_mapped)")
@@ -603,14 +647,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # remains the right number when the question is about alignable reads; the
     # all-reads column is the one to use for provisioning coverage, because raw
     # coverage is what the operator buys.
-    table_provenance = (
-        run_coverage = reported_coverage,
-        run_seed = reported_seed,
-        badread_version = badread_version,
-        read_source = read_source,
-        reads_file = basename(reads_path),
-    )
-
     if blast_summary !== nothing
         error_rate = 1 - blast_summary.mean
         println("\n--- Implied k-mer survival at measured e = $(fmt(error_rate)) ---")
