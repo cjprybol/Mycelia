@@ -541,24 +541,44 @@ Test.@testset "ONT k-sweep helpers" begin
                 # a read failure that is not an ArgumentError — was still
                 # unexercised. A permission-denied file makes CSV.read throw
                 # SystemError, which is the path this pins.
-                mktempdir() do dir
-                    target = joinpath(dir, results_name)
-                    CSV.write(target, DataFrames.DataFrame(full);
-                        delim = '\t', missingstring = "NA")
-                    before = read(target)
-                    chmod(target, 0o000)
-                    err = try
-                        guarded_error(() -> write_table_guarded(
-                            target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
-                    finally
-                        chmod(target, 0o644)
+                #
+                # chmod 000 does not make a file unreadable for uid 0, which
+                # is how CI containers run, and Windows has no getuid. Skip
+                # there, and also skip if the file is still readable after
+                # the mode change.
+                if Sys.iswindows() || ccall(:getuid, Cint, ()) == 0
+                    Test.@test_skip true
+                else
+                    mktempdir() do dir
+                        target = joinpath(dir, results_name)
+                        CSV.write(target, DataFrames.DataFrame(full);
+                            delim = '\t', missingstring = "NA")
+                        before = read(target)
+                        chmod(target, 0o000)
+                        still_readable = try
+                            read(target, 1)
+                            true
+                        catch
+                            false
+                        end
+                        if still_readable
+                            chmod(target, 0o644)
+                            Test.@test_skip true
+                        else
+                            err = try
+                                guarded_error(() -> write_table_guarded(
+                                    target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                            finally
+                                chmod(target, 0o644)
+                            end
+                            Test.@test err isa ErrorException
+                            Test.@test occursin("could not be read", err.msg)
+                            Test.@test occursin("git checkout", err.msg)
+                            Test.@test !occursin("schema change", err.msg)
+                            Test.@test occursin("Permission denied", err.msg)
+                            Test.@test read(target) == before
+                        end
                     end
-                    Test.@test err isa ErrorException
-                    Test.@test occursin("could not be read", err.msg)
-                    Test.@test occursin("git checkout", err.msg)
-                    Test.@test !occursin("schema change", err.msg)
-                    Test.@test occursin("Permission denied", err.msg)
-                    Test.@test read(target) == before
                 end
             end
         end
