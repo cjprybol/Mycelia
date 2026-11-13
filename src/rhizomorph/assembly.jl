@@ -310,6 +310,17 @@ function _determine_kmer_type(observations, k::Int)
     end
 end
 
+# Closed sets AssemblyConfig accepts. The fail-loud guard reads these rather
+# than a second handwritten list (td-70kz).
+const _VALID_MEMORY_PROFILES = (
+    :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
+const _VALID_QUALMER_MEMORY_PROFILES = (
+    :full, :lightweight_quality, :ultralight_quality)
+const _VALID_CORRECTORS = (:none, :iterative)
+const _VALID_STRATEGIES = (:scalable, :exhaustive)
+const _VALID_LAYOUTS = (:native, :olc)
+const _VALID_TRAVERSAL_WEIGHTINGS = (:evidence, :quality)
+
 """
 Enhanced assembly configuration structure with input validation.
 """
@@ -553,23 +564,19 @@ struct AssemblyConfig
         end
 
         # Validation: memory_profile must be one recognized by build_kmer_graph
-        _valid_memory_profiles = (
-            :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
-        if !(memory_profile in _valid_memory_profiles)
-            error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
+        if !(memory_profile in _VALID_MEMORY_PROFILES)
+            error("memory_profile must be one of $(_VALID_MEMORY_PROFILES), got :$(memory_profile)")
         end
 
         # Validation: corrector front-end must be a recognized mode
-        _valid_correctors = (:none, :iterative)
-        if !(corrector in _valid_correctors)
-            error("corrector must be one of $(_valid_correctors), got :$(corrector)")
+        if !(corrector in _VALID_CORRECTORS)
+            error("corrector must be one of $(_VALID_CORRECTORS), got :$(corrector)")
         end
 
         # Validation: corrector tier (only meaningful when corrector=:iterative,
         # but validate unconditionally so a typo is caught at construction time).
-        _valid_strategies = (:scalable, :exhaustive)
-        if !(effective_strategy in _valid_strategies)
-            error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
+        if !(effective_strategy in _VALID_STRATEGIES)
+            error("strategy must be one of $(_VALID_STRATEGIES), got :$(effective_strategy)")
         end
 
         # Validation: sequencing_tech selects a correction ERROR PROFILE, not an
@@ -623,11 +630,11 @@ struct AssemblyConfig
             error("qualmer_prefilter_min_count must be positive, got " *
                   "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
         end
-        if !(effective_qualmer_memory_profile in (:full, :lightweight_quality, :ultralight_quality))
+        if !(effective_qualmer_memory_profile in _VALID_QUALMER_MEMORY_PROFILES)
             error("qualmer_memory_profile must be :full, :lightweight_quality, or :ultralight_quality, " *
                   "got qualmer_memory_profile=:$(effective_qualmer_memory_profile)")
         end
-        if !(traversal_weighting in (:evidence, :quality))
+        if !(traversal_weighting in _VALID_TRAVERSAL_WEIGHTINGS)
             error("traversal_weighting must be :evidence or :quality, got " *
                   "traversal_weighting=:$(traversal_weighting)")
         end
@@ -680,7 +687,7 @@ struct AssemblyConfig
         end
 
         # Validation: Stage-2 layout selector (hybrid-OLC route (a), td-yymj).
-        if !(layout in (:native, :olc))
+        if !(layout in _VALID_LAYOUTS)
             error("layout must be :native or :olc, got :$(layout)")
         end
         # Read-type <-> tool taxonomy from the SINGLE source of truth (_olc_taxonomy).

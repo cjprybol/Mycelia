@@ -8,6 +8,11 @@
 # AssemblyConfig mode flag cannot ship silently. Every public GraphMode value
 # and every closed mode-flag value must either have a functional assembly
 # test or emit a @warn (or a louder error) when used.
+#
+# memory_profile, qualmer_memory_profile, corrector, strategy, layout, and
+# traversal_weighting are read from the constants AssemblyConfig validates
+# against. graph_mode, sequencing_tech, and olc_tool are discovered from
+# GraphMode, _correction_profile_technologies, and _olc_taxonomy.
 
 import Test
 import Mycelia
@@ -151,14 +156,12 @@ function discovered_mode_values()
     tax = R._olc_taxonomy()
     return Dict{Symbol, Vector}(
         :graph_mode => collect(instances(R.GraphMode)),
-        :memory_profile =>
-            [:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality],
-        :qualmer_memory_profile =>
-            [:full, :lightweight_quality, :ultralight_quality],
-        :corrector => [:none, :iterative],
-        :strategy => [:scalable, :exhaustive],
-        :layout => [:native, :olc],
-        :traversal_weighting => [:evidence, :quality],
+        :memory_profile => collect(R._VALID_MEMORY_PROFILES),
+        :qualmer_memory_profile => collect(R._VALID_QUALMER_MEMORY_PROFILES),
+        :corrector => collect(R._VALID_CORRECTORS),
+        :strategy => collect(R._VALID_STRATEGIES),
+        :layout => collect(R._VALID_LAYOUTS),
+        :traversal_weighting => collect(R._VALID_TRAVERSAL_WEIGHTINGS),
         :sequencing_tech => collect(R._correction_profile_technologies()),
         :olc_tool => collect((:auto, tax.short_read_tools..., tax.long_read_tools...)),
     )
