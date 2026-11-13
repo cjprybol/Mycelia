@@ -228,4 +228,81 @@ Test.@testset "Quality Functions" begin
     end
 end
 
+Test.@testset "lightweight and ultralight paths reject sub-33 bytes" begin
+    # The full QualmerVertexData path already throws. These storage tiers used
+    # unsigned `s - UInt8(33)`, which wraps byte 30 to 0xfd (td-ozts).
+    kmer = Kmers.DNAKmer{3}("ATG")
+    good = Mycelia.Rhizomorph.QualityEvidenceEntry(
+        1, Mycelia.Rhizomorph.Forward, UInt8[63, 68, 65])  # Q30, Q35, Q32
+    bad = Mycelia.Rhizomorph.QualityEvidenceEntry(
+        1, Mycelia.Rhizomorph.Forward, UInt8[30, 63, 63])
+    good_edge = Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
+        1, 2, Mycelia.Rhizomorph.Forward, UInt8[63], UInt8[68])
+    bad_from = Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
+        1, 2, Mycelia.Rhizomorph.Forward, UInt8[30], UInt8[63])
+    bad_to = Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
+        1, 2, Mycelia.Rhizomorph.Forward, UInt8[63], UInt8[30])
+
+    function rejects_sub33(f)
+        try
+            f()
+            return false
+        catch e
+            return e isa ArgumentError && occursin("below the Phred+33", e.msg)
+        end
+    end
+
+    for ctor in (
+            Mycelia.Rhizomorph.UltralightQualityKmerVertexData,
+            Mycelia.Rhizomorph.LightweightQualityKmerVertexData,
+            )
+        empty_vertex = ctor(kmer)
+        Test.@test rejects_sub33() do
+            Mycelia.Rhizomorph.add_evidence!(empty_vertex, "ds", "obs", bad)
+        end
+        Test.@test isempty(empty_vertex.joint_quality)
+        Test.@test !any(==(0xfd), empty_vertex.joint_quality)
+
+        vertex = ctor(kmer)
+        Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obs1", good)
+        Test.@test vertex.joint_quality == UInt8[30, 35, 32]
+        kept = copy(vertex.joint_quality)
+        Test.@test rejects_sub33() do
+            Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obs2", bad)
+        end
+        Test.@test vertex.joint_quality == kept
+    end
+
+    for ctor in (
+            Mycelia.Rhizomorph.UltralightQualityEdgeData,
+            Mycelia.Rhizomorph.LightweightQualityEdgeData,
+            )
+        from_edge = ctor()
+        Test.@test rejects_sub33() do
+            Mycelia.Rhizomorph.add_evidence!(from_edge, "ds", "obs", bad_from)
+        end
+        Test.@test !any(==(0xfd), from_edge.from_joint_quality)
+        Test.@test !any(==(0xfd), from_edge.to_joint_quality)
+
+        to_edge = ctor()
+        Test.@test rejects_sub33() do
+            Mycelia.Rhizomorph.add_evidence!(to_edge, "ds", "obs", bad_to)
+        end
+        Test.@test !any(==(0xfd), to_edge.from_joint_quality)
+        Test.@test !any(==(0xfd), to_edge.to_joint_quality)
+
+        edge = ctor()
+        Mycelia.Rhizomorph.add_evidence!(edge, "ds", "obs1", good_edge)
+        Test.@test edge.from_joint_quality == UInt8[30]
+        Test.@test edge.to_joint_quality == UInt8[35]
+        kept_from = copy(edge.from_joint_quality)
+        kept_to = copy(edge.to_joint_quality)
+        Test.@test rejects_sub33() do
+            Mycelia.Rhizomorph.add_evidence!(edge, "ds", "obs2", bad_from)
+        end
+        Test.@test edge.from_joint_quality == kept_from
+        Test.@test edge.to_joint_quality == kept_to
+    end
+end
+
 println("✓ Quality functions tests completed")
