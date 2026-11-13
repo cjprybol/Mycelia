@@ -8,13 +8,15 @@
 #
 #   CELLS: 6000 bp genome x read length {1000, 2000} x 20x x err {0.01, 0.02, 0.05};
 #       16 seeds (1..16); arms differ only in assemble_genome sequencing_tech.
-#   H1' (decode cost): per cell, median over seeds of the PAIRED incremental cost
-#       (wall_nanopore - wall_illumina) / n_reads. A cell is H1'-complete when it
-#       has 16 pairs and >= 1 engaged nanopore run, whether or not its coverage
-#       deltas are defined. HOLDS only if all 6 cells are H1'-complete with median
-#       <= 0.30 s/read; REFUTED if any H1'-complete cell exceeds 0.30; otherwise
-#       INCOMPLETE. The difference includes rerouting/window overhead, so it is an
-#       upper bound on decode cost alone.
+#   H1' (incremental cost; upper bound on decode cost): per cell, median over
+#       seeds of the PAIRED incremental cost (wall_nanopore - wall_illumina) /
+#       n_reads, which includes rerouting/window overhead. A cell is H1'-complete
+#       when it has 16 pairs and >= 1 engaged nanopore run, whether or not its
+#       coverage deltas are defined. That >= 1 rule is loose: unengaged seeds in
+#       an otherwise engaged cell still enter the H1' median (the 1000/e0.02 cell
+#       in the committed 27118659 run includes unengaged seed 6). HOLDS only if
+#       all 6 cells are H1'-complete with median <= 0.30 s/read; REFUTED if any
+#       H1'-complete cell exceeds 0.30; otherwise INCOMPLETE.
 #   H2 (contiguity): per cell, delta = nanopore - illumina on the PRIMARY metric
 #       best_contig_reference_coverage (a contiguity measure, not sequence
 #       accuracy; see indel_bench_best_reference_alignment), rounded to 1e-6
@@ -101,6 +103,8 @@ difference the test is undefined and `pvalue` is `NaN`.
 Throws `ArgumentError` on a non-finite difference (coverage is always finite --
 an empty assembly scores 0.0 -- so this signals corrupt input, and the whole
 analysis stops rather than scoring it) and when `n > TD2RXH_MAX_EXACT_N`.
+The cap is defence-in-depth: `td2rxh_analysis_main` only scores the
+pre-registered n = 16, so this path is live only for direct callers.
 """
 function signflip_signed_rank_test(diffs::AbstractVector{<:Real})::NamedTuple
     rounded = round.(Float64.(diffs); digits = TD2RXH_DELTA_DIGITS)

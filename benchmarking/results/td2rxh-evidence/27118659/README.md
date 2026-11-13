@@ -18,7 +18,7 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
   The single run label is `td2rxh@e984af449ac3+manifest6893ba277d71`, which is Mycelia commit e984af449ac3 plus the `Manifest.toml` hash.
   Each task used a node-local TMPDIR.
   Internal tracking IDs (`td-2rxh` / `td2rxh`) are left in this path and in the run label; they already name the committed folder.
-- Harness: `benchmarking/indel_reroute_evidence.jl --cells td2rxh`, launched by `benchmarking/run_td2rxh_evidence_lrc.sbatch`.
+- Harness: `benchmarking/indel_reroute_evidence.jl --cells td2rxh`, launched by the hardened `benchmarking/run_td2rxh_evidence_lrc.sbatch` at e984af44 (mktemp, fs allowlist, trap).
 - Analysis: `benchmarking/td2rxh_paired_analysis.jl`, first run at Mycelia 498b2822 over `shards/seed*.csv`.
   `report.md` and `td2rxh_cell_verdicts.csv` were regenerated after review round 7, which rounds the median deltas to 1e-6 before the median gates.
   That rounding is an implementation detail, not part of the pre-registered rule (which rounds only inside the signed-rank test).
@@ -51,7 +51,7 @@ Both arms receive byte-identical reads simulated with `Mycelia.observe(...; tech
 Coverage is the median best-contig reference coverage, a contiguity measure.
 Δ is nanopore minus illumina, paired by seed.
 
-- **H1′ (decode cost ≤ 0.30 s/read): REFUTED.** Every cell is over the threshold, by 16.6–33.8× (4.99–10.15 s/read).
+- **H1′ (incremental cost, an upper bound on decode cost, ≤ 0.30 s/read): REFUTED.** Every cell is over the threshold, by 16.6–33.8× (4.99–10.15 s/read).
 - **Acceptance (pre-registered rule): MET.** This is at error 0.05 only: nanopore is better at both read lengths, and the median fit-identity Δ is ≥ 0.
 
 Coverage values are medians across the 16 seeds; individual seeds vary, and nanopore reaches 0.39 at 2000/e0.05 on one seed.
