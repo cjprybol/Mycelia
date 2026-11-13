@@ -234,10 +234,14 @@ function _prune_qualmer_graph_by_quality(graph, min_quality::Float64)
         confidence === nothing && continue
         confidence < min_quality && push!(doomed, label)
     end
+    n_deleted = 0
     for label in doomed
-        haskey(pruned, label) && delete!(pruned, label)
+        if haskey(pruned, label)
+            delete!(pruned, label)
+            n_deleted += 1
+        end
     end
-    return pruned, length(doomed)
+    return pruned, n_deleted
 end
 
 function _qualmer_vertex_quality_scores(vertex_data)
@@ -446,16 +450,16 @@ struct AssemblyConfig
     # `:evidence`.
     #
     # This is on the JOINT (summed-across-observations) Phred scale of
-    # `planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`, which runs 0-255, NOT
-    # the 0-60 single-observation scale. Its documented confidence bands:
-    #   10-30    low        (a few low-quality observations)
-    #   30-60    moderate   (a typical SINGLE high-quality observation)
-    #   60-100   high       (multiple high-quality observations)
-    #   100-255  extreme    (many high-quality observations; essentially certain)
-    # The 60.0 default is therefore "require more than one high-quality observation" —
-    # the threshold at which compounding evidence starts to mean something. Set it
-    # explicitly for low-coverage data, where demanding multiple observations of every
-    # k-mer will prune real sequence.
+    # `planning-docs/rhizomorph-graph-ecosystem-plan.md`, which runs 0-255, NOT
+    # the 0-60 single-observation scale. The planning-doc confidence bands that
+    # once justified the 60.0 default ("60-100 high, 100-255 extreme /
+    # essentially certain") are withdrawn by
+    # `docs/design/2026-08-05-joint-quality-aggregation-adr.md`. The default
+    # itself is unchanged. Under real binned Illumina quality the floor is
+    # often just a coverage gate (n >= 2). Set it explicitly for low-coverage
+    # data, where demanding multiple observations of every k-mer will prune
+    # real sequence. An in-range floor that would empty a non-empty graph is
+    # an error; pruning a large fraction of vertices warns.
     traversal_min_quality::Float64
 
     # Constructor with validation
@@ -3124,13 +3128,27 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
     # per-base quality can influence `find_contigs_next` / `find_eulerian_paths_next` —
     # both are purely topological and expose no scoring hook.
     quality_pruned_vertices = 0
+    traversal_quality_vertices_before = length(collect(MetaGraphsNext.labels(graph)))
     if config.traversal_weighting == :quality
+        vertices_before = traversal_quality_vertices_before
         graph,
         quality_pruned_vertices = _prune_qualmer_graph_by_quality(
             graph, config.traversal_min_quality)
+        vertices_after = length(collect(MetaGraphsNext.labels(graph)))
+        if vertices_before > 0 && vertices_after == 0
+            error("traversal_min_quality=$(config.traversal_min_quality) pruned all " *
+                  "$(vertices_before) vertices from a non-empty qualmer graph")
+        end
+        if vertices_before > 0 &&
+           quality_pruned_vertices / vertices_before >= 0.5
+            @warn "traversal_min_quality=$(config.traversal_min_quality) pruned " *
+                  "$(quality_pruned_vertices) of $(vertices_before) vertices " *
+                  "($(round(100 * quality_pruned_vertices / vertices_before; digits=1))%) " *
+                  "from the qualmer graph"
+        end
         _log_info(config,
             "Quality-weighted traversal (td-4e19d.2): pruned $(quality_pruned_vertices) " *
-            "vertices below joint Q$(config.traversal_min_quality)")
+            "of $(vertices_before) vertices below joint Q$(config.traversal_min_quality)")
     end
 
     cleanup_stats = nothing
@@ -3261,6 +3279,7 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         "traversal_weighting" => string(config.traversal_weighting),
         "quality_influences_traversal" => config.traversal_weighting == :quality,
         "traversal_quality_pruned_vertices" => quality_pruned_vertices,
+        "traversal_quality_vertices_before" => traversal_quality_vertices_before,
         # Always true: canonical (undirected) qualmer reconstruction is now
         # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,

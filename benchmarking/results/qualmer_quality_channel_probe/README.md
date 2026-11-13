@@ -282,10 +282,10 @@ would break the second half — one bad base among ten strong ones still average
 high, so every error k-mer would pass.
 
 The floor is on the joint 0-255 scale, not the 0-60 single-observation scale.
-The design's bands are 10-30 low, 30-60 moderate (one typical high-quality
-observation), 60-100 high (multiple), 100-255 extreme. The 60.0 default
-therefore means "require more than one high-quality observation", and should be
-lowered explicitly for low-coverage data.
+The planning-doc bands that once justified the 60.0 default ("60-100 high,
+100-255 extreme") are withdrawn by the ADR; the default itself is unchanged.
+Under real binned Illumina quality the floor is effectively a coverage gate,
+and how it should scale with coverage is unmeasured.
 
 **Measured separation** on the test fixture (600 bp genome, k=11, 12x, a
 systematic artifact injected at a fixed locus in every read covering it):

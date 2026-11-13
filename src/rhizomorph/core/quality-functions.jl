@@ -174,8 +174,16 @@ function get_vertex_joint_quality(vertex_data, dataset_id::String)
         return nothing
     end
 
-    # All observations should have same k-mer length
-    k = length(quality_vectors[1])
+    # All observations must have the same k-mer length. Taking k from the
+    # first vector and indexing the rest at `pos` either throws BoundsError
+    # (shorter) or silently truncates (longer), depending on Dict iteration
+    # order. Positional aggregation is only defined for equal lengths.
+    lengths = unique(length(v) for v in quality_vectors)
+    if length(lengths) != 1
+        throw(ArgumentError("get_vertex_joint_quality requires equal observation " *
+                            "quality lengths, got $(sort(collect(lengths)))"))
+    end
+    k = first(lengths)
 
     # Compute joint quality for each position
     joint_scores = Vector{UInt8}(undef, k)
