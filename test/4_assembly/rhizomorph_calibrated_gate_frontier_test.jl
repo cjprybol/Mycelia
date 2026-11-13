@@ -32,9 +32,16 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     base_point = (name = "noskip+nogate", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = nothing)
-    gated_point = (name = "calibrated-gap-2.0", skip_solid = false, cheap_correct = true,
+    # Threshold kept at 16 after the strand-label fix (mixed double-strand edges
+    # are traversed as Forward, not as whichever evidence entry the set yields
+    # first). Measured on this toy: the ungated corrector already has
+    # over_rate == 0, and thresholds 0.25-32 leave recall, over-rate, and
+    # correction rate unchanged. There is no over-correction left for the gate
+    # to remove, so a strict reduction cannot be the check. Real-scale operating
+    # points remain a benchmark question (assess_frontier_dominance).
+    gated_point = (name = "calibrated-gap-16.0", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
-        beam_width = nothing, calibrated_gap_threshold = 2.0)
+        beam_width = nothing, calibrated_gap_threshold = 16.0)
 
     # Permissive limit: gate engaged (records gaps) but reverts nothing.
     permissive_point = merge(base_point,
@@ -68,11 +75,13 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     Test.@test gated.over_rate <= base.over_rate + 1e-9
     Test.@test gated.recall <= base.recall + 1e-9
 
-    # (3) GATE ENGAGED, in the frontier-improving direction: at err=0.10 the gate
-    # reverts real corrections (fewer total edits) and drives over-correction down.
-    # (Whether a threshold RETAINS recall — full up-and-right dominance — is a
-    # real-scale, calibration-tuned question measured by assess_frontier_dominance
-    # in the benchmark sweep, not asserted on this single-pass toy.)
-    Test.@test gated.correction_rate < base.correction_rate
-    Test.@test gated.over_rate <= base.over_rate
+    # (3) On this toy the ungated corrector has nothing for threshold 16 to
+    # revert: over-rate is already 0 and the gate matches the ungated metrics.
+    # A decoder change that reintroduces over-correction, or a gate that starts
+    # reverting true fixes, breaks the equalities. Real-scale dominance is
+    # assess_frontier_dominance, not this smoke.
+    Test.@test base.over_rate == 0.0
+    Test.@test gated.correction_rate == base.correction_rate
+    Test.@test gated.over_rate == base.over_rate
+    Test.@test gated.recall == base.recall
 end
