@@ -3481,8 +3481,9 @@ adapter all read from THIS table so they cannot drift out of sync. (Drift is
 exactly what let a stale `:metaflye` branch masquerade as "wired" before td-yymj's
 review.) The "taxonomy single-source" test in `hybrid_olc_config_test.jl` asserts
 `:auto` resolves to a member of the wired-tool set for every valid tech, and that
-`_run_olc_tool` rejects a tool not in it. (A stronger test iterating every wired
-tool through `_run_olc_tool` needs an external-wrapper stub — a follow-up.)
+`_run_olc_tool` rejects a tool not in it. The adapter-exhaustiveness test in the
+same file iterates every wired tool through `_run_olc_tool` via the `wrappers`
+stub seam, so conda and the real assembler wrappers do not run (td-yguy).
 """
 function _olc_taxonomy()
     return (
@@ -3551,7 +3552,31 @@ function _canu_read_type(sequencing_tech::Symbol)::String
 end
 
 """
-    _run_olc_tool(tool, corrected_fastq, outdir, config) -> contigs_fasta_path::String
+    _default_olc_tool_wrappers() -> NamedTuple
+
+Default assembler wrappers used by `_run_olc_tool`. Tests pass a stub
+NamedTuple via the `wrappers` keyword so conda and subprocess never run
+(td-yguy). Keys must stay in lockstep with `_olc_taxonomy()`'s wired tools.
+"""
+function _default_olc_tool_wrappers()
+    return (
+        megahit = (fastq, out, options) -> Mycelia.run_megahit(;
+            options..., fastq1 = fastq, outdir = out),
+        metaspades = (fastq, out, options) -> Mycelia.run_metaspades(;
+            options..., fastq1 = fastq, outdir = out),
+        flye = (fastq, out, options, read_type) -> Mycelia.run_flye(;
+            options..., fastq = fastq, outdir = out, read_type = read_type),
+        metaflye = (fastq, out, options, read_type) -> Mycelia.run_metaflye(;
+            options..., fastq = fastq, outdir = out, read_type = read_type),
+        canu = (fastq, out, options, read_type) -> Mycelia.run_canu(;
+            options..., fastq = fastq, outdir = out, read_type = read_type),
+        hifiasm = (fastq, out, options) -> Mycelia.run_hifiasm(;
+            options..., fastq = fastq, outdir = out),
+    )
+end
+
+"""
+    _run_olc_tool(tool, corrected_fastq, outdir, config; wrappers) -> contigs_fasta_path::String
 
 Per-tool argument adapter: the external-assembler wrappers have non-uniform
 signatures, so map each wired `tool` onto its wrapper call and return the path to
@@ -3566,32 +3591,36 @@ than a return field; Flye/metaFlye/Canu return their assembly under `.assembly`.
 Julia resolves duplicate keywords rightmost-wins, so managed keys must come last.
 (The constructor also rejects reserved keys — incl. `:read_type` — but this
 ordering keeps the invariant even if that guard is ever relaxed.)
+
+`wrappers` defaults to `_default_olc_tool_wrappers()`. Tests replace it with
+stubs so this adapter can be exercised without conda or a real assembler.
 """
 function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
-        outdir::AbstractString, config::AssemblyConfig)::String
+        outdir::AbstractString, config::AssemblyConfig;
+        wrappers = _default_olc_tool_wrappers())::String
     fastq = String(corrected_fastq)
     out = String(outdir)
     if tool == :megahit
-        result = Mycelia.run_megahit(; config.olc_options..., fastq1 = fastq, outdir = out)
+        result = wrappers.megahit(fastq, out, config.olc_options)
         return result.contigs
     elseif tool == :metaspades
-        result = Mycelia.run_metaspades(; config.olc_options..., fastq1 = fastq, outdir = out)
+        result = wrappers.metaspades(fastq, out, config.olc_options)
         return result.contigs
     elseif tool == :flye
-        result = Mycelia.run_flye(; config.olc_options..., fastq = fastq, outdir = out,
-            read_type = _flye_read_type(config.sequencing_tech))
+        result = wrappers.flye(fastq, out, config.olc_options,
+            _flye_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :metaflye
-        result = Mycelia.run_metaflye(; config.olc_options..., fastq = fastq, outdir = out,
-            read_type = _flye_read_type(config.sequencing_tech))
+        result = wrappers.metaflye(fastq, out, config.olc_options,
+            _flye_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :canu
         # genome_size comes from olc_options (required — constructor-validated).
-        result = Mycelia.run_canu(; config.olc_options..., fastq = fastq, outdir = out,
-            read_type = _canu_read_type(config.sequencing_tech))
+        result = wrappers.canu(fastq, out, config.olc_options,
+            _canu_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :hifiasm
-        result = Mycelia.run_hifiasm(; config.olc_options..., fastq = fastq, outdir = out)
+        result = wrappers.hifiasm(fastq, out, config.olc_options)
         contigs = Mycelia.hifiasm_primary_contigs(result)
         contigs === nothing && error("_run_olc_tool: hifiasm produced no primary " *
               "contigs (.p_ctg.fa) in $(out)")
