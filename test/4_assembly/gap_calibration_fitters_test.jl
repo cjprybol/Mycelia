@@ -87,4 +87,16 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     b_long = fit_logistic_map(sep_scores, sep_labels; iters = 2000).b
     Test.@test isfinite(b_short) && isfinite(b_long)
     Test.@test isapprox(b_short, b_long; rtol = 0.1)
+
+    # 90/10 labels. Regularizing the intercept would pull the fitted mean
+    # toward 0.5. With the penalty on the slope only, it stays near the
+    # label mean.
+    n_majority = 180
+    n_minority = 20
+    imb_scores = vcat(fill(0.0, n_majority), fill(1.0, n_minority))
+    imb_labels = vcat(fill(false, n_majority), fill(true, n_minority))
+    imb_model = fit_logistic_map(imb_scores, imb_labels; iters = 4000)
+    imb_mean = sum(predict_logistic(imb_model, imb_scores)) / length(imb_scores)
+    label_mean = n_minority / (n_majority + n_minority)
+    Test.@test isapprox(imb_mean, label_mean; atol = 0.02)
 end
