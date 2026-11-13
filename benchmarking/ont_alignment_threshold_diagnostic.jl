@@ -321,14 +321,37 @@ script's own INTERPRETATION block reads "genome fraction stays near zero even
 at 80%" as evidence for an assembler defect, so a mismatched reference would
 supply that evidence while looking entirely normal (td-19c7).
 """
+function _reference_fasta_header_and_length(path::AbstractString)
+    isfile(path) || error("reference file does not exist: $(path)")
+    header = ""
+    seqlen = 0
+    open(path) do io
+        for line in eachline(io)
+            if isempty(line)
+                continue
+            elseif startswith(line, '>')
+                if isempty(header)
+                    header = line
+                end
+            else
+                seqlen += count(!isspace, line)
+            end
+        end
+    end
+    isempty(header) && error("reference $(path) has no FASTA header")
+    return (header = header, length = seqlen)
+end
+
 function assert_reference_matches_organism(organism, reference; organisms = ORGANISMS)
     organism_s = String(organism)
     reference_s = String(reference)
     accession = first(splitext(basename(reference_s)))
     expected = nothing
-    for (org, acc, _size) in organisms
+    expected_size = nothing
+    for (org, acc, genome_size) in organisms
         if String(org) == organism_s
             expected = String(acc)
+            expected_size = genome_size
             break
         end
     end
@@ -338,6 +361,17 @@ function assert_reference_matches_organism(organism, reference; organisms = ORGA
     if accession != expected
         error("reference $(reference_s) accession $(accession) does not match " *
               "organism $(organism_s) (expected $(expected))")
+    end
+    # The path is built from the accession, so the filename check above cannot
+    # see a file whose contents are a different genome (td-19c7).
+    record = _reference_fasta_header_and_length(reference_s)
+    if !occursin(expected, record.header)
+        error("reference $(reference_s) FASTA header $(record.header) does not " *
+              "contain accession $(expected) for organism $(organism_s)")
+    end
+    if record.length != expected_size
+        error("reference $(reference_s) sequence length $(record.length) does not " *
+              "match organism $(organism_s) size $(expected_size)")
     end
     return nothing
 end
