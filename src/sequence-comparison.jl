@@ -679,6 +679,14 @@ function topological_entropy(seq; alphabet = nothing, step_size::Int = 1)
     return entropy_sum / window_count
 end
 
+function _merge_and_map_file_token(path::AbstractString)
+    abs_path = abspath(string(path))
+    isfile(abs_path) || throw(ArgumentError(
+        "merge_and_map fingerprint requires an existing file, got $(abs_path)"))
+    file_stat = stat(abs_path)
+    return string(abs_path, "\t", file_stat.size, "\t", file_stat.mtime)
+end
+
 """
     merge_and_map_single_end_samples(; 
         fasta_reference::AbstractString, 
@@ -698,9 +706,10 @@ Merge and map single-end sequencing samples, then output results in one or more 
 - `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
 - `outbase`: Base name (optionally including path) for output files. The default
   is a SHA-1 fingerprint of the input FASTQ list (order-insensitive, absolute
-  paths), the reference, the minimap index, and the mapping type, so different
-  input sets do not collide and the same inputs reuse a cache key. Pass `outbase`
-  explicitly to keep a chosen path.
+  paths plus each file's size and mtime), the reference, the minimap index, and
+  the mapping type. Different input sets do not collide, and an in-place change
+  to a FASTQ, the reference, or the index invalidates the cache key. Pass
+  `outbase` explicitly to keep a chosen path.
 - `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
 
 # Description
@@ -717,11 +726,12 @@ function merge_and_map_default_outbase(fastq_list;
         fasta_reference::AbstractString = "",
         minimap_index::AbstractString = "",
         mapping_type::AbstractString = "")
-    fastq_payload = join(sort(abspath.(string.(fastq_list))), "\n")
+    fastq_paths = sort(abspath.(string.(fastq_list)))
+    fastq_payload = join((_merge_and_map_file_token(path) for path in fastq_paths), "\n")
     fingerprint = create_sha1_hash(
         string(
-            "fasta_reference=", abspath(string(fasta_reference)), "\n",
-            "minimap_index=", abspath(string(minimap_index)), "\n",
+            "fasta_reference=", _merge_and_map_file_token(fasta_reference), "\n",
+            "minimap_index=", _merge_and_map_file_token(minimap_index), "\n",
             "mapping_type=", mapping_type, "\n",
             "fastq_list=", fastq_payload, "\n",
         );

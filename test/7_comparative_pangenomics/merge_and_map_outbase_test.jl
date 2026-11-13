@@ -17,6 +17,10 @@ Test.@testset "merge_and_map_single_end_samples default outbase (td-s9ig)" begin
         ba = [joinpath(dir, "b.fq"), joinpath(dir, "a.fq")]
         ref = joinpath(dir, "ref.fa")
         idx = joinpath(dir, "ref.mmi")
+        other_ref = joinpath(dir, "other.fa")
+        for path in (a[1], b[1], ref, idx, other_ref)
+            write(path, "x")
+        end
 
         out_a = Mycelia.merge_and_map_default_outbase(a;
             fasta_reference = ref, minimap_index = idx, mapping_type = "map-ont")
@@ -29,7 +33,7 @@ Test.@testset "merge_and_map_single_end_samples default outbase (td-s9ig)" begin
         out_ba = Mycelia.merge_and_map_default_outbase(ba;
             fasta_reference = ref, minimap_index = idx, mapping_type = "map-ont")
         out_a_other_ref = Mycelia.merge_and_map_default_outbase(a;
-            fasta_reference = joinpath(dir, "other.fa"),
+            fasta_reference = other_ref,
             minimap_index = idx, mapping_type = "map-ont")
 
         Test.@test out_a != out_b
@@ -43,5 +47,11 @@ Test.@testset "merge_and_map_single_end_samples default outbase (td-s9ig)" begin
             fasta_reference = ref, minimap_index = idx, mapping_type = "map-ont") == "my-out"
         Test.@test Mycelia.resolve_merge_and_map_outbase(nothing, a;
             fasta_reference = ref, minimap_index = idx, mapping_type = "map-ont") == out_a
+
+        # An in-place FASTQ rewrite must not reuse the previous cache key.
+        write(a[1], "xy")
+        out_a_rewritten = Mycelia.merge_and_map_default_outbase(a;
+            fasta_reference = ref, minimap_index = idx, mapping_type = "map-ont")
+        Test.@test out_a_rewritten != out_a
     end
 end
