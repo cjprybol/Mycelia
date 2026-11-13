@@ -1,0 +1,4 @@
+cell,gated,status,n_pairs,n_nonzero,n_zero,statistic,pvalue_one_sided,median_x,median_d_fix_minus_d_base,n_x_positive,median_d_base,median_d_fix,method
+6000/1000/20x/e0.01,true,COMPLETE,16,16,0,-124.0,0.999847412109375,-0.19125,-0.19125,2,-0.426084,-0.5700000000000001,exact one-sided sign-flip (65536 assignments)
+6000/1000/20x/e0.02,false,COMPLETE,16,16,0,-64.0,0.953277587890625,-0.0326665,-0.0945835,5,-0.1085,-0.2208335,exact one-sided sign-flip (65536 assignments)
+6000/1000/20x/e0.05,false,COMPLETE,16,15,1,-40.0,0.873809814453125,-0.0094995,-0.0070835,5,0.020333999999999998,0.0242505,exact one-sided sign-flip (32768 assignments)

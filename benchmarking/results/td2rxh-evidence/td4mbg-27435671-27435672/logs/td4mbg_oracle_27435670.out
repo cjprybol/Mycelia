@@ -1,0 +1,228 @@
+Job 27435670 node n0230.lr6 start Fri Oct 30 09:27:12 PDT 2026 TMPDIR=/tmp/td4mbg_oracle_27435670.Th5tEQ
+>>> ORACLE fix head=dae40feaf6973c087ce956d08a25a7f7a46d5bfd manifest=85b75e3eb5c8 out=/global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea Fri Oct 30 09:27:13 PDT 2026
+td-jt7r.2 fixed toy fixture
+  fixture_seed:          42
+  corrector_seed:        1042
+  reference/source read: 2000/1200 bp
+  reads/coverage/error:  14/8x/0.05
+  observed read lengths: min=1190, max=1214
+  max_k:                 31
+  nanopore budget:       120.0 s
+run status: no prior .last_run_status in /global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea
+
+nanopore correction arm
+  wall_seconds:          114.608
+  best-contig ref cov:   0.132 (contiguity, not accuracy)
+  best-contig fit ident: 0.966292 (258 matches, 9 edits)
+  global edit_distance:  1736
+  global matches/aligned: 264/2000 (saturating; see header)
+  contigs/total/largest: 366/9722/264
+  N50:                   25
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       208
+  indel attempted:       14
+  indel completed:       14
+  indel truncated:       0
+  indel engaged:         8
+  trace_contract_errors: 0
+  window anchor rejects: 2
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=no_candidate_windows
+    k=11 iter=1 requested=49 attempted=1 completed=1 truncated=0 engaged=1 admitted=true reason=sparse_frontier_affordable
+    k=11 iter=2 requested=49 attempted=2 completed=2 truncated=0 engaged=0 admitted=true reason=sparse_frontier_affordable
+    k=31 iter=1 requested=55 attempted=5 completed=5 truncated=0 engaged=4 admitted=true reason=sparse_frontier_affordable
+    k=31 iter=2 requested=55 attempted=6 completed=6 truncated=0 engaged=3 admitted=true reason=sparse_frontier_affordable
+
+illumina correction arm
+  wall_seconds:          11.412
+  best-contig ref cov:   0.0655 (contiguity, not accuracy)
+  best-contig fit ident: 0.992366 (130 matches, 1 edits)
+  global edit_distance:  1869
+  global matches/aligned: 131/2000 (saturating; see header)
+  contigs/total/largest: 526/13124/131
+  N50:                   24
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       0
+  indel attempted:       0
+  indel completed:       0
+  indel truncated:       0
+  indel engaged:         0
+  trace_contract_errors: 0
+  window anchor rejects: 0
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=2 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=31 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+
+default_illumina_oracle correction arm
+  wall_seconds:          3.908
+  best-contig ref cov:   0.0655 (contiguity, not accuracy)
+  best-contig fit ident: 0.992366 (130 matches, 1 edits)
+  global edit_distance:  1869
+  global matches/aligned: 131/2000 (saturating; see header)
+  contigs/total/largest: 526/13124/131
+  N50:                   24
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       0
+  indel attempted:       0
+  indel completed:       0
+  indel truncated:       0
+  indel engaged:         0
+  trace_contract_errors: 0
+  window anchor rejects: 0
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=2 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=31 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+
+Fixed-toy acceptance checks
+  [gate] reads_are_1000bp_plus: PASS — observed range=1190-1214 bp
+  [gate] nanopore_requested_indel_decode: PASS — requested=208
+  [gate] noninitial_rung_attempted_and_completed: PASS — initial_k=3, attempted=14, completed=14
+  [gate] nanopore_reference_coverage_beats_identical_read_illumina: PASS — best-contig reference coverage (CONTIGUITY, not sequence accuracy): nanopore=0.132 from a 264 bp contig, illumina=0.0655 from a 131 bp contig, on a 2000 bp reference. Best-contig fit identity: nanopore=0.9662921348314607, illumina=0.9923664122137404
+  [advisory] nanopore_under_120_seconds: PASS — wall=114.608457739 s, budget=120.0 s (advisory: wall-clock is host-load dependent and gates nothing)
+  [gate] nanopore_decode_not_truncated: PASS — truncated=0
+  [gate] nanopore_substitution_window_contract_clean: PASS — window_divergences=0
+  [gate] illumina_all_indel_counters_zero: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] default_oracle_all_indel_counters_zero: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] illumina_byte_identical_to_default_oracle: PASS — illumina_bytes=24062, oracle_bytes=24062
+  [gate] illumina_byte_identical_to_prewiring_oracle: PASS — sha256=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311, origin_master=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311
+  [gate] per_rung_telemetry_schema_complete: PASS — required keys=requested/attempted/completed/truncated/engaged
+  [gate] per_rung_telemetry_values_valid: PASS — all per-rung counters are exact nonnegative Int values with requested/attempted/completed/truncated/engaged inequalities satisfied
+  [gate] nanopore_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=208/14/14/0/8, telemetry=208/14/14/0/8
+  [gate] illumina_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] default_oracle_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] nanopore_attempts_all_classified: PASS — attempted=14, completed=14, truncated=0
+  [gate] nanopore_trace_contract_clean: PASS — trace_contract_errors=0
+  [gate] both_assemblies_nonempty: PASS — nanopore=366, illumina=526
+  summary: 18/18 correctness gates PASS, 1/1 advisories within threshold (19 checks recorded)
+publishing over prior generation none (context=fixed-toy proof)
+
+td-jt7r.2 fixed-toy/oracle proof: PASS (all correctness gates; the wall-clock check is advisory)
+  summary:   /global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea/fixed_toy_arm_summary.csv
+  telemetry: /global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea/fixed_toy_rung_telemetry.csv
+  checks:    /global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea/fixed_toy_acceptance_checks.csv
+  manifest:  /global/scratch/users/cjprybol/td4mbg_oracle/27435670/fix_dae40fea/fixed_toy_run_manifest.csv
+>>> ORACLE fix rc=0 Fri Oct 30 09:48:00 PDT 2026
+>>> ORACLE base head=ca9eb736636101e6a4b3e6adf87687574608466b manifest=85b75e3eb5c8 out=/global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736 Fri Oct 30 09:48:01 PDT 2026
+td-jt7r.2 fixed toy fixture
+  fixture_seed:          42
+  corrector_seed:        1042
+  reference/source read: 2000/1200 bp
+  reads/coverage/error:  14/8x/0.05
+  observed read lengths: min=1190, max=1214
+  max_k:                 31
+  nanopore budget:       120.0 s
+run status: no prior .last_run_status in /global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736
+
+nanopore correction arm
+  wall_seconds:          114.905
+  best-contig ref cov:   0.1615 (contiguity, not accuracy)
+  best-contig fit ident: 0.960366 (315 matches, 13 edits)
+  global edit_distance:  1677
+  global matches/aligned: 323/2000 (saturating; see header)
+  contigs/total/largest: 369/9841/323
+  N50:                   25
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       208
+  indel attempted:       11
+  indel completed:       11
+  indel truncated:       0
+  indel engaged:         6
+  trace_contract_errors: 0
+  window anchor rejects: 2
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=no_candidate_windows
+    k=11 iter=1 requested=49 attempted=1 completed=1 truncated=0 engaged=1 admitted=true reason=sparse_frontier_affordable
+    k=11 iter=2 requested=49 attempted=2 completed=2 truncated=0 engaged=0 admitted=true reason=sparse_frontier_affordable
+    k=31 iter=1 requested=56 attempted=5 completed=5 truncated=0 engaged=4 admitted=true reason=sparse_frontier_affordable
+    k=31 iter=2 requested=54 attempted=3 completed=3 truncated=0 engaged=1 admitted=true reason=sparse_frontier_affordable
+
+illumina correction arm
+  wall_seconds:          10.864
+  best-contig ref cov:   0.0655 (contiguity, not accuracy)
+  best-contig fit ident: 0.992366 (130 matches, 1 edits)
+  global edit_distance:  1869
+  global matches/aligned: 131/2000 (saturating; see header)
+  contigs/total/largest: 526/13124/131
+  N50:                   24
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       0
+  indel attempted:       0
+  indel completed:       0
+  indel truncated:       0
+  indel engaged:         0
+  trace_contract_errors: 0
+  window anchor rejects: 0
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=2 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=31 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+
+default_illumina_oracle correction arm
+  wall_seconds:          4.013
+  best-contig ref cov:   0.0655 (contiguity, not accuracy)
+  best-contig fit ident: 0.992366 (130 matches, 1 edits)
+  global edit_distance:  1869
+  global matches/aligned: 131/2000 (saturating; see header)
+  contigs/total/largest: 526/13124/131
+  N50:                   24
+  k_progression:         [3, 11, 31]
+  graph vertices/pass:   Dict{Int64, Vector{Int64}}()
+  indel requested:       0
+  indel attempted:       0
+  indel completed:       0
+  indel truncated:       0
+  indel engaged:         0
+  trace_contract_errors: 0
+  window anchor rejects: 0
+  window_divergences:    0
+  per-rung telemetry:
+    k=3 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=11 iter=2 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+    k=31 iter=1 requested=0 attempted=0 completed=0 truncated=0 engaged=0 admitted=false reason=profile_disabled
+
+Fixed-toy acceptance checks
+  [gate] reads_are_1000bp_plus: PASS — observed range=1190-1214 bp
+  [gate] nanopore_requested_indel_decode: PASS — requested=208
+  [gate] noninitial_rung_attempted_and_completed: PASS — initial_k=3, attempted=11, completed=11
+  [gate] nanopore_reference_coverage_beats_identical_read_illumina: PASS — best-contig reference coverage (CONTIGUITY, not sequence accuracy): nanopore=0.1615 from a 323 bp contig, illumina=0.0655 from a 131 bp contig, on a 2000 bp reference. Best-contig fit identity: nanopore=0.9603658536585366, illumina=0.9923664122137404
+  [advisory] nanopore_under_120_seconds: PASS — wall=114.905005013 s, budget=120.0 s (advisory: wall-clock is host-load dependent and gates nothing)
+  [gate] nanopore_decode_not_truncated: PASS — truncated=0
+  [gate] nanopore_substitution_window_contract_clean: PASS — window_divergences=0
+  [gate] illumina_all_indel_counters_zero: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] default_oracle_all_indel_counters_zero: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] illumina_byte_identical_to_default_oracle: PASS — illumina_bytes=24062, oracle_bytes=24062
+  [gate] illumina_byte_identical_to_prewiring_oracle: PASS — sha256=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311, origin_master=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311
+  [gate] per_rung_telemetry_schema_complete: PASS — required keys=requested/attempted/completed/truncated/engaged
+  [gate] per_rung_telemetry_values_valid: PASS — all per-rung counters are exact nonnegative Int values with requested/attempted/completed/truncated/engaged inequalities satisfied
+  [gate] nanopore_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=208/11/11/0/6, telemetry=208/11/11/0/6
+  [gate] illumina_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] default_oracle_per_rung_totals_consistent: PASS — requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0
+  [gate] nanopore_attempts_all_classified: PASS — attempted=11, completed=11, truncated=0
+  [gate] nanopore_trace_contract_clean: PASS — trace_contract_errors=0
+  [gate] both_assemblies_nonempty: PASS — nanopore=369, illumina=526
+  summary: 18/18 correctness gates PASS, 1/1 advisories within threshold (19 checks recorded)
+publishing over prior generation none (context=fixed-toy proof)
+
+td-jt7r.2 fixed-toy/oracle proof: PASS (all correctness gates; the wall-clock check is advisory)
+  summary:   /global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736/fixed_toy_arm_summary.csv
+  telemetry: /global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736/fixed_toy_rung_telemetry.csv
+  checks:    /global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736/fixed_toy_acceptance_checks.csv
+  manifest:  /global/scratch/users/cjprybol/td4mbg_oracle/27435670/base_ca9eb736/fixed_toy_run_manifest.csv
+>>> ORACLE base rc=0 Fri Oct 30 09:52:33 PDT 2026
+=== done overall=0 Fri Oct 30 09:52:33 PDT 2026 ===
