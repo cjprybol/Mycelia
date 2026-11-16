@@ -81,10 +81,11 @@ println("COMPOSED config: corrector=:iterative, qualmer_memory_profile=:$(QUALME
         "qualmer_prefilter_min_count=$(PREFILTER_MIN), graph_mode=DoubleStrand")
 println("GATE: completes AND peak RSS <= $(MEMORY_CEILING_GB) GB (aspiration <= $(ASPIRATION_GB) GB); was 74-200 GB+")
 
-# cleanup = false: Julia's default removes this at process exit, which would take
-# the contigs FASTA and QUAST report with it before the sbatch wrapper can save
-# them. The wrapper owns this directory's lifetime (it lives under the job TMPDIR).
-benchmark_dir = mktempdir(prefix = "ecoli_qualmer_memory_gate_"; cleanup = false)
+# Under the sbatch wrapper (which sets QUALMER_GATE_HEAD) this directory survives
+# process exit so the wrapper can save the contigs FASTA and QUAST report; the
+# wrapper owns its lifetime. Run by hand, Julia removes it at exit as usual.
+benchmark_dir = mktempdir(prefix = "ecoli_qualmer_memory_gate_";
+    cleanup = !haskey(ENV, "QUALMER_GATE_HEAD"))
 results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
 println("Working directory: $benchmark_dir")
@@ -252,9 +253,12 @@ results = DataFrames.DataFrame(
     dup_ratio = Union{Missing, Float64}[dup_ratio],
     genome_fraction_quast = Union{Missing, Float64}[genome_fraction],
     # Provenance set by the sbatch wrapper (empty when run by hand): the checkout
-    # HEAD and the sha256 of the Manifest.toml the run actually resolved against.
+    # HEAD, the sha256 of the env Manifest.toml the run actually used (includes the
+    # Mycelia develop-path entry), and the sha256 of the supplied source Manifest
+    # (comparable with a checkout's file; empty in resolve mode).
     git_head = String[get(ENV, "QUALMER_GATE_HEAD", "")],
-    manifest_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SHA", "")])
+    manifest_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SHA", "")],
+    manifest_src_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SRC_SHA", "")])
 CSV.write(csv_path, results)
 println("\nResults written to: $csv_path")
 println(results)

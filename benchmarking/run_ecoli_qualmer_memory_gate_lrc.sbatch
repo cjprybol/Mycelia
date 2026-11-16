@@ -48,7 +48,8 @@
 # job 24000519, July 2026). That has not been shown fixed; if it recurs, rerun with
 # QUALMER_GATE_MANIFEST=existing or a known-good Manifest path.
 # The sha256 of the Manifest actually used and the checkout HEAD are printed and
-# written into the driver's results CSV (git_head, manifest_sha256).
+# written into the driver's results CSV (git_head, manifest_sha256,
+# manifest_src_sha256); the env Project/Manifest are saved to results/<jobid>/.
 #
 # A dirty tracked tree is reported in the log but does NOT stop the run: this is a
 # memory gate on whatever is checked out, not a provenance-locked evidence run.
@@ -170,25 +171,36 @@ if ! tmp_root="$(mktemp -d "${tmp_base}/ecoli_qualmer_memgate_${SLURM_JOB_ID}.XX
   echo "ERROR: cannot create a TMPDIR under ${tmp_base}." >&2
   exit 1
 fi
-# On every exit the driver's contigs FASTA and QUAST report (if any) are copied
-# to benchmarking/results/<jobid>/. TMPDIR is then REMOVED when status is 0 (a
-# passing gate, an early guard exit, or a walltime/scancel SIGTERM, which reaches
-# the trap with status still 0) and KEPT when the Pkg step, the warmup, or the
-# driver failed, as the evidence for why. A SIGKILL after KillWait skips the trap.
+# On every exit the private env's Project.toml + Manifest.toml (the only record
+# of the resolved dependency versions; most Mycelia deps carry no [compat]) and
+# the driver's contigs FASTA and QUAST report (if any) are copied to
+# benchmarking/results/<jobid>/. TMPDIR is then REMOVED unless keep_tmp=1, which
+# is set only for a setup failure (Pkg step, manifest hash, warmup) or a driver
+# CODE error (exit 2) -- the cases whose scratch is evidence. A gate PASS (0) or
+# memory FAIL (1) is an expected result and its multi-GB scratch is removed, as
+# it is on an early guard exit or a walltime/scancel SIGTERM. A SIGKILL after
+# KillWait skips the trap.
 status=0
+keep_tmp=0
+env_dir=""
 save_dir="${run_dir}/benchmarking/results/${SLURM_JOB_ID}"
 # shellcheck disable=SC2329  # invoked from the EXIT trap below
 save_artifacts() {
-  local d
+  local d f
+  mkdir -p "${save_dir}" || { echo "WARN: cannot create ${save_dir}" >&2; return; }
+  if [[ -n "${env_dir}" ]]; then
+    for f in Project.toml Manifest.toml; do
+      [[ -f "${env_dir}/${f}" ]] && cp -p "${env_dir}/${f}" "${save_dir}/env_${f}"
+    done
+  fi
   for d in "${tmp_root}"/ecoli_qualmer_memory_gate_*/; do
     [[ -d "${d}" ]] || continue
-    mkdir -p "${save_dir}" || { echo "WARN: cannot create ${save_dir}" >&2; return; }
     cp -p "${d}"*_contigs.fasta "${save_dir}/" 2>/dev/null || true
     [[ -d "${d}quast" ]] && cp -pR "${d}quast" "${save_dir}/" 2>/dev/null
   done
-  [[ -d "${save_dir}" ]] && echo "saved run artifacts to ${save_dir}"
+  echo "saved run artifacts to ${save_dir}"
 }
-trap 'save_artifacts; if [[ "${status}" == "0" ]]; then rm -rf "${tmp_root}"; else echo "kept TMPDIR ${tmp_root} on $(hostname) for debugging" >&2; fi' EXIT
+trap 'save_artifacts; if [[ "${keep_tmp}" == "1" ]]; then echo "kept TMPDIR ${tmp_root} on $(hostname) for debugging" >&2; else rm -rf "${tmp_root}"; fi' EXIT
 if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then
   echo "ERROR: cannot resolve TMPDIR ${tmp_root}." >&2
   exit 1
@@ -243,34 +255,51 @@ else
 end
 Pkg.instantiate()
 JL
+# Two hashes, not interchangeable: manifest_src_sha256 is the Manifest as supplied
+# (comparable with a checkout's Manifest.toml; empty in resolve mode), while
+# manifest_sha256 is the env Manifest that actually ran, which includes the
+# Mycelia develop-path entry and so never matches a checkout's file.
+manifest_src_sha=""
+if [[ -n "${manifest_src}" ]]; then
+  if ! manifest_src_sha="$(sha256sum "${manifest_src}" | cut -d' ' -f1)" ||
+     [[ ! "${manifest_src_sha}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: could not hash ${manifest_src} (got '${manifest_src_sha:-}')." >&2
+    exit 1
+  fi
+fi
 echo ">>> Pkg (${manifest_mode}${manifest_src:+ from ${manifest_src}}) into ${env_dir} $(date)"
 if ! JULIA_PKG_PRECOMPILE_AUTO=0 "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no \
     "${setup_jl}" "${run_dir}" "${env_dir}" "${manifest_mode}"; then
   echo ">>> Pkg ${manifest_mode} FAILED" >&2
-  status=1
+  status=1; keep_tmp=1
   exit 1
 fi
 if ! manifest_sha="$(sha256sum "${env_dir}/Manifest.toml" | cut -d' ' -f1)" ||
    [[ ! "${manifest_sha}" =~ ^[0-9a-f]{64}$ ]]; then
   echo "ERROR: could not hash ${env_dir}/Manifest.toml (got '${manifest_sha:-}')." >&2
-  status=1
+  status=1; keep_tmp=1
   exit 1
 fi
+# QUALMER_GATE_HEAD also tells the driver it is wrapped, so it leaves its workdir
+# for the EXIT trap to save instead of deleting it at process exit.
 export QUALMER_GATE_HEAD="${head}"
 export QUALMER_GATE_MANIFEST_SHA="${manifest_sha}"
-echo "Provenance: HEAD=${QUALMER_GATE_HEAD}  manifest_sha256=${QUALMER_GATE_MANIFEST_SHA}"
+export QUALMER_GATE_MANIFEST_SRC_SHA="${manifest_src_sha}"
+echo "Provenance: HEAD=${QUALMER_GATE_HEAD}  manifest_sha256=${QUALMER_GATE_MANIFEST_SHA}  manifest_src_sha256=${QUALMER_GATE_MANIFEST_SRC_SHA:-<resolve mode>}"
 
 echo ">>> precompile warmup (import Mycelia) $(date)"
 if ! "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" \
     -e 'import Mycelia; println("Mycelia loaded from ", pathof(Mycelia))'; then
   echo ">>> precompile/load FAILED" >&2
-  status=1
+  status=1; keep_tmp=1
   exit 1
 fi
 
 echo ">>> RUN ecoli_qualmer_memory_gate.jl $(date)"
 "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" ecoli_qualmer_memory_gate.jl
 status=$?
+# Exit 2 is a driver CODE error: keep its scratch. 0 and 1 are gate results.
+[[ "${status}" -eq 2 ]] && keep_tmp=1
 
 echo "=== gate exit=${status} complete $(date) ==="
 echo "Slurm-side peak (after the job ends): sacct -j ${SLURM_JOB_ID} --format=JobID,State,Elapsed,MaxRSS"
