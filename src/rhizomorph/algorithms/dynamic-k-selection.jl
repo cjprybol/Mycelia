@@ -679,13 +679,21 @@ end
 # non-increasing in k by construction, so an argmax would always return the
 # smallest admissible rung and the measurement would do no work.
 #
-# UPDATE (box draft, 2026-11-11): the default criterion is now this level set,
-# with S(k) estimated reference-free by `solid_kmer_survival` and tau = 0.5. The
-# uniqueness bound is the existing `_genome_size_floor_k` (p = 0.01, log4). The old
-# median-solid criterion stays reachable as `criterion = :median_solid`. The
-# docstring paragraphs below describe that legacy criterion.
+# UPDATE (2026-11-16): the default is the legacy median-solid criterion again.
+# `:survival` (S(k) = solid_kmer_survival, tau = 0.5) stays available as an
+# opt-in. Tau 0.5 is unverified at real scale, and on the E2E toy it trades
+# seed-3 illumina identity from 1.0 down to 0.9667. Pending Cameron's pick.
 """
-    select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
+    select_reassembly_k(
+        reads,
+        ceiling_k;
+        floor_k = 7,
+        connectivity_floor = 6.0,
+        genome_size_floor = true,
+        size_ref_k = 17,
+        criterion = :median_solid,
+        survival_tau = 0.5,
+    ) -> Int
 
 Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`,
 using a COVERAGE-AWARE CONNECTIVITY criterion. Iterating candidates DESCENDING from
@@ -724,7 +732,7 @@ function select_reassembly_k(
         connectivity_floor::Float64 = 6.0,
         genome_size_floor::Bool = true,
         size_ref_k::Int = 17,
-        criterion::Symbol = :survival,
+        criterion::Symbol = :median_solid,
         survival_tau::Float64 = 0.5
 )::Int
     criterion in (:survival, :median_solid) ||
@@ -750,13 +758,10 @@ function select_reassembly_k(
     candidates = vcat(lower_primes, ceiling_k)   # ascending; ceiling is the largest
     # Descend from the ceiling: the LARGEST candidate whose solid backbone still meets
     # the connectivity floor is the most specific k that keeps the graph joined.
-    # Default criterion (:survival) is the registered level set
-    #     k* = max { k : S(k) >= survival_tau },  k >= the uniqueness floor above,
-    # with S(k) = solid_kmer_survival (fraction of read k-mer occurrences that recur).
-    # survival_tau = 0.5 is a majority rule: keep k while most read windows sit on a
-    # recurring k-mer. :median_solid is the legacy, REFUTED criterion (see caveat on
-    # median_solid_kmer_multiplicity), kept selectable for comparison only; it is the
-    # one place connectivity_floor is used.
+    # Default criterion is :median_solid (legacy connectivity floor). :survival is
+    # the opt-in level set k* = max { k : S(k) >= survival_tau }, with S(k) =
+    # solid_kmer_survival. survival_tau = 0.5 is unverified at real scale.
+    # connectivity_floor is used only by :median_solid.
     for k in Iterators.reverse(candidates)
         keep = criterion === :survival ?
                solid_kmer_survival(reads, k) >= survival_tau :

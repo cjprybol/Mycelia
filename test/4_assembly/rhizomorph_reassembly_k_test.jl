@@ -104,8 +104,10 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         # Non-increasing in k on the noisy sets (the level-set premise).
         Test.@test sv(_rk_n05, 7) >= sv(_rk_n05, 13) >= sv(_rk_n05, 21)
         Test.@test sv(_rk_n10, 7) >= sv(_rk_n10, 13) >= sv(_rk_n10, 21)
-        # Legacy criterion still reachable and still drops on shattered reads.
-        Test.@test R.select_reassembly_k(_rk_n05, 21; criterion = :median_solid) < 21
+        # Default is median-solid. Survival stays opt-in and still drops here.
+        Test.@test R.select_reassembly_k(_rk_n05, 21) ==
+                   R.select_reassembly_k(_rk_n05, 21; criterion = :median_solid)
+        Test.@test R.select_reassembly_k(_rk_n05, 21; criterion = :survival) < 21
         Test.@test_throws ArgumentError R.select_reassembly_k(_rk_clean, 21; criterion = :bogus)
     end
 

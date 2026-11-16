@@ -430,12 +430,12 @@ Test.@testset "DENSE-regime rare-allele retention under score margin (td-plqi)" 
             Test.@test total == total_exact
             Test.@test retained == retained_exact
             # One SNP is one emission. On a k=21 bubble that is not enough to
-            # outvote a large coverage skew; balanced coverage and k=9 still keep
-            # every minority read on its own allele.
+            # outvote a large coverage skew, so the strict invariant is broken
+            # there. Balanced coverage and k=9 still keep every minority read.
             if k < 21 || bg == minr
                 Test.@test retained == total
             else
-                Test.@test retained < total
+                Test.@test_broken retained == total
             end
         end
     end

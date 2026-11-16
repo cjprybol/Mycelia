@@ -1891,6 +1891,9 @@ end
 # (about -2.6). On the box the coverage 2-3 pin, the E2E matrix and a
 # one-substitution/insertion/deletion probe still pass. Re-run
 # assess_frontier_dominance before treating 8.0 as calibrated for both kernels.
+# PROVISIONAL: the calibrated gate threshold 1.0 (see
+# rhizomorph_calibrated_gate_frontier_test.jl) is the midpoint of a toy plateau
+# from 0.5 to 2 and has not been confirmed at real scale.
 const _INDEL_TRANSITION_BACKGROUND = 8.0
 
 # Shared by the scalar substitution decoder and the batched array-frontier
@@ -1946,8 +1949,8 @@ function _indel_decode_successors!(
             # store overlap length, where the same additive mass would dwarf
             # the weight and drop real indel paths, so they keep pure
             # normalization.
-            background = _viterbi_graph_label_type(graph) <: Kmers.Kmer ?
-                         _INDEL_TRANSITION_BACKGROUND : 0.0
+            background = _viterbi_kmer_transition_background(
+                _viterbi_graph_label_type(graph))
             push!(
                 successors,
                 (
@@ -2550,9 +2553,9 @@ function _viterbi_correct_observation_indel(
     backpointers = Dict{Cell, Union{Nothing, Cell}}()
 
     # Outgoing (target-state, logE) expansion for one state. Sibling edges keep
-    # the substitution decoder's ranking (weight / outgoing) and, unlike that
-    # decoder, divide by outgoing + `_INDEL_TRANSITION_BACKGROUND` so a
-    # coverage-1 spur is not a free transition. Complete M/I/D cells that
+    # the substitution decoder's ranking and, like that decoder, divide by
+    # outgoing + `_INDEL_TRANSITION_BACKGROUND` on k-mer graphs so a coverage-1
+    # spur is not a free transition. Complete M/I/D cells that
     # share `(vertex, strand)` have identical scored
     # successors, so resolve that immutable transition set once per decode.
     transition_cache = Dict{PathState, SuccessorBatch}()
