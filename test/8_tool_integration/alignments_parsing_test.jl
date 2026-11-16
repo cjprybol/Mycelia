@@ -45,6 +45,33 @@ Test.@testset "Alignment Parsing Helpers" begin
             Test.@test !haskey(parsed.raw_sections[Symbol("1_to_1")], :total_bases_ref)
             Test.@test parsed.raw_sections[Symbol("global")][:total_bases_ref] == 1000
         end
+
+        # td-0y1z: real MUMmer dnadiff reports emit TotalSNPs/TotalIndels
+        # (not bare SNPs/Indels) and AlignedBases as compact N(P%) tokens.
+        # The synthetic fixtures above do not catch either mismatch.
+        let repo_root = pkgdir(Mycelia)
+            phix = joinpath(repo_root, "benchmarking", "results",
+                "real_data_corrector_validation_20260713_173610_795_p24339",
+                "dnadiff_reports", "phix174_naive_dnadiff.report")
+            Test.@test isfile(phix)
+            parsed = Mycelia.parse_dnadiff_report(phix)
+            Test.@test parsed.summary.snps == 1
+            Test.@test parsed.summary.indels == 0
+            Test.@test parsed.summary.aligned_bases_ref == 5377
+            Test.@test parsed.summary.aligned_bases_query == 10773
+            Test.@test parsed.summary.aligned_pct_ref ≈ 99.83
+            Test.@test parsed.summary.aligned_pct_query ≈ 22.32
+            Test.@test parsed.summary.total_bases_ref == 5386
+
+            raw = joinpath(repo_root, "benchmarking", "results",
+                "opt4_dnadiff_raw.report")
+            Test.@test isfile(raw)
+            parsed_raw = Mycelia.parse_dnadiff_report(raw)
+            Test.@test parsed_raw.summary.snps == 4
+            Test.@test parsed_raw.summary.indels == 0
+            Test.@test parsed_raw.summary.aligned_bases_ref == 48454
+            Test.@test parsed_raw.summary.aligned_pct_ref ≈ 99.90
+        end
     end
 
     Test.@testset "MUMmer coords parsing and summary" begin
