@@ -59,6 +59,14 @@ if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
   exit 1
 fi
 
+# The iterative corrector refuses a working root that resolves through a symlink
+# component, and a login profile may point TMPDIR through one (on Perlmutter,
+# ~/workspace is a symlink to CFS). Resolve the output root and keep TMPDIR on a
+# real path beneath it, or every :iterative cell fails.
+mkdir -p "${OUTDIR}"
+OUTDIR="$(realpath "${OUTDIR}")"
+export TMPDIR="${OUTDIR}/tmp"
+mkdir -p "${TMPDIR}"
 export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""

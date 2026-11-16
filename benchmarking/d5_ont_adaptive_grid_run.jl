@@ -1013,8 +1013,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     else
         cli.output_dir === nothing &&
             error("--output-dir is required for --phase $(cli.phase)")
-        root = abspath(cli.output_dir)
-        mkpath(root)
+        mkpath(abspath(cli.output_dir))
+        # realpath: the iterative corrector refuses a working root that resolves
+        # through a symlink component, and cell output dirs live under this root.
+        root = realpath(abspath(cli.output_dir))
         # Cell failures are caught and checkpointed as rows, so the process would
         # otherwise end normally. Exit non-zero whenever a resubmit is needed, so
         # SLURM shows FAILED and the operator sees it.
