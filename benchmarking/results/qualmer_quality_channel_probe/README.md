@@ -13,7 +13,7 @@ named for evidence counts and does consume Phred.
 | Is the quality channel inert in the DEFAULT greedy qualmer assembly? | **Yes**, proven in 18/18 probe cells across three chemistries                       |
 | Are the Track-A `qualmer` and `kmer` arms the same experiment?       | **Yes** on every assembly metric; they differ only in runtime and memory            |
 | Is the Viterbi/DP machinery also quality-blind?                      | **No.** It demonstrably consumes Phred, and Phred changes what it decides           |
-| Is the Stage-1 corrector quality-blind end-to-end?                   | **Not determined by this work.** It was never reached — see the gating result below |
+| Is the Stage-1 corrector quality-blind end-to-end?                   | **Partly measured.** Illumina decoder ran (still byte-identical); PacBio/ONT never ran — see Stage C |
 | Is the greedy behaviour a defect or a design choice?                 | **A design choice**, with a documented rationale in PR #335                         |
 | What changed on this branch?                                         | An **opt-in** `traversal_weighting = :quality`; the default is untouched            |
 
@@ -79,23 +79,24 @@ comparator that always returns "same" would produce exactly the table above.
 The mechanism is stronger than a weak scoring function; the traversal has **no
 scoring hook at all**:
 
-- Contigs come from `find_eulerian_paths_next`
-  (`src/rhizomorph/algorithms/path-finding.jl:2055`) with a fallback to
-  `find_contigs_next` (`src/rhizomorph/algorithms/contigs.jl:65`), selected in
+- Contigs come from `find_eulerian_paths_next` in
+  `src/rhizomorph/algorithms/path-finding.jl` with a fallback to
+  `find_contigs_next` in `src/rhizomorph/algorithms/contigs.jl`, selected in
   `_qualmer_graph_to_assembly`. Both are purely topological —
   `grep -c quality src/rhizomorph/algorithms/contigs.jl` returns **0** — and
   `find_contigs_next` is the same routine the k-mer arm uses. Identical k-mer
   sets therefore give identical contigs.
 - The only quality read in the whole greedy path is
-  `_qualmer_vertex_quality_scores` at `src/rhizomorph/assembly.jl:4057`, inside
+  `_qualmer_vertex_quality_scores` in `src/rhizomorph/assembly.jl`, inside
   contig **emission**, building the output FASTQ quality string. It cannot
   influence which path was taken because the path already exists by then. The
   Track-A harness then writes contigs as FASTA, discarding even that.
-- `_qualmer_vertex_score` / `_qualmer_edge_score`
-  (`src/rhizomorph/assembly.jl:43,47`) are named for quality but return
-  `count_evidence`, a pure count of evidence entries
-  (`src/rhizomorph/core/evidence-functions.jl:393`). They are also **only
-  reachable from the fallback walk** (`src/rhizomorph/assembly.jl:2461`), which
+- `_qualmer_vertex_score` / `_qualmer_edge_score` in
+  `src/rhizomorph/assembly.jl` are named for quality but (in their one-argument
+  forms) return `count_evidence`, a pure count of evidence entries
+  (`count_evidence_entries` in `src/rhizomorph/core/evidence-functions.jl`).
+  They are also **only reachable from the fallback walk**
+  `_quality_weighted_walk` in `src/rhizomorph/assembly.jl`, which
   runs only when the primary extraction returns nothing — so on the common path
   they are not even the operative code. The original brief for this bead traced
   the root cause to these two functions; that trace is correct about them being
@@ -125,12 +126,12 @@ in three stages, because the stages disagree.
 | `default_viterbi_emission_logp` (mismatch) | -10.310 | -10.531  | yes              |
 | `calculate_read_likelihood`                | -0.474  | -391.439 | yes              |
 
-Mechanism: `_viterbi_position_error_rate` (`src/viterbi-next.jl:847`) converts
-each position's Phred to `10^(-Q/10)`, and `default_viterbi_emission_logp`
-(`src/viterbi-next.jl:10`) scores every emitted position with it. The
-corrector's accept/reject likelihood accumulates Phred-derived log-probabilities
-in `_rhizomorph_joint_probability` (`src/iterative-assembly.jl:6190`). This is
-real, not nominal.
+Mechanism: `_viterbi_position_error_rate` in `src/viterbi-next.jl` converts
+each position's Phred to `10^(-Q/10)`, and `default_viterbi_emission_logp` in
+the same file scores every emitted position with it. The corrector's
+accept/reject likelihood accumulates Phred-derived log-probabilities in
+`_rhizomorph_joint_probability` in `src/iterative-assembly.jl`. This is real,
+not nominal.
 
 ### Stage B — Phred changes what the decoder DECIDES
 
@@ -156,39 +157,50 @@ Running full `assemble_genome(corrector = :iterative)` under all four conditions
 gave **byte-identical assemblies in all three chemistries**. Taken at face value
 that contradicts Stage B.
 
-It does not, and the corrector diagnostics say why:
+It does not, and the corrector diagnostics say why. An earlier reading of these
+rows treated `decode_fraction_per_pass` as all zeros and concluded the decoder
+never ran. That was a flag bug (ADR erratum E2): the `decoder_ever_ran` check
+only inspected pass 1, which is `0.0` by construction. The sibling TSV
+`qualmer_corrector_stageC_end_to_end.tsv` shows otherwise for Illumina.
 
 | chemistry | assemblies identical | quality reached graph | decoder ever ran | skip_fraction per pass     |
 | --------- | -------------------- | --------------------- | ---------------- | -------------------------- |
-| illumina  | yes                  | yes                   | **no**           | [1.0, 0.942, 0.983, 0.986] |
+| illumina  | yes                  | yes                   | **yes**          | [1.0, 0.942, 0.983, 0.986] |
 | pacbio    | yes                  | yes                   | **no**           | [1.0, 1.0, 1.0, 1.0]       |
 | ont       | yes                  | yes                   | **no**           | [1.0, 1.0, 1.0, 1.0]       |
 
-`decode_fraction_per_pass` was `[0.0, 0.0, 0.0, 0.0]` in every condition: the
-`skip_solid` gate — auto-enabled, not requested (`skip_solid_requested = false`,
-`skip_solid_effective = true`) — skipped essentially every read on every pass,
-so the quality-consuming decoder **never executed once**. The only corrections
-applied were 120 from the count-based Stage-0 cheap-correct. Meanwhile
-`mean_joint_quality` _did_ differ between conditions (34.33 vs 3.95 on ONT),
-proving quality reached the graph and simply never reached a decision.
+Illumina `decode_fraction_per_pass` is `[0.0, 0.058, 0.017, 0.014]` under
+oracle (max 0.0583) and `[0.0, 0.058, 0.036, 0.036]` under constant40. The
+corrected finding is **stronger** than the retracted one: the decoder ran, ran
+on a quality-dependent fraction of reads (3.6% flat vs 1.7% oracle), and the
+assemblies were still byte-identical. PacBio and ONT are genuinely all-zero.
 
-So Stage C is a **gating** result, not a quality-blindness result. Reported
-without the diagnostics it would have been a false and much more damaging claim
-than the one this bead started from.
+The count-based Stage-0 cheap-correct totals are **not** the same across
+chemistries: illumina 74, pacbio 329, ont 120. Meanwhile `mean_joint_quality`
+_did_ differ between conditions (34.33 vs 3.95 on ONT), proving quality
+reached the graph even on the chemistries where the decoder did not run.
+
+So Stage C is a **gating-plus-invariance** result, not a "decoder never ran"
+result. For PacBio and ONT it is a gating result; for Illumina the decoder
+ran and still did not change the assembly. Reported without the diagnostics it
+would have been a false and much more damaging claim than the one this bead
+started from.
 
 ### Quality API with no production callers
 
-Zero non-test, non-docstring call sites anywhere in `src/`: `filter_by_quality`
-(`quality-functions.jl:271`), `get_vertex_min_quality` (`:218`),
-`mean_path_quality` (`:86`), `combine_phred_scores` (`:43`). The quality
+The "zero production callers" list is the wrong frame for every name here.
+`combine_phred_scores` in `src/rhizomorph/core/quality-functions.jl` is called
+by `get_vertex_joint_quality` in the same file; `get_vertex_min_quality` is
+called by `filter_by_quality`, which is itself unused in `src/` (transitively
+dead). `mean_path_quality` has no non-test, non-docstring callers. The quality
 machinery is larger than the set of paths that use it.
 
 ### One more count-based default worth knowing
 
 `weighted_graph_from_rhizomorph` defaults to `edge_weight = count_evidence`
-(`src/rhizomorph/algorithms/path-finding.jl:327`). The Phred-derived alternative
-`edge_quality_weight` (`:270`) exists and is wired up in exactly one place —
-`polish_fastq(weighting = :quality)` in
+in `src/rhizomorph/algorithms/path-finding.jl`. The Phred-derived alternative
+`edge_quality_weight` in the same file exists and is wired up in exactly one
+place — `polish_fastq(weighting = :quality)` in
 `src/viterbi-polishing-and-error-correction.jl`. Any Viterbi decode over a
 default-weighted graph therefore has a quality-aware **emission** model and a
 count-based **transition** model. That split is worth stating precisely if the
@@ -257,22 +269,23 @@ Phred-derived.
 
 ### The confidence statistic follows the existing design, not a new one
 
-Confidence is the **joint quality** of
-`planning-docs/rhizomorph-graph-ecosystem-plan.md:498-550`: Phred summed across
-independent observations (`Q_combined = Q₁ + … + Qₙ`, clamped to 255), already
-implemented as `get_vertex_joint_quality` / `combine_phred_scores` and — before
-this change — carrying no production callers at all.
+Confidence is the **joint quality** described in
+`planning-docs/rhizomorph-graph-ecosystem-plan.md` (the independence-assumption
+aggregation section): Phred summed across independent observations
+(`Q_combined = Q₁ + … + Qₙ`, clamped to 255), already implemented as
+`get_vertex_joint_quality` / `combine_phred_scores`.
 
 This matters because summing is the framework's actual claim, and mean quality
 is not a substitute for it. Phred adds in log space, so summing multiplies error
 probabilities: ten independent Q40 observations are astronomically more
-trustworthy than one, and the joint score says so (400 → clamped 255) while a
-mean cannot (40 either way).
+trustworthy than one under that assumption, and the unclamped joint would be
+400. The implementation clamps to 255. That clamp is not evidence the feature
+is working as a confidence claim: ADR §3 shows 97.6% of true Illumina k-mers
+already sit at the 255 clamp at 20x (99% at 40x), and ADR §6 says Q255 is not a meaningful claim.
 
-That difference is the entire reason the qualmer graph exists. Technical
-artifacts and repeat-collapsed k-mers **also** recur, so an evidence count
-cannot separate them from real sequence — but they recur at _low_ quality, so
-their joint score stays low however often they are seen.
+The ADR withdraws the further claim that joint quality distinguishes
+repeat-collapsed k-mers from real sequence; that is not an empirically
+supported conclusion of this probe (see ADR §5 and §7).
 
 Two reductions are involved and they run in opposite directions on purpose:
 across **observations** quality compounds (sum), while across the k
@@ -282,10 +295,10 @@ would break the second half — one bad base among ten strong ones still average
 high, so every error k-mer would pass.
 
 The floor is on the joint 0-255 scale, not the 0-60 single-observation scale.
-The design's bands are 10-30 low, 30-60 moderate (one typical high-quality
-observation), 60-100 high (multiple), 100-255 extreme. The 60.0 default
-therefore means "require more than one high-quality observation", and should be
-lowered explicitly for low-coverage data.
+The planning-doc bands that once justified the 60.0 default ("60-100 high,
+100-255 extreme") are withdrawn by the ADR; the default itself is unchanged.
+Under real binned Illumina quality the floor is effectively a coverage gate,
+and how it should scale with coverage is unmeasured.
 
 **Measured separation** on the test fixture (600 bp genome, k=11, 12x, a
 systematic artifact injected at a fixed locus in every read covering it):
@@ -311,12 +324,16 @@ not recur.
 
 ## 6. What I could not determine
 
-- **Whether the corrector is quality-blind end-to-end.** Stage C never ran the
-  decoder (`skip_fraction` ~1.0 on every pass), so the end-to-end invariance is
-  uninformative about quality. Settling it requires re-running with the
+- **Whether the corrector is quality-blind end-to-end.** For Illumina, Stage C
+  did run the decoder on a quality-dependent fraction of reads and the
+  assemblies were still byte-identical, so invariance is measured with the
+  decoder in play. For PacBio and ONT, `skip_fraction` is 1.0 on every pass and
+  the decoder never ran, so the end-to-end invariance is uninformative about
+  quality. Settling those two chemistries requires re-running with the
   solid-read gate disabled, at coverage/error settings where reads are not all
   classified solid. Stage B answers the narrower question — the decoder itself
-  is quality-sensitive — and that is the only corrector claim made here.
+  is quality-sensitive — and remains the only decision-level corrector claim
+  made here.
 - **Whether `skip_fraction ~ 1.0` is correct behaviour** at these settings, or
   whether the gate is over-eager and quietly bypassing the graph-HMM core on
   realistic inputs. That is a separate and potentially significant question;

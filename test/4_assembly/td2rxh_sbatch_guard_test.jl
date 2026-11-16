@@ -10,12 +10,26 @@ module Td2rxhSbatchGuardTest
 # exit, unknown cell set, --seeds/--label/--cells passthrough, MYCELIA_PROJECT
 # cleared, symlinked TMPDIR base,
 # TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
-# Not covered: the "julia not runnable", "not in benchmarking/" and mktemp-failure
+# Capture: stdout and stderr must both be complete (td-iobuf); a shared
+# IOBuffer plus take! can drop the EXIT-trap "kept TMPDIR" line.
+# Not covered: the "julia not runnable", "not in benchmarking/"
 # branches, and the SIGTERM path. Round-1 review reproduced two
 # of these as fail-open on the first draft (a stale CSV passing the row guard, and
 # a failing git passing the dirty guard).
+#
+# Slow / opt-in: skipped by default. Enable with MYCELIA_RUN_SLOW=true or
+# MYCELIA_RUN_ALL=true (also listed in runtests.jl SLOW_TEST_FILES).
+#   MYCELIA_RUN_SLOW=true julia --project=. -e 'include("test/4_assembly/td2rxh_sbatch_guard_test.jl")'
 
 import Test
+
+const RUN_SLOW =
+    lowercase(strip(get(ENV, "MYCELIA_RUN_ALL", "false"))) == "true" ||
+    lowercase(strip(get(ENV, "MYCELIA_RUN_SLOW", "false"))) == "true"
+
+if !RUN_SLOW
+    @info "Skipping td-2rxh sbatch guard tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
+else
 
 const SBATCH = joinpath(
     @__DIR__, "..", "..", "benchmarking", "run_td2rxh_evidence_lrc.sbatch")
@@ -81,10 +95,20 @@ function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
         # not leave directories in the host's /tmp.
         "TD2RXH_TMP_BASE" => mktempdir())
     merge!(env, extra_env)
-    out = IOBuffer()
+    # Separate stdout/stderr pipes, read to completion, then wait. A single
+    # shared IOBuffer plus take! races the async copier and can drop the
+    # EXIT-trap "kept TMPDIR" line (and sometimes the provenance label).
+    out = Pipe()
+    err = Pipe()
     proc = run(pipeline(ignorestatus(Cmd(`bash $SBATCH`; env = env));
-        stdout = out, stderr = out))
-    return proc.exitcode, String(take!(out))
+            stdout = out, stderr = err);
+        wait = false)
+    close(out.in)
+    close(err.in)
+    stdout_s = read(out, String)
+    stderr_s = read(err, String)
+    wait(proc)
+    return proc.exitcode, stdout_s * stderr_s
 end
 
 Test.@testset "td2rxh sbatch fail-closed guards" begin
@@ -261,6 +285,24 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             rc, log = run_sbatch(repo, home, bindir; extra_env = Dict("STUB_ROWS" => "12"))
             Test.@test rc == 1 && occursin("Manifest.toml missing", log)
         end
+        Test.@testset "run_sbatch captures late EXIT-trap stderr across repeats (td-iobuf)" begin
+            # The EXIT trap writes "kept TMPDIR" to stderr after stdout is
+            # done. Sharing one IOBuffer for both streams, then take!, races
+            # the async copier and drops that line (and sometimes the
+            # provenance label). Repeat enough times that a flake is a
+            # failure, not a lucky pass.
+            for _ in 1:20
+                repo, home, bindir = fixture()
+                base = mktempdir()
+                rc, log = run_sbatch(repo, home, bindir;
+                    extra_env = Dict("STUB_ROWS" => "12", "STUB_RC" => "3",
+                        "TD2RXH_TMP_BASE" => base))
+                Test.@test rc == 1
+                Test.@test occursin("kept TMPDIR", log)
+                Test.@test occursin("label=td2rxh@", log) &&
+                           occursin("+manifestabcdef012345", log)
+            end
+        end
         Test.@testset "smoke cell set expects 4 rows; unknown set fails" begin
             repo, home, bindir = fixture()
             rc,
@@ -272,7 +314,30 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
                 extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_CELLS" => "td2rhx"))
             Test.@test rc2 == 1 && occursin("unknown TD2RXH_CELLS=td2rhx", log2)
         end
+        Test.@testset "all cell set expects 6 rows (td-wmvp item 17)" begin
+            # A mutant `all) expected=0` would still pass a 6-row success;
+            # zero rows must fail and the log must show expected=6.
+            repo, home, bindir = fixture()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "6", "TD2RXH_CELLS" => "all"))
+            Test.@test rc == 0 && occursin("expected=6", log)
+            rc0,
+            log0 = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "0", "TD2RXH_CELLS" => "all"))
+            Test.@test rc0 == 1 && occursin("0 of 6", log0)
+        end
+        Test.@testset "mktemp-failure guard fires (td-wmvp item 11)" begin
+            repo, home, bindir = fixture()
+            not_a_dir = joinpath(repo, "not_a_tmp_base")
+            write(not_a_dir, "this is a file")
+            rc, log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => not_a_dir))
+            Test.@test rc == 1 && occursin("cannot create a TMPDIR", log)
+        end
     end
 end
+
+end # RUN_SLOW
 
 end
