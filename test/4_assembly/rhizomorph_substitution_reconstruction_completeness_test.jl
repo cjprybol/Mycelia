@@ -9,25 +9,22 @@
 # it keeps its identifier and is scored at input length. So `reads_scored` must
 # equal the read count and every corrected length must equal its input length.
 #
-# TRUNCATION IS NOW ABSENT AT THIS CONFIG: until the td-tg05 decoder fix (weighted
-# decode graph resolves both-strand edges to Forward), the ungated decode dead-ended
-# on mixed-strand edges and the fail-open guard fired here at both error rates. It
-# now fires zero times (Perlmutter job 60917657 and CI at 410695c8), so the
-# real-decode case asserts `substitution_length_divergences == 0`: a return of
-# truncation (td-5vak) fails loudly instead of being silently absorbed by the guard.
-# The guard itself is pinned by the forced testset at the bottom of this file, which
-# injects a short-path kernel and checks the read fails open and is counted.
-# `injected > 0` is the positive control (errors exist to correct).
+# NON-VACUITY IS A DEDICATED DEAD-END, not these seeds. The two acceptance seeds
+# used to truncate because `first_evidence_strand` flipped along a read and the
+# substitution walk died. Labeling mixed edges Forward removes that dead-end, so
+# those seeds now complete and `substitution_length_divergences` is 0 there. The
+# fail-open path is still required when a walk genuinely cannot consume the read
+# (the suffix is absent from the graph). That case is its own testset: the
+# counter fires, and the returned record is the original read, not a truncated
+# correction. `injected > 0` remains the positive control that errors exist.
 #
 # WHAT THIS TEST DOES NOT PIN (verified elsewhere / deferred):
-#   * WHICH reads failed open, and that a failed-open read equals its ORIGINAL
-#     sequence byte-for-byte, plus quality preservation — `correct_reads_at_point`
-#     returns sequences only, not records, and exposes counts not per-read flags.
-#     The fail-open path returning the original record verbatim (ID + qualities +
-#     sequence) is verified by code review of `try_viterbi_path_improvement` ->
-#     `find_optimal_sequence_path` (returns the original `read` on `nothing`).
-#   * That completeness came from PRESERVED corrections vs TOTAL pass-through — we
-#     assert completeness and the absence of truncation, not a correction rate.
+#   * WHICH of the acceptance-seed reads would have failed open — those seeds no
+#     longer truncate. Byte-for-byte fail-open (ID + qualities + sequence) is the
+#     dead-end testset, which calls `find_optimal_sequence_path` directly.
+#   * That completeness came from PRESERVED corrections vs TOTAL pass-through — at
+#     this operating point a `recall > 0` floor would be flaky; we assert
+#     completeness, not a correction rate.
 #   * Indel mode (deliberately exempt from the guard) — this harness is
 #     substitution-only; indel-mode length-change survival is covered by
 #     `indel_length_change_survival_test.jl` (td-3qjd).
@@ -41,7 +38,6 @@ import Test
 import Random
 import BioSequences
 import FASTX
-import MetaGraphsNext
 import Mycelia
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "rhizomorph_correction_pr_curve.jl"))
@@ -94,10 +90,10 @@ function _run_completeness_case(; err::Float64, seed::Int)
     m = per_base_metrics(truth_by_id, observed_by_id, corrected)
     Test.@test m.reads_scored == length(records)
 
-    # (4) NO TRUNCATION: after td-tg05 every decode at this config spans the read,
-    # so the fail-open guard never fires. (2)/(3) would still pass if truncation
-    # came back (the guard absorbs it), so this is what surfaces a regression.
-    # Guard coverage lives in the forced testset below.
+    # These seeds no longer truncate: mixed double-strand edges are walked as
+    # Forward, so the substitution path consumes the read. The fail-open counter
+    # is covered by the dead-end testset below, not by requiring a truncation
+    # that this geometry no longer produces.
     Test.@test get(corrector_errors, :substitution_length_divergences, 0) == 0
 
     # (5) TELEMETRY-DRIFT GUARD: the exported corrector-error dict must expose one
@@ -113,48 +109,31 @@ Test.@testset "substitution reconstruction completeness (fail-open length contra
     _run_completeness_case(err = 0.10, seed = 20260714)
 end
 
-# A substitution kernel that returns a one-unit path for a multi-unit read: the
-# shape a dead-ended (truncated) decode produced before td-tg05.
-function _short_path_substitution_kernel(
-        graph,
-        observations::AbstractVector;
-        config::Mycelia.ViterbiCorrectionConfig,
-        weighted_graph::Any = nothing,
-)::Mycelia.ViterbiCorrectionResult
-    @assert length(only(observations)) > 1
-    path = Mycelia.Rhizomorph.ViterbiDecodingResult(
-        nothing, 0.0, Dict{Symbol, Any}())
-    return Mycelia.ViterbiCorrectionResult(
-        Any[Any[first(MetaGraphsNext.labels(graph))]],
-        Mycelia.Rhizomorph.ViterbiDecodingResult[path],
-        Dict{Symbol, Any}(),
+# Positive control for the fail-open path. The acceptance seeds above no longer
+# die mid-read, so they cannot certify that a short substitution path is
+# discarded. This graph is one non-repetitive path, so its last k-mer has no
+# outgoing edge. The read continues past that end; the walk stops, the counter
+# fires, and the caller returns the original record instead of a truncated one.
+# A repetitive reference does not work: the decoder can stay on the cycle for
+# the whole read and never truncate.
+Test.@testset "dead-end substitution walk fails open to the original read" begin
+    k = 7
+    reference = "ATGCTAGCTAGTCTAGCATG"
+    reference_quality = repeat("I", length(reference))
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        [FASTX.FASTQ.Record("graph_read", reference, reference_quality)],
+        k;
+        mode = :doublestrand,
     )
-end
-
-Test.@testset "substitution fail-open guard fires on a short decode (forced)" begin
-    sequence = "ACGTTGCAAGGCTTACG"
-    read = FASTX.FASTQ.Record("r", sequence, repeat("I", length(sequence)))
-    graph = Mycelia.Rhizomorph.build_qualmer_graph([read], 5; mode = :doublestrand)
-
-    # Control: the real kernel on a read the graph was built from returns a
-    # full-length decode, so the guard does not fire. TTGCA/TGCAA are reverse
-    # complements, so the decode crosses a both-strand edge (the td-tg05 case).
-    control = Mycelia.CorrectorDiagnostics()
-    control_result = Mycelia.try_viterbi_path_improvement(
-        read, graph, 5; graph_mode = :doublestrand, diagnostics = control)
-    Test.@test control_result !== nothing
-    Test.@test length(FASTX.sequence(String, first(control_result))) == length(sequence)
-    Test.@test control.substitution_length_divergences[] == 0
-    Test.@test control.structural_errors[] == 0
-
-    # Forced truncation: the decode returns `nothing` (the fail-open signal; the
-    # caller keeping the original record is checked by code review, see header)
-    # and the divergence is counted exactly once.
-    forced = Mycelia.CorrectorDiagnostics()
-    result = Mycelia.try_viterbi_path_improvement(
-        read, graph, 5; graph_mode = :doublestrand, diagnostics = forced,
-        correction_kernel = _short_path_substitution_kernel)
-    Test.@test result === nothing
-    Test.@test forced.substitution_length_divergences[] == 1
-    Test.@test forced.structural_errors[] == 0
+    read_sequence = reference * "AAAAAAA"
+    read = FASTX.FASTQ.Record("deadend", read_sequence, repeat("I", length(read_sequence)))
+    diagnostics = Mycelia.CorrectorDiagnostics()
+    improved, improvement = Mycelia.find_optimal_sequence_path(
+        read, graph, k; graph_mode = :doublestrand, diagnostics = diagnostics)
+    Test.@test diagnostics.substitution_length_divergences[] > 0
+    Test.@test improvement == 0.0
+    Test.@test FASTX.identifier(improved) == FASTX.identifier(read)
+    Test.@test FASTX.sequence(String, improved) == read_sequence
+    Test.@test length(FASTX.sequence(String, improved)) == length(read_sequence)
+    Test.@test String(FASTX.quality(improved)) == String(FASTX.quality(read))
 end

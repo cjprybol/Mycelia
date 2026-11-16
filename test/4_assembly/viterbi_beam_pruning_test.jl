@@ -91,30 +91,24 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
     end
 
 
-    # The existing bubble (observed k-mers unique to one branch) prunes under
-    # beam_width=1 but still recovers the exact path, because the matching
-    # branch is also the local best. td-63vh asks for a case where a too-narrow
-    # beam DIVERGES, and a wider beam still matches exact.
-    # Two paths share ATG then split (TGC vs TGA). The observed second k-mer
-    # is TGT — one substitution from BOTH — so the first branch is decided by
-    # coverage, not emission. The remaining observed k-mers uniquely match the
-    # lower-coverage path. Exact (and a beam wide enough to keep both branches)
-    # recovers that path; beam_width=1 keeps only the high-coverage decoy.
+    # td-63vh: a too-narrow beam diverges, and a wider beam still matches exact.
+    # The observed read ATGTG is one overlapping k-mer chain (ATG, TGT, GTG).
+    # The 1x truth ATGAG and the 2x decoy ATGCT share ATG, then add A versus C.
+    # The observed new base T mismatches both, so coverage decides that first
+    # branch. The next new base G matches the truth (GAG) and mismatches the
+    # decoy (GCT). Exact recovers the low-coverage path; beam width 1 has
+    # already kept only the decoy.
     Test.@testset "too-narrow a beam on a branching graph diverges from exact" begin
         trap_records = [
-            FASTX.FASTA.Record("true_path", BioSequences.dna"ATGAGTA"),
-            FASTX.FASTA.Record("decoy_1", BioSequences.dna"ATGCGTA"),
-            FASTX.FASTA.Record("decoy_2", BioSequences.dna"ATGCGTA"),
+            FASTX.FASTA.Record("true_path", BioSequences.dna"ATGAG"),
+            FASTX.FASTA.Record("decoy_1", BioSequences.dna"ATGCT"),
+            FASTX.FASTA.Record("decoy_2", BioSequences.dna"ATGCT"),
         ]
         trap_graph = Mycelia.Rhizomorph.build_kmer_graph(
             trap_records, 3; dataset_id="beam_trap", mode=:singlestrand
         )
         trap_observed = [
-            Kmers.DNAKmer{3}("ATG"),
-            Kmers.DNAKmer{3}("TGT"),
-            Kmers.DNAKmer{3}("GAG"),
-            Kmers.DNAKmer{3}("AGT"),
-            Kmers.DNAKmer{3}("GTA"),
+            Kmers.DNAKmer{3}(kmer) for kmer in ("ATG", "TGT", "GTG")
         ]
         exact = Mycelia.correct_observations(trap_graph, [trap_observed])
         wide = Mycelia.correct_observations(
@@ -126,12 +120,12 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
             config = Mycelia.ViterbiCorrectionConfig(alphabet = :DNA, beam_width = 1),
         )
         exact_labels = beam_decoded_label_strings(exact)
-        Test.@test exact_labels == ["ATG", "TGA", "GAG", "AGT", "GTA"]
+        Test.@test exact_labels == ["ATG", "TGA", "GAG"]
         Test.@test beam_decoded_label_strings(wide) == exact_labels
         Test.@test isapprox(only(wide.paths).score, only(exact.paths).score; atol = 1e-9)
         Test.@test get(only(wide.paths).diagnostics, :beam_pruned, 0) == 0
         Test.@test get(only(narrow.paths).diagnostics, :beam_pruned, 0) >= 1
-        Test.@test beam_decoded_label_strings(narrow) != exact_labels
+        Test.@test beam_decoded_label_strings(narrow) == ["ATG", "TGC", "GCT"]
         Test.@test only(exact.paths).score > only(narrow.paths).score + 1e-9
     end
 

@@ -557,6 +557,36 @@ function median_solid_kmer_multiplicity(reads, k::Int; solid_min::Int = 2)::Floa
 end
 
 """
+    solid_kmer_survival(reads, k; solid_min = 2) -> Float64
+
+Reference-free estimate of `S(k)`, the k-mer SURVIVAL fraction in the registered
+level-set rule on `select_reassembly_k`: the fraction of all length-`k` CANONICAL
+window OCCURRENCES over `reads` that fall on a k-mer seen `>= solid_min` times.
+
+Why this and not `median_solid_kmer_multiplicity`: an occurrence is the unit, so the
+statistic is read-position weighted. A genomic window read error-free recurs at any
+non-trivial coverage and counts toward `S(k)`; an error window is mostly a singleton
+and counts against it. Error k-mers that happen to recur (systematic residual indels
+shared by a few reads) DO enter the numerator, but each contributes only its own few
+occurrences, so they cannot dominate it the way they dominate a median over DISTINCT
+solid k-mers (see the td-jt7r caveat on that function). On clean reads `S(k)` ≈ 1 at
+every k; on raw high-error reads it decays roughly like `(1-e)^k`.
+
+Returns `0.0` when no window of length `k` exists.
+"""
+function solid_kmer_survival(reads, k::Int; solid_min::Int = 2)::Float64
+    counts = _kmer_count_spectrum(reads, k; canonical = true)
+    total = 0
+    solid = 0
+    for c in values(counts)
+        total += c
+        c >= solid_min && (solid += c)
+    end
+    total == 0 && return 0.0
+    return solid / total
+end
+
+"""
     effective_kmer_coverage(reads, k) -> Float64
 
 DIAGNOSTIC / SECONDARY signal: the MEAN occurrence count over ALL distinct canonical
@@ -649,10 +679,21 @@ end
 # non-increasing in k by construction, so an argmax would always return the
 # smallest admissible rung and the measurement would do no work.
 #
-# This function is retained as the control point because it is wired, NOT
-# because its criterion is sound. Replacing the criterion is downstream work.
+# UPDATE (2026-11-16): the default is the legacy median-solid criterion again.
+# `:survival` (S(k) = solid_kmer_survival, tau = 0.5) stays available as an
+# opt-in. Tau 0.5 is unverified at real scale, and on the E2E toy it trades
+# seed-3 illumina identity from 1.0 down to 0.9667. Pending Cameron's pick.
 """
-    select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
+    select_reassembly_k(
+        reads,
+        ceiling_k;
+        floor_k = 7,
+        connectivity_floor = 6.0,
+        genome_size_floor = true,
+        size_ref_k = 17,
+        criterion = :median_solid,
+        survival_tau = 0.5,
+    ) -> Int
 
 Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`,
 using a COVERAGE-AWARE CONNECTIVITY criterion. Iterating candidates DESCENDING from
@@ -690,8 +731,12 @@ function select_reassembly_k(
         floor_k::Int = 7,
         connectivity_floor::Float64 = 6.0,
         genome_size_floor::Bool = true,
-        size_ref_k::Int = 17
+        size_ref_k::Int = 17,
+        criterion::Symbol = :median_solid,
+        survival_tau::Float64 = 0.5
 )::Int
+    criterion in (:survival, :median_solid) ||
+        throw(ArgumentError("criterion must be :survival or :median_solid, got $(criterion)"))
     effective_floor = min(floor_k, ceiling_k)
     # Genome-size-aware uniqueness floor (td-jt7r): never let the drop-down fall below
     # the k whose k-mer space keeps genomic k-mers unique, so a multi-kb genome cannot
@@ -713,10 +758,15 @@ function select_reassembly_k(
     candidates = vcat(lower_primes, ceiling_k)   # ascending; ceiling is the largest
     # Descend from the ceiling: the LARGEST candidate whose solid backbone still meets
     # the connectivity floor is the most specific k that keeps the graph joined.
+    # Default criterion is :median_solid (legacy connectivity floor). :survival is
+    # the opt-in level set k* = max { k : S(k) >= survival_tau }, with S(k) =
+    # solid_kmer_survival. survival_tau = 0.5 is unverified at real scale.
+    # connectivity_floor is used only by :median_solid.
     for k in Iterators.reverse(candidates)
-        if median_solid_kmer_multiplicity(reads, k) >= connectivity_floor
-            return k
-        end
+        keep = criterion === :survival ?
+               solid_kmer_survival(reads, k) >= survival_tau :
+               median_solid_kmer_multiplicity(reads, k) >= connectivity_floor
+        keep && return k
     end
     # Nothing qualifies (very low coverage / very high error): fall back to the
     # SMALLEST candidate, i.e. the most-connected k still in range. Three

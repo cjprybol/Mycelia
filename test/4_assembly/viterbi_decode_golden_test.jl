@@ -89,7 +89,12 @@ Test.@testset "Viterbi decode golden master (opt2 fused-transitions lock)" begin
                expected_cumulative_probabilities
     Test.@test path.total_probability === 0.6666666666666666
 
-    Test.@test result.score === -0.5863711534711905
+    # Score re-captured for the decoder repair (each read base emitted once; k-mer
+    # transitions divided by outgoing + _INDEL_TRANSITION_BACKGROUND). Path, step
+    # probabilities and diagnostics are unchanged. By hand: 8 matched bases at the
+    # 0.01 fallback rate, 8 * log(0.99), plus log(3/11) + log(2/11) + 3 * log(2/10).
+    # Pre-repair (whole-k-mer emission, pure normalization): -0.5863711534711905.
+    Test.@test result.score === -7.912747500498998
 
     expected_diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
@@ -234,7 +239,10 @@ Test.@testset "Viterbi decode golden master (opt2 diagnostics-hoist, pruning fir
                expected_cumulative_probabilities
     Test.@test path.total_probability === 0.03333857604967649
 
-    Test.@test result.score === -4.406073697889444
+    # Score re-captured on the box for the decoder repair (new-base emission +
+    # k-mer transition background); path, pruning counts and diagnostics are
+    # unchanged. Pre-repair: -4.406073697889444.
+    Test.@test result.score === -17.070067355912773
 
     expected_diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
