@@ -116,6 +116,48 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         Test.@test e_lo > e_hi
     end
 
+    Test.@testset "reassembly_k_policy=:fixed holds the requested k (td-yddpr.5)" begin
+        R = Mycelia.Rhizomorph
+        # Low-coverage, high-error nanopore reads: the regime where the default
+        # connectivity criterion drops k below the requested ceiling. A fixed-k
+        # benchmark comparator must NOT be silently lowered there.
+        thin = _rk_n10[1:max(1, length(_rk_n10) ÷ 3)]
+        recs = [FASTX.FASTQ.Record("n$i", s, repeat("5", length(s)))
+                for (i, s) in enumerate(thin)]
+        common = (; k = 21, corrector = :iterative, strategy = :scalable,
+            sequencing_tech = :nanopore, verbose = false)
+        asm_fixed = R.assemble_genome(recs; common..., reassembly_k_policy = :fixed)
+        asm_conn = R.assemble_genome(recs; common...)
+        Test.@test asm_fixed.assembly_stats["reassembly_k"] == 21
+        Test.@test asm_fixed.assembly_stats["reassembly_k_ceiling"] == 21
+        Test.@test asm_fixed.assembly_stats["reassembly_k_policy"] == "fixed"
+        # Default unchanged: still the connectivity criterion, stamped as such, and
+        # on this fixture it really does lower k (so the :fixed assertion above is
+        # not tautological).
+        Test.@test asm_conn.assembly_stats["reassembly_k_policy"] == "connectivity"
+        Test.@test asm_conn.assembly_stats["reassembly_k"] < 21
+
+        bad = try
+            R.AssemblyConfig(; k = 21, corrector = :iterative, reassembly_k_policy = :smallest)
+            nothing
+        catch e
+            e
+        end
+        Test.@test bad isa ErrorException
+        Test.@test occursin("reassembly_k_policy must be :connectivity or :fixed",
+            sprint(showerror, bad))
+
+        nok = try
+            R.AssemblyConfig(; corrector = :iterative, reassembly_k_policy = :fixed)
+            nothing
+        catch e
+            e
+        end
+        Test.@test nok isa ErrorException
+        Test.@test occursin("requires an explicit k", sprint(showerror, nok))
+        Test.@test R.AssemblyConfig(; k = 21).reassembly_k_policy == :connectivity
+    end
+
     Test.@testset "genome-size-aware uniqueness floor (td-jt7r)" begin
         R = Mycelia.Rhizomorph
         # A multi-kb genome's distinct k-mer set exceeds the 7-mer space (4^7=16384),
