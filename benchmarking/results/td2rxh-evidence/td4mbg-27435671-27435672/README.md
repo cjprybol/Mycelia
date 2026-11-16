@@ -120,6 +120,20 @@ Descriptive and not pre-registered, from two seeds only:
 - `replicate-27438474/`: the BASE replicate's shards, logs, `sacct.txt`, the comparison script and its output.
 - `Manifest.toml`, `sacct.txt`, `shard_line_counts.txt`.
 
+`Manifest.toml` and the SLURM logs match `.gitignore` patterns and were force-added (`git add -f`).
+A later cleanup that re-applies `.gitignore` would drop them, so keep them when tidying this directory.
+
+Reproduce the replicate comparison from the repository root (no Julia needed):
+
+```bash
+python3 benchmarking/results/td2rxh-evidence/td4mbg-27435671-27435672/replicate-27438474/compare_replicate.py \
+  benchmarking/results/td2rxh-evidence/td4mbg-27435671-27435672/shards/base \
+  benchmarking/results/td2rxh-evidence/td4mbg-27435671-27435672/replicate-27438474/shards \
+  2 10
+```
+
+Its output should equal `replicate-27438474/comparison.txt`.
+
 Reproduce the analysis from the repository root on a compute node:
 
 ```bash

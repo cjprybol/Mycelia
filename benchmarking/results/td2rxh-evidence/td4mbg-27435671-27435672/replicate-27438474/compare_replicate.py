@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Amendment-6 diagnostic: BASE replicate vs original BASE, same G0 field rule.
 
-Usage: compare_rep.py <original BASE shard dir> <replicate shard dir> <seed>...
+Usage: compare_replicate.py <original BASE shard dir> <replicate shard dir> <seed>...
+Both directories hold seed<N>.csv files (shards/base/ and replicate-27438474/shards/).
 Compares every column except label/wall_seconds/wall_seconds_per_read as exact
 strings, per (cell, seed, arm). Prints a summary and every differing field.
 """
@@ -23,7 +24,7 @@ def main() -> None:
     labels = set()
     for seed in sys.argv[3:]:
         orig = rows(orig_dir / f"seed{seed}.csv")
-        rep = rows(rep_dir / f"rep_seed{seed}.csv")
+        rep = rows(rep_dir / f"seed{seed}.csv")
         labels |= {r["label"] for r in orig.values()} | {r["label"] for r in rep.values()}
         if set(orig) != set(rep):
             raise SystemExit(f"seed {seed}: row keys differ")
