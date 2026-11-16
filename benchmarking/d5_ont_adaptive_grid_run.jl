@@ -97,30 +97,54 @@ One grid, one Mycelia SHA. The first writer records the SHA; every later task
 (Phase A shards, merge, Phase B) must match it unless explicitly overridden.
 This keeps a phased run a single grid execution (PLAN-2026-03-28 step 2).
 """
-function check_run_manifest!(root::AbstractString, sha::AbstractString;
-        allow_mismatch::Bool, toy::Bool)
+"""The registered simulation pins, as stored in (and compared against) the manifest."""
+function manifest_pins()
+    return Dict{String, Any}(
+        "badread_identity_params" => Dict(string(k) => v
+        for (k, v) in D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS),
+        "badread_error_model" => D5OntAdaptiveGridDriver.D5_BADREAD_ERROR_MODEL,
+        "badread_qscore_model" => D5OntAdaptiveGridDriver.D5_BADREAD_QSCORE_MODEL,
+        "badread_length_dist" => D5OntAdaptiveGridDriver.D5_BADREAD_LENGTH_DIST,
+        "illumina_params" => Dict(String(k) => v
+        for (k, v) in pairs(D5OntAdaptiveGridDriver.D5_ILLUMINA_PARAMS)),
+        "strategy" => String(D5OntAdaptiveGridDriver.D5_STRATEGY))
+end
+
+"""
+One grid, one code version. The first writer records the Mycelia SHA and the
+simulation pins; every later task (Phase A shards, merge, Phase B) must match.
+An unreadable SHA or a dirty tree cannot prove that, so both refuse too. This
+keeps a phased run a single grid execution (PLAN-2026-03-28 step 2).
+`allow_mismatch` (--allow-sha-mismatch) downgrades every refusal to a warning.
+"""
+function check_run_manifest!(root::AbstractString, git; allow_mismatch::Bool, toy::Bool)
+    refuse(msg) = allow_mismatch ? (@warn msg) : error(msg)
+    git.sha == "unknown" &&
+        refuse("cannot read the Mycelia git SHA, so this task cannot be tied to the " *
+               "grid's code version. Fix git access or pass --allow-sha-mismatch.")
+    git.dirty === true &&
+        refuse("the Mycelia checkout has uncommitted changes to tracked files; the SHA " *
+               "would not describe the code that ran. Commit or pass --allow-sha-mismatch.")
     path = joinpath(root, "run_manifest.json")
     if !isfile(path)
         D5OntAdaptiveGridDriver.save_json_atomically(path,
-            Dict("mycelia_git_sha" => sha, "toy" => toy,
-                "created" => string(Dates.now()),
-                "badread_identity_params" => D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS,
-                "badread_error_model" => D5OntAdaptiveGridDriver.D5_BADREAD_ERROR_MODEL,
-                "badread_qscore_model" => D5OntAdaptiveGridDriver.D5_BADREAD_QSCORE_MODEL,
-                "illumina_params" => Dict(String(k) => v
-                for (k, v) in pairs(D5OntAdaptiveGridDriver.D5_ILLUMINA_PARAMS)),
-                "strategy" => String(D5OntAdaptiveGridDriver.D5_STRATEGY)))
+            merge(manifest_pins(),
+                Dict{String, Any}("mycelia_git_sha" => git.sha, "toy" => toy,
+                    "created" => string(Dates.now()))))
     end
     manifest = JSON.parsefile(path)
     manifest["toy"] == toy ||
         error("output dir $(root) belongs to a $(manifest["toy"] ? "toy" : "full") run; " *
               "refusing to mix toy and full cells in one tree")
     recorded = manifest["mycelia_git_sha"]
-    if recorded != sha
-        msg = "run_manifest.json records Mycelia $(recorded) but this checkout is $(sha). " *
-              "A grid is one code version; pass --allow-sha-mismatch only if the " *
-              "difference cannot touch assembly output, and say so in the results."
-        allow_mismatch ? (@warn msg) : error(msg)
+    recorded == git.sha ||
+        refuse("run_manifest.json records Mycelia $(recorded) but this checkout is " *
+               "$(git.sha). A grid is one code version; pass --allow-sha-mismatch only " *
+               "if the difference cannot touch assembly output, and say so in the results.")
+    for (key, value) in manifest_pins()
+        manifest[key] == value ||
+            refuse("run_manifest.json pins $(key) = $(manifest[key]) but this code has " *
+                   "$(value); the simulation parameters changed under the grid.")
     end
     return manifest
 end
@@ -136,8 +160,12 @@ function prepare_reference(organism::Symbol, refs_dir::AbstractString)
         error("reference download failed for $(organism) ($(info.accession)): $(path)")
     seqs = read_sequences(path)
     genome_size = sum(length, seqs)
-    abs(genome_size - info.expected_bp) <= 0.2 * info.expected_bp ||
-        error("reference $(info.accession) is $(genome_size) bp; expected ~$(info.expected_bp)")
+    # EXACT length: a tolerance would accept a partially written download, which
+    # would then feed simulation, survival and QUAST at once. expected_bp is the
+    # RefSeq record length.
+    genome_size == info.expected_bp ||
+        error("reference $(info.accession) at $(path) is $(genome_size) bp; the RefSeq " *
+              "record is $(info.expected_bp) bp. Delete the file and re-stage it.")
     return (; path, seqs, genome_size, accession = info.accession)
 end
 
@@ -199,6 +227,9 @@ function prepare_read_set(rs, ref, root::AbstractString)
     if isfile(marker)
         meta = JSON.parsefile(marker)
         records = reduce(vcat, read_records.(meta["reads_paths"]))
+        length(records) == meta["n_reads"] ||
+            error("read set $(rs_id) has $(length(records)) reads on disk but readset.json " *
+                  "recorded $(meta["n_reads"]); delete $(rs_dir) to regenerate it")
         return (; meta, records)
     end
     isdir(rs_dir) && rm(rs_dir; recursive = true)
@@ -211,15 +242,11 @@ function prepare_read_set(rs, ref, root::AbstractString)
         "seed" => rs.seed, "accession" => ref.accession,
         "genome_size" => ref.genome_size)
     if rs.technology === :ont
-        argv = D5OntAdaptiveGridDriver.badread_argv(rs, ref.path)
+        # One kwargs source for the simulator AND the recorded argv.
+        badread = D5OntAdaptiveGridDriver.badread_kwargs(rs, ref.path)
+        argv = Mycelia._badread_nanopore_args(; badread...)
         tmp = joinpath(work, "reads.fq.gz")
-        Mycelia.simulate_nanopore_reads(; fasta = ref.path,
-            quantity = "$(rs.coverage)x",
-            error_model = D5OntAdaptiveGridDriver.D5_BADREAD_ERROR_MODEL,
-            qscore_model = D5OntAdaptiveGridDriver.D5_BADREAD_QSCORE_MODEL,
-            identity = D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS[rs.identity],
-            length_dist = D5OntAdaptiveGridDriver.D5_BADREAD_LENGTH_DIST,
-            seed = rs.seed, outfile = tmp, quiet = true)
+        Mycelia.simulate_nanopore_reads(; badread..., outfile = tmp, quiet = true)
         final = joinpath(rs_dir, "reads.fq.gz")
         mv(tmp, final; force = true)
         meta["reads_paths"] = [final]
@@ -251,6 +278,7 @@ function prepare_read_set(rs, ref, root::AbstractString)
                 "identity_measured_median" => nothing,
                 "identity_method" => "not measured (Illumina control)"))
     end
+    meta["tool_versions"] = tool_versions()
     records = reduce(vcat, read_records.(meta["reads_paths"]))
     meta["n_reads"] = length(records)
     meta["read_bases"] = sum(r -> length(FASTX.sequence(r)), records; init = 0)
@@ -321,12 +349,14 @@ function assemble_cell(cell, k::Int, records, ref, cell_dir, context; phase::Sym
     stats = D5OntAdaptiveGridDriver.contig_stats(result.contigs, min_contig)
     quast_dir = joinpath(cell_dir, "quast")
     report = joinpath(quast_dir, "report.tsv")
+    quast_error = missing
     if stats.n_ge_min > 0 && filesize(contigs_path) > 0
         try
             Mycelia.run_quast([contigs_path]; outdir = quast_dir, reference = ref.path,
                 min_contig, threads = QUAST_THREADS)
         catch e
             @warn "QUAST failed" cell_dir exception = (e, catch_backtrace())
+            quast_error = first(sprint(showerror, e), 2000)
         end
     end
     quast_ran = isfile(report)
@@ -337,8 +367,22 @@ function assemble_cell(cell, k::Int, records, ref, cell_dir, context; phase::Sym
     status = nga50_status == "quast_failed" ? D5OntAdaptiveGridDriver.STATUS_QUAST_FAILED :
              D5OntAdaptiveGridDriver.STATUS_OK
 
-    if iterative
-        corrected_survival_diagnostic(asm_dir, ref, cell_dir)
+    # The diagnostic must never cost the cell its assembly: a failure here is
+    # recorded in its own column, and the cell keeps its QUAST result.
+    corrected_status = if iterative
+        try
+            corrected_survival_diagnostic(asm_dir, ref, cell_dir)
+        catch e
+            @warn "corrected-read survival diagnostic failed" cell_dir exception = (e,
+                catch_backtrace())
+            D5OntAdaptiveGridDriver.save_json_atomically(
+                joinpath(cell_dir, "corrected_survival.json"),
+                Dict("status" => "failed", "role" => "diagnostic",
+                    "error" => first(sprint(showerror, e), 2000)))
+            "failed"
+        end
+    else
+        missing
     end
 
     return D5OntAdaptiveGridDriver.cell_row(cell, context; phase, status,
@@ -346,6 +390,7 @@ function assemble_cell(cell, k::Int, records, ref, cell_dir, context; phase::Sym
         reassembly_k_policy = iterative ? "fixed" : missing,
         n_contigs = stats.n, contigs_ge_min = stats.n_ge_min,
         quast_min_contig = min_contig, metrics, nga50_status,
+        corrected_survival_status = corrected_status, error_message = quast_error,
         wall_seconds = round(measured.wall_seconds; digits = 3),
         peak_rss_bytes = measured.peak_rss_bytes, peak_rss_method = measured.method,
         row_kwargs...)
@@ -353,16 +398,18 @@ end
 
 """
 DIAGNOSTIC: survival on this cell's own corrected reads (user decision
-2026-11-16). Never feeds k*. Absent corrected FASTQ is recorded, not fatal.
+2026-11-16). Never feeds k*. Returns the status recorded in the cell row
+(`"measured"` or `"unavailable"`); an absent corrected FASTQ breaks the
+`output_dir` contract, so it is warned for EVERY cell, not once.
 """
 function corrected_survival_diagnostic(asm_dir, ref, cell_dir)
     corrected = joinpath(asm_dir, "corrected.fastq")
     out = joinpath(cell_dir, "corrected_survival.json")
     if !isfile(corrected)
-        @warn "corrected FASTQ not found; corrected-read survival unavailable" corrected maxlog = 1
+        @warn "corrected FASTQ not found; corrected-read survival unavailable" corrected
         D5OntAdaptiveGridDriver.save_json_atomically(out,
             Dict("status" => "unavailable", "role" => "diagnostic"))
-        return nothing
+        return "unavailable"
     end
     seqs = read_sequences(corrected)
     rows = D5OntAdaptiveGridDriver.survival_ladder(seqs, ref.seqs)
@@ -370,15 +417,22 @@ function corrected_survival_diagnostic(asm_dir, ref, cell_dir)
         Dict("status" => "measured", "role" => "diagnostic", "reads" => "corrected",
             "strand" => "canonical", "rungs" => survival_json(rows)))
     rm(corrected; force = true)
-    return nothing
+    return "measured"
 end
 
 function checkpoint_path(root, cell)
     return joinpath(root, "cells", D5OntAdaptiveGridDriver.cell_id(cell), "cell_result.json")
 end
 
-"""Skip a completed cell; retry error / quast_failed rows; record failures as rows."""
-function run_or_resume(f, root, cell, context; phase::Symbol)
+"""
+Skip a completed cell; retry error / quast_failed rows; record failures as rows.
+
+`stale(prior)` returns `nothing` when a cached row is valid for this run, or a
+message saying why it is not (Phase B: computed under another tau). A stale row
+is an error unless `replan`, which recomputes it. Returns the row's status.
+"""
+function run_or_resume(f, root, cell, context; phase::Symbol,
+        stale = prior -> nothing, replan::Bool = false)
     ckpt = checkpoint_path(root, cell)
     if isfile(ckpt)
         prior = try
@@ -389,8 +443,14 @@ function run_or_resume(f, root, cell, context; phase::Symbol)
         end
         if prior !== nothing &&
            !(prior["status"] in D5OntAdaptiveGridDriver.RETRYABLE_STATUSES)
-            println("  cached  $(D5OntAdaptiveGridDriver.cell_id(cell)): $(prior["status"])")
-            return prior
+            why = stale(prior)
+            if why === nothing
+                println("  cached  $(D5OntAdaptiveGridDriver.cell_id(cell)): $(prior["status"])")
+                return prior["status"]
+            end
+            replan ||
+                error("$(why) Pass --replan to recompute it, or use a fresh output root.")
+            println("  replan  $(D5OntAdaptiveGridDriver.cell_id(cell)): $(why)")
         end
     end
     cell_dir = dirname(ckpt)
@@ -407,8 +467,15 @@ function run_or_resume(f, root, cell, context; phase::Symbol)
     D5OntAdaptiveGridDriver.save_json_atomically(ckpt, D5OntAdaptiveGridDriver.row_to_json(row))
     println("  $(row.status)  $(row.cell_id)  nga50_status=$(row.nga50_status) " *
             "NGA50=$(row.NGA50) GF=$(row.genome_fraction)")
-    return row
+    return row.status
 end
+
+"""Statuses that mean a resubmit is needed; a phase with any of these exits non-zero."""
+function needs_retry(statuses)
+    count(s -> s in D5OntAdaptiveGridDriver.RETRYABLE_STATUSES, statuses)
+end
+
+git_state(base) = (; sha = base.mycelia_git_sha, dirty = base.git_dirty)
 
 # === Phases ===
 
@@ -441,26 +508,50 @@ function run_phase_a(cli, root)
     cli.read_set_index === nothing &&
         error("--phase A requires --read-set-index (one read set per array task)")
     base = run_context_base()
-    check_run_manifest!(root, base.mycelia_git_sha;
+    check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
+    statuses = String[]
     for rs in read_sets_for(cli)
         println("=== read set $(D5OntAdaptiveGridDriver.read_set_id(rs)) ===")
         ref = prepare_reference(rs.organism, joinpath(root, "refs"))
         prepared = prepare_read_set(rs, ref, root)
         context = cell_context(prepared.meta, base)
         for cell in phase_cells(rs, :A, cli.toy)
-            run_or_resume(root, cell, context; phase = :A) do cell_dir
-                assemble_cell(cell, Int(cell.k_policy), prepared.records, ref, cell_dir,
-                    context; phase = :A)
-            end
+            push!(statuses,
+                run_or_resume(root, cell, context; phase = :A) do cell_dir
+                    assemble_cell(cell, Int(cell.k_policy), prepared.records, ref,
+                        cell_dir, context; phase = :A)
+                end)
         end
     end
+    return statuses
+end
+
+"""
+Phase B row metadata. tau and tau_hat are recorded on every row (a Phase B row
+is a function of both), together with the collision floor and the S_hat reason.
+"""
+function phase_b_kwargs(plan, cli)
+    hat = plan.k_star_hat === D5OntAdaptiveGridDriver.NO_FEASIBLE_K ?
+          String(plan.k_star_hat) : plan.k_star_hat
+    return (; k_star_reason = plan.reason, k_star_hat = hat,
+        k_star_hat_reason = plan.reason_hat, tau = cli.tau, tau_hat = cli.tau_hat,
+        k_floor = plan.floor_k)
+end
+
+function phase_b_stale(cli)
+    return prior -> D5OntAdaptiveGridDriver.phase_b_checkpoint_matches(prior, cli.tau,
+        cli.tau_hat) ? nothing :
+                    "Phase B checkpoint $(prior["cell_id"]) was computed with " *
+                    "tau=$(get(prior, "tau", missing)), tau_hat=$(get(prior, "tau_hat", missing)); " *
+                    "this run has tau=$(cli.tau), tau_hat=$(cli.tau_hat)."
 end
 
 function run_phase_b(cli, root)
     base = run_context_base()
-    check_run_manifest!(root, base.mycelia_git_sha;
+    check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
+    statuses = String[]
     for rs in read_sets_for(cli)
         rs_id = D5OntAdaptiveGridDriver.read_set_id(rs)
         marker = joinpath(root, "readsets", rs_id, "readset.json")
@@ -473,33 +564,43 @@ function run_phase_b(cli, root)
         for cell in phase_cells(rs, :B, cli.toy)
             plan = D5OntAdaptiveGridDriver.phase_b_plan(cell, survival["rungs"], cli.tau,
                 cli.tau_hat; genome_size = meta["genome_size"])
-            plan_kwargs = (; k_star_reason = plan.reason,
-                k_star_hat = plan.k_star_hat === D5OntAdaptiveGridDriver.NO_FEASIBLE_K ?
-                             String(plan.k_star_hat) : plan.k_star_hat)
-            run_or_resume(root, cell, context; phase = :B) do cell_dir
-                if plan.action === :no_feasible_k
-                    D5OntAdaptiveGridDriver.cell_row(cell, context; phase = :B,
-                        status = D5OntAdaptiveGridDriver.STATUS_NO_FEASIBLE_K,
-                        k_selected = String(D5OntAdaptiveGridDriver.NO_FEASIBLE_K),
-                        plan_kwargs...)
-                elseif plan.action === :infeasible
-                    D5OntAdaptiveGridDriver.infeasible_row(cell, context; phase = :B,
-                        k_selected = plan.k_star, plan_kwargs...)
-                elseif plan.action === :reuse
-                    reuse_row(root, cell, plan, context, plan_kwargs)
-                else
-                    records === nothing &&
-                        (records = reduce(vcat, read_records.(meta["reads_paths"])))
-                    assemble_cell(cell, plan.k_star, records, ref, cell_dir, context;
-                        phase = :B, plan_kwargs...)
-                end
+            row_kwargs = phase_b_kwargs(plan, cli)
+            action = plan.action
+            # The toy runs only a few comparator rungs, so its Phase A source for a
+            # reuse is usually absent. Assemble at the SAME k* instead: that is a
+            # recomputation of the identical cell, not a fallback k. The full grid
+            # runs every comparator rung, so a missing source there stays an error.
+            if action === :reuse && cli.toy &&
+               !isfile(joinpath(root, "cells", plan.reuse_cell_id, "cell_result.json"))
+                action = :assemble
             end
+            push!(statuses,
+                run_or_resume(root, cell, context; phase = :B,
+                    stale = phase_b_stale(cli), replan = cli.replan) do cell_dir
+                    if action === :no_feasible_k
+                        D5OntAdaptiveGridDriver.cell_row(cell, context; phase = :B,
+                            status = D5OntAdaptiveGridDriver.STATUS_NO_FEASIBLE_K,
+                            k_selected = String(D5OntAdaptiveGridDriver.NO_FEASIBLE_K),
+                            row_kwargs...)
+                    elseif action === :infeasible
+                        D5OntAdaptiveGridDriver.infeasible_row(cell, context; phase = :B,
+                            k_selected = plan.k_star, row_kwargs...)
+                    elseif action === :reuse
+                        reuse_row(root, cell, plan, context, row_kwargs)
+                    else
+                        records === nothing &&
+                            (records = reduce(vcat, read_records.(meta["reads_paths"])))
+                        assemble_cell(cell, plan.k_star, records, ref, cell_dir, context;
+                            phase = :B, row_kwargs...)
+                    end
+                end)
         end
     end
+    return statuses
 end
 
 """Phase B row copied from the Phase A comparator assembly at k*, recorded as reuse."""
-function reuse_row(root, cell, plan, context, plan_kwargs)
+function reuse_row(root, cell, plan, context, row_kwargs)
     source = joinpath(root, "cells", plan.reuse_cell_id, "cell_result.json")
     isfile(source) ||
         error("Phase B reuse needs Phase A cell $(plan.reuse_cell_id), which has no checkpoint")
@@ -513,11 +614,11 @@ function reuse_row(root, cell, plan, context, plan_kwargs)
         reassembly_k = src["reassembly_k"], reassembly_k_policy = src["reassembly_k_policy"],
         reused_from_cell_id = plan.reuse_cell_id, n_contigs = src["n_contigs"],
         contigs_ge_min = src["contigs_ge_min"], quast_min_contig = src["quast_min_contig"],
-        metrics, nga50_status = src["nga50_status"], wall_seconds = src["wall_seconds"],
-        peak_rss_bytes = src["peak_rss_bytes"], peak_rss_method = src["peak_rss_method"],
-        plan_kwargs...)
+        metrics, nga50_status = src["nga50_status"],
+        corrected_survival_status = get(src, "corrected_survival_status", missing),
+        wall_seconds = src["wall_seconds"], peak_rss_bytes = src["peak_rss_bytes"],
+        peak_rss_method = src["peak_rss_method"], row_kwargs...)
 end
-
 # === Merge ===
 
 function publish_tsv(path, df)
@@ -550,7 +651,7 @@ end
 
 function run_merge(cli, root)
     base = run_context_base()
-    check_run_manifest!(root, base.mycelia_git_sha;
+    check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     cells_dir = joinpath(root, "cells")
     rows = Dict{String, Any}[]
@@ -565,11 +666,62 @@ function run_merge(cli, root)
             @warn "skipping unreadable checkpoint" entry exception = e
         end
     end
-    isempty(skipped) ||
-        @warn "merge omits $(length(skipped)) unreadable checkpoint(s)" skipped
+    # Every registered cell appears in the table: a cell with no checkpoint gets
+    # an explicit `absent` row instead of silently shrinking the grid. Phase B is
+    # expected only once any Phase B checkpoint exists (it waits on tau).
+    has_b = any(r -> get(r, "phase", missing) == "B", rows)
+    present = Set(r["cell_id"] for r in rows)
+    absent = [c
+              for c in expected_cells(cli.toy, has_b)
+              if !(D5OntAdaptiveGridDriver.cell_id(c) in present)]
+    for c in absent
+        nt = D5OntAdaptiveGridDriver.absent_row(c; phase = D5OntAdaptiveGridDriver.cell_phase(c))
+        push!(rows, Dict{String, Any}(String(k) => v for (k, v) in pairs(nt)))
+    end
     cells = frame(rows, D5OntAdaptiveGridDriver.cell_row_columns())
     publish_tsv(joinpath(root, "d5_cells.tsv"), cells)
 
+    survival_df = survival_table(root)
+    publish_tsv(joinpath(root, "d5_survival.tsv"), survival_df)
+    publish_tsv(joinpath(root, "illumina_none_optimum.tsv"), illumina_optimum(cells))
+    publish_tsv(joinpath(root, "replicate_evaluability.tsv"), replicate_evaluability(cells))
+
+    n_retry = needs_retry(skipmissing(cells.status))
+    D5OntAdaptiveGridDriver.save_json_atomically(joinpath(root, "merge_provenance.json"),
+        Dict("generated" => string(Dates.now()), "mycelia_git_sha" => base.mycelia_git_sha,
+            "git_dirty" => base.git_dirty, "host" => base.host,
+            "tool_versions" => tool_versions(), "n_rows" => DataFrames.nrow(cells),
+            "n_expected" => length(expected_cells(cli.toy, has_b)),
+            "n_absent" => length(absent), "n_retryable" => n_retry,
+            "unreadable_checkpoints" => skipped,
+            "n_survival_rows" => DataFrames.nrow(survival_df),
+            "invocation" => "julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl " *
+                            join(ARGS, " ")))
+    n_ok = count(isequal("ok"), cells.status)
+    println("merged $(DataFrames.nrow(cells)) rows ($(n_ok) ok, $(length(absent)) absent, " *
+            "$(n_retry) retryable, $(length(skipped)) unreadable), " *
+            "$(DataFrames.nrow(survival_df)) survival rows into $(root)")
+    incomplete = length(absent) + length(skipped) + n_retry
+    if incomplete > 0 && !cli.allow_incomplete
+        @error "merge published an INCOMPLETE grid ($(incomplete) cells absent, " *
+               "unreadable or retryable); tables carry them as rows. Resubmit the " *
+               "affected array indices, or pass --allow-incomplete for a partial view."
+        return incomplete
+    end
+    return 0
+end
+
+"""Every registered cell of this run (toy or full), Phase A plus optionally Phase B."""
+function expected_cells(toy::Bool, include_phase_b::Bool)
+    cells = NamedTuple[]
+    for rs in selected_read_sets(toy)
+        append!(cells, phase_cells(rs, :A, toy))
+        include_phase_b && append!(cells, phase_cells(rs, :B, toy))
+    end
+    return cells
+end
+
+function survival_table(root)
     survival_rows = Dict{String, Any}[]
     readsets_dir = joinpath(root, "readsets")
     for entry in sort(isdir(readsets_dir) ? readdir(readsets_dir) : String[])
@@ -580,7 +732,8 @@ function run_merge(cli, root)
         for r in survival["rungs"]
             push!(survival_rows,
                 Dict{String, Any}(
-                    "read_set_id" => entry, "technology" => meta["technology"],
+                    "read_set_id" => entry, "reads" => "raw",
+                    "technology" => meta["technology"],
                     "identity_target" => meta["identity_target"],
                     "identity_measured_mean" => meta["identity_measured_mean"],
                     "coverage" => meta["coverage"], "organism" => meta["organism"],
@@ -593,94 +746,99 @@ function run_merge(cli, root)
                     "error_rate_estimate_diagnostic" => meta["error_rate_estimate_diagnostic"]))
         end
     end
-    survival_columns = ["read_set_id", "technology", "identity_target",
+    columns = ["read_set_id", "reads", "technology", "identity_target",
         "identity_measured_mean", "coverage", "organism", "seed", "k", "S",
         "n_ref_positions", "n_ref_positions_observed", "n_distinct_read_kmers", "S_hat",
         "s_hat_v", "s_hat_m", "s_hat_status", "error_rate_estimate_diagnostic"]
-    survival_df = frame(
+    return frame(
         [Dict(k => (v === nothing ? missing : v) for (k, v) in d)
-         for d in survival_rows],
-        survival_columns)
-    publish_tsv(joinpath(root, "d5_survival.tsv"), survival_df)
-
-    write_illumina_optimum(root, cells)
-    write_replicate_evaluability(root, cells)
-    write_merge_provenance(root, cells, survival_df, base)
-    n_ok = isempty(rows) ? 0 : count(isequal("ok"), cells.status)
-    println("merged $(length(rows)) cells ($(n_ok) ok), " *
-            "$(DataFrames.nrow(survival_df)) survival rows into $(root)")
+         for d in survival_rows], columns)
 end
 
 """
 Illumina :none stratum, Phase A: median NGA50 per rung, so a human can read off
-each organism's measured optimum when setting tau. This step computes NO tau.
-Medians are over MEASURED NGA50 only; `n_measured` shows how many contributed.
+each organism's measured optimum when setting tau. Computes NO tau.
+
+Every registered cell counts, whatever its status, so `n_measured` is out of
+the registered seeds (x coverages for the pooled scope). Medians are over
+MEASURED NGA50 only, and `is_optimum` is eligible only for rungs where every
+registered replicate was measured: a rung that won on one surviving seed is
+not an optimum.
 """
-function write_illumina_optimum(root, cells)
+function illumina_optimum(cells;
+        n_seeds::Int = length(
+            D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_SEEDS),
+        n_coverages::Int = length(D5OntAdaptiveGridDriver.D5_ILLUMINA_COVERAGES))
     calib = String(D5OntAdaptiveGridDriver.D5_ILLUMINA_CALIBRATION_CORRECTOR)
-    df = isempty(cells) ? cells :
-         cells[(isequal.(cells.technology, "illumina")) .& (isequal.(cells.corrector, calib)) .& (isequal.(cells.phase, "A")) .& (isequal.(cells.status, "ok")), :]
+    df = DataFrames.nrow(cells) == 0 ? cells :
+         cells[
+    isequal.(
+        cells.technology, "illumina") .& isequal.(cells.corrector, calib) .& isequal.(cells.phase, "A"), :]
     out = NamedTuple[]
     for scope in (:per_coverage, :all_coverages)
+        DataFrames.nrow(df) == 0 && break
         group_cols = scope === :per_coverage ? [:organism, :coverage, :k_requested] :
-               [:organism, :k_requested]
-        isempty(df) && break
+                     [:organism, :k_requested]
+        n_expected = scope === :per_coverage ? n_seeds : n_seeds * n_coverages
         for g in DataFrames.groupby(df, group_cols)
             measured = g[isequal.(g.nga50_status, "measured"), :]
+            n_measured = DataFrames.nrow(measured)
             push!(out,
                 (; scope = String(scope), organism = g.organism[1],
                     coverage = scope === :per_coverage ? string(g.coverage[1]) : "all",
-                    k = g.k_requested[1], n = DataFrames.nrow(g),
-                    n_measured = DataFrames.nrow(measured),
+                    k = g.k_requested[1], n_expected, n_rows = DataFrames.nrow(g),
+                    n_measured, all_measured = n_measured == n_expected,
                     median_nga50 = median_or_missing(measured.NGA50),
-                    median_genome_fraction = median_or_missing(g.genome_fraction)))
+                    median_genome_fraction = median_or_missing(
+                        g[isequal.(g.status, "ok"), :].genome_fraction)))
         end
     end
     table = DataFrames.DataFrame(out)
-    if !isempty(table)
-        table.is_optimum = falses(DataFrames.nrow(table))
-        for g in DataFrames.groupby(table, [:scope, :organism, :coverage]; sort = false)
-            vals = coalesce.(g.median_nga50, -Inf)
-            maximum(vals) == -Inf && continue
-            g.is_optimum .= vals .== maximum(vals)
-        end
+    DataFrames.nrow(table) == 0 && return table
+    table.is_optimum = falses(DataFrames.nrow(table))
+    for g in DataFrames.groupby(table, [:scope, :organism, :coverage]; sort = false)
+        vals = [r.all_measured ? coalesce(r.median_nga50, -Inf) : -Inf for r in eachrow(g)]
+        best = maximum(vals)
+        best == -Inf && continue
+        g.is_optimum .= vals .== best
     end
-    publish_tsv(joinpath(root, "illumina_none_optimum.tsv"), table)
+    return table
 end
 
 """
 Replicate evaluability and CV per (technology, identity, coverage, corrector,
-k-policy level, organism), over seeds. `all_replicates_measured` is the NGA50
-evaluability the admissibility rule consumes; its constants are not set here.
+k-policy LEVEL, stratum, organism, phase), over seeds. Every registered cell
+counts whatever its status (absent, error, infeasible, no_feasible_k), and the
+denominator is the registered seed count, so a group with a failed or missing
+seed can never read as fully measured. Adaptive cells group by policy level,
+not by the k* each seed happened to select. The admissibility rule's constants
+are not set here.
 """
-function write_replicate_evaluability(root, cells)
+function replicate_evaluability(cells;
+        n_expected::Int = length(
+            D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_SEEDS))
     out = NamedTuple[]
-    if !isempty(cells)
-        df = cells[isequal.(cells.status, "ok"), :]
-        group_cols = [:technology, :identity_target, :coverage, :corrector, :k_policy,
-            :k_selected, :stratum, :organism, :phase]
-        for g in DataFrames.groupby(df, group_cols)
-            n_measured = count(isequal("measured"), g.nga50_status)
-            push!(out,
-                (; (k => g[1, k] for k in group_cols)..., n = DataFrames.nrow(g), n_measured,
-                    all_replicates_measured = n_measured == DataFrames.nrow(g),
-                    cv_nga50 = cv_or_missing(g.NGA50),
-                    cv_genome_fraction = cv_or_missing(g.genome_fraction)))
-        end
+    DataFrames.nrow(cells) == 0 && return DataFrames.DataFrame(out)
+    group_cols = [:technology, :identity_target, :coverage, :corrector, :policy_level,
+        :stratum, :organism, :phase]
+    status_count(g, s) = count(isequal(s), g.status)
+    for g in DataFrames.groupby(cells, group_cols)
+        n_measured = count(isequal("measured"), g.nga50_status)
+        ok = g[isequal.(g.status, "ok"), :]
+        push!(out,
+            (; (k => g[1, k] for k in group_cols)..., n_expected,
+                n_rows = DataFrames.nrow(g), n_ok = DataFrames.nrow(ok), n_measured,
+                n_error = status_count(g, D5OntAdaptiveGridDriver.STATUS_ERROR),
+                n_quast_failed = status_count(g, D5OntAdaptiveGridDriver.STATUS_QUAST_FAILED),
+                n_absent = status_count(g, D5OntAdaptiveGridDriver.STATUS_ABSENT),
+                n_infeasible = status_count(g, D5OntAdaptiveGridDriver.STATUS_INFEASIBLE_K),
+                n_no_feasible_k = status_count(g, D5OntAdaptiveGridDriver.STATUS_NO_FEASIBLE_K),
+                all_replicates_measured = n_measured == n_expected,
+                cv_nga50 = cv_or_missing(g[isequal.(g.nga50_status, "measured"), :].NGA50),
+                cv_genome_fraction = cv_or_missing(ok.genome_fraction)))
     end
-    publish_tsv(joinpath(root, "replicate_evaluability.tsv"), DataFrames.DataFrame(out))
+    return DataFrames.DataFrame(out)
 end
-
-function write_merge_provenance(root, cells, survival_df, base)
-    D5OntAdaptiveGridDriver.save_json_atomically(joinpath(root, "merge_provenance.json"),
-        Dict("generated" => string(Dates.now()), "mycelia_git_sha" => base.mycelia_git_sha,
-            "git_dirty" => base.git_dirty, "host" => base.host,
-            "tool_versions" => tool_versions(), "n_cells" => DataFrames.nrow(cells),
-            "n_survival_rows" => DataFrames.nrow(survival_df),
-            "invocation" => "julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl " *
-                            join(ARGS, " ")))
-end
-
 function print_counts(toy::Bool)
     a = D5OntAdaptiveGridDriver.phase_a_cells()
     b = D5OntAdaptiveGridDriver.phase_b_cells()
@@ -714,9 +872,20 @@ if abspath(PROGRAM_FILE) == @__FILE__
             error("--output-dir is required for --phase $(cli.phase)")
         root = abspath(cli.output_dir)
         mkpath(root)
-        cli.phase === :A && run_phase_a(cli, root)
-        cli.phase === :B && run_phase_b(cli, root)
-        cli.phase === :merge && run_merge(cli, root)
+        # Cell failures are caught and checkpointed as rows, so the process would
+        # otherwise end normally. Exit non-zero whenever a resubmit is needed, so
+        # SLURM shows FAILED and the operator sees it.
+        n_retry = if cli.phase === :A
+            needs_retry(run_phase_a(cli, root))
+        elseif cli.phase === :B
+            needs_retry(run_phase_b(cli, root))
+        else
+            run_merge(cli, root)
+        end
+        if n_retry > 0
+            println("=== $(n_retry) cell(s) need a resubmit; exiting 3  $(Dates.now()) ===")
+            exit(3)
+        end
     end
     println("=== done $(Dates.now()) ===")
 end

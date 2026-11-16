@@ -103,6 +103,7 @@ const STATUS_ERROR = "error"
 const STATUS_QUAST_FAILED = "quast_failed"
 const STATUS_INFEASIBLE_K = "infeasible_k_gt_assembler_max"
 const STATUS_NO_FEASIBLE_K = "no_feasible_k"
+const STATUS_ABSENT = "absent"  # registered cell with no checkpoint (merge only)
 const NO_FEASIBLE_K = :NoFeasibleK
 const RETRYABLE_STATUSES = (STATUS_ERROR, STATUS_QUAST_FAILED)
 
@@ -417,14 +418,42 @@ end
 
 # === Simulation parameters (recorded literally) ===
 
-"""The Badread argv for an ONT read set, exactly as the simulator will build it."""
-function badread_argv(read_set, reference_fasta::AbstractString)
-    read_set.technology === :ont || error("badread_argv is for ONT read sets only")
-    return Mycelia._badread_nanopore_args(; fasta = reference_fasta,
-        quantity = "$(read_set.coverage)x",
+"""
+The Badread keyword set for an ONT read set. ONE source for both the simulator
+call and the recorded argv, so the two cannot drift.
+"""
+function badread_kwargs(read_set, reference_fasta::AbstractString)
+    read_set.technology === :ont || error("badread_kwargs is for ONT read sets only")
+    return (; fasta = reference_fasta, quantity = "$(read_set.coverage)x",
         error_model = D5_BADREAD_ERROR_MODEL, qscore_model = D5_BADREAD_QSCORE_MODEL,
         identity = D5_BADREAD_IDENTITY_PARAMS[read_set.identity],
         length_dist = D5_BADREAD_LENGTH_DIST, seed = read_set.seed)
+end
+
+"""The Badread argv for an ONT read set, exactly as the simulator will build it."""
+function badread_argv(read_set, reference_fasta::AbstractString)
+    Mycelia._badread_nanopore_args(; badread_kwargs(read_set, reference_fasta)...)
+end
+
+"""
+Replicate-group key for a k-policy: the rung for a fixed cell, `"adaptive"` for an
+adaptive one. Adaptive seeds choose k* per read set, so grouping them by the k
+they selected would split one policy level into per-seed groups of one.
+"""
+function policy_level(k_policy)
+    k_policy === :adaptive || k_policy == "adaptive" ? "adaptive" :
+    string(k_policy)
+end
+
+"""
+Whether a cached Phase B checkpoint was computed under THIS tau / tau_hat.
+A Phase B row is a function of the thresholds, so a row from another tau must
+never be served as current.
+"""
+function phase_b_checkpoint_matches(row::AbstractDict, tau::Real, tau_hat::Real)
+    t = get(row, "tau", missing)
+    th = get(row, "tau_hat", missing)
+    return !ismissing(t) && !ismissing(th) && t == tau && th == tau_hat
 end
 
 sequencing_tech_for(read_set) = read_set.technology === :ont ? :nanopore : :illumina
@@ -476,9 +505,11 @@ from `parse_quast_metrics` and stay `missing` when QUAST could not compute them.
 function cell_row(cell, context; phase::Symbol, status::AbstractString,
         k_requested = cell.k_policy === :adaptive ? missing : cell.k_policy,
         k_selected = k_requested, k_star_reason = missing, k_star_hat = missing,
+        k_star_hat_reason = missing, tau = missing, tau_hat = missing, k_floor = missing,
         reassembly_k = missing, reassembly_k_policy = missing,
         reused_from_cell_id = missing, n_contigs = missing, contigs_ge_min = missing,
         quast_min_contig = missing, metrics = empty_metrics(), nga50_status = missing,
+        corrected_survival_status = missing,
         wall_seconds = missing, peak_rss_bytes = missing, peak_rss_method = missing,
         error_message = missing)
     rs = read_set_of(cell)
@@ -495,11 +526,13 @@ function cell_row(cell, context; phase::Symbol, status::AbstractString,
         read_set_id = read_set_id(rs), corrector = String(cell.corrector),
         strategy = String(D5_STRATEGY),
         k_policy = cell.k_policy === :adaptive ? "adaptive" : "fixed",
-        k_requested, k_selected, k_star_reason, k_star_hat, reassembly_k,
+        policy_level = policy_level(cell.k_policy),
+        k_requested, k_selected, k_star_reason, k_star_hat, k_star_hat_reason,
+        tau, tau_hat, k_floor, reassembly_k,
         reassembly_k_policy, reused_from_cell_id,
         n_reads = context.n_reads, read_bases = context.read_bases,
         n_contigs, contigs_ge_min, quast_min_contig, metric_values...,
-        nga50_status, status = String(status),
+        nga50_status, corrected_survival_status, status = String(status),
         error_rate_estimate_diagnostic = context.error_rate_estimate_diagnostic,
         wall_seconds, peak_rss_bytes, peak_rss_method, error_message,
         mycelia_git_sha = context.mycelia_git_sha, git_dirty = context.git_dirty,
@@ -511,14 +544,23 @@ end
 Column order of the per-cell table, read off `cell_row` itself so the merge step
 and the row builder can never disagree.
 """
+const EMPTY_CONTEXT = (; identity_params = missing, simulator_argv = missing,
+    error_model = missing, qscore_model = missing, n_reads = missing,
+    read_bases = missing, error_rate_estimate_diagnostic = missing,
+    mycelia_git_sha = missing, git_dirty = missing, host = missing,
+    slurm_job_id = missing)
+
 function cell_row_columns()
-    context = (; identity_params = missing, simulator_argv = missing,
-        error_model = missing, qscore_model = missing, n_reads = missing,
-        read_bases = missing, error_rate_estimate_diagnostic = missing,
-        mycelia_git_sha = missing, git_dirty = missing, host = missing,
-        slurm_job_id = missing)
-    row = cell_row(first(ont_cells()), context; phase = :A, status = STATUS_OK)
+    row = cell_row(first(ont_cells()), EMPTY_CONTEXT; phase = :A, status = STATUS_OK)
     return [String(k) for k in keys(row)]
+end
+
+"""
+Row for a registered cell with NO checkpoint. The merge emits one per missing
+cell so an incomplete grid shows its holes instead of silently shrinking.
+"""
+function absent_row(cell; phase::Symbol)
+    cell_row(cell, EMPTY_CONTEXT; phase, status = STATUS_ABSENT)
 end
 
 """Row for a cell whose k the assembler cannot take (k > 64 today)."""
@@ -532,7 +574,9 @@ end
     parse_cli(args) -> NamedTuple
 
 `--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
-`--phase merge` | `--list`; plus `--output-dir`, `--toy`, `--allow-sha-mismatch`.
+`--phase merge` | `--list`; plus `--output-dir`, `--toy`, `--allow-sha-mismatch`,
+`--replan` (Phase B: recompute cells checkpointed under a different tau) and
+`--allow-incomplete` (merge: publish even when registered cells are absent).
 Phase B refuses to run without tau: the grid never chooses tau itself.
 """
 function parse_cli(args::AbstractVector{<:AbstractString})
@@ -563,7 +607,8 @@ function parse_cli(args::AbstractVector{<:AbstractString})
     end
     return (; phase, read_set_index, tau, tau_hat, toy = "--toy" in args,
         output_dir = value("--output-dir"),
-        allow_sha_mismatch = "--allow-sha-mismatch" in args)
+        allow_sha_mismatch = "--allow-sha-mismatch" in args,
+        replan = "--replan" in args, allow_incomplete = "--allow-incomplete" in args)
 end
 
 end # module

@@ -155,6 +155,15 @@ Test.@testset "D5 grid driver" begin
     end
 
     Test.@testset "Badread pins: one per registered identity, recorded literally" begin
+        # Pinned LITERALLY (user decision 2026-11-16), so an edited pin fails here
+        # instead of being compared against itself.
+        Test.@test D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS ==
+                   Dict(90 => "90,98,5", 95 => "95,99,2.5", 99 => "99,100,1")
+        Test.@test D5OntAdaptiveGridDriver.D5_BADREAD_ERROR_MODEL == "nanopore2023"
+        Test.@test D5OntAdaptiveGridDriver.D5_BADREAD_QSCORE_MODEL == "nanopore2023"
+        Test.@test D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_COVERAGES ==
+                   (10, 30, 50, 100)
+        Test.@test D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_SEEDS == (42, 123, 456)
         Test.@test Set(keys(D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS)) ==
                    Set(D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_IDENTITIES)
         Test.@test Set(keys(D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES)) ==
@@ -201,8 +210,12 @@ Test.@testset "D5 grid driver" begin
         Test.@test none.S == 0.0
         Test.@test none.s_hat_status == "undefined" && none.S_hat === nothing
         # Multiplicity histogram counts DISTINCT k-mers per exact multiplicity.
+        # The fixture's windows at 16 (CCGATCG) and 17 (CGATCGG) are reverse
+        # complements, i.e. ONE canonical k-mer: 24 positions, 23 distinct, and
+        # that one is seen 4 times across two copies of the reference.
         twice = D5OntAdaptiveGridDriver.kmer_survival([ref, ref], [ref], k)
-        Test.@test twice.histogram == Dict(2 => twice.n_distinct_read_kmers)
+        Test.@test twice.n_distinct_read_kmers == 23
+        Test.@test twice.histogram == Dict(2 => 22, 4 => 1)
         # The full ladder reaches k = 101 (Kmers.jl, not the assembler's cap).
         long_ref = dna(repeat("ACGTTGCAAGGCTTACCGATCGGATCCAGTTAGC", 5))
         ladder = D5OntAdaptiveGridDriver.survival_ladder([long_ref], [long_ref])
@@ -252,6 +265,20 @@ Test.@testset "D5 grid driver" begin
         Test.@test D5OntAdaptiveGridDriver.select_k_star(with_gaps, 0.9;
             genome_size = 48_502).k_star == ladder[2]
         # A genome so large the floor clears every rung.
+        # The floor is INCLUSIVE: T4's floor is exactly 13, the ladder minimum.
+        only13 = [k == 13 ? 0.9 : 0.1 for k in ladder]
+        Test.@test D5OntAdaptiveGridDriver.select_k_star(only13, 0.5;
+            genome_size = 168_903).k_star == 13
+        # A floor INSIDE the ladder excludes the rungs below it (G = 5e9 -> floor 20):
+        # survival meeting tau only at 13..19 is not admissible, even though a
+        # floor-blind lookup would return 19.
+        Test.@test D5OntAdaptiveGridDriver.collision_floor_k(5_000_000_000) == 20
+        low_only = [k <= 19 ? 0.9 : 0.1 for k in ladder]
+        Test.@test D5OntAdaptiveGridDriver.select_k_star(low_only, 0.5;
+            genome_size = 5_000_000_000).reason == "no_rung_meets_threshold"
+        to21 = [k <= 21 ? 0.9 : 0.1 for k in ladder]
+        Test.@test D5OntAdaptiveGridDriver.select_k_star(to21, 0.5;
+            genome_size = 5_000_000_000).k_star == 21
         huge = D5OntAdaptiveGridDriver.select_k_star(ones(length(ladder)), 0.5;
             genome_size = big(10)^62)
         Test.@test huge.k_star === D5OntAdaptiveGridDriver.NO_FEASIBLE_K
@@ -294,6 +321,17 @@ Test.@testset "D5 grid driver" begin
         mixed = D5OntAdaptiveGridDriver.phase_b_plan(adaptive, rows_for(S; S_hat), 0.5,
             0.6; genome_size = 48_502)
         Test.@test mixed.k_star == 21 && mixed.k_star_hat == 15
+        # tau and tau_hat are NOT interchangeable: with tau=0.5, tau_hat=0.8 the S
+        # lookup gives 21 and S_hat (0.7 at 15) meets nothing; swapping the two
+        # thresholds would give 21 and 15.
+        split = D5OntAdaptiveGridDriver.phase_b_plan(adaptive, rows_for(S; S_hat), 0.5,
+            0.8; genome_size = 48_502)
+        Test.@test split.k_star == 21
+        Test.@test split.k_star_hat === D5OntAdaptiveGridDriver.NO_FEASIBLE_K
+        # Rows out of ladder order would pair S with the wrong k: refused.
+        msg = error_message(() -> D5OntAdaptiveGridDriver.phase_b_plan(adaptive,
+            reverse(rows_for(S)), 0.5, 0.5; genome_size = 48_502))
+        Test.@test msg !== nothing && occursin("in order", msg)
         fixed = first(D5OntAdaptiveGridDriver.phase_a_cells())
         msg = error_message(() -> D5OntAdaptiveGridDriver.phase_b_plan(fixed,
             rows_for(S), 0.5, 0.5; genome_size = 48_502))
