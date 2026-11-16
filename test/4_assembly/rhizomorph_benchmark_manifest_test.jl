@@ -1238,17 +1238,26 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
         Test.@test isfile(plan_csv)
         Test.@test isfile(plan_provenance)
 
-        plan_table = DataFrames.DataFrame(CSV.File(plan_csv))
+        plan_table = DataFrames.DataFrame(
+            CSV.File(plan_csv; types = Dict("benchmark_git_dirty" => String))
+        )
         required_columns = [
             "benchmark_schema_version",
             "benchmark_run_id",
             "benchmark_scale",
             "benchmark_dataset_ids",
             "benchmark_git_commit",
+            "benchmark_git_dirty",
             "benchmark_dataset_id",
             "benchmark_hypothesis_id"
         ]
         Test.@test issubset(Set(required_columns), Set(names(plan_table)))
+        commit_col_idx = findfirst(==("benchmark_git_commit"), names(plan_table))
+        dirty_col_idx = findfirst(==("benchmark_git_dirty"), names(plan_table))
+        Test.@test !isnothing(commit_col_idx)
+        Test.@test dirty_col_idx == commit_col_idx + 1
+        plan_git_dirty = coalesce.(plan_table.benchmark_git_dirty, "")
+        Test.@test all(value -> value in ("true", "false", ""), plan_git_dirty)
         Test.@test all(plan_table.benchmark_run_id .== "ci_smoke")
         Test.@test all(plan_table.benchmark_scale .== "ci")
         Test.@test all(plan_table.benchmark_schema_version .== BENCHMARK_ARTIFACT_SCHEMA_VERSION)
@@ -1264,6 +1273,11 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
         Test.@test issubset(Set(["synthetic_isolate_5386", "synthetic_metagenome_pair"]), Set(run_provenance["dataset_ids"]))
         Test.@test haskey(run_provenance["tool_versions"], "julia")
         Test.@test haskey(run_provenance["tool_versions"], "Mycelia")
+        sidecar_git = get(run_provenance, "git", Dict{String, Any}())
+        sidecar_is_dirty = sidecar_git isa AbstractDict ? get(sidecar_git, "is_dirty", nothing) : nothing
+        expected_git_dirty = sidecar_is_dirty === true ? "true" :
+                             sidecar_is_dirty === false ? "false" : ""
+        Test.@test all(plan_git_dirty .== expected_git_dirty)
 
         index = JSON.parsefile(joinpath(output_dir, "artifact-index.json"))
         Test.@test index["directories"]["tables"] == "tables"
@@ -1283,6 +1297,71 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
             Test.@test read(artifacts.provenance, String) == read(second_artifacts.provenance, String)
             Test.@test read(plan_csv, String) ==
                        read(joinpath(second_output_dir, "tables", "rhizomorph_benchmark_plan.csv"), String)
+        end
+    end
+end
+
+Test.@testset "benchmark_git_dirty provenance column rendering" begin
+    cases = (
+        ("dirty", Dict{String, Any}("commit" => "deadbeef", "is_dirty" => true), "deadbeef", "true"),
+        ("clean", Dict{String, Any}("commit" => "deadbeef", "is_dirty" => false), "deadbeef", "false"),
+        ("unknown_null", Dict{String, Any}("commit" => "deadbeef", "is_dirty" => nothing), "deadbeef", ""),
+        ("unknown_absent", Dict{String, Any}("commit" => "deadbeef"), "deadbeef", ""),
+        ("no_git_block", nothing, "", "")
+    )
+
+    for (label, git_meta, expected_commit, expected_dirty) in cases
+        provenance = Dict{String, Any}(
+            "schema_version" => BENCHMARK_ARTIFACT_SCHEMA_VERSION,
+            "run_id" => "unit_$(label)",
+            "scale" => "ci",
+            "dataset_ids" => ["ds1"]
+        )
+        if !isnothing(git_meta)
+            provenance["git"] = git_meta
+        end
+
+        df = DataFrames.DataFrame(metric = [10, 20])
+        _insert_table_provenance_columns!(df, provenance, Dict{String, String}())
+
+        Test.@test names(df)[1:6] == [
+            "benchmark_schema_version",
+            "benchmark_run_id",
+            "benchmark_scale",
+            "benchmark_dataset_ids",
+            "benchmark_git_commit",
+            "benchmark_git_dirty"
+        ]
+        Test.@test eltype(df.benchmark_git_dirty) == String
+        Test.@test df.benchmark_git_commit == [expected_commit, expected_commit]
+        Test.@test df.benchmark_git_dirty == [expected_dirty, expected_dirty]
+
+        mktempdir() do dir
+            layout = benchmark_artifact_layout(dir)
+            written = write_benchmark_table(
+                DataFrames.DataFrame(metric = [10, 20]),
+                "sample_$(label)";
+                layout = layout,
+                provenance = provenance
+            )
+            csv_lines = readlines(written.table)
+            Test.@test csv_lines[1] ==
+                       "benchmark_schema_version,benchmark_run_id,benchmark_scale,benchmark_dataset_ids,benchmark_git_commit,benchmark_git_dirty,metric"
+            Test.@test csv_lines[2] ==
+                       "$(BENCHMARK_ARTIFACT_SCHEMA_VERSION),unit_$(label),ci,ds1,$(expected_commit),$(expected_dirty),10"
+
+            reloaded = DataFrames.DataFrame(
+                CSV.File(written.table; types = Dict("benchmark_git_dirty" => String))
+            )
+            reloaded_dirty = coalesce.(reloaded.benchmark_git_dirty, "")
+            Test.@test reloaded_dirty == [expected_dirty, expected_dirty]
+            Test.@test all(value -> value in ("true", "false", ""), reloaded_dirty)
+
+            table_prov = JSON.parsefile(written.provenance)
+            Test.@test table_prov["columns"][5:6] == [
+                "benchmark_git_commit",
+                "benchmark_git_dirty"
+            ]
         end
     end
 end

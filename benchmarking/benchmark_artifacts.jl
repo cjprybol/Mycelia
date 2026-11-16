@@ -207,14 +207,24 @@ function _insert_table_provenance_columns!(
         provenance::AbstractDict,
         row_context_columns)
     rows = DataFrames.nrow(table)
-    git = get(provenance, "git", Dict{String, Any}())
+    raw_git = get(provenance, "git", nothing)
+    git = raw_git isa AbstractDict ? raw_git : Dict{String, Any}()
+    is_dirty = get(git, "is_dirty", nothing)
+    git_dirty = if is_dirty === true
+        "true"
+    elseif is_dirty === false
+        "false"
+    else
+        ""
+    end
     dataset_ids = get(provenance, "dataset_ids", String[])
     column_values = Pair{String, Any}[
         "benchmark_schema_version" => get(provenance, "schema_version", BENCHMARK_ARTIFACT_SCHEMA_VERSION),
         "benchmark_run_id" => get(provenance, "run_id", ""),
         "benchmark_scale" => get(provenance, "scale", ""),
         "benchmark_dataset_ids" => join(string.(dataset_ids), ","),
-        "benchmark_git_commit" => _string_or_empty(get(git, "commit", nothing))
+        "benchmark_git_commit" => _string_or_empty(get(git, "commit", nothing)),
+        "benchmark_git_dirty" => git_dirty
     ]
 
     for (provenance_column, source_column) in sort(collect(row_context_columns); by = first)
