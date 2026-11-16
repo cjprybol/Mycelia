@@ -76,13 +76,20 @@ if [[ "${PHASE}" == "A" || "${PHASE}" == "B" ]]; then
   INDEX_ARGS=(--read-set-index "${TASK_INDEX}")
 fi
 
+# Exit codes from the runner: 0 ok; 3 = cells recorded but some need a resubmit
+# (A/B) or the merged grid is incomplete or mixed (merge); anything else = the
+# runner itself failed (bad args, manifest refusal, simulator or reference error).
 # shellcheck disable=SC2086  # D5_ARGS is intentionally word-split
-if "${JULIA}" --project=.. d5_ont_adaptive_grid_run.jl --phase "${PHASE}" \
-     --output-dir "${OUTDIR}" "${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"}" ${EXTRA_ARGS}; then
+"${JULIA}" --project=.. d5_ont_adaptive_grid_run.jl --phase "${PHASE}" \
+  --output-dir "${OUTDIR}" "${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"}" ${EXTRA_ARGS}
+status=$?
+if [[ "${status}" -eq 0 ]]; then
   echo ">>> OK phase=${PHASE} task=${TASK_INDEX}  $(date)"
-  status=0
+elif [[ "${status}" -eq 3 && "${PHASE}" == "merge" ]]; then
+  echo ">>> INCOMPLETE merge: see merge_provenance.json; resubmit the Phase A/B indices with absent or retryable cells, then re-merge  $(date)"
+elif [[ "${status}" -eq 3 ]]; then
+  echo ">>> RETRY phase=${PHASE} task=${TASK_INDEX}: some cells need a resubmit of this index  $(date)"
 else
-  echo ">>> FAIL phase=${PHASE} task=${TASK_INDEX} (resubmit this index to resume)  $(date)"
-  status=1
+  echo ">>> FAIL phase=${PHASE} task=${TASK_INDEX} (exit ${status}); read the .err log before resubmitting  $(date)"
 fi
 exit "${status}"

@@ -219,6 +219,117 @@ Test.@testset "D5 grid runner" begin
         Test.@test k31.n_expected[1] == 3
     end
 
+    toy_sets = D5OntAdaptiveGridDriver.toy_read_sets()
+    toy_cells = reduce(vcat, D5OntAdaptiveGridDriver.toy_cells(rs) for rs in toy_sets)
+
+    Test.@testset "merge: absent and unreadable cells, end to end through run_merge" begin
+        mktempdir() do root
+            save_row(root, row_for(toy_cells[1]))
+            save_row(root, row_for(toy_cells[2]))
+            bad = joinpath(root, "cells", D5OntAdaptiveGridDriver.cell_id(toy_cells[3]))
+            mkpath(bad)
+            write(joinpath(bad, "cell_result.json"), "{not json")
+            collected = collect_merge_rows(root, true)
+            Test.@test length(collected.rows) == 7
+            Test.@test collected.n_absent == 4 && collected.unreadable == [basename(bad)]
+            p = merge_problems(collected.rows)
+            Test.@test p.n_absent == 4 && p.n_unreadable == 1 && p.n_problems == 5
+            # Through the real entry point: incomplete -> non-zero, tables still written.
+            cli = (; toy = true, allow_sha_mismatch = true, allow_incomplete = false)
+            Test.@test run_merge(cli, root) == 5
+            tsv = read(joinpath(root, "d5_cells.tsv"), String)
+            Test.@test count("\tabsent\t", tsv) == 4 && count("\tunreadable\t", tsv) == 1
+            prov = JSON.parsefile(joinpath(root, "merge_provenance.json"))
+            Test.@test prov["n_absent"] == 4 &&
+                       prov["overrides"]["allow_incomplete"] == false
+            Test.@test run_merge(merge(cli, (; allow_incomplete = true)), root) == 0
+        end
+    end
+
+    Test.@testset "merge: one tau pair and one code version per published grid" begin
+        b = filter(c -> c.k_policy === :adaptive, D5OntAdaptiveGridDriver.phase_b_cells())
+        rows = [as_dict(row_for(b[1]; phase = :B, tau = 0.8, tau_hat = 0.6)),
+            as_dict(row_for(b[2]; phase = :B, tau = 0.8, tau_hat = 0.6))]
+        Test.@test merge_problems(rows).n_problems == 0
+        push!(rows, as_dict(row_for(b[3]; phase = :B, tau = 0.75, tau_hat = 0.6)))
+        p = merge_problems(rows)
+        Test.@test length(p.tau_pairs) == 2 && p.n_problems == 1
+        sha_rows = [merge(as_dict(row_for(cell)), Dict("mycelia_git_sha" => s))
+                    for s in ("a" ^ 40, "b" ^ 40)]
+        Test.@test merge_problems(sha_rows).n_problems == 1
+        diag = [merge(as_dict(row_for(cell)), Dict("corrected_survival_status" => s))
+                for s in ("failed", "unavailable", "measured")]
+        dp = merge_problems(diag)
+        Test.@test dp.n_corrected_survival_failed == 1
+        Test.@test dp.n_corrected_survival_unavailable == 1 && dp.n_problems == 0
+    end
+
+    Test.@testset "Phase B wiring: plan metadata and the toy reuse rule" begin
+        adaptive = first(filter(c -> c.technology === :ont,
+            D5OntAdaptiveGridDriver.phase_b_cells()))
+        plan = (; action = :reuse, k_star = 21, reason = "admissible", floor_k = 12,
+            k_star_hat = D5OntAdaptiveGridDriver.NO_FEASIBLE_K,
+            reason_hat = "no_rung_meets_threshold", reuse_cell_id = "x")
+        kw = phase_b_kwargs(plan, (; tau = 0.8, tau_hat = 0.6))
+        Test.@test kw.tau == 0.8 && kw.tau_hat == 0.6 && kw.k_floor == 12
+        Test.@test kw.k_star_hat == "NoFeasibleK" && kw.k_star_reason == "admissible"
+        # Toy: a source outside the toy's Phase A cells is assembled at the same k*;
+        # a source INSIDE the toy keeps :reuse (so a missing checkpoint fails loudly);
+        # the full grid always keeps :reuse.
+        rs95 = first(filter(rs -> rs.technology === :ont && rs.identity == 95, toy_sets))
+        in_toy = first(D5OntAdaptiveGridDriver.toy_cells(rs95))
+        inside = merge(plan, (; reuse_cell_id = D5OntAdaptiveGridDriver.cell_id(in_toy)))
+        Test.@test phase_b_action(inside, rs95, true) === :reuse
+        Test.@test phase_b_action(plan, rs95, true) === :assemble
+        Test.@test phase_b_action(plan, rs95, false) === :reuse
+        Test.@test phase_b_action(merge(plan, (; action = :infeasible)), rs95, true) ===
+                   :infeasible
+    end
+
+    Test.@testset "reference length and read count guards" begin
+        info = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[:Lambda]
+        Test.@test info.expected_bp == 48_502
+        Test.@test D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[:T4].expected_bp ==
+                   168_903
+        Test.@test check_reference_length(48_502, info, "/r.fna") === nothing
+        msg = error_message(() -> check_reference_length(48_501, info, "/r.fna"))
+        Test.@test msg !== nothing && occursin("the RefSeq record is 48502 bp", msg)
+        meta = Dict{String, Any}("read_set_id" => "rs", "n_reads" => 3)
+        Test.@test length(check_read_count([1, 2, 3], meta, "/d")) == 3
+        msg = error_message(() -> check_read_count([1, 2], meta, "/d"))
+        Test.@test msg !== nothing && occursin("has 2 reads on disk", msg)
+    end
+
+    Test.@testset "manifest: pins are not waivable; unknown dirty state refuses" begin
+        mktempdir() do root
+            git = (; sha = "c" ^ 40, dirty = false)
+            check_run_manifest!(root, git; allow_mismatch = false, toy = true)
+            msg = error_message(() -> check_run_manifest!(
+                root, (; sha = git.sha,
+                    dirty = missing);
+                allow_mismatch = false, toy = true))
+            Test.@test msg !== nothing && occursin("could not be read", msg)
+            path = joinpath(root, "run_manifest.json")
+            manifest = JSON.parsefile(path)
+            delete!(manifest, "badread_length_dist")  # a legacy manifest
+            D5OntAdaptiveGridDriver.save_json_atomically(path, manifest)
+            msg = error_message(() -> check_run_manifest!(root, git;
+                allow_mismatch = true, toy = true))
+            Test.@test msg !== nothing && occursin("badread_length_dist", msg)
+        end
+    end
+
+    Test.@testset "CLI: new switches, and unknown arguments are refused" begin
+        cli = D5OntAdaptiveGridDriver.parse_cli(["--phase", "B", "--tau", "0.8",
+            "--tau-hat", "0.6", "--replan"])
+        Test.@test cli.replan && !cli.allow_incomplete
+        Test.@test D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge",
+            "--allow-incomplete"]).allow_incomplete
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "B",
+            "--tau", "0.8", "--tau-hat", "0.6", "--replann"]))
+        Test.@test msg !== nothing && occursin("unknown argument", msg)
+    end
+
     Test.@testset "expected cells for the toy and the full grid" begin
         Test.@test length(expected_cells(true, false)) == 7
         Test.@test length(expected_cells(false, false)) == 1008 + 96 + 336

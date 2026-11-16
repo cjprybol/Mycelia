@@ -104,6 +104,7 @@ const STATUS_QUAST_FAILED = "quast_failed"
 const STATUS_INFEASIBLE_K = "infeasible_k_gt_assembler_max"
 const STATUS_NO_FEASIBLE_K = "no_feasible_k"
 const STATUS_ABSENT = "absent"  # registered cell with no checkpoint (merge only)
+const STATUS_UNREADABLE = "unreadable"  # checkpoint exists but cannot be parsed (merge only)
 const NO_FEASIBLE_K = :NoFeasibleK
 const RETRYABLE_STATUSES = (STATUS_ERROR, STATUS_QUAST_FAILED)
 
@@ -540,16 +541,17 @@ function cell_row(cell, context; phase::Symbol, status::AbstractString,
         julia_version = string(VERSION))
 end
 
-"""
-Column order of the per-cell table, read off `cell_row` itself so the merge step
-and the row builder can never disagree.
-"""
+# Context for rows that have no read set behind them (absent cells, column order).
 const EMPTY_CONTEXT = (; identity_params = missing, simulator_argv = missing,
     error_model = missing, qscore_model = missing, n_reads = missing,
     read_bases = missing, error_rate_estimate_diagnostic = missing,
     mycelia_git_sha = missing, git_dirty = missing, host = missing,
     slurm_job_id = missing)
 
+"""
+Column order of the per-cell table, read off `cell_row` itself so the merge step
+and the row builder can never disagree.
+"""
 function cell_row_columns()
     row = cell_row(first(ont_cells()), EMPTY_CONTEXT; phase = :A, status = STATUS_OK)
     return [String(k) for k in keys(row)]
@@ -579,7 +581,25 @@ end
 `--allow-incomplete` (merge: publish even when registered cells are absent).
 Phase B refuses to run without tau: the grid never chooses tau itself.
 """
+const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--tau", "--tau-hat",
+    "--output-dir")
+const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
+    "--allow-incomplete")
+
 function parse_cli(args::AbstractVector{<:AbstractString})
+    # A mistyped switch (`--replann`) must not silently do nothing.
+    i = 1
+    while i <= length(args)
+        a = args[i]
+        if a in CLI_VALUE_FLAGS
+            i += 2
+        elseif a in CLI_SWITCHES
+            i += 1
+        else
+            error("unknown argument $(repr(a)); expected one of " *
+                  join((CLI_VALUE_FLAGS..., CLI_SWITCHES...), ", "))
+        end
+    end
     value(flag) =
         let i = findfirst(==(flag), args)
             i === nothing ? nothing :
