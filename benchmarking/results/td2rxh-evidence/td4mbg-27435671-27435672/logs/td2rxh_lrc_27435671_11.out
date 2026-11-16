@@ -1,0 +1,7 @@
+=== td-2rxh evidence (Lawrencium) ===
+Job: 27435671_11  Node: n0018.lr6  CPUs: 16  Start: Fri Oct 30 09:52:44 PDT 2026
+Checkout: /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix  label=td2rxh@dae40feaf697+manifest85b75e3eb5c8
+TMPDIR=/tmp/td2rxh_27435671_11.42fZBC (ext2/ext3)
+>>> RUN cells=td2rxh seed=11 -> results/td2rxh/27435671/seed11.csv  Fri Oct 30 09:52:45 PDT 2026
+julia_rc=1 rows=0 expected=12
+=== done rc=1 Fri Oct 30 10:36:46 PDT 2026 ===
