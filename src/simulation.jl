@@ -163,12 +163,13 @@ with options to choose either fold coverage (`--fcov`) or an absolute read count
 to enable amplicon mode, and to optionally generate a zero-error SAM file.
 
 # Arguments
-- `in_fasta::String`: Path to the input FASTA file.
+- `fasta::String`: Path to the input FASTA file.
 - `coverage::Union{Nothing,Number}`: Desired fold coverage (used with `--fcov`); if `nothing`
-  and `read_count` is provided then fold coverage is ignored. (Default: 20)
-- `read_count::Union{Nothing,Number}`: Total number of reads (or read pairs) to generate
+  and `read_count` is provided then fold coverage is ignored. (Default: `nothing`)
+- `read_count::Union{Nothing,Int}`: Total number of reads (or read pairs) to generate
   (used with `--rcount` instead of fold coverage). (Default: `nothing`)
-- `outbase::String`: Output file prefix (default: "\$(in_fasta).art.\$(coverage)x.").
+- `outbase::String`: Output file prefix (default: `""`). When empty, auto-set to
+  `"\$(fasta).fcov_\$(coverage)x.art"` or `"\$(fasta).rcount_\$(read_count).art"`.
 - `read_length::Int`: Length of reads to simulate (default: 150).
 - `mflen::Int`: Mean fragment length for paired-end simulations (default: 500).
 - `sdev::Int`: Standard deviation of fragment lengths (default: 10).
@@ -187,12 +188,13 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 - `paired::Bool`: Whether to simulate paired-end reads (default: true). Some systems like MinS only support single-end.
 - `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
 - `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
-- `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
+- `rndSeed::Int`: Seed for ART reproducibility (default: `current_unix_datetime()`).
+- `quiet::Bool`: Suppress Bioconda/ART provisioning chatter (default: `true`).
 
 # Outputs
 Generates gzipped FASTQ files in the working directory:
 - For paired-end: `\$(outbase)1.fq.gz` (forward) and `\$(outbase)2.fq.gz` (reverse).
-- For single-end: `\$(outbase)1.fq.gz`.
+- For single-end: `\$(outbase).fq.gz` (ART writes `\$(outbase).fq` without a mate suffix).
 
 SAM files are produced via ART's `--samout` option, and additional error-free
 SAM output is created when `--errfree` is enabled.
@@ -1023,6 +1025,7 @@ Follows the recommended PacBio HiFi simulation parameters from the Badread docum
 - `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
 - `outfile::String`: Output filepath for simulated reads. Defaults to input filename with PacBio HiFi suffix
 - `quiet::Bool=false`: If true, suppress badread output to stdout/stderr
+- `seed::Union{Nothing,Int}=nothing`: RNG seed for Badread; when `nothing` (default), Badread chooses its own seed
 
 # Returns
 - `String`: Path to the generated output file
