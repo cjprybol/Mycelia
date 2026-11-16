@@ -119,15 +119,23 @@ with the registry's own constructors. `length(ont_cells()) == n_d5_cells()`.
 """
 function ont_cells()
     cells = NamedTuple[]
-    for identity in D5OntAdaptiveGridAxes.D5_IDENTITIES, coverage in D5OntAdaptiveGridAxes.D5_COVERAGES,
-        corrector in D5OntAdaptiveGridAxes.D5_CORRECTORS, k_policy in D5OntAdaptiveGridAxes.D5_K_POLICIES,
-        organism in D5OntAdaptiveGridAxes.D5_ORGANISMS, seed in D5OntAdaptiveGridAxes.D5_SEEDS
+    for identity in D5OntAdaptiveGridAxes.D5_IDENTITIES,
+        coverage in D5OntAdaptiveGridAxes.D5_COVERAGES,
+        corrector in D5OntAdaptiveGridAxes.D5_CORRECTORS, k_policy in
+                                                          D5OntAdaptiveGridAxes.D5_K_POLICIES,
+        organism in D5OntAdaptiveGridAxes.D5_ORGANISMS,
+        seed in D5OntAdaptiveGridAxes.D5_SEEDS
+
         push!(cells,
             merge((; technology = :ont),
-                D5OntAdaptiveGridAxes.ont_grid_cell(identity, coverage, corrector, k_policy, organism, seed)))
+                D5OntAdaptiveGridAxes.ont_grid_cell(
+                    identity, coverage, corrector, k_policy, organism, seed)))
     end
-    for rung in D5OntAdaptiveGridAxes.D5_DROPPED_RUNGS, organism in D5OntAdaptiveGridAxes.D5_ORGANISMS, seed in D5OntAdaptiveGridAxes.D5_SEEDS
-        push!(cells, merge((; technology = :ont), D5OntAdaptiveGridAxes.validation_cell(rung, organism, seed)))
+    for rung in D5OntAdaptiveGridAxes.D5_DROPPED_RUNGS,
+        organism in D5OntAdaptiveGridAxes.D5_ORGANISMS,
+        seed in D5OntAdaptiveGridAxes.D5_SEEDS
+        push!(cells,
+            merge((; technology = :ont), D5OntAdaptiveGridAxes.validation_cell(rung, organism, seed)))
     end
     return cells
 end
@@ -341,9 +349,7 @@ function select_k_star(values::AbstractVector, tau::Real;
     above_floor = [i for i in eachindex(ladder) if ladder[i] >= floor_k]
     isempty(above_floor) &&
         return (; k_star = NO_FEASIBLE_K, reason = "no_rung_above_collision_floor", floor_k)
-    admissible = [ladder[i]
-                  for i in above_floor
-                  if values[i] !== nothing && !isnan(values[i]) && values[i] >= tau]
+    admissible = [ladder[i] for i in above_floor if _usable(values[i]) && values[i] >= tau]
     isempty(admissible) &&
         return (; k_star = NO_FEASIBLE_K, reason = "no_rung_meets_threshold", floor_k)
     return (; k_star = maximum(admissible), reason = "admissible", floor_k)
@@ -364,6 +370,49 @@ function assembler_accepts_k(k::Integer)
         occursin("k-mer size must be between", sprint(showerror, e)) && return false
         rethrow()
     end
+end
+
+"""A survival value that can be compared against a threshold."""
+_usable(x) = x !== nothing && x !== missing && !isnan(x)
+
+"""
+    phase_b_plan(cell, survival_rows, tau, tau_hat; genome_size) -> NamedTuple
+
+What Phase B does for one `:adaptive` cell, decided before any assembly runs.
+`survival_rows` are the read set's 23 rung records (raw reads) carrying `S` and
+`S_hat`. `action` is one of:
+
+  * `:no_feasible_k` — no rung meets tau (or clears the collision floor).
+  * `:infeasible`    — k* exists but the assembler cannot take it (k > 64 today).
+  * `:reuse`         — k* is a comparator rung, so the Phase A fixed-rung cell on
+                       the same read set and corrector IS this assembly;
+                       `reuse_cell_id` names it.
+  * `:assemble`      — k* needs a new assembly.
+
+`k_star_hat` (from S_hat at tau_hat) is recorded for criterion 5; it never
+drives the assembly.
+"""
+function phase_b_plan(cell, survival_rows::AbstractVector, tau::Real, tau_hat::Real;
+        genome_size::Integer)
+    cell.k_policy === :adaptive ||
+        error("phase_b_plan is for :adaptive cells, got k_policy=$(cell.k_policy)")
+    ks = [Int(r["k"]) for r in survival_rows]
+    ks == collect(D5OntAdaptiveGridAxes.D5_CANDIDATE_LADDER) ||
+        error("survival rows do not cover the registered 23-rung ladder in order: $(ks)")
+    pick = select_k_star([r["S"] for r in survival_rows], tau; genome_size)
+    pick_hat = select_k_star([r["S_hat"] for r in survival_rows], tau_hat; genome_size)
+    k_star = pick.k_star
+    action, reuse_cell_id = if k_star === NO_FEASIBLE_K
+        (:no_feasible_k, nothing)
+    elseif !assembler_accepts_k(k_star)
+        (:infeasible, nothing)
+    elseif k_star in D5OntAdaptiveGridAxes.D5_COMPARATOR_RUNGS
+        (:reuse, cell_id(merge(cell, (; k_policy = k_star))))
+    else
+        (:assemble, nothing)
+    end
+    return (; action, k_star, reason = pick.reason, floor_k = pick.floor_k,
+        k_star_hat = pick_hat.k_star, reason_hat = pick_hat.reason, reuse_cell_id)
 end
 
 # === Simulation parameters (recorded literally) ===
@@ -456,6 +505,20 @@ function cell_row(cell, context; phase::Symbol, status::AbstractString,
         mycelia_git_sha = context.mycelia_git_sha, git_dirty = context.git_dirty,
         host = context.host, slurm_job_id = context.slurm_job_id,
         julia_version = string(VERSION))
+end
+
+"""
+Column order of the per-cell table, read off `cell_row` itself so the merge step
+and the row builder can never disagree.
+"""
+function cell_row_columns()
+    context = (; identity_params = missing, simulator_argv = missing,
+        error_model = missing, qscore_model = missing, n_reads = missing,
+        read_bases = missing, error_rate_estimate_diagnostic = missing,
+        mycelia_git_sha = missing, git_dirty = missing, host = missing,
+        slurm_job_id = missing)
+    row = cell_row(first(ont_cells()), context; phase = :A, status = STATUS_OK)
+    return [String(k) for k in keys(row)]
 end
 
 """Row for a cell whose k the assembler cannot take (k > 64 today)."""
