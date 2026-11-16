@@ -250,6 +250,32 @@ Test.@testset "Evidence Helper Functions" begin
         Test.@test first_strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
     end
 
+    Test.@testset "preferred_evidence_strand" begin
+        F = Mycelia.Rhizomorph.Forward
+        R = Mycelia.Rhizomorph.Reverse
+        # Vector inner containers fix the iteration order.
+        ev(strands...) = Dict("ds" => Dict("obs" => [(strand = s,) for s in strands]))
+        # Forward wins wherever it appears; first_evidence_strand follows order.
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(ev(R, F)) == F
+        Test.@test Mycelia.Rhizomorph.first_evidence_strand(ev(R, F)) == R
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(ev(F, R)) == F
+        # Reverse-only evidence stays Reverse.
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(ev(R, R)) == R
+        # No strand field, or no entries: the default.
+        nostrand = Dict("ds" => Dict("obs" => [(count = 1,)]))
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(nostrand) == F
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(
+            nostrand; default = R) == R
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(
+            Dict(); default = R) == R
+        # Real evidence entries, Reverse only.
+        reverse_vertex = Mycelia.Rhizomorph.KmerVertexData(Kmers.DNAKmer{3}("ATG"))
+        Mycelia.Rhizomorph.add_evidence!(reverse_vertex, "dataset_01", "read_001",
+            Mycelia.Rhizomorph.EvidenceEntry(1, R))
+        Test.@test Mycelia.Rhizomorph.preferred_evidence_strand(
+            reverse_vertex.evidence) == R
+    end
+
     Test.@testset "filter_evidence_by_strand" begin
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)

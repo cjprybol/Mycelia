@@ -803,12 +803,15 @@ function _viterbi_graph_has_reverse_strand_evidence(graph::MetaGraphsNext.MetaGr
                 return true
             end
         elseif hasproperty(edge_data, :evidence)
-            strand = Rhizomorph.first_evidence_strand(
-                getproperty(edge_data, :evidence);
-                default = Rhizomorph.Forward
-            )
-            if Rhizomorph._normalize_strand(strand) == Rhizomorph.Reverse
-                return true
+            # Any Reverse entry counts, independent of evidence order.
+            for dataset_evidence in values(getproperty(edge_data, :evidence))
+                for observation_evidence in values(dataset_evidence)
+                    for entry in observation_evidence
+                        hasfield(typeof(entry), :strand) || continue
+                        Rhizomorph._normalize_strand(entry.strand) ==
+                        Rhizomorph.Reverse && return true
+                    end
+                end
             end
         end
     end
@@ -1774,18 +1777,11 @@ function _indel_frontier_edge_strands(
             Rhizomorph._normalize_strand(edge_data.dst_strand),
         ))
     elseif hasproperty(edge_data, :evidence)
-        evidence = getproperty(edge_data, :evidence)
-        for dataset_evidence in values(evidence)
-            for observation_evidence in values(dataset_evidence)
-                for entry in observation_evidence
-                    normalized = Rhizomorph._normalize_strand(entry.strand)
-                    push!(strand_pairs, (normalized, normalized))
-                    length(strand_pairs) == 2 && break
-                end
-                length(strand_pairs) == 2 && break
-            end
-            length(strand_pairs) == 2 && break
-        end
+        # One strand per edge, resolved exactly as weighted_graph_from_rhizomorph
+        # does, so the probe admits only cells the decoder can reach (td-tg05).
+        strand = Rhizomorph._normalize_strand(Rhizomorph.preferred_evidence_strand(
+            getproperty(edge_data, :evidence); default = Rhizomorph.Forward))
+        push!(strand_pairs, (strand, strand))
     end
     isempty(strand_pairs) && push!(
         strand_pairs, (Rhizomorph.Forward, Rhizomorph.Forward))

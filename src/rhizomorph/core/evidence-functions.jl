@@ -455,6 +455,40 @@ function first_evidence_strand(evidence_map; default::StrandOrientation = Forwar
     return default
 end
 
+"""
+    preferred_evidence_strand(evidence_map; default=Forward)
+
+Return `Forward` when any evidence entry carries `Forward`, otherwise the strand
+of the first entry, otherwise `default`.
+
+Unlike `first_evidence_strand`, the result does not depend on evidence iteration
+order. In a `:doublestrand` graph each observation adds `Forward` evidence to the
+edges of its own walk, so a single-strand view built with this rule keeps that
+walk traversable on one strand. Edges with evidence on only one strand resolve to that
+strand, exactly as with `first_evidence_strand`.
+
+One strand per edge cannot serve both orientations: a walk supported only by
+reverse-complement evidence dead-ends at any edge that was also observed forward.
+
+# Example
+```julia
+strand = Mycelia.Rhizomorph.preferred_evidence_strand(edge_data.evidence)
+```
+"""
+function preferred_evidence_strand(evidence_map; default::StrandOrientation = Forward)
+    found = nothing
+    for dataset_evidence in values(evidence_map)
+        for evidence_set in values(dataset_evidence)
+            for entry in evidence_set
+                hasfield(typeof(entry), :strand) || continue
+                entry.strand == Forward && return Forward
+                found === nothing && (found = entry.strand)
+            end
+        end
+    end
+    return found === nothing ? default : found
+end
+
 # ============================================================================
 # Filtering Functions
 # ============================================================================

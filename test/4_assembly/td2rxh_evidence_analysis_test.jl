@@ -5,12 +5,19 @@ module Td2rxhEvidenceAnalysisTest
 # decision rule (with amendments 1-3) in benchmarking/td2rxh_paired_analysis.jl. No
 # assembly runs here; the harness runs on HPC.
 #
+# Default CI runs one fast smoke testset below (no figure write, no sbatch/Slurm
+# stubs). The remaining suite is opt-in via MYCELIA_RUN_SLOW=true or
+# MYCELIA_RUN_ALL=true (also covered by the td2rxh-slow CI lane).
+#   MYCELIA_RUN_SLOW=true julia --project=. -e 'include("test/4_assembly/td2rxh_evidence_analysis_test.jl")'
+#
 # The decision-rule testsets pair a POSITIVE control (a clean win must be
 # accepted) with NEGATIVE controls (a loss, a one-read-length win, a fit-identity
 # regression, a raw-significant-but-not-after-Holm cell, a missing cell, an
 # undefined cell, an unengaged treatment, duplicate and mixed-label shards), so a
 # rule that always says yes, or always says no, fails. Several controls exist
-# because a review-round mutant survived without them; each says which.
+# because a review-round mutant survived without them; each says which. Most
+# analysis guards are reached through the test-side analyse() helper, which
+# mirrors main.
 #
 # The harness failure path is tested without an assembly through an injected
 # `runner`: failed arms (even one) are counted, logged with a backtrace, reported
@@ -20,12 +27,31 @@ module Td2rxhEvidenceAnalysisTest
 # elsewhere or unresolvable) and is shown, through script_main, to refuse before
 # any arm runs or any CSV is written. A subprocess test runs the script itself,
 # so the entry point and the default check against the live state are executed.
+# That subprocess test skips with a reason when the root Manifest.toml is
+# missing (the file is gitignored; CI instantiates it, a fresh local clone
+# may not). The child julia command drops session flags that change the 1.10
+# cache key or force pkgimages off: --code-coverage, --pkgimages,
+# --check-bounds, --track-allocation, and --inline.
+#
+# Deferred, not closed here (need an LRC or CI timing measurement, or are
+# won't-fix history): (1) hpc-setup.sh precompiles with the default load path
+# while sbatch sets JULIA_LOAD_PATH="@:@stdlib" — check the first array task's
+# wall time on the next LRC run; (2) whether CI's child reuses the cache built
+# by "Install dependencies" — compare test (lts) time on a post-filter head
+# against the ~2 h baseline; (3) round-9/10 commit-message Minor counts are
+# recorded on the PR and history is not rewritten.
 
 import Test
 import CSV
 import DataFrames
 import StableRNGs
 import Random
+
+# Nested modules must stay at true module top-level (cannot live inside `if`).
+# File is included in default discovery; only the heavy suite below is gated.
+const RUN_SLOW =
+    lowercase(strip(get(ENV, "MYCELIA_RUN_ALL", "false"))) == "true" ||
+    lowercase(strip(get(ENV, "MYCELIA_RUN_SLOW", "false"))) == "true"
 
 module Harness
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "indel_reroute_evidence.jl"))
@@ -92,6 +118,127 @@ end
 cell_index(cell) = findfirst(==(cell), PREREGISTERED_CELLS)
 rate_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).error_rate
 readlen_of(c) = Analysis.parse_cell_id(PREREGISTERED_CELLS[c]).read_length
+
+# Flags that change the Julia 1.10 precompile cache key, or that force
+# pkgimages off (cold compile). The child julia in the subprocess provenance
+# test must drop these if they were inherited from the parent session.
+const CHILD_JULIA_SESSION_FLAGS = (
+    "--code-coverage", "--pkgimages", "--check-bounds",
+    "--track-allocation", "--inline",
+)
+
+function child_julia_cmd(julia_cmd = Base.julia_cmd())
+    return Cmd(filter(arg -> !any(startswith(arg, flag) for flag in
+        CHILD_JULIA_SESSION_FLAGS), julia_cmd.exec))
+end
+
+function missing_root_manifest_skip_reason(root::AbstractString)
+    isfile(joinpath(root, "Manifest.toml")) && return nothing
+    return "root Manifest.toml is missing (gitignored; run Pkg.instantiate() before this subprocess test)"
+end
+
+# Ungated smoke: a few seconds, pure Julia contract checks for default CI.
+Test.@testset "td2rxh evidence smoke" begin
+    cells = Harness.select_cells("td2rxh")
+    Test.@test Harness.cell_id.(cells) == PREREGISTERED_CELLS
+    Test.@test Analysis.TD2RXH_EXPECTED_CELLS == PREREGISTERED_CELLS
+    Test.@test all(c -> c.kmax == 31, cells)
+    Test.@test Analysis.TD2RXH_N_SEEDS == 16
+    Test.@test Analysis.TD2RXH_H1_MAX_INCREMENTAL_SECONDS_PER_READ == 0.30
+    Test.@test Analysis.TD2RXH_ALPHA == 0.05
+    Test.@test Harness.select_cells("all") === Harness.ALL_CELLS
+    Test.@test Harness.select_cells("smoke") === Harness.SMOKE_CELLS
+    Test.@test_throws ArgumentError Harness.select_cells("td2rhx")
+    Test.@test Harness.parse_args(["--cells", "td2rxh", "--seeds", "3"]) ==
+               Dict("cells" => "td2rxh", "seeds" => "3")
+    Test.@test_throws ArgumentError Harness.parse_args(["--cell", "td2rxh"])
+    Test.@test Harness.CSV_HEADER == vcat(LEGACY_HEADER, NEW_COLUMNS)
+end
+
+# td-wj2s: the header and check_provenance "Not covered" lists must stay one
+# list, and the documented gaps (including those that need a label-format
+# decision) have to appear in that list.
+Test.@testset "check_provenance Not-covered list is unified (td-wj2s)" begin
+    source = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+        "indel_reroute_evidence.jl"), String)
+    header_end = findfirst("import Pkg", source)
+    Test.@test header_end !== nothing
+    header = source[1:(first(header_end) - 1)]
+    doc_start = findfirst("check_provenance(project; loaded", source)
+    doc_fn = findfirst("function check_provenance", source)
+    Test.@test doc_start !== nothing && doc_fn !== nothing
+    docstring = source[first(doc_start):(first(doc_fn) - 1)]
+    # One list: the docstring defers to the header instead of repeating a
+    # shorter, divergent set of gaps.
+    Test.@test occursin("file header", lowercase(docstring))
+    required = (
+        "Overrides.toml",
+        "LocalPreferences.toml",
+        "precompile cache",
+        "path =",
+        "run label",
+    )
+    for phrase in required
+        Test.@test occursin(phrase, header)
+    end
+    # Hashing Overrides.toml or LocalPreferences into the run label is a
+    # format decision, not something this pass invents.
+    Test.@test occursin("format decision", lowercase(header)) ||
+               occursin("label-format", lowercase(header)) ||
+               occursin("not decided", lowercase(header))
+end
+
+# td-wmvp: pin the box-closable round-7 doc nits (source-level, default CI).
+Test.@testset "round-7 deferred doc nits (td-wmvp)" begin
+    root = joinpath(@__DIR__, "..", "..")
+    analysis = read(joinpath(root, "benchmarking", "td2rxh_paired_analysis.jl"), String)
+    readme = read(joinpath(root, "benchmarking", "results", "td2rxh-evidence",
+        "27118659", "README.md"), String)
+    source = read(@__FILE__, String)
+    header_end = findfirst("import Test", source)
+    test_header = source[1:(first(header_end) - 1)]
+    # Item 5: H1' is labelled as incremental cost, an upper bound, not bare
+    # "decode cost".
+    Test.@test occursin("H1' (incremental cost", analysis)
+    # Item 1: the exact-n cap is labelled defence-in-depth (n <= 16 through main).
+    Test.@test occursin("defence-in-depth", analysis)
+    # Item 4: the >=1-engaged rule can still include unengaged seeds in the H1' median.
+    Test.@test occursin("unengaged", analysis)
+    # Item 6: the committed evidence was launched by the hardened sbatch at e984af44.
+    Test.@test occursin("at e984af44", readme)
+    # Item 18: most analysis guards are reached through the test-side analyse() mirror.
+    Test.@test occursin("analyse() helper", test_header) ||
+               occursin("analyse() mirrors", test_header) ||
+               occursin("test-side analyse()", test_header)
+end
+
+# td-8ihz: child-julia cache-key flags, Manifest skip, and Dep2 mismatch.
+# These helpers are also used by the slow subprocess test below.
+Test.@testset "subprocess julia flags and Manifest skip (td-8ihz)" begin
+    filtered = child_julia_cmd(Cmd([
+        "julia",
+        "--track-allocation=user",
+        "--inline=no",
+        "--code-coverage=@user",
+        "--pkgimages=no",
+        "--check-bounds=yes",
+        "--color=yes",
+    ]))
+    Test.@test filtered.exec == ["julia", "--color=yes"]
+
+    mktempdir() do dir
+        reason = missing_root_manifest_skip_reason(dir)
+        Test.@test reason isa AbstractString
+        Test.@test occursin("Manifest.toml", reason)
+        Test.@test occursin("instantiate", lowercase(reason))
+        write(joinpath(dir, "Manifest.toml"), "manifest_format = \"2.0\"\n")
+        Test.@test missing_root_manifest_skip_reason(dir) === nothing
+    end
+end
+
+if !RUN_SLOW
+    @info "Skipping remaining td-2rxh evidence analysis tests (set MYCELIA_RUN_SLOW=true or MYCELIA_RUN_ALL=true)"
+else
 
 Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
     Test.@testset "td2rxh cell grid matches the pre-registration" begin
@@ -164,6 +311,9 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         undefined = Analysis.signflip_signed_rank_test(zeros(4))
         Test.@test undefined.n == 0 && isnan(undefined.pvalue)
         Test.@test_throws ArgumentError Analysis.signflip_signed_rank_test([1.0, NaN])
+        # Defence-in-depth cap (td-wmvp item 1): unreachable through main (n=16).
+        Test.@test_throws ArgumentError Analysis.signflip_signed_rank_test(
+            collect(1.0:(Analysis.TD2RXH_MAX_EXACT_N + 1)))
         # Symmetric: sign reversal leaves the two-sided p unchanged.
         Test.@test Analysis.signflip_signed_rank_test(-collect(1.0:8.0)).pvalue ≈ 2 / 256
         # Mixed signs WITH a tie, hand-enumerated. |d| = (1, 1, 2) gets average
@@ -365,6 +515,10 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test !r.verdicts[1, :h2_holds]
         Test.@test Analysis._engaged("3") && !Analysis._engaged("") &&
                    !Analysis._engaged(missing) && !Analysis._engaged(0)
+        # Real branch (td-wmvp item 16): 0 hits the Integer method, so a
+        # >= 1 -> >= 0 mutant on the Real branch would survive without these.
+        Test.@test Analysis._engaged(1.0) && !Analysis._engaged(0.5) &&
+                   !Analysis._engaged(0.0)
     end
 
     Test.@testset "empty assembly: NaN fit identity is excluded, not scored 0" begin
@@ -528,8 +682,14 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test check(a, src(a), [proj(a)]; packages = ok_pkgs) == src(realpath(a))
         Test.@test_throws r"package Dep was loaded from .* but the project resolves it" check(
             a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, dep_here)])
+        # Distinct name (Dep2): a first-wins de-dup by name cannot drop this
+        # mismatch behind the good "Dep" row in ok_pkgs (td-8ihz).
+        Test.@test_throws r"package Dep2 was loaded from .* but the project resolves it" check(
+            a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep2", dep_elsewhere, dep_here)])
+        # ok_pkgs first so a check that only inspects the first package cannot
+        # pass this (td-wj2s: nothing-check-first-only).
         Test.@test_throws r"package Dep is loaded .* cannot resolve it" check(
-            a, src(a), [proj(a)]; packages = [("Dep", dep_elsewhere, nothing)])
+            a, src(a), [proj(a)]; packages = [ok_pkgs; ("Dep", dep_elsewhere, nothing)])
 
         # Through script_main with a REAL refusal: the check runs before anything,
         # so no arm runs and no CSV is written (round 9: checking after main()
@@ -579,7 +739,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test length(preloaded) == 1
         Test.@test only(preloaded)[3] === nothing
         Test.@test_throws r"package FakeDepTd2rxh is loaded" check(
-            a, src(a), [proj(a)]; packages = preloaded)
+            a, src(a), [proj(a)]; packages = [ok_pkgs; preloaded])
     end
 
     Test.@testset "the script itself: default provenance check, real entry point" begin
@@ -588,31 +748,36 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         # executed (round 10: a no-op default survived every in-process test).
         # `--cells nonexistent` stops a run right after a PASSED check, so no
         # assembly runs either way. The child drops this session's coverage,
-        # pkgimages and bounds-check flags: under Pkg.test(coverage=true) they
-        # made it compile every package from scratch (round 11: ~36 min).
+        # pkgimages, bounds-check, track-allocation and inline flags: under
+        # Pkg.test(coverage=true) they made it compile every package from
+        # scratch (round 11: ~36 min). --track-allocation forces pkgimages off;
+        # --inline is part of the 1.10 cache key (td-8ihz).
         root = realpath(joinpath(@__DIR__, "..", ".."))
-        script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
-        session_only = ("--code-coverage", "--pkgimages", "--check-bounds")
-        julia = Cmd(filter(arg -> !any(startswith(arg, f) for f in session_only),
-            Base.julia_cmd().exec))
-        function run_script(load_path::String)
-            out, err = IOBuffer(), IOBuffer()
-            proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
-                "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
-                run(pipeline(
-                    ignorestatus(`$(julia) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
-                    stdout = out, stderr = err))
+        skip_reason = missing_root_manifest_skip_reason(root)
+        if skip_reason !== nothing
+            Test.@test_skip skip_reason
+        else
+            script = joinpath(root, "benchmarking", "indel_reroute_evidence.jl")
+            julia = child_julia_cmd()
+            function run_script(load_path::String)
+                out, err = IOBuffer(), IOBuffer()
+                proc = withenv("JULIA_LOAD_PATH" => load_path, "MYCELIA_PROJECT" => nothing,
+                    "JULIA_PROJECT" => nothing, "LD_LIBRARY_PATH" => "") do
+                    run(pipeline(
+                        ignorestatus(`$(julia) --startup-file=no --project=$(root) $(script) --cells nonexistent`);
+                        stdout = out, stderr = err))
+                end
+                return proc.exitcode, String(take!(out)), String(take!(err))
             end
-            return proc.exitcode, String(take!(out)), String(take!(err))
+            rc, out, err = run_script("@:@stdlib")
+            Test.@test occursin("# mycelia=$(joinpath(root, "src", "Mycelia.jl"))", out)
+            Test.@test rc == 1 && occursin("unknown --cells", err)
+            # An environment ahead of the project: refused before anything else runs.
+            rc2, out2, err2 = run_script(mktempdir() * ":@:@stdlib")
+            Test.@test rc2 == 1
+            Test.@test !occursin("# mycelia=", out2)
+            Test.@test occursin("not first on the load path", err2)
         end
-        rc, out, err = run_script("@:@stdlib")
-        Test.@test occursin("# mycelia=$(joinpath(root, "src", "Mycelia.jl"))", out)
-        Test.@test rc == 1 && occursin("unknown --cells", err)
-        # An environment ahead of the project: refused before anything else runs.
-        rc2, out2, err2 = run_script(mktempdir() * ":@:@stdlib")
-        Test.@test rc2 == 1
-        Test.@test !occursin("# mycelia=", out2)
-        Test.@test occursin("not first on the load path", err2)
     end
 
     Test.@testset "H1' threshold and three states" begin
@@ -710,8 +875,11 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
             push!(paths, path)
         end
         out = joinpath(dir, "analysis")
-        Test.@test Analysis.td2rxh_analysis_main(
-            ["--csv", join(paths, ","), "--output-dir", out]) == 0
+        # Do not print the full report to CI stdout (td-wmvp item 19).
+        Test.@test redirect_stdout(devnull) do
+            Analysis.td2rxh_analysis_main(
+                ["--csv", join(paths, ","), "--output-dir", out])
+        end == 0
         report = read(joinpath(out, "report.md"), String)
         Test.@test occursin("td-2rxh ACCEPTANCE: MET", report)
         Test.@test occursin("H1': HOLDS", report)
@@ -729,5 +897,7 @@ Test.@testset "td-2rxh evidence harness and pre-registered analysis" begin
         Test.@test !isfile(joinpath(out, "report.md"))
     end
 end
+
+end # RUN_SLOW
 
 end

@@ -394,6 +394,33 @@ Test.@testset "Frontier successor topology is indexed once" begin
     Test.@test resolved_edges[] == Graphs.ne(graph.graph)
 end
 
+Test.@testset "Both-strand frontier topology matches weighted decode (td-tg05)" begin
+    # Every edge of this reverse-complement-symmetric doublestrand graph carries
+    # evidence on both strands. The probe must offer exactly the successors the
+    # weighted decode graph offers, on both strands, so it never admits a cell
+    # the decoder cannot reach.
+    symmetric_record = FASTX.FASTQ.Record("symmetric", "ACGTACGTA", repeat("I", 9))
+    raw = Mycelia.Rhizomorph.build_qualmer_graph(
+        [symmetric_record], 5; mode = :doublestrand)
+    raw_index = Mycelia._indel_frontier_successor_index(raw)
+    weighted_index = Mycelia._indel_frontier_successor_index(
+        Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw))
+    for vertex in MetaGraphsNext.labels(raw)
+        for strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+            cell = Mycelia._IndelFrontierCell(vertex, strand, :M, 0, 0)
+            raw_successors = Mycelia._indel_frontier_successors(
+                raw_index, cell, typemax(Int))
+            weighted_successors = Mycelia._indel_frontier_successors(
+                weighted_index, cell, typemax(Int))
+            Test.@test Set(raw_successors.successors) ==
+                       Set(weighted_successors.successors)
+        end
+        Test.@test Mycelia._indel_frontier_start_strands(
+            raw_index, vertex, :doublestrand, Mycelia.Rhizomorph.Forward) ==
+                   [Mycelia.Rhizomorph.Forward]
+    end
+end
+
 Test.@testset "Undirected frontier topology matches weighted decode" begin
     graph = MetaGraphsNext.MetaGraph(
         Graphs.Graph();
