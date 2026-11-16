@@ -63,10 +63,13 @@ fi
 # component, and a login profile may point TMPDIR through one (on Perlmutter,
 # ~/workspace is a symlink to CFS). Resolve the output root and keep TMPDIR on a
 # real path beneath it, or every :iterative cell fails.
-mkdir -p "${OUTDIR}"
-OUTDIR="$(realpath "${OUTDIR}")"
+# No `set -e` here, so every step that defines the root must fail loudly: an
+# empty OUTDIR would otherwise make the runner write the grid into the checkout.
+mkdir -p "${OUTDIR}" || { echo "ERROR: cannot create D5_OUTDIR=${OUTDIR}" >&2; exit 1; }
+OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2; exit 1; }
+[[ -n "${OUTDIR}" ]] || { echo "ERROR: D5_OUTDIR resolved to an empty path" >&2; exit 1; }
 export TMPDIR="${OUTDIR}/tmp"
-mkdir -p "${TMPDIR}"
+mkdir -p "${TMPDIR}" || { echo "ERROR: cannot create ${TMPDIR}" >&2; exit 1; }
 export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""
@@ -94,7 +97,7 @@ status=$?
 if [[ "${status}" -eq 0 ]]; then
   echo ">>> OK phase=${PHASE} task=${TASK_INDEX}  $(date)"
 elif [[ "${status}" -eq 3 && "${PHASE}" == "merge" ]]; then
-  echo ">>> INCOMPLETE merge: see merge_provenance.json; resubmit the Phase A/B indices with absent or retryable cells, then re-merge  $(date)"
+  echo ">>> BLOCKED merge: read merge_provenance.json 'blocking_reasons' (absent/retryable cells -> resubmit those indices; mixed tau or code versions -> a resubmit will not help)  $(date)"
 elif [[ "${status}" -eq 3 ]]; then
   echo ">>> RETRY phase=${PHASE} task=${TASK_INDEX}: some cells need a resubmit of this index  $(date)"
 else

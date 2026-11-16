@@ -238,14 +238,21 @@ Test.@testset "merge: absent and unreadable cells, end to end through run_merge"
         Test.@test p.n_absent == 4 && p.n_unreadable == 1 && p.n_incomplete == 5
         # Through the real entry point: incomplete -> non-zero, tables still written.
         # (Rows built from EMPTY_CONTEXT have git_dirty = missing, i.e. not provably
-        # clean; allow_sha_mismatch waives exactly that, as it would in production.)
-        cli = (; toy = true, allow_sha_mismatch = true, allow_incomplete = false)
+        # clean; --allow-mixed-code waives exactly that. --allow-sha-mismatch is for the manifest.)
+        cli = (; toy = true, allow_sha_mismatch = true, allow_mixed_code = true,
+            allow_incomplete = false)
         Test.@test run_merge(cli, root) == 5
         tsv = read(joinpath(root, "d5_cells.tsv"), String)
         Test.@test count("\tabsent\t", tsv) == 4 && count("\tunreadable\t", tsv) == 1
         prov = JSON.parsefile(joinpath(root, "merge_provenance.json"))
         Test.@test prov["n_absent"] == 4 && prov["blocking_problems"] == 5
         Test.@test prov["overrides"]["allow_incomplete"] == false
+            Test.@test length(prov["blocking_reasons"]) == 1
+            Test.@test length(prov["waived_reasons"]) == 1  # unclean rows, waived
+            # Without --allow-mixed-code the unclean (git_dirty = missing) rows block too,
+            # and --allow-incomplete does not waive them.
+            Test.@test run_merge(merge(cli, (; allow_incomplete = true,
+                allow_mixed_code = false)), root) == 2
         Test.@test run_merge(merge(cli, (; allow_incomplete = true)), root) == 0
         # A stray unreadable directory that is not a registered cell still counts.
         stray = joinpath(root, "cells", "not_a_registered_cell")
@@ -277,7 +284,7 @@ Test.@testset "merge verdict: completeness, code version and tau are waived diff
     p = merge_problems(rows)
     Test.@test p.n_incomplete == 0 && p.n_tau_conflicts == 0
     Test.@test p.n_sha_conflicts == 0 && p.n_dirty_rows == 0
-    none = (; allow_incomplete = false, allow_sha_mismatch = false)
+    none = (; allow_incomplete = false, allow_mixed_code = false)
     Test.@test merge_verdict(p; none...).blocking == 0
     # A retryable row is incomplete; --allow-incomplete waives it (and says so).
     err = clean(as_dict(row_for(b[3]; phase = :B, status = "error", nga50 = missing,
@@ -285,7 +292,8 @@ Test.@testset "merge verdict: completeness, code version and tau are waived diff
     pe = merge_problems(vcat(rows, [err]))
     Test.@test pe.n_retry == 1 && pe.n_incomplete == 1
     Test.@test merge_verdict(pe; none...).blocking == 1
-    ve = merge_verdict(pe; allow_incomplete = true, allow_sha_mismatch = false)
+    ve = merge_verdict(pe; allow_incomplete = true, allow_mixed_code = false)
+    Test.@test isempty(ve.blocking_reasons) && length(ve.waived_reasons) == 1
     Test.@test ve.blocking == 0 && ve.waived == 1
     # Mixed tau is NEVER waivable, not even with both flags.
     mixed = vcat(rows,
@@ -293,16 +301,16 @@ Test.@testset "merge verdict: completeness, code version and tau are waived diff
     pm = merge_problems(mixed)
     Test.@test pm.n_tau_conflicts == 1 && length(pm.tau_pairs) == 2
     Test.@test merge_verdict(pm; allow_incomplete = true,
-        allow_sha_mismatch = true).blocking == 1
+        allow_mixed_code = true).blocking == 1
     # Mixed SHAs / unclean rows block unless --allow-sha-mismatch, never by
     # --allow-incomplete.
     shas = [merge(rows[1], Dict{String, Any}("mycelia_git_sha" => "b" ^ 40)), rows[2]]
     ps = merge_problems(shas)
     Test.@test ps.n_sha_conflicts == 1
     Test.@test merge_verdict(ps; allow_incomplete = true,
-        allow_sha_mismatch = false).blocking == 1
+        allow_mixed_code = false).blocking == 1
     Test.@test merge_verdict(ps; allow_incomplete = false,
-        allow_sha_mismatch = true).blocking == 0
+        allow_mixed_code = true).blocking == 0
     dirty = [merge(rows[1], Dict{String, Any}("git_dirty" => true)), rows[2]]
     Test.@test merge_problems(dirty).n_dirty_rows == 1
     # Absent rows carry no SHA / dirty state and are not "mixed code".
@@ -405,10 +413,13 @@ end
         Test.@test msg !== nothing && occursin("unknown argument", msg)
         every = D5OntAdaptiveGridDriver.parse_cli(["--phase", "A", "--read-set-index",
             "0", "--output-dir", "/x", "--toy", "--allow-sha-mismatch", "--replan",
-            "--allow-incomplete"])
+            "--allow-incomplete", "--allow-mixed-code"])
         Test.@test every.phase === :A && every.read_set_index == 0
         Test.@test every.output_dir == "/x" && every.toy && every.allow_sha_mismatch
-        Test.@test every.replan && every.allow_incomplete
+        Test.@test every.replan && every.allow_incomplete && every.allow_mixed_code
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge",
+            "--output-dir", ""]))
+        Test.@test msg !== nothing && occursin("non-empty path", msg)
         both = D5OntAdaptiveGridDriver.parse_cli(["--phase", "B", "--tau", "0.8",
             "--tau-hat", "0.6", "--list"])
         Test.@test both.tau == 0.8 && both.tau_hat == 0.6

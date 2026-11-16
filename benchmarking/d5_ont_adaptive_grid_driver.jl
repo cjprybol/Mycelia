@@ -575,20 +575,21 @@ end
 const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--tau", "--tau-hat",
     "--output-dir")
 const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
-    "--allow-incomplete")
+    "--allow-incomplete", "--allow-mixed-code")
 
 """
     parse_cli(args) -> NamedTuple
 
 `--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
-`--phase merge` | `--list`; plus `--output-dir`, `--toy`, `--allow-sha-mismatch`
-(waive code-version refusals and, at merge, mixed SHAs / unclean-tree rows),
+`--phase merge` | `--list`; plus `--output-dir` (non-empty), `--toy`,
+`--allow-sha-mismatch` (waive THIS checkout's code-version refusals: SHA differs
+from the manifest, dirty or unreadable git state), `--allow-mixed-code` (merge:
+publish rows written at more than one SHA or from an unclean tree),
 `--replan` (Phase B: recompute cells checkpointed under a different tau) and
 `--allow-incomplete` (merge: publish even when registered cells are absent,
 unreadable or retryable; never waives mixed tau). Unknown arguments are errors.
 Phase B refuses to run without tau: the grid never chooses tau itself.
 """
-
 function parse_cli(args::AbstractVector{<:AbstractString})
     # A mistyped switch (`--replann`) must not silently do nothing.
     i = 1
@@ -629,9 +630,15 @@ function parse_cli(args::AbstractVector{<:AbstractString})
         t === nothing || (0.0 <= t <= 1.0) || error("$(name) must be in [0, 1], got $(t)")
     end
     return (; phase, read_set_index, tau, tau_hat, toy = "--toy" in args,
-        output_dir = value("--output-dir"),
+        output_dir = let d = value("--output-dir")
+            d !== nothing && isempty(strip(d)) &&
+                error("--output-dir must be a non-empty path (an empty one resolves to " *
+                      "the current directory and would write the grid into the checkout)")
+            d
+        end,
         allow_sha_mismatch = "--allow-sha-mismatch" in args,
-        replan = "--replan" in args, allow_incomplete = "--allow-incomplete" in args)
+        replan = "--replan" in args, allow_incomplete = "--allow-incomplete" in args,
+        allow_mixed_code = "--allow-mixed-code" in args)
 end
 
 end # module

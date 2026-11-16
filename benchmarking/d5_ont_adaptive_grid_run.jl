@@ -767,44 +767,44 @@ function merge_problems(rows; n_unreadable_entries::Int = 0)
 end
 
 """
-What blocks a merge, given the problem counts and the operator's flags.
+What blocks a merge, given the problem counts and the operator's flags. Each
+flag waives exactly one class, so accepting one never silently accepts another:
 
-  * Incomplete cells block unless `--allow-incomplete` (a partial view of a
-    grid still running is legitimate).
-  * Mixed code versions (more than one SHA, or rows from an unclean tree)
-    block unless `--allow-sha-mismatch`, the same flag that let those rows be
-    written.
-  * More than one (tau, tau_hat) pair ALWAYS blocks: a Phase B table is a
-    function of tau, and no flag makes a mixed one meaningful (same rule as
-    track_a_merge_hosts.jl's non-waivable consistency check).
+  * incomplete cells (absent / unreadable / retryable): `--allow-incomplete`
+    (a partial view of a grid still running is legitimate);
+  * rows written at more than one Mycelia SHA or from an unclean tree:
+    `--allow-mixed-code` (distinct from --allow-sha-mismatch, which only lets
+    THIS checkout differ from the manifest);
+  * more than one (tau, tau_hat) pair: never waivable. A Phase B table is a
+    function of tau (same rule as track_a_merge_hosts.jl's consistency check).
 
-Every waived problem is reported in `waived`, so the caller can warn about it.
-Returns `(; blocking, waived, reasons)` with counts and human-readable reasons.
+Returns `(; blocking, waived, blocking_reasons, waived_reasons)`.
 """
-function merge_verdict(p; allow_incomplete::Bool, allow_sha_mismatch::Bool)
+function merge_verdict(p; allow_incomplete::Bool, allow_mixed_code::Bool)
     blocking = 0
     waived = 0
-    reasons = String[]
-    if p.n_incomplete > 0
-        push!(reasons,
-            "$(p.n_incomplete) incomplete cell(s) ($(p.n_absent) absent, " *
-            "$(p.n_unreadable) unreadable, $(p.n_retry) retryable)")
-        allow_incomplete ? (waived += p.n_incomplete) : (blocking += p.n_incomplete)
+    blocking_reasons = String[]
+    waived_reasons = String[]
+    function record(n, reason, waive)
+        n > 0 || return
+        if waive
+            waived += n
+            push!(waived_reasons, reason)
+        else
+            blocking += n
+            push!(blocking_reasons, reason)
+        end
     end
-    code = p.n_sha_conflicts + p.n_dirty_rows
-    if code > 0
-        push!(reasons,
-            "mixed code versions ($(length(p.shas)) SHA(s), " *
-            "$(p.n_dirty_rows) row(s) from an unclean tree)")
-        allow_sha_mismatch ? (waived += code) : (blocking += code)
-    end
-    if p.n_tau_conflicts > 0
-        push!(reasons,
-            "Phase B rows from $(length(p.tau_pairs)) different (tau, tau_hat) " *
-            "pairs $(p.tau_pairs); never waivable")
-        blocking += p.n_tau_conflicts
-    end
-    return (; blocking, waived, reasons)
+    record(p.n_incomplete,
+        "$(p.n_incomplete) incomplete cell(s) ($(p.n_absent) absent, " *
+        "$(p.n_unreadable) unreadable, $(p.n_retry) retryable)", allow_incomplete)
+    record(p.n_sha_conflicts + p.n_dirty_rows,
+        "mixed code versions ($(length(p.shas)) SHA(s), $(p.n_dirty_rows) row(s) " *
+        "from an unclean tree)", allow_mixed_code)
+    record(p.n_tau_conflicts,
+        "Phase B rows from $(length(p.tau_pairs)) different (tau, tau_hat) pairs " *
+        "$(p.tau_pairs); never waivable", false)
+    return (; blocking, waived, blocking_reasons, waived_reasons)
 end
 
 function run_merge(cli, root)
@@ -820,12 +820,13 @@ function run_merge(cli, root)
     publish_tsv(joinpath(root, "replicate_evaluability.tsv"), replicate_evaluability(cells))
 
     p = merge_problems(collected.rows; n_unreadable_entries = length(collected.unreadable))
-    v = merge_verdict(p; cli.allow_incomplete, cli.allow_sha_mismatch)
+    v = merge_verdict(p; cli.allow_incomplete, cli.allow_mixed_code)
     D5OntAdaptiveGridDriver.save_json_atomically(joinpath(root, "merge_provenance.json"),
         Dict{String, Any}("generated" => string(Dates.now()),
             "mycelia_git_sha" => base.mycelia_git_sha, "git_dirty" => base.git_dirty,
             "host" => base.host, "tool_versions" => tool_versions(),
             "overrides" => Dict("allow_sha_mismatch" => cli.allow_sha_mismatch,
+                "allow_mixed_code" => cli.allow_mixed_code,
                 "allow_incomplete" => cli.allow_incomplete),
             "n_rows" => DataFrames.nrow(cells),
             "n_expected" => length(expected_cells(cli.toy, collected.has_b)),
@@ -836,7 +837,7 @@ function run_merge(cli, root)
             "n_corrected_survival_failed" => p.n_corrected_survival_failed,
             "n_corrected_survival_unavailable" => p.n_corrected_survival_unavailable,
             "blocking_problems" => v.blocking, "waived_problems" => v.waived,
-            "problems" => v.reasons,
+            "blocking_reasons" => v.blocking_reasons, "waived_reasons" => v.waived_reasons,
             "n_survival_rows" => DataFrames.nrow(survival_df),
             "invocation" => "julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl " *
                             join(ARGS, " ")))
@@ -846,10 +847,10 @@ function run_merge(cli, root)
             "$(p.n_corrected_survival_unavailable)")
     v.waived > 0 &&
         @warn "merge WAIVED $(v.waived) problem(s) by flag; the tables are not a " *
-              "complete, single-version grid" reasons = v.reasons
+              "complete, single-version grid" waived = v.waived_reasons
     if v.blocking > 0
         @error "merge found $(v.blocking) blocking problem(s); the tables are written " *
-               "but must not be used as the grid result" reasons = v.reasons
+               "but must not be used as the grid result" blocking = v.blocking_reasons
         return v.blocking
     end
     return 0
@@ -1014,9 +1015,15 @@ if abspath(PROGRAM_FILE) == @__FILE__
         cli.output_dir === nothing &&
             error("--output-dir is required for --phase $(cli.phase)")
         mkpath(abspath(cli.output_dir))
-        # realpath: the iterative corrector refuses a working root that resolves
-        # through a symlink component, and cell output dirs live under this root.
+        # realpath: cell output dirs (corrector output_dir) live under this root, and
+        # the corrector refuses any working root that resolves through a symlink.
         root = realpath(abspath(cli.output_dir))
+        # The corrector's temp roots follow TMPDIR, not --output-dir, and it refuses
+        # a root through a symlink. Pin TMPDIR to a real path under the grid root for
+        # EVERY invocation (sbatch, login node, Lovelace), not only the sbatch.
+        tmp = joinpath(root, "tmp")
+        mkpath(tmp)
+        ENV["TMPDIR"] = tmp
         # Cell failures are caught and checkpointed as rows, so the process would
         # otherwise end normally. Exit non-zero whenever a resubmit is needed, so
         # SLURM shows FAILED and the operator sees it.
