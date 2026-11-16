@@ -583,6 +583,14 @@ function run_phase_b(cli, root)
             action = phase_b_action(plan, rs, cli.toy)
             k_sel = plan.k_star === D5OntAdaptiveGridDriver.NO_FEASIBLE_K ?
                     String(plan.k_star) : plan.k_star
+            # Load and check the reads OUTSIDE the per-cell closure: a corrupt read
+            # set must fail the task once (exit 1, "fix the read set"), not become
+            # one retryable error row per cell that a resubmit cannot fix.
+            if action === :assemble && records === nothing
+                records = check_read_count(
+                    reduce(vcat, read_records.(meta["reads_paths"])), meta,
+                    dirname(marker))
+            end
             push!(statuses,
                 run_or_resume(root, cell, context; phase = :B,
                     stale = phase_b_stale(cli), replan = cli.replan,
@@ -598,10 +606,6 @@ function run_phase_b(cli, root)
                     elseif action === :reuse
                         reuse_row(root, cell, plan, context, row_kwargs)
                     else
-                        records === nothing &&
-                            (records = check_read_count(
-                                reduce(vcat, read_records.(meta["reads_paths"])), meta,
-                                dirname(marker)))
                         assemble_cell(cell, plan.k_star, records, ref, cell_dir, context;
                             phase = :B, row_kwargs...)
                     end
@@ -695,7 +699,10 @@ function collect_merge_rows(root::AbstractString, toy::Bool)
             @warn "unreadable checkpoint" entry exception = e
         end
     end
-    has_b = any(r -> isequal(get(r, "phase", missing), "B"), rows)
+    # Phase B is expected once ANY Phase B checkpoint exists, readable or not:
+    # a corrupt-only Phase B must not make Phase B look like it never started.
+    has_b = any(r -> isequal(get(r, "phase", missing), "B"), rows) ||
+            any(id -> occursin("__adaptive__", id), unreadable)
     loaded = Set(r["cell_id"] for r in rows)
     unreadable_set = Set(unreadable)
     as_row(nt) = Dict{String, Any}(String(k) => v for (k, v) in pairs(nt))
@@ -718,32 +725,86 @@ function collect_merge_rows(root::AbstractString, toy::Bool)
 end
 
 """
-Everything that makes a merged grid incomplete or internally inconsistent.
-`n_problems` counts absent, unreadable and retryable cells, plus one for each
-EXTRA tau pair or code version beyond the first: a published table must come
-from one (tau, tau_hat) and one Mycelia SHA. Corrected-survival diagnostic
-failures are reported but are not problems (the diagnostic never feeds k*).
+Everything that makes a merged grid incomplete or internally inconsistent, as
+COUNTS (no policy). Two different kinds, kept apart because they are waived
+differently (see `merge_verdict`):
+
+  * completeness: absent cells, unreadable checkpoints (every unreadable entry,
+    registered or not, passed in as `n_unreadable_entries`), retryable cells.
+  * consistency: more than one (tau, tau_hat) pair among Phase B rows; more
+    than one Mycelia SHA among rows; rows written from a tree that was not
+    clean (`git_dirty` not `false`).
+
+Corrected-survival diagnostic failures are reported but are not problems
+(the diagnostic never feeds k*).
 """
-function merge_problems(rows)
+function merge_problems(rows; n_unreadable_entries::Int = 0)
     status(r) = get(r, "status", missing)
     count_status(s) = count(r -> isequal(status(r), s), rows)
+    measured_rows = [r
+                     for r in rows
+                     if !(status(r) in (D5OntAdaptiveGridDriver.STATUS_ABSENT,
+        D5OntAdaptiveGridDriver.STATUS_UNREADABLE))]
     n_retry = needs_retry(skipmissing(status.(rows)))
     tau_pairs = unique((r["tau"], r["tau_hat"])
-    for r in rows
+    for r in measured_rows
     if isequal(get(r, "phase", missing), "B") && !ismissing(get(r, "tau", missing)))
-    shas = unique(r["mycelia_git_sha"]
-    for r in rows
-    if !ismissing(get(r, "mycelia_git_sha", missing)))
+    shas = unique(get(r, "mycelia_git_sha", missing) for r in measured_rows)
+    n_dirty_rows = count(r -> !isequal(get(r, "git_dirty", missing), false), measured_rows)
     n_absent = count_status(D5OntAdaptiveGridDriver.STATUS_ABSENT)
-    n_unreadable = count_status(D5OntAdaptiveGridDriver.STATUS_UNREADABLE)
+    n_unreadable = max(n_unreadable_entries,
+        count_status(D5OntAdaptiveGridDriver.STATUS_UNREADABLE))
     corrected(s) = count(r -> isequal(get(r, "corrected_survival_status", missing), s),
         rows)
-    n_problems = n_absent + n_unreadable + n_retry + max(0, length(tau_pairs) - 1) +
-                 max(0, length(shas) - 1)
-    return (; n_problems, n_absent, n_unreadable, n_retry,
-        tau_pairs = [[t, th] for (t, th) in tau_pairs], shas,
+    return (; n_absent, n_unreadable, n_retry,
+        n_incomplete = n_absent + n_unreadable + n_retry,
+        tau_pairs = [[t, th] for (t, th) in tau_pairs],
+        n_tau_conflicts = max(0, length(tau_pairs) - 1),
+        shas = collect(shas), n_sha_conflicts = max(0, length(shas) - 1),
+        n_dirty_rows,
         n_corrected_survival_failed = corrected("failed"),
         n_corrected_survival_unavailable = corrected("unavailable"))
+end
+
+"""
+What blocks a merge, given the problem counts and the operator's flags.
+
+  * Incomplete cells block unless `--allow-incomplete` (a partial view of a
+    grid still running is legitimate).
+  * Mixed code versions (more than one SHA, or rows from an unclean tree)
+    block unless `--allow-sha-mismatch`, the same flag that let those rows be
+    written.
+  * More than one (tau, tau_hat) pair ALWAYS blocks: a Phase B table is a
+    function of tau, and no flag makes a mixed one meaningful (same rule as
+    track_a_merge_hosts.jl's non-waivable consistency check).
+
+Every waived problem is reported in `waived`, so the caller can warn about it.
+Returns `(; blocking, waived, reasons)` with counts and human-readable reasons.
+"""
+function merge_verdict(p; allow_incomplete::Bool, allow_sha_mismatch::Bool)
+    blocking = 0
+    waived = 0
+    reasons = String[]
+    if p.n_incomplete > 0
+        push!(reasons,
+            "$(p.n_incomplete) incomplete cell(s) ($(p.n_absent) absent, " *
+            "$(p.n_unreadable) unreadable, $(p.n_retry) retryable)")
+        allow_incomplete ? (waived += p.n_incomplete) : (blocking += p.n_incomplete)
+    end
+    code = p.n_sha_conflicts + p.n_dirty_rows
+    if code > 0
+        push!(reasons,
+            "mixed code versions ($(length(p.shas)) SHA(s), " *
+            "$(p.n_dirty_rows) row(s) from an unclean tree)")
+        allow_sha_mismatch ? (waived += code) : (blocking += code)
+    end
+    if p.n_tau_conflicts > 0
+        push!(reasons,
+            "Phase B rows from $(length(p.tau_pairs)) different (tau, tau_hat) " *
+            "pairs $(p.tau_pairs); never waivable")
+        blocking += p.n_tau_conflicts
+    end
+    return (; blocking, waived, reasons)
 end
 
 function run_merge(cli, root)
@@ -758,7 +819,8 @@ function run_merge(cli, root)
     publish_tsv(joinpath(root, "illumina_none_optimum.tsv"), illumina_optimum(cells))
     publish_tsv(joinpath(root, "replicate_evaluability.tsv"), replicate_evaluability(cells))
 
-    p = merge_problems(collected.rows)
+    p = merge_problems(collected.rows; n_unreadable_entries = length(collected.unreadable))
+    v = merge_verdict(p; cli.allow_incomplete, cli.allow_sha_mismatch)
     D5OntAdaptiveGridDriver.save_json_atomically(joinpath(root, "merge_provenance.json"),
         Dict{String, Any}("generated" => string(Dates.now()),
             "mycelia_git_sha" => base.mycelia_git_sha, "git_dirty" => base.git_dirty,
@@ -770,23 +832,25 @@ function run_merge(cli, root)
             "n_absent" => p.n_absent, "n_unreadable" => p.n_unreadable,
             "unreadable_checkpoints" => collected.unreadable, "n_retryable" => p.n_retry,
             "phase_b_tau_pairs" => p.tau_pairs, "row_mycelia_shas" => p.shas,
+            "n_dirty_rows" => p.n_dirty_rows,
             "n_corrected_survival_failed" => p.n_corrected_survival_failed,
             "n_corrected_survival_unavailable" => p.n_corrected_survival_unavailable,
+            "blocking_problems" => v.blocking, "waived_problems" => v.waived,
+            "problems" => v.reasons,
             "n_survival_rows" => DataFrames.nrow(survival_df),
             "invocation" => "julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl " *
                             join(ARGS, " ")))
     n_ok = count(isequal("ok"), cells.status)
-    println("merged $(DataFrames.nrow(cells)) rows ($(n_ok) ok, $(p.n_absent) absent, " *
-            "$(p.n_unreadable) unreadable, $(p.n_retry) retryable; tau pairs " *
-            "$(p.tau_pairs); SHAs $(p.shas); corrected-survival failed " *
-            "$(p.n_corrected_survival_failed), unavailable " *
-            "$(p.n_corrected_survival_unavailable)) into $(root)")
-    if p.n_problems > 0 && !cli.allow_incomplete
-        @error "merge published an INCOMPLETE or MIXED grid ($(p.n_problems) problem(s): " *
-               "absent / unreadable / retryable cells, or more than one tau pair or " *
-               "code version). The tables carry them as rows. Resubmit the affected " *
-               "array indices, or pass --allow-incomplete for a partial view."
-        return p.n_problems
+    println("merged $(DataFrames.nrow(cells)) rows ($(n_ok) ok) into $(root); " *
+            "corrected-survival failed $(p.n_corrected_survival_failed), unavailable " *
+            "$(p.n_corrected_survival_unavailable)")
+    v.waived > 0 &&
+        @warn "merge WAIVED $(v.waived) problem(s) by flag; the tables are not a " *
+              "complete, single-version grid" reasons = v.reasons
+    if v.blocking > 0
+        @error "merge found $(v.blocking) blocking problem(s); the tables are written " *
+               "but must not be used as the grid result" reasons = v.reasons
+        return v.blocking
     end
     return 0
 end
@@ -962,7 +1026,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
             run_merge(cli, root)
         end
         if n_retry > 0
-            println("=== $(n_retry) cell(s) need a resubmit; exiting 3  $(Dates.now()) ===")
+            println("=== $(n_retry) problem(s): ",
+                cli.phase === :merge ? "see merge_provenance.json" :
+                "cells need a resubmit of this index",
+                "; exiting 3  $(Dates.now()) ===")
             exit(3)
         end
     end

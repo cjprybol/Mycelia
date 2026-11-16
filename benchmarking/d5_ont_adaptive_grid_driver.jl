@@ -572,19 +572,22 @@ end
 
 # === CLI parsing (pure, so the tau requirement is testable) ===
 
-"""
-    parse_cli(args) -> NamedTuple
-
-`--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
-`--phase merge` | `--list`; plus `--output-dir`, `--toy`, `--allow-sha-mismatch`,
-`--replan` (Phase B: recompute cells checkpointed under a different tau) and
-`--allow-incomplete` (merge: publish even when registered cells are absent).
-Phase B refuses to run without tau: the grid never chooses tau itself.
-"""
 const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--tau", "--tau-hat",
     "--output-dir")
 const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
     "--allow-incomplete")
+
+"""
+    parse_cli(args) -> NamedTuple
+
+`--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
+`--phase merge` | `--list`; plus `--output-dir`, `--toy`, `--allow-sha-mismatch`
+(waive code-version refusals and, at merge, mixed SHAs / unclean-tree rows),
+`--replan` (Phase B: recompute cells checkpointed under a different tau) and
+`--allow-incomplete` (merge: publish even when registered cells are absent,
+unreadable or retryable; never waives mixed tau). Unknown arguments are errors.
+Phase B refuses to run without tau: the grid never chooses tau itself.
+"""
 
 function parse_cli(args::AbstractVector{<:AbstractString})
     # A mistyped switch (`--replann`) must not silently do nothing.
