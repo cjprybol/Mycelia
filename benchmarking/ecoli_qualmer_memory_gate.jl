@@ -81,7 +81,10 @@ println("COMPOSED config: corrector=:iterative, qualmer_memory_profile=:$(QUALME
         "qualmer_prefilter_min_count=$(PREFILTER_MIN), graph_mode=DoubleStrand")
 println("GATE: completes AND peak RSS <= $(MEMORY_CEILING_GB) GB (aspiration <= $(ASPIRATION_GB) GB); was 74-200 GB+")
 
-benchmark_dir = mktempdir(prefix = "ecoli_qualmer_memory_gate_")
+# cleanup = false: Julia's default removes this at process exit, which would take
+# the contigs FASTA and QUAST report with it before the sbatch wrapper can save
+# them. The wrapper owns this directory's lifetime (it lives under the job TMPDIR).
+benchmark_dir = mktempdir(prefix = "ecoli_qualmer_memory_gate_"; cleanup = false)
 results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
 println("Working directory: $benchmark_dir")
@@ -247,7 +250,11 @@ results = DataFrames.DataFrame(
     NGA50 = Union{Missing, Float64}[nga50],
     num_misassemblies = Union{Missing, Float64}[num_misassemblies],
     dup_ratio = Union{Missing, Float64}[dup_ratio],
-    genome_fraction_quast = Union{Missing, Float64}[genome_fraction])
+    genome_fraction_quast = Union{Missing, Float64}[genome_fraction],
+    # Provenance set by the sbatch wrapper (empty when run by hand): the checkout
+    # HEAD and the sha256 of the Manifest.toml the run actually resolved against.
+    git_head = String[get(ENV, "QUALMER_GATE_HEAD", "")],
+    manifest_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SHA", "")])
 CSV.write(csv_path, results)
 println("\nResults written to: $csv_path")
 println(results)

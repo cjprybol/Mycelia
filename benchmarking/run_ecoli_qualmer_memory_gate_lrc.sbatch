@@ -12,6 +12,8 @@
 # 24024728 held a flat ~34.9 GB peak but was CANCELLED at 12:00:26 by the wall
 # before the corrector finished, so no verdict was printed.
 #SBATCH --time=3-00:00:00
+# Relative to the submit directory; with the documented usage (submit from
+# benchmarking/) the logs land in benchmarking/, not the repo root.
 #SBATCH --output=ecoli_qualmer_memgate_%j.out
 #SBATCH --error=ecoli_qualmer_memgate_%j.err
 
@@ -20,31 +22,41 @@
 # (aspiration 16GB) with the COMPOSED config (:ultralight_quality aggregate storage
 # + qualmer_prefilter_min_count=2). Driver: benchmarking/ecoli_qualmer_memory_gate.jl.
 #
-# Usage (from anywhere inside the checkout to measure; it is the default run dir):
-#   cd ~/workspace/Mycelia && sbatch benchmarking/run_ecoli_qualmer_memory_gate_lrc.sbatch
+# Usage (submit from the checkout's benchmarking/ directory; that checkout is the
+# default run dir and the Slurm logs land beside this script):
+#   cd ~/workspace/Mycelia/benchmarking && sbatch run_ecoli_qualmer_memory_gate_lrc.sbatch
 # Overrides (sbatch exports the submitting environment):
 #   QUALMER_GATE_RUN_DIR=<checkout>   checkout whose code runs (default: the git
 #                                     toplevel of the submit directory)
-#   QUALMER_GATE_MANIFEST=resolve     (default) Pkg.resolve() + instantiate against
-#                                     <checkout>/Project.toml inside the job
-#   QUALMER_GATE_MANIFEST=existing    use <checkout>/Manifest.toml as-is (instantiate only)
-#   QUALMER_GATE_MANIFEST=<path>      copy that Manifest.toml in, then instantiate only
+#   QUALMER_GATE_MANIFEST=resolve     (default) resolve the checkout's dependencies
+#                                     from scratch into a private environment
+#   QUALMER_GATE_MANIFEST=existing    pin every version in <checkout>/Manifest.toml
+#   QUALMER_GATE_MANIFEST=<path>      pin every version in that Manifest.toml
+#                                     (relative paths are taken from the submit dir)
 #   QUALMER_GATE_TMP_BASE=<dir>       node-local parent for TMPDIR (default
 #                                     ${SLURM_TMPDIR:-/tmp})
 # Driver knobs (MYCELIA_ECOLI_COVERAGE, MYCELIA_MEMORY_CEILING_GB, ...) pass through.
-# Example:
-#   QUALMER_GATE_RUN_DIR=$HOME/workspace/Mycelia QUALMER_GATE_MANIFEST=resolve \
-#     sbatch benchmarking/run_ecoli_qualmer_memory_gate_lrc.sbatch
 #
-# Why resolve by default: the previous version copied the MAIN checkout's
-# Manifest.toml into a hardcoded worktree. That manifest goes stale whenever
-# Project.toml gains or moves a dependency, and precompile then fails. Resolving
-# against the checkout's own Project.toml keeps the two in step. Resolve and
-# instantiate run with auto-precompile off; the `import Mycelia` warmup below
-# precompiles on the compute node (the Lawrencium login-node watchdog kills long
-# precompiles; see benchmarking/hpc-setup.sh).
+# PRIVATE ENVIRONMENT. The job never writes the checkout's Manifest.toml: other
+# jobs read it concurrently (run_td2rxh_evidence_lrc.sbatch hashes it into its run
+# label). Instead it builds ${TMPDIR}/env, whose Project.toml carries the
+# checkout's [deps] and [compat] plus Mycelia developed from the checkout by path,
+# so the code that runs is the checkout's src/. The previous version copied the
+# main checkout's Manifest.toml into a hardcoded worktree; that manifest went stale
+# when Project.toml gained XML and moved UMAP 0.1 -> 0.3, and precompile failed.
+# CAUTION: resolving from scratch once hit a Pkg extension bug (KeyError "Graphs",
+# job 24000519, July 2026). That has not been shown fixed; if it recurs, rerun with
+# QUALMER_GATE_MANIFEST=existing or a known-good Manifest path.
+# The sha256 of the Manifest actually used and the checkout HEAD are printed and
+# written into the driver's results CSV (git_head, manifest_sha256).
 #
-# Mycelia bootstraps ART + QUAST via Bioconda into the group depot on first use.
+# A dirty tracked tree is reported in the log but does NOT stop the run: this is a
+# memory gate on whatever is checked out, not a provenance-locked evidence run.
+#
+# Pkg steps run with auto-precompile off; the `import Mycelia` warmup precompiles
+# on the compute node (the Lawrencium login-node watchdog kills long precompiles;
+# see benchmarking/hpc-setup.sh). Mycelia bootstraps ART + QUAST via Bioconda into
+# the group depot on first use.
 # `-e` is deliberately omitted: every step that matters is guarded explicitly.
 set -uo pipefail
 echo "=== E. coli qualmer memory gate (Lawrencium lr6) ==="
@@ -68,6 +80,11 @@ echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --versi
 # Group depot (precompiled deps + Bioconda envs install here).
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""
+# Environment hygiene, as in run_td2rxh_evidence_lrc.sbatch: sbatch exports the
+# submit shell, so a stray MYCELIA_PROJECT / JULIA_PROJECT could select another
+# environment, and Julia's default load path would stack the global environment.
+unset MYCELIA_PROJECT JULIA_PROJECT
+export JULIA_LOAD_PATH="@:@stdlib"
 # Julia's thread count is DERIVED from the allocation, never hardcoded. The old
 # `${SLURM_CPUS_PER_TASK:-16}` default was a silent oversubscription hazard: with
 # no --cpus-per-task directive Slurm allocates 1 CPU per task, the variable is
@@ -86,21 +103,57 @@ echo "CPUs allocated: ${SLURM_CPUS_PER_TASK}  JULIA_NUM_THREADS=${JULIA_NUM_THRE
 # --- Run directory: the checkout whose code is measured ----------------------
 # Default is the checkout this was submitted from, never a hardcoded worktree
 # (the old `cd .worktrees/td-n8ax-gate` pinned every run to a stale commit).
+# Made absolute and physical before any cd; a relative override is taken from the
+# job's starting directory, which is the submit directory.
 if [[ -n "${QUALMER_GATE_RUN_DIR:-}" ]]; then
-  run_dir="${QUALMER_GATE_RUN_DIR}"
-elif ! run_dir="$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)" || [[ -z "${run_dir}" ]]; then
-  echo "ERROR: ${SLURM_SUBMIT_DIR} is not inside a git checkout; submit from the checkout or set QUALMER_GATE_RUN_DIR." >&2
-  exit 1
+  if ! run_dir="$(cd "${QUALMER_GATE_RUN_DIR}" && pwd -P)" || [[ -z "${run_dir}" ]]; then
+    echo "ERROR: cannot resolve QUALMER_GATE_RUN_DIR='${QUALMER_GATE_RUN_DIR}'." >&2
+    exit 1
+  fi
+else
+  if ! top="$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)" || [[ -z "${top}" ]] ||
+     ! run_dir="$(cd "${top}" && pwd -P)" || [[ -z "${run_dir}" ]]; then
+    echo "ERROR: ${SLURM_SUBMIT_DIR} is not inside a git checkout; submit from the checkout or set QUALMER_GATE_RUN_DIR." >&2
+    exit 1
+  fi
 fi
 if [[ ! -f "${run_dir}/benchmarking/ecoli_qualmer_memory_gate.jl" ]] || [[ ! -f "${run_dir}/Project.toml" ]]; then
   echo "ERROR: ${run_dir} is not a Mycelia checkout with benchmarking/ecoli_qualmer_memory_gate.jl." >&2
   exit 1
 fi
-cd "${run_dir}/benchmarking" || exit 1
-# Provenance for the log (informational): what code actually ran.
-echo "Run dir: ${run_dir}  HEAD: $(git -C "${run_dir}" rev-parse HEAD 2>&1)"
-echo "Uncommitted tracked changes (empty if clean):"
+if ! head="$(git -C "${run_dir}" rev-parse HEAD)" || [[ -z "${head}" ]]; then
+  echo "ERROR: cannot resolve HEAD of ${run_dir}." >&2
+  exit 1
+fi
+echo "Run dir: ${run_dir}  HEAD: ${head}"
+echo "Uncommitted tracked changes (empty if clean; reported, not refused):"
 git -C "${run_dir}" status --short --untracked-files=no 2>&1 || true
+
+# --- Manifest source, made absolute before any cd ---------------------------
+manifest_mode="${QUALMER_GATE_MANIFEST:-resolve}"
+manifest_src=""
+case "${manifest_mode}" in
+  resolve) ;;
+  existing) manifest_src="${run_dir}/Manifest.toml" ;;
+  *)
+    manifest_path="${manifest_mode}"
+    [[ "${manifest_path}" == /* ]] || manifest_path="${SLURM_SUBMIT_DIR}/${manifest_path}"
+    if [[ ! -f "${manifest_path}" ]] ||
+       ! manifest_dir="$(cd "$(dirname "${manifest_path}")" && pwd -P)"; then
+      echo "ERROR: QUALMER_GATE_MANIFEST='${manifest_mode}' is not resolve, existing, or an existing file." >&2
+      exit 1
+    fi
+    manifest_src="${manifest_dir}/$(basename "${manifest_path}")"
+    if [[ "${manifest_src}" == "${run_dir}/Manifest.toml" ]]; then
+      manifest_mode=existing
+    fi ;;
+esac
+if [[ -n "${manifest_src}" ]] && [[ ! -f "${manifest_src}" ]]; then
+  echo "ERROR: QUALMER_GATE_MANIFEST=${manifest_mode} but ${manifest_src} does not exist." >&2
+  exit 1
+fi
+
+cd "${run_dir}/benchmarking" || exit 1
 
 # --- Node-local TMPDIR --------------------------------------------------------
 # The driver's mktempdir() and Mycelia's iterative corrector both follow TMPDIR.
@@ -117,11 +170,25 @@ if ! tmp_root="$(mktemp -d "${tmp_base}/ecoli_qualmer_memgate_${SLURM_JOB_ID}.XX
   echo "ERROR: cannot create a TMPDIR under ${tmp_base}." >&2
   exit 1
 fi
-# Always removed on exit (clean run, failure, or walltime/scancel SIGTERM): the
-# E. coli reads and graph scratch are large and node-local disk is shared with
-# later jobs. Results are written to benchmarking/results/, not here. A SIGKILL
-# after KillWait skips the trap and leaves the directory on the node.
-trap 'rm -rf "${tmp_root}"' EXIT
+# On every exit the driver's contigs FASTA and QUAST report (if any) are copied
+# to benchmarking/results/<jobid>/. TMPDIR is then REMOVED when status is 0 (a
+# passing gate, an early guard exit, or a walltime/scancel SIGTERM, which reaches
+# the trap with status still 0) and KEPT when the Pkg step, the warmup, or the
+# driver failed, as the evidence for why. A SIGKILL after KillWait skips the trap.
+status=0
+save_dir="${run_dir}/benchmarking/results/${SLURM_JOB_ID}"
+# shellcheck disable=SC2329  # invoked from the EXIT trap below
+save_artifacts() {
+  local d
+  for d in "${tmp_root}"/ecoli_qualmer_memory_gate_*/; do
+    [[ -d "${d}" ]] || continue
+    mkdir -p "${save_dir}" || { echo "WARN: cannot create ${save_dir}" >&2; return; }
+    cp -p "${d}"*_contigs.fasta "${save_dir}/" 2>/dev/null || true
+    [[ -d "${d}quast" ]] && cp -pR "${d}quast" "${save_dir}/" 2>/dev/null
+  done
+  [[ -d "${save_dir}" ]] && echo "saved run artifacts to ${save_dir}"
+}
+trap 'save_artifacts; if [[ "${status}" == "0" ]]; then rm -rf "${tmp_root}"; else echo "kept TMPDIR ${tmp_root} on $(hostname) for debugging" >&2; fi' EXIT
 if ! TMPDIR="$(cd "${tmp_root}" && pwd -P)" || [[ -z "${TMPDIR}" ]]; then
   echo "ERROR: cannot resolve TMPDIR ${tmp_root}." >&2
   exit 1
@@ -148,43 +215,61 @@ if ! julia_tmp="$("${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no -e 'print(temp
 fi
 echo "Julia tempdir(): ${julia_tmp}"
 
-# --- Manifest: resolve against this checkout's Project.toml by default --------
-manifest_mode="${QUALMER_GATE_MANIFEST:-resolve}"
-case "${manifest_mode}" in
-  resolve)
-    pkg_expr='import Pkg; Pkg.resolve(); Pkg.instantiate()' ;;
-  existing)
-    if [[ ! -f ../Manifest.toml ]]; then
-      echo "ERROR: QUALMER_GATE_MANIFEST=existing but ${run_dir}/Manifest.toml does not exist." >&2
-      exit 1
-    fi
-    pkg_expr='import Pkg; Pkg.instantiate()' ;;
-  *)
-    if [[ ! -f "${manifest_mode}" ]]; then
-      echo "ERROR: QUALMER_GATE_MANIFEST='${manifest_mode}' is not resolve, existing, or an existing file." >&2
-      exit 1
-    fi
-    if ! cp -f "${manifest_mode}" ../Manifest.toml; then
-      echo "ERROR: cannot copy ${manifest_mode} to ${run_dir}/Manifest.toml." >&2
-      exit 1
-    fi
-    echo ">>> copied Manifest.toml from ${manifest_mode}"
-    pkg_expr='import Pkg; Pkg.instantiate()' ;;
-esac
-echo ">>> Pkg (${manifest_mode}) against ${run_dir}/Project.toml $(date)"
-if ! JULIA_PKG_PRECOMPILE_AUTO=0 "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project=.. -e "${pkg_expr}"; then
-  echo ">>> Pkg ${manifest_mode} FAILED" >&2
+# --- Private environment ------------------------------------------------------
+env_dir="${TMPDIR}/env"
+mkdir -p "${env_dir}" || exit 1
+if [[ -n "${manifest_src}" ]] && ! cp -f "${manifest_src}" "${env_dir}/Manifest.toml"; then
+  echo "ERROR: cannot copy ${manifest_src} into ${env_dir}." >&2
   exit 1
 fi
+# Env Project.toml = the checkout's [deps] (so the driver's direct imports
+# resolve) + [compat] for those deps, then Mycelia developed from the checkout by
+# path. With a pinned manifest, PRESERVE_ALL keeps every version it records.
+setup_jl="${TMPDIR}/gate_env_setup.jl"
+cat > "${setup_jl}" <<'JL'
+import Pkg, TOML
+run_dir, env_dir, mode = ARGS[1], ARGS[2], ARGS[3]
+proj = TOML.parsefile(joinpath(run_dir, "Project.toml"))
+deps = get(proj, "deps", Dict{String, Any}())
+compat = Dict{String, Any}(k => v for (k, v) in get(proj, "compat", Dict{String, Any}())
+                           if k == "julia" || haskey(deps, k))
+open(io -> TOML.print(io, Dict{String, Any}("deps" => deps, "compat" => compat)),
+     joinpath(env_dir, "Project.toml"), "w")
+Pkg.activate(env_dir)
+if mode == "resolve"
+    Pkg.develop(path = run_dir)
+else
+    Pkg.develop(path = run_dir; preserve = Pkg.PRESERVE_ALL)
+end
+Pkg.instantiate()
+JL
+echo ">>> Pkg (${manifest_mode}${manifest_src:+ from ${manifest_src}}) into ${env_dir} $(date)"
+if ! JULIA_PKG_PRECOMPILE_AUTO=0 "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no \
+    "${setup_jl}" "${run_dir}" "${env_dir}" "${manifest_mode}"; then
+  echo ">>> Pkg ${manifest_mode} FAILED" >&2
+  status=1
+  exit 1
+fi
+if ! manifest_sha="$(sha256sum "${env_dir}/Manifest.toml" | cut -d' ' -f1)" ||
+   [[ ! "${manifest_sha}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "ERROR: could not hash ${env_dir}/Manifest.toml (got '${manifest_sha:-}')." >&2
+  status=1
+  exit 1
+fi
+export QUALMER_GATE_HEAD="${head}"
+export QUALMER_GATE_MANIFEST_SHA="${manifest_sha}"
+echo "Provenance: HEAD=${QUALMER_GATE_HEAD}  manifest_sha256=${QUALMER_GATE_MANIFEST_SHA}"
 
 echo ">>> precompile warmup (import Mycelia) $(date)"
-if ! "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project=.. -e 'import Mycelia; println("Mycelia loaded")'; then
+if ! "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" \
+    -e 'import Mycelia; println("Mycelia loaded from ", pathof(Mycelia))'; then
   echo ">>> precompile/load FAILED" >&2
+  status=1
   exit 1
 fi
 
 echo ">>> RUN ecoli_qualmer_memory_gate.jl $(date)"
-"${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project=.. ecoli_qualmer_memory_gate.jl
+"${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" ecoli_qualmer_memory_gate.jl
 status=$?
 
 echo "=== gate exit=${status} complete $(date) ==="
