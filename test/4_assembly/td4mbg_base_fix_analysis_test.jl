@@ -386,23 +386,33 @@ Test.@testset "td4mbg oracle G0c" begin
 end
 
 Test.@testset "td4mbg oracle shape and provenance are errors, not verdicts" begin
-    E = ArgumentError
-    Test.@test_throws E run_case(fix_oracle = (n_ordinary_gates = 16,))   # truncated
-    # The row-count and gate-count checks each need a case only they catch.
-    Test.@test_throws E run_case(fix_oracle = (extra_advisory = 1,))      # 20 rows, 18 gates
-    Test.@test_throws E run_case(fix_oracle = (first_advisory = true,))   # 19 rows, 17 gates
+    # Every case is matched on its message, so each check is pinned as the one
+    # that fires. The row-count, severity-vocabulary and gate-count checks are
+    # implied by the later name and severity pins; matching on the message is
+    # what keeps them from being deletable with the suite still green.
+    Test.@test_throws r"has 18 rows; expected 19" run_case(
+        fix_oracle = (n_ordinary_gates = 16,))                            # truncated
+    Test.@test_throws r"has 20 rows; expected 19" run_case(
+        fix_oracle = (extra_advisory = 1,))                               # 20 rows, 18 gates
+    Test.@test_throws r"has 17 gate rows; expected 18" run_case(
+        fix_oracle = (first_advisory = true,))                            # 19 rows, 17 gates
     # Row and gate counts both correct; only the severity vocabulary is wrong.
-    Test.@test_throws E run_case(fix_oracle = (advisory_severity = "Advisory",))
-    Test.@test_throws E run_case(fix_oracle = (severity = "Gate",))
-    Test.@test_throws E run_case(fix_oracle = (passed_text = "",))
-    Test.@test_throws E run_case(fix_oracle = (head = "eeeeeeeeeeee",))  # other commit
-    Test.@test_throws E run_case(fix_oracle = (manifest = "dddddddddddd",))
-    Test.@test_throws E run_case(fix_oracle = (dirty = true,))
+    Test.@test_throws r"severity values outside" run_case(
+        fix_oracle = (advisory_severity = "Advisory",))
+    Test.@test_throws r"severity values outside" run_case(
+        fix_oracle = (severity = "Gate",))
+    Test.@test_throws r"passed values outside" run_case(
+        fix_oracle = (passed_text = "",))
+    Test.@test_throws r"code_sha \w+ is not commit" run_case(
+        fix_oracle = (head = "eeeeeeeeeeee",))                            # other commit
+    Test.@test_throws r"manifest_toml_sha256 \w+ is not" run_case(
+        fix_oracle = (manifest = "dddddddddddd",))
+    Test.@test_throws r"dirty tracked tree" run_case(fix_oracle = (dirty = true,))
     # Matched on the message: without the isfile guard, CSV.read of the absent
     # file would also throw an ArgumentError and pass a type-only check.
     Test.@test_throws r"run manifest not found" run_case(
         fix_oracle = (write_manifest = false,))
-    Test.@test_throws E run_case(same_oracle = true)
+    Test.@test_throws r"are the same file" run_case(same_oracle = true)
     # Row and gate counts both right; only the names, or only the severities,
     # are wrong. A duplicated row standing in for a dropped (possibly failed)
     # check would otherwise pass G0c.
@@ -416,7 +426,7 @@ Test.@testset "td4mbg oracle shape and provenance are errors, not verdicts" begi
         fix_oracle = (drop_column = "detail",))
     Test.@test_throws r"no sha256" run_case(fix_oracle = (sha_detail = "unparsed",))
     # A second run-manifest row would otherwise go unchecked.
-    Test.@test_throws r"has 2 rows; expected 1" run_case(
+    Test.@test_throws r"fixed_toy_run_manifest\.csv has 2 rows; expected 1$" run_case(
         fix_oracle = (manifest_rows = 2,))
     # A FIX checks file symlinked to BASE's, beside a genuine FIX run manifest,
     # passes oracle_summary's provenance check; only the realpath comparison in
@@ -442,6 +452,18 @@ Test.@testset "td4mbg a shard cut short is an error, not a verdict" begin
     end
     Test.@test_throws r"line 5 has 19 fields; the header has 20" run_case(
         postprocess = short)
+    # A quoted field keeps the comma count and the newline, and the string read
+    # strips the quotes, so "1.0" vs 1.0 would compare equal in G0a. Line 4 is an
+    # illumina row (1000 bp, e0.02); the refusal fires before any comparison.
+    quoted = root -> begin
+        lines = readlines(shard(root))
+        endswith(lines[4], ",1.0") || error("fixture: unexpected row $(lines[4])")
+        lines[4] = lines[4][1:(end - 3)] * "\"1.0\""
+        write(shard(root), join(lines, "\n") * "\n")
+    end
+    Test.@test_throws r"has a quoted field" run_case(postprocess = quoted)
+    Test.@test_throws r"does not end in a newline" run_case(
+        postprocess = root -> write(shard(root), ""))                     # empty shard
     Test.@test_throws r"does not end in a newline" run_case(postprocess = root -> write(
         joinpath(root, "base", "seed9.csv"),
         read(joinpath(root, "base", "seed9.csv"), String)[1:(end - 1)]))

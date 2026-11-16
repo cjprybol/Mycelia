@@ -48,7 +48,8 @@
 # the manifest digest that are not 12 lowercase hex, BASE and FIX naming the same
 # commit or the same directory or oracle file (compared by realpath), oracle
 # files failing the shape or provenance checks above, a shard that is cut short
-# (no final newline, or a row whose field count differs from its header), and
+# (no final newline, or a row whose field count differs from its header) or has
+# a quoted field, and
 # (as in td2rxh amendment 3) a pair with no contigs in either arm,
 # n_reads <= 0, or arms reporting different read counts.
 # SUPPORTED requires p < alpha; an undefined test (every x = 0) is reported as
@@ -176,13 +177,14 @@ end
 
 Refuse a shard cut short mid-write (a task killed while writing). CSV.read does
 not reject it: missing trailing fields would arrive as `missing`, and a number cut
-mid-digit would parse as a different number. The file must be non-empty, end in a
-newline, contain no quoted field (the shard schema has none, so counting commas is
-exact), and give every row the header's field count.
+mid-digit would parse as a different number. The file must end in a newline (so
+an empty file is refused too), contain no quoted field, and give every row the
+header's field count. The shard schema has no quoted field, so counting commas is
+exact; refusing quotes also keeps G0's on-disk comparison honest, because the
+string read strips them (`"1.0"` would otherwise compare equal to `1.0`).
 """
 function check_shard_text(path::AbstractString)::Nothing
     text = read(path, String)
-    isempty(text) && throw(ArgumentError("$(path) is empty"))
     endswith(text, '\n') ||
         throw(ArgumentError("$(path) does not end in a newline (cut short mid-write?)"))
     occursin('"', text) &&
@@ -330,12 +332,14 @@ end
 
 Read a `fixed_toy_acceptance_checks.csv` and its sibling
 `$(TD4MBG_ORACLE_RUN_MANIFEST)`. Throws `ArgumentError` unless the checks file
-has exactly $(TD4MBG_ORACLE_EXPECTED_ROWS) rows, $(TD4MBG_ORACLE_EXPECTED_GATES)
-of them `gate` and the rest `advisory`, every `passed` is `true` or `false`, and
-the run manifest names a commit starting with `expected_head`, a
-`manifest_toml_sha256` starting with `manifest`, and a clean tracked tree. So a
-truncated file, a swapped or duplicated path, or an oracle from another commit is
-an error rather than a passing control.
+holds exactly the checks named in `TD4MBG_ORACLE_CHECKS`, each once and at its
+pinned severity, every `passed` is `true` or `false`, and the run manifest has
+one row naming a commit starting with `expected_head`, a `manifest_toml_sha256`
+starting with `manifest`, and a clean tracked tree. So a truncated file, a
+duplicated-and-dropped check, a swapped or duplicated path, or an oracle from
+another commit is an error rather than a passing control. The row-count,
+severity-vocabulary and gate-count checks run first and are implied by the
+name and severity pins; they are kept for their more specific messages.
 
 `gates_pass` is true iff every `gate` row passes EXCEPT the
 `$(TD4MBG_ORACLE_SHA_CHECK)` row: that row compares with the historical prewiring

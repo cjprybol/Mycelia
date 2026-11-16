@@ -35,7 +35,7 @@ Amendment 5 was recorded on 2026-10-30 after the runs were launched and before a
 - **G2** (outcome): at 1000 bp / err 0.01, per seed `d = nanopore − illumina` best-contig reference coverage in each run, `x = |d_BASE| − |d_FIX|`; exact one-sided sign-flip Wilcoxon signed-rank on the 16 `x`, alpha 0.05, H1: x > 0.
 - The fail-open counters are descriptive only. The new reroute counter is not exported by the harness, so it was not captured.
 
-The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed at `94c0cbb9` (2026-10-30 10:28 PDT), before any array task had finished: the first finished at 10:53 PDT and the last at 11:58 PDT (`sacct.txt`).
+The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed at `94c0cbb9` (2026-10-30 10:28 PDT), before any array task had ended: FIX seed 11's failed attempt ended first, at 10:36 PDT; the first task to complete did so at 10:53 PDT and the last at 11:58 PDT (`sacct.txt`).
 The oracle job had already finished (09:52 PDT), and its checks (G0c inputs) had been read when the code was committed.
 After code review the script was revised, again with the decision rule unchanged. The revision adds input validation, oracle provenance and shape checks, and the read-integrity checks of the earlier td2rxh analysis, and fixes report formatting and the figure.
 Re-running the revised script on these inputs reproduces the original verdict and every G0 and G2 number; the outputs in `analysis/` come from the revised script.
@@ -115,7 +115,7 @@ Descriptive and not pre-registered, from two seeds only:
 
 - `shards/{base,fix}/seed*.csv`: per-seed harness output (12 rows each).
 - `oracle/{base,fix}/`: fixed-toy acceptance checks, arm summary, run manifest, rung telemetry.
-- `analysis/`: `report.md`, G0/G2/descriptive/context CSVs, `td4mbg_g2_paired.{png,svg}`.
+- `analysis/`: `report.md` and the G0/G2/descriptive/context CSVs. The figure `td4mbg_g2_paired.{png,svg}` is not committed (the repository ignores plots under `td2rxh-evidence/*/analysis/`); the reproduce command below regenerates it.
 - `logs/`: SLURM stdout/stderr for every task, including the failed FIX seed 11 attempt and its retry.
 - `provenance/`: the oracle sbatch and the Lawrencium setup script and log.
 - `replicate-27438474/`: the BASE replicate's shards, logs, `sacct.txt`, the comparison script and its output.
