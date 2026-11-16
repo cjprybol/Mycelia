@@ -64,6 +64,11 @@ jobs:
             exit 1
           fi
 
+      - name: Check benchmarking tests have a test/ entry point
+        run: |
+          python3 -m unittest discover -s ci -p 'test_check_benchmark_test_entrypoints.py'
+          python3 ci/check_benchmark_test_entrypoints.py
+
       - name: Check for new StatsPlots usage in source
         run: |
           violations=$(grep -rl 'import StatsPlots' src/ --include='*.jl' || true)
