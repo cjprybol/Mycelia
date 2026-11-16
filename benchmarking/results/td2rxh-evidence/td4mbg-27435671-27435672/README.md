@@ -35,8 +35,8 @@ Amendment 5 was recorded on 2026-10-30 after the runs were launched and before a
 - **G2** (outcome): at 1000 bp / err 0.01, per seed `d = nanopore − illumina` best-contig reference coverage in each run, `x = |d_BASE| − |d_FIX|`; exact one-sided sign-flip Wilcoxon signed-rank on the 16 `x`, alpha 0.05, H1: x > 0.
 - The fail-open counters are descriptive only. The new reroute counter is not exported by the harness, so it was not captured.
 
-The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed after the runs finished and before any shard was analysed.
-The oracle checks (G0c inputs) had already been read when it was committed.
+The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed at `94c0cbb9` (2026-10-30 10:28 PDT), before any array task had finished: the first finished at 10:53 PDT and the last at 11:58 PDT (`sacct.txt`).
+The oracle job had already finished (09:52 PDT), and its checks (G0c inputs) had been read when the code was committed.
 After code review the script was revised, again with the decision rule unchanged. The revision adds input validation, oracle provenance and shape checks, and the read-integrity checks of the earlier td2rxh analysis, and fixes report formatting and the figure.
 Re-running the revised script on these inputs reproduces the original verdict and every G0 and G2 number; the outputs in `analysis/` come from the revised script.
 
@@ -105,7 +105,8 @@ Because the replicate ran on different nodes, it does not separate run-to-run no
 Descriptive and not pre-registered, from two seeds only:
 
 - Seed 2, including the 2000 bp / err 0.02 cell where BASE and FIX differed most (reassembly k 19 vs 17), reproduced exactly.
-- In all 12 replicated nanopore rows, best-contig reference coverage was unchanged; the differences were at most one contig and 33 bases.
+- In all 12 replicated nanopore rows, best-contig reference coverage was unchanged; the differences were at most one contig and 33 bases, plus changes of 1-2 in two corrector counters (`substitution_length_divergences`, `indel_engaged`).
+- At 2000 bp / err 0.01 seed 10, `total_contig_bases` differs by 2 between BASE and FIX (34871 vs 34873) but by 33 between BASE and its replicate (34871 vs 34904): there, run-to-run noise exceeds the BASE-vs-FIX difference.
 - That is small next to the BASE-vs-FIX coverage changes at 1000 bp / err 0.01 (median −0.19), but two seeds cannot bound the run-to-run variance.
 - Until then, these data support neither merging nor rejecting PR #487 on measured grounds.
 - Single genome size (6 kb), synthetic reads, one coverage; nothing here generalizes beyond the grid.

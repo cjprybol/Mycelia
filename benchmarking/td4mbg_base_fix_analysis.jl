@@ -21,8 +21,9 @@
 #           because amendment 4 reports equality with the historical prewiring
 #           sha descriptively rather than gating it; the one advisory row
 #           (host-load-dependent wall clock) is reported, not gated. An oracle
-#           file is accepted only with exactly 19 rows (18 gate, 1 advisory) and
-#           a sibling fixed_toy_run_manifest.csv naming the expected commit, the
+#           file is accepted only with exactly the 19 expected checks, each once
+#           and at its expected severity (18 gate, 1 advisory), and a sibling
+#           fixed_toy_run_manifest.csv of one row naming the expected commit, the
 #           shared manifest digest and a clean tree; anything else is an error.
 #       "Identical" (amendment 5) = exact CSV field-string equality on every
 #       column except `label` (embeds the commit) and the two wall-time columns.
@@ -43,11 +44,13 @@
 #
 # Order of evaluation: run labels -> completeness (every expected row in both
 # runs) -> G0 -> G2. Once the labels pass, missing rows give INCOMPLETE, never
-# VOID or REFUTED. Malformed input is an error, never a verdict: heads and the
-# manifest digest that are not 12 lowercase hex, BASE and FIX naming the same
-# commit or the same directory or oracle file, oracle files failing the shape
-# or provenance checks above, and (as in td2rxh amendment 3) a pair with no
-# contigs in either arm, n_reads <= 0, or arms reporting different read counts.
+# VOID or REFUTED. These malformed inputs are errors, never verdicts: heads and
+# the manifest digest that are not 12 lowercase hex, BASE and FIX naming the same
+# commit or the same directory or oracle file (compared by realpath), oracle
+# files failing the shape or provenance checks above, a shard that is cut short
+# (no final newline, or a row whose field count differs from its header), and
+# (as in td2rxh amendment 3) a pair with no contigs in either arm,
+# n_reads <= 0, or arms reporting different read counts.
 # SUPPORTED requires p < alpha; an undefined test (every x = 0) is reported as
 # REFUTED with the reason, since it is not significant.
 #
@@ -78,6 +81,31 @@ const TD4MBG_ORACLE_SHA_CHECK = "illumina_byte_identical_to_prewiring_oracle"
 const TD4MBG_PREWIRING_SHA = "d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311"
 const TD4MBG_ORACLE_EXPECTED_ROWS = 19
 const TD4MBG_ORACLE_EXPECTED_GATES = 18
+# The fixed-toy oracle's 19 checks and their severities, as the oracle generator
+# writes them at both commits (oracle/{base,fix}/fixed_toy_acceptance_checks.csv).
+# Counting rows and gates alone would accept a file with one check duplicated and
+# another dropped, so the names are pinned too.
+const TD4MBG_ORACLE_CHECKS = Dict(
+    "reads_are_1000bp_plus" => "gate",
+    "nanopore_requested_indel_decode" => "gate",
+    "noninitial_rung_attempted_and_completed" => "gate",
+    "nanopore_reference_coverage_beats_identical_read_illumina" => "gate",
+    "nanopore_under_120_seconds" => "advisory",
+    "nanopore_decode_not_truncated" => "gate",
+    "nanopore_substitution_window_contract_clean" => "gate",
+    "illumina_all_indel_counters_zero" => "gate",
+    "default_oracle_all_indel_counters_zero" => "gate",
+    "illumina_byte_identical_to_default_oracle" => "gate",
+    "illumina_byte_identical_to_prewiring_oracle" => "gate",
+    "per_rung_telemetry_schema_complete" => "gate",
+    "per_rung_telemetry_values_valid" => "gate",
+    "nanopore_per_rung_totals_consistent" => "gate",
+    "illumina_per_rung_totals_consistent" => "gate",
+    "default_oracle_per_rung_totals_consistent" => "gate",
+    "nanopore_attempts_all_classified" => "gate",
+    "nanopore_trace_contract_clean" => "gate",
+    "both_assemblies_nonempty" => "gate"
+)
 const TD4MBG_ORACLE_RUN_MANIFEST = "fixed_toy_run_manifest.csv"
 const TD4MBG_RUN_LABEL_PATTERN = r"^td2rxh@([0-9a-f]{12})\+manifest([0-9a-f]{12})$"
 const TD4MBG_SHORT_HEX_PATTERN = r"^[0-9a-f]{12}$"
@@ -144,6 +172,32 @@ function parse_run_label(label::AbstractString)::NamedTuple
 end
 
 """
+    check_shard_text(path) -> Nothing
+
+Refuse a shard cut short mid-write (a task killed while writing). CSV.read does
+not reject it: missing trailing fields would arrive as `missing`, and a number cut
+mid-digit would parse as a different number. The file must be non-empty, end in a
+newline, contain no quoted field (the shard schema has none, so counting commas is
+exact), and give every row the header's field count.
+"""
+function check_shard_text(path::AbstractString)::Nothing
+    text = read(path, String)
+    isempty(text) && throw(ArgumentError("$(path) is empty"))
+    endswith(text, '\n') ||
+        throw(ArgumentError("$(path) does not end in a newline (cut short mid-write?)"))
+    occursin('"', text) &&
+        throw(ArgumentError("$(path) has a quoted field; the shard schema has none"))
+    lines = split(chomp(text), '\n')
+    width = count(==(','), first(lines)) + 1
+    for (i, line) in enumerate(lines)
+        n = count(==(','), line) + 1
+        n == width ||
+            throw(ArgumentError("$(path) line $(i) has $(n) fields; the header has $(width)"))
+    end
+    return nothing
+end
+
+"""
     load_run(dir) -> NamedTuple
 
 Read every `seed<N>.csv` shard in `dir` twice: typed (for statistics, checked by
@@ -156,6 +210,7 @@ function load_run(dir::AbstractString)::NamedTuple
         filter(p -> occursin(r"^seed\d+\.csv$", basename(p)), readdir(dir; join = true)),
     )
     isempty(paths) && throw(ArgumentError("no seed*.csv shards in $(dir)"))
+    foreach(check_shard_text, paths)
     typed = DataFrames.vcat(
         [CSV.read(p, DataFrames.DataFrame) for p in paths]...;
         cols = :setequal
@@ -310,11 +365,23 @@ function oracle_summary(
     count(is_gate) == TD4MBG_ORACLE_EXPECTED_GATES ||
         throw(ArgumentError("$(path) has $(count(is_gate)) gate rows; " *
                             "expected $(TD4MBG_ORACLE_EXPECTED_GATES)"))
+    allunique(df.check) && Set(df.check) == Set(keys(TD4MBG_ORACLE_CHECKS)) ||
+        throw(ArgumentError("$(path): check names are not the " *
+                            "$(length(TD4MBG_ORACLE_CHECKS)) distinct oracle checks"))
+    for (check, severity) in zip(df.check, df.severity)
+        expected = TD4MBG_ORACLE_CHECKS[check]
+        severity == expected ||
+            throw(ArgumentError("$(path): check $(check) has severity $(severity); " *
+                                "expected $(expected)"))
+    end
     failed_gates = [string(df.check[i])
                     for i in eachindex(passed)
                     if is_gate[i] && !passed[i] &&
                        !isequal(df.check[i], TD4MBG_ORACLE_SHA_CHECK)]
     row = findfirst(isequal(TD4MBG_ORACLE_SHA_CHECK), df.check)
+    # Defence in depth: the name check above already requires this row, so no
+    # input reaches this throw. It keeps a later edit to TD4MBG_ORACLE_CHECKS from
+    # turning a missing row into an index error.
     row === nothing && throw(ArgumentError("$(path) has no $(TD4MBG_ORACLE_SHA_CHECK) row"))
     m = match(r"sha256=([0-9a-f]{64})", coalesce(df.detail[row], ""))
     m === nothing &&
@@ -397,10 +464,11 @@ function check_inputs(;
         throw(ArgumentError("--base-head and --fix-head are the same commit $(base_head)"))
     isdir(base_dir) && isdir(fix_dir) && realpath(base_dir) == realpath(fix_dir) &&
         throw(ArgumentError("--base-dir and --fix-dir are the same directory"))
-    # Defence in depth, with no input only it can catch: one shared file has one
-    # run manifest, whose code_sha cannot start with two different heads, so
-    # oracle_summary's provenance check also refuses this. Kept for the clearer
-    # message; a surviving mutant here is expected, not missing coverage.
+    # Compared by realpath. oracle_summary finds the run manifest beside the path
+    # as given, so a FIX checks file that is a symlink to BASE's, next to a genuine
+    # FIX run manifest, passes its provenance check; this is the only refusal of
+    # that input. (A literally shared path is also refused by provenance: one
+    # code_sha cannot start with two different heads.)
     isfile(base_oracle) && isfile(fix_oracle) &&
         realpath(base_oracle) == realpath(fix_oracle) &&
         throw(ArgumentError("--base-oracle and --fix-oracle are the same file"))

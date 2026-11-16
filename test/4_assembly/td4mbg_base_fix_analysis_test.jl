@@ -18,8 +18,10 @@ module Td4mbgBaseFixAnalysisTest
 #     advisory row and a historical-sha mismatch shared by both commits do not.
 #   - Completeness: a missing shard or row on either run is INCOMPLETE.
 #   - Errors, not verdicts: malformed heads, BASE == FIX, same directory or
-#     oracle file, truncated or mis-shaped oracle files, wrong oracle provenance,
-#     an empty-assembly pair, bad read counts, and mismatched shard columns.
+#     oracle file (including a symlinked one), truncated, mis-shaped or
+#     duplicated-and-dropped oracle files, wrong oracle provenance, a shard cut
+#     short mid-write, an empty-assembly pair, bad read counts on either run, and
+#     mismatched shard columns.
 # The one-sided test is checked against hand enumeration.
 
 import Test
@@ -55,6 +57,27 @@ const OUTPUT_COLUMNS = [
     "total_contig_bases",
     "best_contig_reference_coverage",
     "best_contig_fit_identity"
+]
+# The oracle's 17 ordinary gate checks, written out here (not read from the
+# production constant) so narrowing the name check cannot narrow the fixture.
+const ORACLE_GATES = [
+    "reads_are_1000bp_plus",
+    "nanopore_requested_indel_decode",
+    "noninitial_rung_attempted_and_completed",
+    "nanopore_reference_coverage_beats_identical_read_illumina",
+    "nanopore_decode_not_truncated",
+    "nanopore_substitution_window_contract_clean",
+    "illumina_all_indel_counters_zero",
+    "default_oracle_all_indel_counters_zero",
+    "illumina_byte_identical_to_default_oracle",
+    "per_rung_telemetry_schema_complete",
+    "per_rung_telemetry_values_valid",
+    "nanopore_per_rung_totals_consistent",
+    "illumina_per_rung_totals_consistent",
+    "default_oracle_per_rung_totals_consistent",
+    "nanopore_attempts_all_classified",
+    "nanopore_trace_contract_clean",
+    "both_assemblies_nonempty"
 ]
 const BASE_HEAD = "aaaaaaaaaaaa"
 const FIX_HEAD = "bbbbbbbbbbbb"
@@ -132,8 +155,11 @@ end
 
 """
 Write `fixed_toy_acceptance_checks.csv` and `fixed_toy_run_manifest.csv` into
-`dir`, as the oracle generator does: 17 ordinary gates, one advisory row, and the
-prewiring-sha gate whose `passed` is whether the sha equals the historical one.
+`dir`, as the oracle generator does: the 17 ordinary gates, one advisory row, and
+the prewiring-sha gate whose `passed` is whether the sha equals the historical one.
+`duplicate_drop` replaces the last ordinary gate with a second copy of the first
+(19 rows, 18 gates, wrong names); `swap_severity` makes the advisory row a gate
+and the first gate advisory (19 rows, 18 gates, wrong severities).
 """
 function write_oracle(dir;
         head,
@@ -147,17 +173,25 @@ function write_oracle(dir;
         passed_text = nothing,
         dirty = false,
         write_manifest = true,
+        manifest_rows = 1,
         first_advisory = false,
         extra_advisory = 0,
-        advisory_severity = "advisory")
+        advisory_severity = "advisory",
+        duplicate_drop = false,
+        swap_severity = false,
+        sha_detail = nothing,
+        drop_column = nothing)
     mkpath(dir)
-    rows = [(check = "gate_$(i)",
-                severity = i == 1 && first_advisory ? "advisory" : severity,
+    name(i) = duplicate_drop && i == n_ordinary_gates ? ORACLE_GATES[1] : ORACLE_GATES[i]
+    rows = [(check = name(i),
+                severity = i == 1 && (first_advisory || swap_severity) ? "advisory" :
+                           severity,
                 passed = i == 1 && passed_text !== nothing ? passed_text :
                          string(!(fail_gate && i == 1)),
                 detail = "ok") for i in 1:n_ordinary_gates]
     push!(rows,
-        (check = "nanopore_under_120_seconds", severity = advisory_severity,
+        (check = "nanopore_under_120_seconds",
+            severity = swap_severity ? "gate" : advisory_severity,
             passed = string(!fail_advisory), detail = "wall"))
     for i in 1:extra_advisory
         push!(rows, (check = "extra_$(i)", severity = "advisory", passed = "true",
@@ -166,15 +200,18 @@ function write_oracle(dir;
     push!(rows,
         (check = "illumina_byte_identical_to_prewiring_oracle", severity = "gate",
             passed = string(historical),
-            detail = "sha256=$(sha), origin_master=$(SHA_A)"))
+            detail = sha_detail === nothing ? "sha256=$(sha), origin_master=$(SHA_A)" :
+                     sha_detail))
     path = joinpath(dir, "fixed_toy_acceptance_checks.csv")
-    CSV.write(path, DataFrames.DataFrame(rows))
+    df = DataFrames.DataFrame(rows)
+    drop_column === nothing || DataFrames.select!(df, DataFrames.Not(drop_column))
+    CSV.write(path, df)
     if write_manifest
         CSV.write(joinpath(dir, "fixed_toy_run_manifest.csv"),
             DataFrames.DataFrame(
-                code_sha = [head * repeat("0", 28)],
-                manifest_toml_sha256 = [manifest * repeat("0", 52)],
-                git_tracked_worktree_dirty = [string(dirty)]))
+                code_sha = fill(head * repeat("0", 28), manifest_rows),
+                manifest_toml_sha256 = fill(manifest * repeat("0", 52), manifest_rows),
+                git_tracked_worktree_dirty = fill(string(dirty), manifest_rows)))
     end
     return path
 end
@@ -361,8 +398,53 @@ Test.@testset "td4mbg oracle shape and provenance are errors, not verdicts" begi
     Test.@test_throws E run_case(fix_oracle = (head = "eeeeeeeeeeee",))  # other commit
     Test.@test_throws E run_case(fix_oracle = (manifest = "dddddddddddd",))
     Test.@test_throws E run_case(fix_oracle = (dirty = true,))
-    Test.@test_throws E run_case(fix_oracle = (write_manifest = false,))
+    # Matched on the message: without the isfile guard, CSV.read of the absent
+    # file would also throw an ArgumentError and pass a type-only check.
+    Test.@test_throws r"run manifest not found" run_case(
+        fix_oracle = (write_manifest = false,))
     Test.@test_throws E run_case(same_oracle = true)
+    # Row and gate counts both right; only the names, or only the severities,
+    # are wrong. A duplicated row standing in for a dropped (possibly failed)
+    # check would otherwise pass G0c.
+    Test.@test_throws r"check names are not" run_case(
+        fix_oracle = (duplicate_drop = true,))
+    Test.@test_throws r"check names are not" run_case(
+        base_oracle = (duplicate_drop = true,))
+    Test.@test_throws r"has severity advisory; expected gate" run_case(
+        fix_oracle = (swap_severity = true,))
+    Test.@test_throws r"lacks column detail" run_case(
+        fix_oracle = (drop_column = "detail",))
+    Test.@test_throws r"no sha256" run_case(fix_oracle = (sha_detail = "unparsed",))
+    # A second run-manifest row would otherwise go unchecked.
+    Test.@test_throws r"has 2 rows; expected 1" run_case(
+        fix_oracle = (manifest_rows = 2,))
+    # A FIX checks file symlinked to BASE's, beside a genuine FIX run manifest,
+    # passes oracle_summary's provenance check; only the realpath comparison in
+    # check_inputs refuses it.
+    link = root -> begin
+        fix_checks = joinpath(root, "oracle_fix", "fixed_toy_acceptance_checks.csv")
+        rm(fix_checks)
+        symlink(joinpath(root, "oracle_base", "fixed_toy_acceptance_checks.csv"),
+            fix_checks)
+    end
+    Test.@test_throws r"are the same file" run_case(postprocess = link)
+end
+
+Test.@testset "td4mbg a shard cut short is an error, not a verdict" begin
+    shard(root) = joinpath(root, "fix", "seed3.csv")
+    # Killed mid-write: the last row loses its tail and the final newline.
+    cut = root -> write(shard(root), read(shard(root), String)[1:(end - 4)])
+    Test.@test_throws r"does not end in a newline" run_case(postprocess = cut)
+    short = root -> begin
+        lines = readlines(shard(root))
+        lines[5] = join(split(lines[5], ',')[1:(end - 1)], ',')
+        write(shard(root), join(lines, "\n") * "\n")
+    end
+    Test.@test_throws r"line 5 has 19 fields; the header has 20" run_case(
+        postprocess = short)
+    Test.@test_throws r"does not end in a newline" run_case(postprocess = root -> write(
+        joinpath(root, "base", "seed9.csv"),
+        read(joinpath(root, "base", "seed9.csv"), String)[1:(end - 1)]))
 end
 
 Test.@testset "td4mbg operator input is checked" begin
@@ -385,8 +467,14 @@ Test.@testset "td4mbg pipeline failures are errors (td2rxh amendment 3)" begin
     Test.@test_throws E run_case(base = synthetic_run(head = BASE_HEAD, tweak = empty),
         fix = synthetic_run(head = FIX_HEAD, delta = fix_delta(s -> -0.005 * s),
             tweak = empty))
-    Test.@test_throws E run_case(fix = synthetic_run(head = FIX_HEAD,
+    Test.@test_throws r"FIX .*arms report different read counts" run_case(
+        fix = synthetic_run(head = FIX_HEAD,
         delta = fix_delta(s -> -0.005 * s),
+        tweak = bump("6000/1000/20x/e0.05", 8, "nanopore", :n_reads, nudge)))
+    # The same defect on BASE alone: each run's integrity check needs a case only
+    # it catches.
+    Test.@test_throws r"BASE .*arms report different read counts" run_case(
+        base = synthetic_run(head = BASE_HEAD,
         tweak = bump("6000/1000/20x/e0.05", 8, "nanopore", :n_reads, nudge)))
     zero_reads = r -> (r.cell == "6000/2000/20x/e0.01" && r.seed == 1) ?
                       merge(r, (n_reads = 0,)) : r
