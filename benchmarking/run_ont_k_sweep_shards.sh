@@ -388,7 +388,19 @@ echo "shards complete (${failed} non-zero exits)"
 echo "--- final aggregation (serial, reads checkpoints, computes nothing) ---"
 if ! julia --project="${REPO_ROOT}" "${REPO_ROOT}/benchmarking/ont_k_sweep.jl" \
     --aggregate-only --output-dir "${OUTPUT_DIR}" 2>&1 | tee "${LOG_DIR}/final-aggregate.log" | tail -60; then
-    echo "final aggregation reported non-ok cells (see ${LOG_DIR}/final-aggregate.log)"
+    # Two different non-zero exits land here: write_aggregate / the shrink
+    # guard refused (tables were NOT published) and some loaded cells were
+    # not ok (tables WERE written, then exit 1). The message used to assert
+    # only the second. Discriminate on the log so an operator is not sent
+    # looking for non-ok cells when the tables never landed.
+    agg_log="${LOG_DIR}/final-aggregate.log"
+    if grep -Eq "refusing to shrink|could not be read|failed to publish" "${agg_log}"; then
+        echo "final aggregation hit a guard refusal (tables may be unchanged; see ${agg_log})"
+    elif grep -Eq "not ok" "${agg_log}"; then
+        echo "final aggregation reported non-ok cells (tables were written; see ${agg_log})"
+    else
+        echo "final aggregation failed (see ${agg_log})"
+    fi
     failed=$((failed + 1))
 fi
 

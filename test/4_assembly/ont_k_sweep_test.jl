@@ -534,6 +534,53 @@ Test.@testset "ONT k-sweep helpers" begin
                                UInt8[0x00, 0xff, 0xfe, 0x00, 0x01, 0x02]
                 end
             end
+
+            Test.@testset "a non-ArgumentError read failure is still corruption (td-6mzb)" begin
+                # The binary-input fixture above reaches the corruption
+                # branch via CSV.jl's ArgumentError. The generic path —
+                # a read failure that is not an ArgumentError — was still
+                # unexercised. A permission-denied file makes CSV.read throw
+                # SystemError, which is the path this pins.
+                #
+                # chmod 000 does not make a file unreadable for uid 0, which
+                # is how CI containers run, and Windows has no getuid. Skip
+                # there, and also skip if the file is still readable after
+                # the mode change.
+                if Sys.iswindows() || ccall(:getuid, Cint, ()) == 0
+                    Test.@test_skip true
+                else
+                    mktempdir() do dir
+                        target = joinpath(dir, results_name)
+                        CSV.write(target, DataFrames.DataFrame(full);
+                            delim = '\t', missingstring = "NA")
+                        before = read(target)
+                        chmod(target, 0o000)
+                        still_readable = try
+                            read(target, 1)
+                            true
+                        catch
+                            false
+                        end
+                        if still_readable
+                            chmod(target, 0o644)
+                            Test.@test_skip true
+                        else
+                            err = try
+                                guarded_error(() -> write_table_guarded(
+                                    target, DataFrames.DataFrame(full), RESULTS_KEYCOLS))
+                            finally
+                                chmod(target, 0o644)
+                            end
+                            Test.@test err isa ErrorException
+                            Test.@test occursin("could not be read", err.msg)
+                            Test.@test occursin("git checkout", err.msg)
+                            Test.@test !occursin("schema change", err.msg)
+                            Test.@test occursin("Permission denied", err.msg)
+                            Test.@test read(target) == before
+                        end
+                    end
+                end
+            end
         end
 
         Test.@testset "a Float64 key round-trips rather than reading as lost" begin
@@ -1341,6 +1388,129 @@ Test.@testset "ONT k-sweep helpers" begin
         with_null = copy(complete)
         with_null["NGA50"] = nothing
         Test.@test ismissing(canonical(with_null).NGA50)
+    end
+
+    Test.@testset "Int and Float64 forms of a key are the same key (td-6mzb)" begin
+        # Documented in table_row_keys: Int 30 on disk vs Float64 30.0 in
+        # memory used to render "30" against "30.0" and the guard reported a
+        # phantom loss. Fails closed today, but a CSV.jl inference change on a
+        # key column would then refuse a rewrite of an unchanged table.
+        on_disk = DataFrames.DataFrame(cell_id = ["a", "b"],
+            coverage = [30, 50], value = [1, 2])
+        in_memory = DataFrames.DataFrame(cell_id = ["a", "b"],
+            coverage = [30.0, 50.0], value = [1, 2])
+        Test.@test table_row_keys(on_disk, (:cell_id, :coverage)) ==
+                   table_row_keys(in_memory, (:cell_id, :coverage))
+
+        mktempdir() do dir
+            target = joinpath(dir, "keys.tsv")
+            CSV.write(target, on_disk; delim = '\t', missingstring = "NA")
+            # Must not refuse: this is the same table, only the Julia type of
+            # coverage changed (the situation CSV.jl produces when it infers
+            # Float64).
+            write_table_guarded(target, in_memory, (:cell_id, :coverage))
+            Test.@test DataFrames.nrow(read_tsv(target)) == 2
+        end
+
+        # Non-integer floats stay distinct from nearby ints.
+        mixed = DataFrames.DataFrame(
+            cell_id = ["a", "a"], min_identity = [80, 80.5])
+        Test.@test length(table_row_keys(mixed, (:cell_id, :min_identity))) == 2
+    end
+
+    Test.@testset "--allow-shrink CLI parsing is pinned (td-6mzb)" begin
+        # Tests previously exercised only the allow_shrink KWARG. The process
+        # const is parsed from ARGS at include time, so the near-miss
+        # `--allow-shrink=true` was silently ignored (the token is not
+        # exactly "--allow-shrink"). Pin the parser so a misspelled form
+        # cannot pass as a disabled guard.
+        Test.@test allow_shrink_from_args(String[]) == false
+        Test.@test allow_shrink_from_args(["--smoke"]) == false
+        Test.@test allow_shrink_from_args(["--allow-shrink"]) == true
+        Test.@test allow_shrink_from_args(["--output-dir", "x", "--allow-shrink"]) == true
+        Test.@test allow_shrink_from_args(["--allow-shrink=true"]) == true
+        Test.@test allow_shrink_from_args(["--allow-shrink=false"]) == false
+        err = try
+            allow_shrink_from_args(["--allow-shrink=yesplease"])
+            nothing
+        catch e
+            e
+        end
+        Test.@test err isa ErrorException
+        Test.@test occursin("unrecognised --allow-shrink value", err.msg)
+        Test.@test occursin("yesplease", err.msg)
+    end
+
+    Test.@testset "write_aggregate warns once per unreadable checkpoint (td-6mzb)" begin
+        # load_all_checkpoints was called twice per write_aggregate: once in
+        # the isempty-guard and once in the union body. Every unreadable
+        # checkpoint therefore warned twice, and the tree was parsed twice.
+        # Use a first write (no on-disk table, so the guard does not refuse)
+        # with one good checkpoint and one truncated one.
+        import Logging
+        mktempdir() do dir
+            cells = joinpath(dir, "cells")
+            good = cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = merge(empty_metrics(),
+                    (; NGA50 = 4000.0, genome_fraction = 99.0,
+                        quast_contigs = 1.0)),
+                nga50_status = "measured", outcome = "partial",
+                wall_seconds = 1.0, status = "ok")
+            gid = cell_id_for("Lambda", "ont", 21, 30, 42)
+            mkpath(joinpath(cells, gid))
+            save_cell_json(joinpath(cells, gid, "cell_result.json"), good)
+
+            bid = cell_id_for("Lambda", "ont", 31, 30, 42)
+            mkpath(joinpath(cells, bid))
+            write(joinpath(cells, bid, "cell_result.json"), "{ truncated")
+
+            buf = IOBuffer()
+            df = Logging.with_logger(Logging.SimpleLogger(buf, Logging.Warn)) do
+                write_aggregate(dir, NamedTuple[])
+            end
+            Test.@test DataFrames.nrow(df) == 1
+            n_warn = length(collect(eachmatch(r"unreadable checkpoint",
+                String(take!(buf)))))
+            Test.@test n_warn == 1
+        end
+    end
+
+    Test.@testset "save_cell_json publishes atomically (td-6mzb)" begin
+        # save_cell_json is the one remaining non-atomic write in the sweep.
+        # It feeds the shrink guard: a crash mid-write leaves a truncated
+        # checkpoint that load_all_checkpoints warn-skips, producing a
+        # refusal that kills the shard. A mid-write failure must leave the
+        # existing checkpoint intact (and leave no partial file when the
+        # path is new).
+        mktempdir() do dir
+            target = joinpath(dir, "cell_result.json")
+            good = cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
+                n_reads = 10, asm = contig_stats(["A"^600], MIN_CONTIG),
+                metrics = merge(empty_metrics(),
+                    (; NGA50 = 4000.0, genome_fraction = 99.0,
+                        quast_contigs = 1.0)),
+                nga50_status = "measured", outcome = "partial",
+                wall_seconds = 1.0, status = "ok")
+            save_cell_json(target, good)
+            before = read(target, String)
+
+            err = try
+                save_cell_json(target, (; boom = ExplodingCell()))
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa Exception
+            # JSON.print does not call Base.show; it refuses the unserialisable
+            # value itself. Either wording is a mid-write failure.
+            msg = sprint(showerror, err)
+            Test.@test occursin("serialis", msg) || occursin("serialize", msg) ||
+                       occursin("simulated serialisation failure", msg)
+            Test.@test isfile(target)
+            Test.@test read(target, String) == before
+            Test.@test isempty(filter(f -> occursin(".tmp.", f), readdir(dir)))
+        end
     end
 end
 
