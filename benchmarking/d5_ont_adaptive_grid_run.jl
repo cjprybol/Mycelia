@@ -13,7 +13,9 @@
 #
 # `--toy` restricts every phase to the pre-declared toy subset (3 read sets,
 # 7 cells); point it at its own --output-dir. On Perlmutter use
-# run_d5_grid_nersc.sbatch, one array task per read set.
+# run_d5_grid_nersc.sbatch, one array task per read set. `--tmp-dir` sets the
+# corrector's temp root (default <root>/tmp); it must accept
+# renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
 #
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
@@ -1006,6 +1008,56 @@ function print_counts(toy::Bool)
     end
 end
 
+# === Temp root ===
+
+"""
+    noreplace_rename_errno(dir) -> Int
+
+Rename a fresh directory under `dir` with `renameat2(RENAME_NOREPLACE)` through
+Mycelia's own wrapper, the call the `:iterative` corrector makes when it removes
+its temp directories. Returns 0 on success, else the errno. Linux only: elsewhere
+returns 0 (macOS uses `renameatx_np`, which APFS supports).
+"""
+function noreplace_rename_errno(dir::AbstractString)::Int
+    Sys.islinux() || return 0
+    probe = mktempdir(dir)
+    try
+        source = joinpath(probe, "a")
+        mkdir(source)
+        # AT_FDCWD = -100 (paths are absolute); RENAME_NOREPLACE = 1.
+        rc = Mycelia._metamdbg_linux_renameat2(Cint(-100), source, Cint(-100),
+            joinpath(probe, "b"), Cuint(1))
+        return rc == 0 ? 0 : Int(Base.Libc.errno())
+    finally
+        rm(probe; recursive = true, force = true)
+    end
+end
+
+"""
+    prepare_temp_root(requested, root; rename_errno) -> String
+
+Create and resolve the corrector's temp root (`--tmp-dir`, default `<root>/tmp`),
+refuse it when its filesystem rejects a no-replace rename, then pin `TMPDIR` to
+it. The `:iterative` corrector puts its temp directories under `TMPDIR`, refuses
+one reached through a symlink (hence `realpath`), and removes them with
+`renameat2(RENAME_NOREPLACE)`, stopping fail-closed on EINVAL, which Lustre
+(Perlmutter `\$SCRATCH`) returns. Checking here turns a failure that otherwise
+arrives only after each cell's correction has run into one refusal up front.
+"""
+function prepare_temp_root(requested::Union{Nothing, AbstractString},
+        root::AbstractString; rename_errno::Function = noreplace_rename_errno)
+    tmp = requested === nothing ? joinpath(root, "tmp") : abspath(requested)
+    mkpath(tmp)
+    tmp = realpath(tmp)
+    code = rename_errno(tmp)
+    code == 0 || error("temp root $(tmp) rejects renameat2(RENAME_NOREPLACE) " *
+          "($(Base.Libc.strerror(code))), so every :iterative cell would fail when " *
+          "the corrector removes its temp directories. Pass --tmp-dir on a " *
+          "filesystem that supports it (node-local /tmp on Perlmutter, not Lustre).")
+    ENV["TMPDIR"] = tmp
+    return tmp
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     cli = D5OntAdaptiveGridDriver.parse_cli(ARGS)
     println("=== D5 grid runner: phase $(cli.phase)$(cli.toy ? " (toy)" : "")  $(Dates.now()) ===")
@@ -1018,12 +1070,11 @@ if abspath(PROGRAM_FILE) == @__FILE__
         # realpath: cell output dirs (corrector output_dir) live under this root, and
         # the corrector refuses any working root that resolves through a symlink.
         root = realpath(abspath(cli.output_dir))
-        # The corrector's temp roots follow TMPDIR, not --output-dir, and it refuses
-        # a root through a symlink. Pin TMPDIR to a real path under the grid root for
-        # EVERY invocation (sbatch, login node, Lovelace), not only the sbatch.
-        tmp = joinpath(root, "tmp")
-        mkpath(tmp)
-        ENV["TMPDIR"] = tmp
+        # The corrector's temp roots follow TMPDIR, not --output-dir. Resolve, check
+        # and pin it on EVERY assembling invocation (sbatch, login node, Lovelace).
+        if cli.phase !== :merge
+            println("temp root: ", prepare_temp_root(cli.tmp_dir, root))
+        end
         # Cell failures are caught and checkpointed as rows, so the process would
         # otherwise end normally. Exit non-zero whenever a resubmit is needed, so
         # SLURM shows FAILED and the operator sees it.

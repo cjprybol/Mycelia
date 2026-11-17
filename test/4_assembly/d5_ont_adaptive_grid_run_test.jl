@@ -302,7 +302,7 @@ Test.@testset "merge verdict: completeness, code version and tau are waived diff
     Test.@test pm.n_tau_conflicts == 1 && length(pm.tau_pairs) == 2
     Test.@test merge_verdict(pm; allow_incomplete = true,
         allow_mixed_code = true).blocking == 1
-    # Mixed SHAs / unclean rows block unless --allow-sha-mismatch, never by
+    # Mixed SHAs / unclean rows block unless --allow-mixed-code, never by
     # --allow-incomplete.
     shas = [merge(rows[1], Dict{String, Any}("mycelia_git_sha" => "b" ^ 40)), rows[2]]
     ps = merge_problems(shas)
@@ -413,16 +413,45 @@ end
         Test.@test msg !== nothing && occursin("unknown argument", msg)
         every = D5OntAdaptiveGridDriver.parse_cli(["--phase", "A", "--read-set-index",
             "0", "--output-dir", "/x", "--toy", "--allow-sha-mismatch", "--replan",
-            "--allow-incomplete", "--allow-mixed-code"])
+            "--allow-incomplete", "--allow-mixed-code", "--tmp-dir", "/t"])
         Test.@test every.phase === :A && every.read_set_index == 0
         Test.@test every.output_dir == "/x" && every.toy && every.allow_sha_mismatch
         Test.@test every.replan && every.allow_incomplete && every.allow_mixed_code
+        Test.@test every.tmp_dir == "/t"
+        Test.@test D5OntAdaptiveGridDriver.parse_cli(["--phase", "A"]).tmp_dir === nothing
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "A",
+            "--tmp-dir", " "]))
+        Test.@test msg !== nothing && occursin("--tmp-dir must be a non-empty path", msg)
         msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge",
             "--output-dir", ""]))
         Test.@test msg !== nothing && occursin("non-empty path", msg)
         both = D5OntAdaptiveGridDriver.parse_cli(["--phase", "B", "--tau", "0.8",
             "--tau-hat", "0.6", "--list"])
         Test.@test both.tau == 0.8 && both.tau_hat == 0.6
+    end
+
+    Test.@testset "temp root: resolved, pinned to TMPDIR, refused when rename fails" begin
+        withenv("TMPDIR" => get(ENV, "TMPDIR", nothing)) do
+            root = realpath(mktempdir())
+            tmp = prepare_temp_root(nothing, root; rename_errno = _ -> 0)
+            Test.@test tmp == joinpath(root, "tmp") && isdir(tmp)
+            Test.@test ENV["TMPDIR"] == tmp
+            # A requested root reached through a symlink is pinned by its real path.
+            mkdir(joinpath(root, "real"))
+            symlink(joinpath(root, "real"), joinpath(root, "link"))
+            chosen = prepare_temp_root(joinpath(root, "link"), root; rename_errno = _ -> 0)
+            Test.@test chosen == joinpath(root, "real") && ENV["TMPDIR"] == chosen
+            # EINVAL (Lustre) refuses before TMPDIR moves.
+            ENV["TMPDIR"] = "unchanged"
+            msg = error_message(() -> prepare_temp_root(nothing, root;
+                rename_errno = _ -> 22))
+            Test.@test msg !== nothing && occursin("RENAME_NOREPLACE", msg) &&
+                       occursin("--tmp-dir", msg)
+            Test.@test ENV["TMPDIR"] == "unchanged"
+            # The real probe accepts this machine's temp filesystem and cleans up.
+            Test.@test noreplace_rename_errno(tmp) == 0
+            Test.@test isempty(readdir(tmp))
+        end
     end
 
     Test.@testset "expected cells for the toy and the full grid" begin

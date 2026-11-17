@@ -59,17 +59,22 @@ if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
   exit 1
 fi
 
-# The iterative corrector refuses a working root that resolves through a symlink
-# component, and a login profile may point TMPDIR through one (on Perlmutter,
-# ~/workspace is a symlink to CFS). Resolve the output root and keep TMPDIR on a
-# real path beneath it, or every :iterative cell fails.
-# No `set -e` here, so every step that defines the root must fail loudly: an
+# No `set -e` here, so every step that defines a root must fail loudly: an
 # empty OUTDIR would otherwise make the runner write the grid into the checkout.
 mkdir -p "${OUTDIR}" || { echo "ERROR: cannot create D5_OUTDIR=${OUTDIR}" >&2; exit 1; }
 OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2; exit 1; }
 [[ -n "${OUTDIR}" ]] || { echo "ERROR: D5_OUTDIR resolved to an empty path" >&2; exit 1; }
-export TMPDIR="${OUTDIR}/tmp"
-mkdir -p "${TMPDIR}" || { echo "ERROR: cannot create ${TMPDIR}" >&2; exit 1; }
+# The :iterative corrector removes its temp directories with
+# renameat2(RENAME_NOREPLACE). Lustre ($SCRATCH) rejects that with EINVAL and the
+# corrector stops, so its temp root is node-local: /tmp on a Perlmutter compute
+# node is tmpfs (it counts against --mem) and is not a symlink. The runner
+# re-checks the rename before any cell runs. Override with D5_TMPDIR.
+D5_TMP="${D5_TMPDIR:-/tmp}/d5_${SLURM_JOB_ID:-$$}"
+mkdir -p "${D5_TMP}" || { echo "ERROR: cannot create ${D5_TMP}" >&2; exit 1; }
+D5_TMP="$(realpath "${D5_TMP}")" || { echo "ERROR: cannot resolve the temp root" >&2; exit 1; }
+[[ -n "${D5_TMP}" ]] || { echo "ERROR: temp root resolved to an empty path" >&2; exit 1; }
+trap 'rm -r -f -- "${D5_TMP}"' EXIT
+export TMPDIR="${D5_TMP}"
 export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""
@@ -92,7 +97,8 @@ fi
 # runner itself failed (bad args, manifest refusal, simulator or reference error).
 # shellcheck disable=SC2086  # D5_ARGS is intentionally word-split
 "${JULIA}" --project=.. d5_ont_adaptive_grid_run.jl --phase "${PHASE}" \
-  --output-dir "${OUTDIR}" "${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"}" ${EXTRA_ARGS}
+  --output-dir "${OUTDIR}" --tmp-dir "${D5_TMP}" \
+  "${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"}" ${EXTRA_ARGS}
 status=$?
 if [[ "${status}" -eq 0 ]]; then
   echo ">>> OK phase=${PHASE} task=${TASK_INDEX}  $(date)"
