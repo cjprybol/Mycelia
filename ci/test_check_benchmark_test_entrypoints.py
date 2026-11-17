@@ -193,6 +193,59 @@ class CheckBenchmarkTestEntrypointsTests(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertIn("benchmarking/commented_test.jl", err)
 
+    def test_d5_axes_suite_allowlisted_until_pr_524_wrapper_lands(self) -> None:
+        """#524's wrapper may be absent (this PR first) or present (#524 first)."""
+        suite = "benchmarking/d5_ont_adaptive_grid_axes_test.jl"
+        allowlist = frozenset({suite})
+        wrapper = (
+            "module D5OntAdaptiveGridAxesCITest\n"
+            'include(joinpath(@__DIR__, "..", "..", "benchmarking", '
+            '"d5_ont_adaptive_grid_axes_test.jl"))\n'
+            "end\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / suite, "# suite\n")
+            (root / "test").mkdir()
+            rc, out, err = self._run_main(root, allowlist=allowlist)
+            self.assertEqual(rc, 0, msg=err)
+            self.assertNotIn("NOTE:", out)
+            self.assertIn("1 allowlisted legacy debt", out)
+
+            _write(
+                root / "test" / "4_assembly" / "d5_ont_adaptive_grid_axes_ci_test.jl",
+                wrapper,
+            )
+            rc, out, err = self._run_main(root, allowlist=allowlist)
+            self.assertEqual(rc, 0, msg=err)
+            self.assertIn("NOTE:", out)
+            self.assertIn("d5_ont_adaptive_grid_axes_ci_test.jl", out)
+            self.assertNotIn("ALLOWLIST", err)
+
+    def test_recorded_wrapper_that_does_not_include_stays_stale(self) -> None:
+        suite = "benchmarking/d5_ont_adaptive_grid_axes_test.jl"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / suite, "# suite\n")
+            # The recorded path exists but does not include the suite. A
+            # different file does, so the suite is wrapped and the allowlist
+            # entry is stale.
+            _write(
+                root / "test" / "4_assembly" / "d5_ont_adaptive_grid_axes_ci_test.jl",
+                "module Empty\nend\n",
+            )
+            _write(
+                root / "test" / "4_assembly" / "other_wrapper_test.jl",
+                "module Other\n"
+                'include(joinpath(@__DIR__, "..", "..", "benchmarking", '
+                '"d5_ont_adaptive_grid_axes_test.jl"))\n'
+                "end\n",
+            )
+            rc, _, err = self._run_main(root, allowlist=frozenset({suite}))
+            self.assertEqual(rc, 1)
+            self.assertIn(suite, err)
+            self.assertIn("now wrapped", err)
+
     def test_cli_subprocess_with_root_argument(self) -> None:
         script = Path(__file__).resolve().parent / "check_benchmark_test_entrypoints.py"
         with tempfile.TemporaryDirectory() as tmp:

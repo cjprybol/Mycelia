@@ -32,12 +32,28 @@ Heuristic limits
   flow in ``test/runtests.jl`` (such as ``skip_files``, environment-variable
   gates, ``if false``, or un-swept directories like ``test/in_development/``
   and ``test/deprecated/``) is not evaluated.
+
+Merge order with PR #524
+------------------------
+``ALLOWLIST`` contains ``benchmarking/d5_ont_adaptive_grid_axes_test.jl``,
+which is unwrapped on master. PR #524 adds
+``test/4_assembly/d5_ont_adaptive_grid_axes_ci_test.jl``, and that file
+includes the suite. ``PENDING_TEST_ENTRYPOINTS`` records that pair so this
+check accepts either tree:
+
+- wrapper absent (this PR merged, #524 not yet): the suite stays allowlisted
+- wrapper present and its ``include(...)`` reaches the suite (#524 merged
+  before or after this lint): the suite is wrapped, and that is not a
+  stale-allowlist error
+
+A wrapper file that does not include the suite is still stale. Delete the
+allowlist entry and the pending mapping together once #524 is on master.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import sys
@@ -59,6 +75,16 @@ ALLOWLIST: frozenset[str] = frozenset(
     }
 )
 
+# In-flight test/ wrappers that are not on master yet. Key: benchmarking suite
+# that is also in ALLOWLIST. Value: the wrapper path the other PR adds.
+# See "Merge order with PR #524" above. Do not add entries for suites that
+# already have a wrapper on this branch; those belong off ALLOWLIST.
+PENDING_TEST_ENTRYPOINTS: dict[str, str] = {
+    "benchmarking/d5_ont_adaptive_grid_axes_test.jl": (
+        "test/4_assembly/d5_ont_adaptive_grid_axes_ci_test.jl"
+    ),
+}
+
 
 @dataclass(frozen=True)
 class AuditResult:
@@ -69,6 +95,10 @@ class AuditResult:
     new_unwrapped: tuple[str, ...]
     stale_wrapped: tuple[str, ...]
     stale_missing: tuple[str, ...]
+    # Allowlisted suites that are wrapped by a recorded in-flight entry point
+    # (PENDING_TEST_ENTRYPOINTS). Present so either merge order with that PR
+    # passes; they are not errors.
+    order_independent_wrapped: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -279,9 +309,36 @@ def is_wrapped(rel_posix_path: str, include_segments: Sequence[tuple[str, ...]])
     )
 
 
+def pending_wrapper_covers(
+    root: Path,
+    rel_posix_path: str,
+    pending_entrypoints: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True when a recorded in-flight wrapper includes ``rel_posix_path``.
+
+    The wrapper path has to be the one named in ``PENDING_TEST_ENTRYPOINTS``
+    (or ``pending_entrypoints``) and that file's ``include(...)`` calls have to
+    reach the suite. A same-named file that does not include it does not count.
+    """
+    mapping = (
+        PENDING_TEST_ENTRYPOINTS
+        if pending_entrypoints is None
+        else dict(pending_entrypoints)
+    )
+    wrapper_rel = mapping.get(rel_posix_path)
+    if wrapper_rel is None:
+        return False
+    wrapper_path = root / wrapper_rel
+    if not wrapper_path.is_file():
+        return False
+    source = wrapper_path.read_text(encoding="utf-8", errors="replace")
+    return is_wrapped(rel_posix_path, extract_include_segment_tuples(source))
+
+
 def audit_entrypoints(
     root: Path,
     allowlist: Collection[str] | None = None,
+    pending_entrypoints: Mapping[str, str] | None = None,
 ) -> AuditResult:
     """Audit ``benchmarking/**/*_test.jl`` files under ``root`` against ``test/``."""
     active_allowlist = frozenset(ALLOWLIST if allowlist is None else allowlist)
@@ -292,9 +349,16 @@ def audit_entrypoints(
     wrapped_set = set(wrapped)
     unwrapped_set = discovered - wrapped_set
 
+    # Allowlisted suites whose recorded #524-style wrapper is actually present
+    # are wrapped on purpose. They are not stale, so either merge order passes.
+    order_independent = {
+        path
+        for path in active_allowlist & wrapped_set
+        if pending_wrapper_covers(root, path, pending_entrypoints)
+    }
     allowlisted_unwrapped = sorted(unwrapped_set & active_allowlist)
     new_unwrapped = sorted(unwrapped_set - active_allowlist)
-    stale_wrapped = sorted(active_allowlist & wrapped_set)
+    stale_wrapped = sorted((active_allowlist & wrapped_set) - order_independent)
     stale_missing = sorted(active_allowlist - discovered)
 
     return AuditResult(
@@ -303,6 +367,7 @@ def audit_entrypoints(
         new_unwrapped=tuple(new_unwrapped),
         stale_wrapped=tuple(stale_wrapped),
         stale_missing=tuple(stale_missing),
+        order_independent_wrapped=tuple(sorted(order_independent)),
     )
 
 
@@ -370,6 +435,18 @@ def main(
 
     if not result.ok:
         return 1
+
+    if result.order_independent_wrapped:
+        print(
+            "NOTE: allowlisted suite(s) are wrapped by a recorded in-flight test/ "
+            "entry point (PENDING_TEST_ENTRYPOINTS). This is accepted so the "
+            "allowlist passes whether or not that wrapper is in the tree. "
+            "Remove the suite from ALLOWLIST and PENDING_TEST_ENTRYPOINTS once "
+            "that entry point is on master:"
+        )
+        for path in result.order_independent_wrapped:
+            wrapper = PENDING_TEST_ENTRYPOINTS[path]
+            print(f"  - {path} via {wrapper}")
 
     total = len(result.wrapped) + len(result.allowlisted_unwrapped)
     print(
