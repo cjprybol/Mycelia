@@ -30,14 +30,9 @@ Keep `JULIA_PROJECT` / `--project=` pointed at that checkout for the job.
 
 ## Headless plots
 
-`run_gqc(...; make_plots=true)` uses Plots.jl. On batch nodes set:
-
-```bash
-export GKSwstype=100
-```
-
-(or `ENV["GKSwstype"]="100"` inside the Julia `-e` string). Without this, plot
-creation can fail or hang on HPC.
+`run_gqc(...; make_plots=true)` writes PNG and SVG with CairoMakie. Cairo
+saves those files without a display server, so `GKSwstype` is not required
+for gqc plots.
 
 ## Nulls and references (required before trusting q-values)
 
@@ -99,7 +94,6 @@ resume after partial failures (`gqc_graph_set_errors.jsonl`).
 
 ```julia
 import Mycelia
-ENV["GKSwstype"] = "100"
 
 Mycelia.run_gqc(
     "/path/to/graph_set_or_single_graph",
@@ -127,12 +121,10 @@ user (`mail_user=`, `ENV["SLURM_MAIL_USER"]`, or `git config user.email`).
 
 ```julia
 import Mycelia
-ENV["GKSwstype"] = "100"
 
 mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
-ENV["GKSwstype"]="100"
 import Mycelia
 Mycelia.run_gqc("/path/to/graph_set", "/scratch/gqc_out";
     ks=[5, 11, 21], bh_ks=[11], n_shuffles=100,
@@ -159,12 +151,10 @@ login nodes (cgroup limits). Prefer `constraint="cpu"` for this CPU packet.
 
 ```julia
 import Mycelia
-ENV["GKSwstype"] = "100"
 
 mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
-ENV["GKSwstype"]="100"
 import Mycelia
 Mycelia.run_gqc("/path/to/graph_set", "/pscratch/gqc_out";
     ks=[5, 11, 21], bh_ks=[11], n_shuffles=100,
@@ -192,12 +182,10 @@ writes timestamped stdout/stderr under `~/workspace/slurmlogs` by default.
 
 ```julia
 import Mycelia
-ENV["GKSwstype"] = "100"
 
 mycelia = "/path/to/Mycelia"   # pinned consolidated-stack SHA
 cmd = """
 julia --project=$(mycelia) -e '
-ENV["GKSwstype"]="100"
 import Mycelia
 Mycelia.run_gqc("/path/to/graph_set", "/data/gqc_out";
     ks=[5, 11, 21], bh_ks=[11], n_shuffles=100,

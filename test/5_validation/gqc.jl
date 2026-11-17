@@ -196,7 +196,6 @@ Test.@testset "gqc v0.1 helpers and packet" begin
     end
 
     Test.@testset "synthetic single-strand GFA packet" begin
-        ENV["GKSwstype"] = "100"
         fixture = joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic")
         out_root = mktempdir()
         packet = Mycelia.run_gqc(fixture, out_root;
@@ -221,9 +220,14 @@ Test.@testset "gqc v0.1 helpers and packet" begin
         Test.@test isfile(joinpath(packet, "formats", "edges.tsv"))
         Test.@test isfile(joinpath(packet, "formats", "adjacency.mtx"))
         Test.@test isfile(joinpath(packet, "formats", "node_link.json"))
-        ## I7 PNG existence (both degree and structure)
-        Test.@test isfile(joinpath(packet, "plots", "degree", "synth_ss_k5__k5.png"))
-        Test.@test isfile(joinpath(packet, "plots", "structure", "synth_ss_k5__k5.png"))
+        ## CairoMakie PNG + SVG for every panel this fixture can produce.
+        for metric in ("degree", "unitig_n50", "coverage", "structure", "components", "betti_vs_k")
+            stem = joinpath(packet, "plots", metric, "synth_ss_k5__k5")
+            Test.@test isfile(stem * ".png")
+            Test.@test filesize(stem * ".png") > 0
+            Test.@test isfile(stem * ".svg")
+            Test.@test occursin("<svg", read(stem * ".svg", String))
+        end
         ## I2 frozen summary header
         header = first(readlines(joinpath(packet, "summary.csv")))
         Test.@test header == join(Mycelia.GQC_SUMMARY_COLUMNS, ',')
@@ -908,6 +912,35 @@ Test.@testset "gqc v0.1 helpers and packet" begin
             make_plots=false, write_node_link_json=false, null_kinds=(:dinucleotide,))
         Test.@test basename(packet) == "cohort_sample"
         Test.@test isfile(joinpath(packet, "nodes", "cohort_sample.tsv"))
+    end
+
+    Test.@testset "CairoMakie gqc panels write PNG and SVG" begin
+        plots_dir = mktempdir()
+        row = Dict(
+            "n_tips" => 1, "n_bubbles" => 2, "n_branch" => 0,
+            "n_self_loops" => 0, "n_tangles" => 1,
+        )
+        ## Degree 0 forces linear axes (log10(0) is invalid).
+        Mycelia.gqc_make_plots(row, Dict(0 => 2, 1 => 3), [10, 30, 20], [1.0, 2.0, 2.0],
+            (1.5, 1.1, 2.0), plots_dir, "toy", 5)
+        for metric in ("degree", "unitig_n50", "coverage", "structure", "repeat_null")
+            stem = joinpath(plots_dir, metric, "toy__k5")
+            Test.@test isfile(stem * ".png")
+            Test.@test filesize(stem * ".png") > 0
+            Test.@test occursin("<svg", read(stem * ".svg", String))
+        end
+        ## Strictly positive degrees take the log-log branch and still save.
+        log_dir = mktempdir()
+        Mycelia.gqc_make_plots(row, Dict(1 => 4, 2 => 1), Int[], Float64[],
+            nothing, log_dir, "toy", 7)
+        Test.@test isfile(joinpath(log_dir, "degree", "toy__k7.png"))
+        Test.@test !isfile(joinpath(log_dir, "coverage", "toy__k7.png"))
+        g = Mycelia.read_gfa_records(joinpath(@__DIR__, "..", "fixtures", "gqc_synthetic", "graph.gfa"))
+        ids, adj, _ = Mycelia._gqc_undirected_adjacency(g)
+        comp_dir = mktempdir()
+        Mycelia.gqc_make_plots(row, Dict{Int, Int}(), Int[], Float64[],
+            nothing, comp_dir, "toy", 5; adj=adj, ids=ids, g=g)
+        Test.@test isfile(joinpath(comp_dir, "components", "toy__k5.svg"))
     end
 
     Test.@testset "I5 circular concordance skips short records" begin
