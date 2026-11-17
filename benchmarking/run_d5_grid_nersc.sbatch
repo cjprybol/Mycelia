@@ -46,6 +46,10 @@
 #   # is refused) or pre-copy refs/.
 #
 # USAGE (submit from benchmarking/):
+#   The default array is indices 0-2; only D5_ARGS="--toy" makes them the toy
+#   read sets (without it they are the first three full-grid read sets at the
+#   12 h envelope). The launch host is chosen at launch by allocation burn-down
+#   (todo hpc-burndown.py); this file is the NERSC entry point.
 #   Toy (3 read sets), the default array. --time shortens the 12 h envelope:
 #     D5_ARGS="--toy" D5_OUTDIR="$SCRATCH/d5_grid_toy" \
 #       sbatch --time=04:00:00 run_d5_grid_nersc.sbatch
@@ -125,11 +129,19 @@ echo "Checkout: $(git -C .. rev-parse HEAD)  dirty: $(git -C .. status --porcela
 # evidence copy on failure and signal handling live in d5_temp_root.sh.
 # shellcheck source=d5_temp_root.sh
 source ./d5_temp_root.sh || { echo "ERROR: cannot source d5_temp_root.sh" >&2; exit 1; }
+# The helper is read from the live checkout at run time, not snapshotted at
+# submit: refuse to run without its functions rather than run without traps.
+declare -F d5_install_temp_root_traps d5_temp_root_cleanup >/dev/null ||
+  { echo "ERROR: d5_temp_root.sh does not define the temp-root functions" >&2; exit 1; }
 [[ "${D5_TMPDIR:-/tmp}" == /* ]] ||
   { echo "ERROR: D5_TMPDIR must be an absolute path, got ${D5_TMPDIR}" >&2; exit 1; }
 D5_TMP_MADE="$(mktemp --directory "${D5_TMPDIR:-/tmp}/d5_${SLURM_JOB_ID:-$$}.XXXXXX")" ||
   { echo "ERROR: cannot create a temp root under ${D5_TMPDIR:-/tmp}" >&2; exit 1; }
-d5_install_temp_root_traps "${D5_TMP_MADE}" "${OUTDIR}/tmp_evidence/${SLURM_JOB_ID:-$$}"
+# A requeued job keeps its SLURM_JOB_ID, so the restart count keeps each
+# attempt's evidence apart (an existing evidence dir is never overwritten).
+d5_install_temp_root_traps "${D5_TMP_MADE}" \
+  "${OUTDIR}/tmp_evidence/${SLURM_JOB_ID:-$$}.r${SLURM_RESTART_COUNT:-0}" ||
+  { rmdir -- "${D5_TMP_MADE}"; echo "ERROR: cannot install the temp-root traps" >&2; exit 1; }
 D5_TMP="$(realpath "${D5_TMP_MADE}")" || { echo "ERROR: cannot resolve the temp root" >&2; exit 1; }
 export TMPDIR="${D5_TMP}"
 

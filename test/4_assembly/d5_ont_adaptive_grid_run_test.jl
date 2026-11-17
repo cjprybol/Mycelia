@@ -222,121 +222,123 @@ Test.@testset "D5 grid runner" begin
     toy_sets = D5OntAdaptiveGridDriver.toy_read_sets()
     toy_cells = reduce(vcat, D5OntAdaptiveGridDriver.toy_cells(rs) for rs in toy_sets)
 
-Test.@testset "merge: absent and unreadable cells, end to end through run_merge" begin
-    mktempdir() do root
-        save_row(root, row_for(toy_cells[1]))
-        save_row(root, row_for(toy_cells[2]))
-        bad = joinpath(root, "cells", D5OntAdaptiveGridDriver.cell_id(toy_cells[3]))
-        mkpath(bad)
-        write(joinpath(bad, "cell_result.json"), "{not json")
-        collected = collect_merge_rows(root, true)
-        Test.@test length(collected.rows) == 7
-        Test.@test collected.n_absent == 4 && collected.unreadable == [basename(bad)]
-        Test.@test collected.has_b == false
-        p = merge_problems(collected.rows;
-            n_unreadable_entries = length(collected.unreadable))
-        Test.@test p.n_absent == 4 && p.n_unreadable == 1 && p.n_incomplete == 5
-        # Through the real entry point: incomplete -> non-zero, tables still written.
-        # (Rows built from EMPTY_CONTEXT have git_dirty = missing, i.e. not provably
-        # clean; --allow-mixed-code waives exactly that. --allow-sha-mismatch is for the manifest.)
-        cli = (; toy = true, allow_sha_mismatch = true, allow_mixed_code = true,
-            allow_incomplete = false)
-        Test.@test run_merge(cli, root) == 5
-        tsv = read(joinpath(root, "d5_cells.tsv"), String)
-        Test.@test count("\tabsent\t", tsv) == 4 && count("\tunreadable\t", tsv) == 1
-        prov = JSON.parsefile(joinpath(root, "merge_provenance.json"))
-        Test.@test prov["n_absent"] == 4 && prov["blocking_problems"] == 5
-        Test.@test prov["overrides"]["allow_incomplete"] == false
+    Test.@testset "merge: absent and unreadable cells, end to end through run_merge" begin
+        mktempdir() do root
+            save_row(root, row_for(toy_cells[1]))
+            save_row(root, row_for(toy_cells[2]))
+            bad = joinpath(root, "cells", D5OntAdaptiveGridDriver.cell_id(toy_cells[3]))
+            mkpath(bad)
+            write(joinpath(bad, "cell_result.json"), "{not json")
+            collected = collect_merge_rows(root, true)
+            Test.@test length(collected.rows) == 7
+            Test.@test collected.n_absent == 4 && collected.unreadable == [basename(bad)]
+            Test.@test collected.has_b == false
+            p = merge_problems(collected.rows;
+                n_unreadable_entries = length(collected.unreadable))
+            Test.@test p.n_absent == 4 && p.n_unreadable == 1 && p.n_incomplete == 5
+            # Through the real entry point: incomplete -> non-zero, tables still written.
+            # (Rows built from EMPTY_CONTEXT have git_dirty = missing, i.e. not provably
+            # clean; --allow-mixed-code waives exactly that. --allow-sha-mismatch is for the manifest.)
+            cli = (; toy = true, allow_sha_mismatch = true, allow_mixed_code = true,
+                allow_incomplete = false)
+            Test.@test run_merge(cli, root) == 5
+            tsv = read(joinpath(root, "d5_cells.tsv"), String)
+            Test.@test count("\tabsent\t", tsv) == 4 && count("\tunreadable\t", tsv) == 1
+            prov = JSON.parsefile(joinpath(root, "merge_provenance.json"))
+            Test.@test prov["n_absent"] == 4 && prov["blocking_problems"] == 5
+            Test.@test prov["overrides"]["allow_incomplete"] == false
             Test.@test length(prov["blocking_reasons"]) == 1
             Test.@test length(prov["waived_reasons"]) == 1  # unclean rows, waived
             # Without --allow-mixed-code the unclean (git_dirty = missing) rows block too,
             # and --allow-incomplete does not waive them.
-            Test.@test run_merge(merge(cli, (; allow_incomplete = true,
-                allow_mixed_code = false)), root) == 2
-        Test.@test run_merge(merge(cli, (; allow_incomplete = true)), root) == 0
-        # A stray unreadable directory that is not a registered cell still counts.
-        stray = joinpath(root, "cells", "not_a_registered_cell")
-        mkpath(stray)
-        write(joinpath(stray, "cell_result.json"), "{")
-        again = collect_merge_rows(root, true)
-        Test.@test length(again.unreadable) == 2
-        Test.@test merge_problems(again.rows;
-            n_unreadable_entries = length(again.unreadable)).n_unreadable == 2
-        # One Phase B checkpoint makes the toy's 5 Phase B cells expected.
-        pb = first(filter(c -> c.k_policy === :adaptive,
-            reduce(vcat, D5OntAdaptiveGridDriver.cells_for_read_set(rs; phase = :B)
-            for rs in toy_sets)))
-        save_row(root, row_for(pb; phase = :B, tau = 0.8, tau_hat = 0.6))
-        withb = collect_merge_rows(root, true)
-        Test.@test withb.has_b && length(withb.rows) == 12
-        Test.@test count(
-            r -> isequal(r["phase"], "B") &&
-                 isequal(r["status"], "absent"), withb.rows) == 4
+            Test.@test run_merge(
+                merge(cli, (; allow_incomplete = true,
+                    allow_mixed_code = false)), root) == 2
+            Test.@test run_merge(merge(cli, (; allow_incomplete = true)), root) == 0
+            # A stray unreadable directory that is not a registered cell still counts.
+            stray = joinpath(root, "cells", "not_a_registered_cell")
+            mkpath(stray)
+            write(joinpath(stray, "cell_result.json"), "{")
+            again = collect_merge_rows(root, true)
+            Test.@test length(again.unreadable) == 2
+            Test.@test merge_problems(again.rows;
+                n_unreadable_entries = length(again.unreadable)).n_unreadable == 2
+            # One Phase B checkpoint makes the toy's 5 Phase B cells expected.
+            pb = first(filter(c -> c.k_policy === :adaptive,
+                reduce(vcat, D5OntAdaptiveGridDriver.cells_for_read_set(rs; phase = :B)
+                for rs in toy_sets)))
+            save_row(root, row_for(pb; phase = :B, tau = 0.8, tau_hat = 0.6))
+            withb = collect_merge_rows(root, true)
+            Test.@test withb.has_b && length(withb.rows) == 12
+            Test.@test count(
+                r -> isequal(r["phase"], "B") &&
+                     isequal(r["status"], "absent"), withb.rows) == 4
+        end
     end
-end
 
-Test.@testset "merge verdict: completeness, code version and tau are waived differently" begin
-    b = filter(c -> c.k_policy === :adaptive, D5OntAdaptiveGridDriver.phase_b_cells())
-    clean(r) = merge(r, Dict{String, Any}("git_dirty" => false,
-        "mycelia_git_sha" => "a" ^ 40))
-    rows = [clean(as_dict(row_for(b[1]; phase = :B, tau = 0.8, tau_hat = 0.6))),
-        clean(as_dict(row_for(b[2]; phase = :B, tau = 0.8, tau_hat = 0.6)))]
-    p = merge_problems(rows)
-    Test.@test p.n_incomplete == 0 && p.n_tau_conflicts == 0
-    Test.@test p.n_sha_conflicts == 0 && p.n_dirty_rows == 0
-    none = (; allow_incomplete = false, allow_mixed_code = false)
-    Test.@test merge_verdict(p; none...).blocking == 0
-    # A retryable row is incomplete; --allow-incomplete waives it (and says so).
-    err = clean(as_dict(row_for(b[3]; phase = :B, status = "error", nga50 = missing,
-        nga50_status = missing, tau = 0.8, tau_hat = 0.6)))
-    pe = merge_problems(vcat(rows, [err]))
-    Test.@test pe.n_retry == 1 && pe.n_incomplete == 1
-    Test.@test merge_verdict(pe; none...).blocking == 1
-    ve = merge_verdict(pe; allow_incomplete = true, allow_mixed_code = false)
-    Test.@test isempty(ve.blocking_reasons) && length(ve.waived_reasons) == 1
-    Test.@test ve.blocking == 0 && ve.waived == 1
-    # Mixed tau is NEVER waivable, not even with both flags.
-    mixed = vcat(rows,
-        [clean(as_dict(row_for(b[3]; phase = :B, tau = 0.75, tau_hat = 0.6)))])
-    pm = merge_problems(mixed)
-    Test.@test pm.n_tau_conflicts == 1 && length(pm.tau_pairs) == 2
-    Test.@test merge_verdict(pm; allow_incomplete = true,
-        allow_mixed_code = true).blocking == 1
-    # Mixed SHAs / unclean rows block unless --allow-mixed-code, never by
-    # --allow-incomplete.
-    shas = [merge(rows[1], Dict{String, Any}("mycelia_git_sha" => "b" ^ 40)), rows[2]]
-    ps = merge_problems(shas)
-    Test.@test ps.n_sha_conflicts == 1
-    Test.@test merge_verdict(ps; allow_incomplete = true,
-        allow_mixed_code = false).blocking == 1
-    Test.@test merge_verdict(ps; allow_incomplete = false,
-        allow_mixed_code = true).blocking == 0
-    dirty = [merge(rows[1], Dict{String, Any}("git_dirty" => true)), rows[2]]
-    Test.@test merge_problems(dirty).n_dirty_rows == 1
-    # Absent rows carry no SHA / dirty state and are not "mixed code".
-    absent = as_dict(D5OntAdaptiveGridDriver.absent_row(b[4]; phase = :B))
-    pa = merge_problems(vcat(rows, [absent]))
-    Test.@test pa.n_absent == 1 && pa.n_dirty_rows == 0 && pa.n_sha_conflicts == 0
-    # Corrected-survival diagnostic outcomes are reported, never problems.
-    diag = [merge(r, Dict{String, Any}("corrected_survival_status" => s))
-            for (r, s) in zip(vcat(rows, rows[1:1]), ("failed", "unavailable", "measured"))]
-    pd = merge_problems(diag)
-    Test.@test pd.n_corrected_survival_failed == 1
-    Test.@test pd.n_corrected_survival_unavailable == 1
-    Test.@test merge_verdict(pd; none...).blocking == 0
-end
-
-Test.@testset "run_or_resume carries the Phase B plan onto an error row" begin
-    mktempdir() do root
-        boom = d -> error("assembler crashed")
-        adaptive = first(D5OntAdaptiveGridDriver.phase_b_cells())
-        run_or_resume(boom, root, adaptive, CTX; phase = :B,
-            error_kwargs = (; tau = 0.8, tau_hat = 0.6, k_selected = "NoFeasibleK"))
-        saved = D5OntAdaptiveGridDriver.load_row(checkpoint_path(root, adaptive))
-        Test.@test saved["status"] == "error" && saved["tau"] == 0.8
-        Test.@test saved["tau_hat"] == 0.6 && saved["k_selected"] == "NoFeasibleK"
+    Test.@testset "merge verdict: completeness, code version and tau are waived differently" begin
+        b = filter(c -> c.k_policy === :adaptive, D5OntAdaptiveGridDriver.phase_b_cells())
+        clean(r) = merge(r, Dict{String, Any}("git_dirty" => false,
+            "mycelia_git_sha" => "a" ^ 40))
+        rows = [clean(as_dict(row_for(b[1]; phase = :B, tau = 0.8, tau_hat = 0.6))),
+            clean(as_dict(row_for(b[2]; phase = :B, tau = 0.8, tau_hat = 0.6)))]
+        p = merge_problems(rows)
+        Test.@test p.n_incomplete == 0 && p.n_tau_conflicts == 0
+        Test.@test p.n_sha_conflicts == 0 && p.n_dirty_rows == 0
+        none = (; allow_incomplete = false, allow_mixed_code = false)
+        Test.@test merge_verdict(p; none...).blocking == 0
+        # A retryable row is incomplete; --allow-incomplete waives it (and says so).
+        err = clean(as_dict(row_for(b[3]; phase = :B, status = "error", nga50 = missing,
+            nga50_status = missing, tau = 0.8, tau_hat = 0.6)))
+        pe = merge_problems(vcat(rows, [err]))
+        Test.@test pe.n_retry == 1 && pe.n_incomplete == 1
+        Test.@test merge_verdict(pe; none...).blocking == 1
+        ve = merge_verdict(pe; allow_incomplete = true, allow_mixed_code = false)
+        Test.@test isempty(ve.blocking_reasons) && length(ve.waived_reasons) == 1
+        Test.@test ve.blocking == 0 && ve.waived == 1
+        # Mixed tau is NEVER waivable, not even with both flags.
+        mixed = vcat(rows,
+            [clean(as_dict(row_for(b[3]; phase = :B, tau = 0.75, tau_hat = 0.6)))])
+        pm = merge_problems(mixed)
+        Test.@test pm.n_tau_conflicts == 1 && length(pm.tau_pairs) == 2
+        Test.@test merge_verdict(pm; allow_incomplete = true,
+            allow_mixed_code = true).blocking == 1
+        # Mixed SHAs / unclean rows block unless --allow-mixed-code, never by
+        # --allow-incomplete.
+        shas = [merge(rows[1], Dict{String, Any}("mycelia_git_sha" => "b" ^ 40)), rows[2]]
+        ps = merge_problems(shas)
+        Test.@test ps.n_sha_conflicts == 1
+        Test.@test merge_verdict(ps; allow_incomplete = true,
+            allow_mixed_code = false).blocking == 1
+        Test.@test merge_verdict(ps; allow_incomplete = false,
+            allow_mixed_code = true).blocking == 0
+        dirty = [merge(rows[1], Dict{String, Any}("git_dirty" => true)), rows[2]]
+        Test.@test merge_problems(dirty).n_dirty_rows == 1
+        # Absent rows carry no SHA / dirty state and are not "mixed code".
+        absent = as_dict(D5OntAdaptiveGridDriver.absent_row(b[4]; phase = :B))
+        pa = merge_problems(vcat(rows, [absent]))
+        Test.@test pa.n_absent == 1 && pa.n_dirty_rows == 0 && pa.n_sha_conflicts == 0
+        # Corrected-survival diagnostic outcomes are reported, never problems.
+        diag = [merge(r, Dict{String, Any}("corrected_survival_status" => s))
+                for (r, s) in
+                    zip(vcat(rows, rows[1:1]), ("failed", "unavailable", "measured"))]
+        pd = merge_problems(diag)
+        Test.@test pd.n_corrected_survival_failed == 1
+        Test.@test pd.n_corrected_survival_unavailable == 1
+        Test.@test merge_verdict(pd; none...).blocking == 0
     end
-end
+
+    Test.@testset "run_or_resume carries the Phase B plan onto an error row" begin
+        mktempdir() do root
+            boom = d -> error("assembler crashed")
+            adaptive = first(D5OntAdaptiveGridDriver.phase_b_cells())
+            run_or_resume(boom, root, adaptive, CTX; phase = :B,
+                error_kwargs = (; tau = 0.8, tau_hat = 0.6, k_selected = "NoFeasibleK"))
+            saved = D5OntAdaptiveGridDriver.load_row(checkpoint_path(root, adaptive))
+            Test.@test saved["status"] == "error" && saved["tau"] == 0.8
+            Test.@test saved["tau_hat"] == 0.6 && saved["k_selected"] == "NoFeasibleK"
+        end
+    end
 
     Test.@testset "Phase B wiring: plan metadata and the toy reuse rule" begin
         adaptive = first(filter(c -> c.technology === :ont,
@@ -510,8 +512,9 @@ end
             # Lustre rename succeed here while the corrector still fails).
             calls = []
             Test.@test noreplace_rename_errno(dir;
-                rename = (sfd, s, dfd, d, flags) -> (push!(calls, (sfd, dfd, flags));
-                Cint(0))) == 0
+                rename = (
+                    sfd, s, dfd, d, flags) -> (push!(calls, (sfd, dfd, flags));
+                    Cint(0))) == 0
             Test.@test calls == [(Cint(-100), Cint(-100), Cuint(1))]
             # A failure reports its errno; one whose errno reads 0 still fails closed.
             Test.@test noreplace_rename_errno(dir;
@@ -553,8 +556,12 @@ end
             r = run_helper(cleanup; rc = 3)
             Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
             Test.@test strip(read(joinpath(r.keep, "ORIGINAL_TEMP_ROOT"), String)) == r.root
+            Test.@test strip(read(joinpath(r.keep, "RESOLVED_TEMP_ROOT"), String)) == r.root
             Test.@test !ispath(r.root) && !ispath(r.keep * ".partial")
             Test.@test occursin("preserved at", r.log) && occursin("memory.peak", r.log)
+            # The copy is announced before it starts, so a copy cut off by SIGKILL
+            # shows as a "copying" line with no "preserved" line after it.
+            Test.@test occursin("copying $(r.root) -> $(r.keep).partial", r.log)
             # Clean exit, or nothing to keep: removed, nothing copied.
             r = run_helper(cleanup; rc = 0)
             Test.@test !ispath(r.root) && !ispath(r.keep)
@@ -575,7 +582,30 @@ end
             r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
                 exit 3""")
             Test.@test r.code == 3 && isdir(r.keep) && !ispath(r.root)
+            # A second SIGTERM during the copy (a repeated scancel) is ignored: the
+            # copy completes and is renamed, and the temp root is still removed.
+            # `cp` is shadowed by a function that signals the shell first.
+            r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
+                cp() { kill -TERM $$; command cp "$@"; } && exit 3""")
+            Test.@test r.code == 3
+            Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
+            Test.@test !ispath(r.keep * ".partial") && !ispath(r.root)
+            # A failed copy (read-only evidence parent) warns, still removes the
+            # temp root, and leaves the job's exit code unchanged.
+            r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
+                mkdir -p "$(dirname "$3")" && chmod a-w "$(dirname "$3")" && exit 3""")
+            chmod(dirname(r.keep), 0o755)
+            Test.@test r.code == 3 && !ispath(r.root) && !ispath(r.keep)
+            Test.@test occursin("could not preserve", r.log)
+        else
+            Test.@test_skip "temp-root cleanup runs under bash with GNU coreutils on Linux"
         end
+        # A requeued job keeps its SLURM_JOB_ID; the restart count keeps each
+        # attempt's evidence in its own directory.
+        sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", "run_d5_grid_nersc.sbatch")
+        Test.@test occursin(
+            raw"tmp_evidence/${SLURM_JOB_ID:-$$}.r${SLURM_RESTART_COUNT:-0}",
+            read(sbatch, String))
     end
 
     Test.@testset "expected cells for the toy and the full grid" begin
@@ -609,7 +639,8 @@ end
                 return (; code = proc.exitcode,
                     log = String(take!(out)) * String(take!(err)))
             end
-            refused = run_gate(; extra = Dict(
+            refused = run_gate(;
+                extra = Dict(
                 "SLURM_ARRAY_TASK_ID" => "0", "SLURM_ARRAY_TASK_MAX" => "95"))
             Test.@test refused.code == 1
             Test.@test occursin("D5_FULL=1", refused.log)
@@ -619,18 +650,21 @@ end
             past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "5"))
             Test.@test past.code == 1 && occursin("outside the toy", past.log)
             # D5_FULL must be exactly 1.
-            almost = run_gate(; extra = Dict(
+            almost = run_gate(;
+                extra = Dict(
                 "D5_FULL" => "true", "SLURM_ARRAY_TASK_MAX" => "95"))
             Test.@test almost.code == 1 && occursin("outside the toy", almost.log)
             garbage = run_gate(; extra = Dict("SLURM_ARRAY_TASK_MAX" => "abc"))
             Test.@test garbage.code == 1 && occursin("non-negative integers", garbage.log)
             # Toy max, and an approved full array, both pass the gate and stop
             # on the missing output root.
-            toy = run_gate(; extra = Dict(
+            toy = run_gate(;
+                extra = Dict(
                 "SLURM_ARRAY_TASK_ID" => "2", "SLURM_ARRAY_TASK_MAX" => "2"))
             Test.@test toy.code == 1 && occursin("set D5_OUTDIR", toy.log)
             Test.@test !occursin("outside the toy", toy.log)
-            approved = run_gate(; extra = Dict(
+            approved = run_gate(;
+                extra = Dict(
                 "D5_FULL" => "1", "SLURM_ARRAY_TASK_ID" => "95",
                 "SLURM_ARRAY_TASK_MAX" => "95"))
             Test.@test approved.code == 1 && occursin("set D5_OUTDIR", approved.log)

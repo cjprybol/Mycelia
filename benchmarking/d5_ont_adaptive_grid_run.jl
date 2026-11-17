@@ -25,7 +25,7 @@
 #   <root>/readsets/<read_set_id>/survival.json 23-rung S / S_hat on RAW reads
 #   <root>/cells/<cell_id>/cell_result.json   one checkpoint per cell (atomic)
 #   <root>/cells/<cell_id>/corrected_survival.json  diagnostic, :iterative only
-#   <root>/tmp_evidence/<jobid>/            sbatch: temp root kept on a failed exit
+#   <root>/tmp_evidence/<jobid>.r<restart>/ sbatch: temp root kept on a failed exit
 #   <root>/d5_cells.tsv, d5_survival.tsv, illumina_none_optimum.tsv,
 #   <root>/replicate_evaluability.tsv         written by --phase merge
 #
