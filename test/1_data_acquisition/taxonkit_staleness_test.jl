@@ -431,6 +431,154 @@ Test.@testset "Taxonkit taxonomy staleness and staging" begin
             Test.@test readdir(root) == ["existing"]
         end
     end
+
+    Test.@testset "offline hatch uses the existing taxdump and skips the download" begin
+        mktempdir() do root
+            stale_dir = populate_dummy_taxdump!(
+                joinpath(root, "stale");
+                marker = "keep-stale",
+                timestamp = string(fixed_now - Dates.Day(90))
+            )
+            calls = Ref(0)
+            refuse_download = _ -> (calls[] += 1; error("download must not run"))
+
+            Test.@test_logs (
+                :warn, r"MYCELIA_TAXONKIT_OFFLINE=1"
+            ) begin
+                Mycelia._setup_taxonkit_taxonomy(
+                    refuse_download;
+                    taxonkit_dir = stale_dir,
+                    max_age_days = 30,
+                    now = fixed_now,
+                    offline = true
+                )
+            end
+            Test.@test calls[] == 0
+            Test.@test occursin("keep-stale", read(joinpath(stale_dir, "nodes.dmp"), String))
+            Test.@test !ispath(joinpath(root, ".taxonkit.lock"))
+
+            # The same hatch from the environment, and an explicit offline=false
+            # still refreshes while that variable is set.
+            undated_dir = populate_dummy_taxdump!(
+                joinpath(root, "undated");
+                marker = "keep-undated"
+            )
+            withenv("MYCELIA_TAXONKIT_OFFLINE" => "1") do
+                Test.@test_logs (
+                    :warn, r"MYCELIA_TAXONKIT_OFFLINE=1"
+                ) begin
+                    Mycelia._setup_taxonkit_taxonomy(
+                        refuse_download;
+                        taxonkit_dir = undated_dir,
+                        max_age_days = 30,
+                        now = fixed_now
+                    )
+                end
+                Test.@test occursin(
+                    "keep-undated",
+                    read(joinpath(undated_dir, "nodes.dmp"), String)
+                )
+
+                refreshed = Ref(0)
+                Mycelia._setup_taxonkit_taxonomy(
+                    staging_dir -> begin
+                        refreshed[] += 1
+                        populate_dummy_taxdump!(staging_dir; marker = "forced-online")
+                    end;
+                    taxonkit_dir = undated_dir,
+                    max_age_days = 30,
+                    now = fixed_now,
+                    offline = false
+                )
+                Test.@test refreshed[] == 1
+                Test.@test occursin(
+                    "forced-online",
+                    read(joinpath(undated_dir, "nodes.dmp"), String)
+                )
+            end
+            Test.@test calls[] == 0
+
+            # "true" is not the hatch. Only "1" is.
+            withenv("MYCELIA_TAXONKIT_OFFLINE" => "true") do
+                env_calls = Ref(0)
+                Mycelia._setup_taxonkit_taxonomy(
+                    staging_dir -> begin
+                        env_calls[] += 1
+                        populate_dummy_taxdump!(staging_dir; marker = "not-the-hatch")
+                    end;
+                    taxonkit_dir = stale_dir,
+                    max_age_days = 30,
+                    now = fixed_now
+                )
+                Test.@test env_calls[] == 1
+            end
+
+            missing_dir = joinpath(root, "absent")
+            assert_throws_with_message(ErrorException, "no usable taxdump") do
+                Mycelia.setup_taxonkit_taxonomy(;
+                    taxonkit_dir = missing_dir,
+                    offline = true
+                )
+            end
+            Test.@test !ispath(missing_dir)
+
+            assert_throws_with_message(ErrorException, "force_update=true") do
+                Mycelia._setup_taxonkit_taxonomy(
+                    refuse_download;
+                    taxonkit_dir = stale_dir,
+                    force_update = true,
+                    offline = true,
+                    now = fixed_now
+                )
+            end
+        end
+    end
+
+    Test.@testset "a pidfile serializes concurrent refreshes and the waiter rechecks" begin
+        mktempdir() do root
+            taxonkit_dir = populate_dummy_taxdump!(
+                joinpath(root, "shared");
+                marker = "before",
+                timestamp = string(fixed_now - Dates.Day(40))
+            )
+            calls = Ref(0)
+            entered = Channel{Nothing}(1)
+            release = Channel{Nothing}(1)
+            populate = staging_dir -> begin
+                calls[] += 1
+                put!(entered, nothing)
+                take!(release)
+                populate_dummy_taxdump!(staging_dir; marker = "after")
+                return nothing
+            end
+            holder = @async Mycelia._setup_taxonkit_taxonomy(
+                populate;
+                taxonkit_dir = taxonkit_dir,
+                max_age_days = 30,
+                now = fixed_now,
+                offline = false
+            )
+            take!(entered)
+            waiter = @async Mycelia._setup_taxonkit_taxonomy(
+                populate;
+                taxonkit_dir = taxonkit_dir,
+                max_age_days = 30,
+                now = fixed_now,
+                offline = false
+            )
+            sleep(0.3)
+            Test.@test !istaskdone(waiter)
+            Test.@test calls[] == 1
+            put!(release, nothing)
+            wait(holder)
+            wait(waiter)
+            Test.@test calls[] == 1
+            Test.@test occursin("after", read(joinpath(taxonkit_dir, "nodes.dmp"), String))
+            Test.@test read(joinpath(taxonkit_dir, ".last_updated"), String) == string(fixed_now)
+            Test.@test !ispath(joinpath(root, ".taxonkit.lock"))
+            Test.@test readdir(root) == ["shared"]
+        end
+    end
 end
 
 end  # module
