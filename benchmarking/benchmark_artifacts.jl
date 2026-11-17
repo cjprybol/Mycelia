@@ -5,7 +5,14 @@ import JSON
 import OrderedCollections
 import TOML
 
-const BENCHMARK_ARTIFACT_SCHEMA_VERSION = 1
+# Public benchmark artifact schema.
+# v1: provenance columns through benchmark_git_commit.
+# v2: adds benchmark_git_dirty immediately after benchmark_git_commit.
+#     Cell values are "true", "false", or "" when git dirtiness is unknown.
+#     Every later column in the table moves one position to the right.
+#     Readers select columns by name. Tables already committed under
+#     benchmarking/results/ were written at v1 and are left on that layout.
+const BENCHMARK_ARTIFACT_SCHEMA_VERSION = 2
 const BENCHMARK_ARTIFACT_SUBDIRS = ("tables", "plots", "logs", "provenance")
 
 """
@@ -87,9 +94,10 @@ Write a CSV table under `layout.tables` and a sidecar provenance JSON file
 under `layout.provenance`.
 
 Stable `benchmark_*` provenance columns are prepended to the table before
-writing. `row_context_columns` maps provenance column names to source columns
-already present in the table, for example
-`"benchmark_dataset_id" => "dataset_id"`.
+writing. Schema version 2 adds `benchmark_git_dirty` (`"true"`, `"false"`, or
+`""`) immediately after `benchmark_git_commit`. `row_context_columns` maps
+provenance column names to source columns already present in the table, for
+example `"benchmark_dataset_id" => "dataset_id"`.
 """
 function write_benchmark_table(
         table,

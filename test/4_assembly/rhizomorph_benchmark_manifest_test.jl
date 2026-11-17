@@ -1260,6 +1260,10 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
         Test.@test all(value -> value in ("true", "false", ""), plan_git_dirty)
         Test.@test all(plan_table.benchmark_run_id .== "ci_smoke")
         Test.@test all(plan_table.benchmark_scale .== "ci")
+        # v2 is the benchmark_git_dirty column. v1 tables under benchmarking/results/
+        # keep the previous layout and are not rewritten here.
+        Test.@test BENCHMARK_ARTIFACT_SCHEMA_VERSION == 2
+        Test.@test all(plan_table.benchmark_schema_version .== 2)
         Test.@test all(plan_table.benchmark_schema_version .== BENCHMARK_ARTIFACT_SCHEMA_VERSION)
         Test.@test plan_table.benchmark_dataset_id == plan_table.dataset_id
         Test.@test plan_table.benchmark_hypothesis_id == plan_table.hypothesis_id
@@ -1280,6 +1284,8 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
         Test.@test all(plan_git_dirty .== expected_git_dirty)
 
         index = JSON.parsefile(joinpath(output_dir, "artifact-index.json"))
+        Test.@test index["schema_version"] == 2
+        Test.@test run_provenance["schema_version"] == 2
         Test.@test index["directories"]["tables"] == "tables"
         Test.@test haskey(index["tables"], "rhizomorph_benchmark_plan")
         Test.@test index["tables"]["rhizomorph_benchmark_plan"]["table"] ==
@@ -1432,6 +1438,7 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
                    joinpath("provenance", "h1_viterbi_dp_greedy_path_metrics.provenance.json")
 
         run_provenance = JSON.parsefile(artifacts.provenance)
+        Test.@test run_provenance["schema_version"] == 2
         Test.@test run_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
         Test.@test run_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
         Test.@test occursin("paired likelihood diagnostic", run_provenance["metadata"]["non_finite_metric_semantics"])
