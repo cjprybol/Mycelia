@@ -188,8 +188,8 @@ function genomic_dijkstra(graph::Graphs.AbstractGraph,
 
     execution_time = time() - start_time
 
-    @info "Path found: $(length(path_kmers)) k-mers, cost $(round(total_cost, digits=3)), " *
-          "confidence $(round(confidence_score, digits=3))"
+    @debug "Path found: $(length(path_kmers)) k-mers, cost $(round(total_cost, digits=3)), " *
+           "confidence $(round(confidence_score, digits=3))"
 
     return GenomicPathResult{T}(
         path_kmers,
