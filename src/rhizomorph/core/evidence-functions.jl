@@ -1162,7 +1162,15 @@ const UltralightQualityVertexData = Union{
 
 const UltralightQualityData = Union{UltralightQualityVertexData, UltralightQualityEdgeData}
 
-# --- Adding Evidence (increment counters + aggregate quality) ---
+# Decode every Phred+33 byte before the caller mutates counts or joint quality.
+# The comprehension either returns the full raw vector or throws ArgumentError
+# on the first sub-33 byte, so a trailing bad byte cannot commit earlier
+# positions (#504).
+function _decode_phred33_vector(scores::AbstractVector{UInt8})
+    return UInt8[decode_phred33_byte(score) for score in scores]
+end
+
+# --- Adding Evidence (decode Phred+33, then increment counters and aggregate) ---
 
 function add_evidence!(
         vertex::UltralightQualityVertexData,
@@ -1170,38 +1178,37 @@ function add_evidence!(
         observation_id::String,
         entry::QualityEvidenceEntry
 )
+    # Validate the whole vector before any write. decode_phred33_byte rejects a
+    # sub-33 byte instead of wrapping or clamping it (td-ozts).
+    raw_scores = _decode_phred33_vector(entry.quality_scores)
+
     vertex.total_count += 1
     vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
 
     # Aggregate quality scores (Phred addition is exact)
-    scores = entry.quality_scores
-    if !isempty(scores)
-        # Decode from Phred+33 to raw Phred before aggregation
+    if !isempty(raw_scores)
         if isempty(vertex.joint_quality)
-            append!(vertex.joint_quality, [decode_phred33_byte(s) for s in scores])
+            append!(vertex.joint_quality, raw_scores)
         else
-            for i in eachindex(scores)
-                raw = Int(decode_phred33_byte(scores[i]))
+            for i in eachindex(raw_scores)
                 vertex.joint_quality[i] = UInt8(clamp(
-                    Int(vertex.joint_quality[i]) + raw, 0, 255))
+                    Int(vertex.joint_quality[i]) + Int(raw_scores[i]), 0, 255))
             end
         end
         # Per-dataset quality
         ds_qual = get!(vertex.dataset_joint_quality, dataset_id) do
-            zeros(UInt8, length(scores))
+            zeros(UInt8, length(raw_scores))
         end
-        for i in eachindex(scores)
-            raw = Int(decode_phred33_byte(scores[i]))
-            ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
+        for i in eachindex(raw_scores)
+            ds_qual[i] = UInt8(clamp(
+                Int(ds_qual[i]) + Int(raw_scores[i]), 0, 255))
         end
         # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax).
         ds_qsum = get!(vertex.dataset_quality_sum, dataset_id) do
-            zeros(UInt32, length(scores))
+            zeros(UInt32, length(raw_scores))
         end
-        for i in eachindex(scores)
-            # decode_phred33_byte rejects a sub-33 byte instead of wrapping or
-            # clamping it (td-ozts). Valid Phred+33 input is always >= 33.
-            ds_qsum[i] += UInt32(decode_phred33_byte(scores[i]))
+        for i in eachindex(raw_scores)
+            ds_qsum[i] += UInt32(raw_scores[i])
         end
     end
 
@@ -1227,30 +1234,32 @@ function add_evidence!(
         observation_id::String,
         entry::EdgeQualityEvidenceEntry
 )
+    # Decode from and to together. A bad to_quality must not commit
+    # total_count, dataset_counts, or from_joint_quality.
+    raw_from = _decode_phred33_vector(entry.from_quality)
+    raw_to = _decode_phred33_vector(entry.to_quality)
+
     edge.total_count += 1
     edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
 
     # Aggregate quality scores for source and destination k-mers
-    if !isempty(entry.from_quality)
-        # Decode from Phred+33 before aggregation
+    if !isempty(raw_from)
         if isempty(edge.from_joint_quality)
-            append!(edge.from_joint_quality, [decode_phred33_byte(s) for s in entry.from_quality])
+            append!(edge.from_joint_quality, raw_from)
         else
-            for i in eachindex(entry.from_quality)
-                raw = Int(decode_phred33_byte(entry.from_quality[i]))
+            for i in eachindex(raw_from)
                 edge.from_joint_quality[i] = UInt8(clamp(
-                    Int(edge.from_joint_quality[i]) + raw, 0, 255))
+                    Int(edge.from_joint_quality[i]) + Int(raw_from[i]), 0, 255))
             end
         end
     end
-    if !isempty(entry.to_quality)
+    if !isempty(raw_to)
         if isempty(edge.to_joint_quality)
-            append!(edge.to_joint_quality, [decode_phred33_byte(s) for s in entry.to_quality])
+            append!(edge.to_joint_quality, raw_to)
         else
-            for i in eachindex(entry.to_quality)
-                raw = Int(decode_phred33_byte(entry.to_quality[i]))
+            for i in eachindex(raw_to)
                 edge.to_joint_quality[i] = UInt8(clamp(
-                    Int(edge.to_joint_quality[i]) + raw, 0, 255))
+                    Int(edge.to_joint_quality[i]) + Int(raw_to[i]), 0, 255))
             end
         end
     end
@@ -1360,7 +1369,7 @@ const LightweightQualityVertexData = Union{
 const LightweightQualityData = Union{
     LightweightQualityVertexData, LightweightQualityEdgeData}
 
-# --- Adding Evidence (increment counters + track obs IDs + aggregate quality) ---
+# --- Adding Evidence (decode Phred+33, then track obs IDs and aggregate) ---
 
 function add_evidence!(
         vertex::LightweightQualityVertexData,
@@ -1368,6 +1377,10 @@ function add_evidence!(
         observation_id::String,
         entry::QualityEvidenceEntry
 )
+    # Validate the whole vector before any write. decode_phred33_byte rejects a
+    # sub-33 byte instead of wrapping or clamping it (td-ozts).
+    raw_scores = _decode_phred33_vector(entry.quality_scores)
+
     vertex.total_count += 1
     vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
     # Track unique observation IDs per dataset
@@ -1377,37 +1390,33 @@ function add_evidence!(
     push!(vertex.dataset_observations[dataset_id], observation_id)
 
     # Aggregate quality scores (same as ultralight quality)
-    scores = entry.quality_scores
-    if !isempty(scores)
+    if !isempty(raw_scores)
         if isempty(vertex.joint_quality)
-            append!(vertex.joint_quality, [decode_phred33_byte(s) for s in scores])
+            append!(vertex.joint_quality, raw_scores)
         else
-            for i in eachindex(scores)
-                raw = Int(decode_phred33_byte(scores[i]))
+            for i in eachindex(raw_scores)
                 vertex.joint_quality[i] = UInt8(clamp(
-                    Int(vertex.joint_quality[i]) + raw, 0, 255))
+                    Int(vertex.joint_quality[i]) + Int(raw_scores[i]), 0, 255))
             end
         end
         ds_qual = get!(vertex.dataset_joint_quality, dataset_id) do
-            zeros(UInt8, length(scores))
+            zeros(UInt8, length(raw_scores))
         end
-        for i in eachindex(scores)
-            raw = Int(decode_phred33_byte(scores[i]))
-            ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
+        for i in eachindex(raw_scores)
+            ds_qual[i] = UInt8(clamp(
+                Int(ds_qual[i]) + Int(raw_scores[i]), 0, 255))
         end
         # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax). Kept
         # separate from the clamped joint_quality so corrector-facing mean
         # (sum ./ dataset_counts) matches the :full path's per-observation mean
         # for well-formed (unique read-ID) input, which the qualmer builders
-        # guarantee. dataset_counts increments in lockstep with this sum (same
-        # !isempty(scores) block), so the divisor equals the quality-obs count.
+        # guarantee. dataset_counts increments in lockstep with this sum when
+        # quality scores are present, so the divisor equals the quality-obs count.
         ds_qsum = get!(vertex.dataset_quality_sum, dataset_id) do
-            zeros(UInt32, length(scores))
+            zeros(UInt32, length(raw_scores))
         end
-        for i in eachindex(scores)
-            # decode_phred33_byte rejects a sub-33 byte instead of wrapping or
-            # clamping it (td-ozts). Valid Phred+33 input is always >= 33.
-            ds_qsum[i] += UInt32(decode_phred33_byte(scores[i]))
+        for i in eachindex(raw_scores)
+            ds_qsum[i] += UInt32(raw_scores[i])
         end
     end
 
@@ -1435,6 +1444,11 @@ function add_evidence!(
         observation_id::String,
         entry::EdgeQualityEvidenceEntry
 )
+    # Decode from and to together. A bad to_quality must not commit
+    # total_count, dataset_counts, from_joint_quality, or observation ids.
+    raw_from = _decode_phred33_vector(entry.from_quality)
+    raw_to = _decode_phred33_vector(entry.to_quality)
+
     edge.total_count += 1
     edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
     if !haskey(edge.dataset_observations, dataset_id)
@@ -1443,25 +1457,23 @@ function add_evidence!(
     push!(edge.dataset_observations[dataset_id], observation_id)
 
     # Aggregate quality for source and destination
-    if !isempty(entry.from_quality)
+    if !isempty(raw_from)
         if isempty(edge.from_joint_quality)
-            append!(edge.from_joint_quality, [decode_phred33_byte(s) for s in entry.from_quality])
+            append!(edge.from_joint_quality, raw_from)
         else
-            for i in eachindex(entry.from_quality)
-                raw = Int(decode_phred33_byte(entry.from_quality[i]))
+            for i in eachindex(raw_from)
                 edge.from_joint_quality[i] = UInt8(clamp(
-                    Int(edge.from_joint_quality[i]) + raw, 0, 255))
+                    Int(edge.from_joint_quality[i]) + Int(raw_from[i]), 0, 255))
             end
         end
     end
-    if !isempty(entry.to_quality)
+    if !isempty(raw_to)
         if isempty(edge.to_joint_quality)
-            append!(edge.to_joint_quality, [decode_phred33_byte(s) for s in entry.to_quality])
+            append!(edge.to_joint_quality, raw_to)
         else
-            for i in eachindex(entry.to_quality)
-                raw = Int(decode_phred33_byte(entry.to_quality[i]))
+            for i in eachindex(raw_to)
                 edge.to_joint_quality[i] = UInt8(clamp(
-                    Int(edge.to_joint_quality[i]) + raw, 0, 255))
+                    Int(edge.to_joint_quality[i]) + Int(raw_to[i]), 0, 255))
             end
         end
     end
