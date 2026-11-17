@@ -536,6 +536,11 @@ struct AssemblyConfig
         # default.
         effective_qualmer_memory_profile = qualmer_memory_profile === nothing ?
                                            :full : qualmer_memory_profile
+        # Capture this before the k=31 default below. `:fixed` must see whether
+        # the caller passed k; checking `k === nothing` after the default is
+        # dead code (`AssemblyConfig(; reassembly_k_policy=:fixed)` would
+        # otherwise store k=31 and return).
+        k_explicit = k !== nothing
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -660,7 +665,7 @@ struct AssemblyConfig
             error("reassembly_k_policy must be :connectivity or :fixed, got " *
                   "reassembly_k_policy=:$(reassembly_k_policy)")
         end
-        if reassembly_k_policy == :fixed && k === nothing
+        if reassembly_k_policy == :fixed && !k_explicit
             error("reassembly_k_policy=:fixed requires an explicit k: there is no " *
                   "requested k to hold the re-assembly at.")
         end

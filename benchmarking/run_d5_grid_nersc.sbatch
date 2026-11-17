@@ -8,9 +8,13 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=200G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-95%16
+#SBATCH --array=0-2
 #SBATCH --output=d5_grid_%A_%a.out
 #SBATCH --error=d5_grid_%A_%a.err
+#
+# The #SBATCH --array directive above is the toy/pilot (read sets 0-2). The
+# full 0-95 array is not a directive: pass `--array=0-95%16` and D5_FULL=1
+# together. See USAGE below.
 #
 # D5 ONT adaptive grid (td-yddpr.5) on NERSC Perlmutter (CPU), one array task per
 # read set: simulate -> measure identity -> 23-rung survival (once) -> that read
@@ -21,6 +25,13 @@
 # cgroup memory.peak, logged to the .err file at exit. peak_rss_bytes alone is
 # too low: the node-local temp root is tmpfs, charged to --mem, not to RSS.
 # Flags on the sbatch command line override the directives above.
+#
+# The #SBATCH --array default is the toy/pilot (0-2). A bare
+# `sbatch run_d5_grid_nersc.sbatch` therefore submits three tasks, not the
+# 96-task Phase A array. Any submitted array whose max index or task id is
+# above 2 is refused before module load unless D5_FULL=1. That includes the
+# full Phase A command below. D5_FULL does not resize --mem or --time; those
+# stay at the un-sized envelope until the toy run is measured.
 #
 # PRE-STAGE ONCE on a login node (compute nodes have no outbound internet):
 #   module load julia/1.10.10
@@ -35,23 +46,47 @@
 #   # is refused) or pre-copy refs/.
 #
 # USAGE (submit from benchmarking/):
-#   Toy (3 read sets):
+#   Toy (3 read sets), the default array. --time shortens the 12 h envelope:
 #     D5_ARGS="--toy" D5_OUTDIR="$SCRATCH/d5_grid_toy" \
-#       sbatch --array=0-2 --time=04:00:00 run_d5_grid_nersc.sbatch
-#   Full Phase A (96 read sets) -- only after the user approves the launch:
-#     D5_OUTDIR="$SCRATCH/d5_grid" sbatch run_d5_grid_nersc.sbatch
-#   Merge after an array finishes (one task):
+#       sbatch --time=04:00:00 run_d5_grid_nersc.sbatch
+#   Full Phase A (96 read sets), only after the user approves the launch.
+#   Both the array override and D5_FULL=1 are required; either one alone is
+#   not the full array (the directive default is 0-2, and a wider array
+#   without D5_FULL=1 exits 1 in every task):
+#     D5_FULL=1 D5_OUTDIR="$SCRATCH/d5_grid" \
+#       sbatch --array=0-95%16 --time=12:00:00 run_d5_grid_nersc.sbatch
+#   Merge after an array finishes (one task; index 0 is inside the toy):
 #     D5_PHASE=merge D5_OUTDIR=... sbatch --array=0 --time=01:00:00 \
 #       --dependency=afterany:<array_job_id> run_d5_grid_nersc.sbatch
-#   Phase B -- only after a human sets tau / tau_hat (lock step 2):
+#   Phase B toy, only after a human sets tau / tau_hat (lock step 2):
 #     D5_PHASE=B D5_ARGS="--tau <x> --tau-hat <y>" D5_OUTDIR=... \
-#       sbatch run_d5_grid_nersc.sbatch
+#       sbatch --array=0-2 run_d5_grid_nersc.sbatch
+#   Phase B full uses the same D5_FULL=1 and --array=0-95%16 gate as Phase A.
 set -uo pipefail
 
 PHASE="${D5_PHASE:-A}"
-OUTDIR="${D5_OUTDIR:?set D5_OUTDIR to the grid output root (one root per grid)}"
 EXTRA_ARGS="${D5_ARGS:-}"
 TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
+
+# Toy/pilot is array indices 0-2. Refuse anything wider before module load,
+# mkdir, or mktemp, so a mis-pasted full submit cannot spend the allocation.
+# D5_FULL must be exactly 1. SLURM_ARRAY_TASK_MAX is the submitted array's last
+# index (a bare sbatch uses the #SBATCH --array default of 2). A non-integer
+# bound fails closed.
+D5_TOY_MAX=2
+if [[ "${D5_FULL:-0}" != "1" ]]; then
+  ARRAY_MAX="${SLURM_ARRAY_TASK_MAX:-${TASK_INDEX}}"
+  if ! [[ "${ARRAY_MAX}" =~ ^[0-9]+$ && "${TASK_INDEX}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: D5 array bounds must be non-negative integers (task=${TASK_INDEX}, array max=${ARRAY_MAX}). Set D5_FULL=1 only for an approved wider array." >&2
+    exit 1
+  fi
+  if (( ARRAY_MAX > D5_TOY_MAX || TASK_INDEX > D5_TOY_MAX )); then
+    echo "ERROR: D5 array task ${TASK_INDEX} (array max ${ARRAY_MAX}) is outside the toy/pilot 0-${D5_TOY_MAX}. Set D5_FULL=1 and pass --array=0-95%16 to run the full array. A bare sbatch submits the toy only." >&2
+    exit 1
+  fi
+fi
+
+OUTDIR="${D5_OUTDIR:?set D5_OUTDIR to the grid output root (one root per grid)}"
 
 echo "=== D5 grid (Perlmutter) phase=${PHASE} task=${TASK_INDEX} ==="
 echo "Job: ${SLURM_JOB_ID:-none}  Array: ${SLURM_ARRAY_JOB_ID:-none}  Node: ${SLURM_NODELIST:-none}  Start: $(date)"

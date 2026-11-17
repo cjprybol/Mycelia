@@ -583,6 +583,60 @@ end
         Test.@test length(expected_cells(false, false)) == 1008 + 96 + 336
         Test.@test length(expected_cells(false, true)) == 1008 + 96 + 336 + 144 + 48
     end
+
+    Test.@testset "sbatch full array requires D5_FULL=1; default is the toy" begin
+        sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", "run_d5_grid_nersc.sbatch")
+        lines = readlines(sbatch)
+        directives = filter(line -> startswith(line, "#SBATCH"), lines)
+        Test.@test count(d -> occursin("--array=0-2", d), directives) == 1
+        Test.@test !any(d -> occursin("0-95", d), directives)
+        if Sys.which("bash") === nothing
+            Test.@test_skip "bash unavailable"
+        else
+            # No D5_OUTDIR: a refused array exits in the gate, and an allowed
+            # array dies on the unbound-variable check. Neither path reaches
+            # module load, mkdir, or mktemp.
+            function run_gate(; extra = Dict{String, String}())
+                env = Dict{String, String}(
+                    "PATH" => get(ENV, "PATH", "/usr/bin"),
+                    "HOME" => homedir(),
+                    "D5_FULL" => "0")
+                merge!(env, extra)
+                out = IOBuffer()
+                err = IOBuffer()
+                proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
+                    stdout = out, stderr = err))
+                return (; code = proc.exitcode,
+                    log = String(take!(out)) * String(take!(err)))
+            end
+            refused = run_gate(; extra = Dict(
+                "SLURM_ARRAY_TASK_ID" => "0", "SLURM_ARRAY_TASK_MAX" => "95"))
+            Test.@test refused.code == 1
+            Test.@test occursin("D5_FULL=1", refused.log)
+            Test.@test occursin("outside the toy", refused.log)
+            Test.@test !occursin("set D5_OUTDIR", refused.log)
+            # A task id past the toy is refused even when the max is unset.
+            past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "5"))
+            Test.@test past.code == 1 && occursin("outside the toy", past.log)
+            # D5_FULL must be exactly 1.
+            almost = run_gate(; extra = Dict(
+                "D5_FULL" => "true", "SLURM_ARRAY_TASK_MAX" => "95"))
+            Test.@test almost.code == 1 && occursin("outside the toy", almost.log)
+            garbage = run_gate(; extra = Dict("SLURM_ARRAY_TASK_MAX" => "abc"))
+            Test.@test garbage.code == 1 && occursin("non-negative integers", garbage.log)
+            # Toy max, and an approved full array, both pass the gate and stop
+            # on the missing output root.
+            toy = run_gate(; extra = Dict(
+                "SLURM_ARRAY_TASK_ID" => "2", "SLURM_ARRAY_TASK_MAX" => "2"))
+            Test.@test toy.code == 1 && occursin("set D5_OUTDIR", toy.log)
+            Test.@test !occursin("outside the toy", toy.log)
+            approved = run_gate(; extra = Dict(
+                "D5_FULL" => "1", "SLURM_ARRAY_TASK_ID" => "95",
+                "SLURM_ARRAY_TASK_MAX" => "95"))
+            Test.@test approved.code == 1 && occursin("set D5_OUTDIR", approved.log)
+            Test.@test !occursin("outside the toy", approved.log)
+        end
+    end
 end
 
 end # module
