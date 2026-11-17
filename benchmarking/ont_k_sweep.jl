@@ -844,8 +844,10 @@ columns:
   * a key column whose type differs across the round trip in a way a naive
     `string()` would render differently. An `Int` 30 on disk against a
     `Float64` 30.0 in memory used to give `"30"` against `"30.0"` and the
-    guard reported a phantom loss. Integer-valued finite floats are now
-    rendered as integers, so that case compares equal. Non-integer floats
+    guard reported a phantom loss. Integer-valued finite floats that fit in
+    `Int` are now rendered as integers, so that case compares equal.
+    `2^63` is integer-valued but does not fit in `Int64`; it stays in
+    decimal form instead of throwing from `Int(value)`. Non-integer floats
     (the identity ladder's 80.5) stay in decimal form and stay distinct.
     Other type mismatches that still render differently continue to fail
     CLOSED. Keep key columns typed consistently at their source.
@@ -854,13 +856,28 @@ function _canonical_key_text(value)
     # Integer-valued floats must match the Int form CSV.jl may have written
     # on a previous run (30 and 30.0 are the same key). Non-integer floats,
     # strings, missings, and other values keep `string(value)`.
+    #
+    # Upper bound is exclusive of 2^63. Float64(typemax(Int64)) rounds up to
+    # 2^63, so a bound check that converts typemax(Int) to Float64 lets
+    # 2.0^63 through and Int(value) throws InexactError. 2^63 is the first
+    # integer that does not fit in Int64 and it is exactly representable.
+    # typemin(Int64) is -2^63 and stays exact. A narrower Int has both bounds
+    # inside the Float64 mantissa, so the inclusive comparison is exact there.
     if value isa Integer
         return string(value)
     elseif value isa AbstractFloat && isfinite(value) && isinteger(value) &&
-           typemin(Int) <= value <= typemax(Int)
+           _float_key_fits_in_int(value)
         return string(Int(value))
     else
         return string(value)
+    end
+end
+
+function _float_key_fits_in_int(value)
+    if sizeof(Int) >= sizeof(Int64)
+        return typemin(Int) <= value < 2.0^63
+    else
+        return typemin(Int) <= value <= typemax(Int)
     end
 end
 
