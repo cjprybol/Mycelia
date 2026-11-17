@@ -14,8 +14,9 @@
 # `--toy` restricts every phase to the pre-declared toy subset (3 read sets,
 # 7 cells); point it at its own --output-dir. On Perlmutter use
 # run_d5_grid_nersc.sbatch, one array task per read set. `--tmp-dir` sets the
-# corrector's temp root (default <root>/tmp); it must accept
+# corrector's temp root (absolute; default <root>/tmp); it must accept
 # renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
+# Run by hand on Perlmutter with e.g. --tmp-dir /tmp/$USER-d5.
 #
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
@@ -1018,16 +1019,19 @@ Mycelia's own wrapper, the call the `:iterative` corrector makes when it removes
 its temp directories. Returns 0 on success, else the errno. Linux only: elsewhere
 returns 0 (macOS uses `renameatx_np`, which APFS supports).
 """
-function noreplace_rename_errno(dir::AbstractString)::Int
+function noreplace_rename_errno(dir::AbstractString;
+        rename::Function = Mycelia._metamdbg_linux_renameat2)::Int
     Sys.islinux() || return 0
     probe = mktempdir(dir)
     try
         source = joinpath(probe, "a")
         mkdir(source)
-        # AT_FDCWD = -100 (paths are absolute); RENAME_NOREPLACE = 1.
-        rc = Mycelia._metamdbg_linux_renameat2(Cint(-100), source, Cint(-100),
-            joinpath(probe, "b"), Cuint(1))
-        return rc == 0 ? 0 : Int(Base.Libc.errno())
+        # AT_FDCWD = -100 (paths are absolute); RENAME_NOREPLACE = 1, as the corrector.
+        rc = rename(Cint(-100), source, Cint(-100), joinpath(probe, "b"), Cuint(1))
+        rc == 0 && return 0
+        code = Int(Base.Libc.errno())
+        # A failed rename whose errno reads 0 is still a failure: fail closed.
+        return code == 0 ? -1 : code
     finally
         rm(probe; recursive = true, force = true)
     end
@@ -1046,16 +1050,32 @@ arrives only after each cell's correction has run into one refusal up front.
 """
 function prepare_temp_root(requested::Union{Nothing, AbstractString},
         root::AbstractString; rename_errno::Function = noreplace_rename_errno)
-    tmp = requested === nothing ? joinpath(root, "tmp") : abspath(requested)
+    requested === nothing || isabspath(requested) ||
+        error("--tmp-dir must be an absolute path, got $(repr(requested)) (a relative " *
+              "one resolves against the current directory, i.e. the checkout)")
+    tmp = requested === nothing ? joinpath(root, "tmp") : requested
     mkpath(tmp)
     tmp = realpath(tmp)
     code = rename_errno(tmp)
+    reason = code > 0 ? Base.Libc.strerror(code) : "rename failed, errno unreadable"
     code == 0 || error("temp root $(tmp) rejects renameat2(RENAME_NOREPLACE) " *
-          "($(Base.Libc.strerror(code))), so every :iterative cell would fail when " *
+          "($(reason)), so every :iterative cell would fail when " *
           "the corrector removes its temp directories. Pass --tmp-dir on a " *
           "filesystem that supports it (node-local /tmp on Perlmutter, not Lustre).")
     ENV["TMPDIR"] = tmp
     return tmp
+end
+
+"""
+    temp_root_for(cli, root; kwargs...) -> Union{String, Nothing}
+
+Phases A and B assemble, so they get a checked, pinned temp root
+(`prepare_temp_root`). Merge only reads checkpoints: it leaves `TMPDIR` alone and
+returns `nothing`, so a merge on a Lustre root is not refused for nothing.
+"""
+function temp_root_for(cli, root::AbstractString; kwargs...)
+    cli.phase in (:A, :B) || return nothing
+    return prepare_temp_root(cli.tmp_dir, root; kwargs...)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
@@ -1072,9 +1092,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         root = realpath(abspath(cli.output_dir))
         # The corrector's temp roots follow TMPDIR, not --output-dir. Resolve, check
         # and pin it on EVERY assembling invocation (sbatch, login node, Lovelace).
-        if cli.phase !== :merge
-            println("temp root: ", prepare_temp_root(cli.tmp_dir, root))
-        end
+        tmp = temp_root_for(cli, root)
+        tmp === nothing || println("temp root: ", tmp)
         # Cell failures are caught and checkpointed as rows, so the process would
         # otherwise end normally. Exit non-zero whenever a resubmit is needed, so
         # SLURM shows FAILED and the operator sees it.

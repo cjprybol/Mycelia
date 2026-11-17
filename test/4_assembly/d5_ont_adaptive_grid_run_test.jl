@@ -422,6 +422,9 @@ end
         msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "A",
             "--tmp-dir", " "]))
         Test.@test msg !== nothing && occursin("--tmp-dir must be a non-empty path", msg)
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "A",
+            "--tmp-dir", "/a", "--tmp-dir", "/b"]))
+        Test.@test msg !== nothing && occursin("--tmp-dir given more than once", msg)
         msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge",
             "--output-dir", ""]))
         Test.@test msg !== nothing && occursin("non-empty path", msg)
@@ -436,21 +439,84 @@ end
             tmp = prepare_temp_root(nothing, root; rename_errno = _ -> 0)
             Test.@test tmp == joinpath(root, "tmp") && isdir(tmp)
             Test.@test ENV["TMPDIR"] == tmp
-            # A requested root reached through a symlink is pinned by its real path.
+            # A requested root reached through a symlink is probed and pinned by its
+            # real path.
             mkdir(joinpath(root, "real"))
             symlink(joinpath(root, "real"), joinpath(root, "link"))
-            chosen = prepare_temp_root(joinpath(root, "link"), root; rename_errno = _ -> 0)
+            seen = Ref("")
+            chosen = prepare_temp_root(joinpath(root, "link"), root;
+                rename_errno = d -> (seen[] = d; 0))
             Test.@test chosen == joinpath(root, "real") && ENV["TMPDIR"] == chosen
-            # EINVAL (Lustre) refuses before TMPDIR moves.
+            Test.@test seen[] == chosen
+            # EINVAL (Lustre) refuses before TMPDIR moves, naming the errno.
             ENV["TMPDIR"] = "unchanged"
             msg = error_message(() -> prepare_temp_root(nothing, root;
                 rename_errno = _ -> 22))
             Test.@test msg !== nothing && occursin("RENAME_NOREPLACE", msg) &&
-                       occursin("--tmp-dir", msg)
+                       occursin("--tmp-dir", msg) &&
+                       occursin(Base.Libc.strerror(22), msg)
             Test.@test ENV["TMPDIR"] == "unchanged"
-            # The real probe accepts this machine's temp filesystem and cleans up.
-            Test.@test noreplace_rename_errno(tmp) == 0
-            Test.@test isempty(readdir(tmp))
+            msg = error_message(() -> prepare_temp_root(nothing, root;
+                rename_errno = _ -> -1))
+            Test.@test msg !== nothing && occursin("errno unreadable", msg)
+            msg = error_message(() -> prepare_temp_root("relative/tmp", root;
+                rename_errno = _ -> 0))
+            Test.@test msg !== nothing && occursin("must be an absolute path", msg)
+            Test.@test ENV["TMPDIR"] == "unchanged"
+        end
+    end
+
+    Test.@testset "temp root: phases A and B get one, merge leaves TMPDIR alone" begin
+        withenv("TMPDIR" => "unchanged") do
+            root = realpath(mktempdir())
+            merge_cli = D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge"])
+            Test.@test temp_root_for(merge_cli, root; rename_errno = _ -> 22) === nothing
+            Test.@test ENV["TMPDIR"] == "unchanged" && !ispath(joinpath(root, "tmp"))
+            for args in (["--phase", "A"], ["--phase", "B", "--tau", "0.5", "--tau-hat",
+                "0.5"])
+                cli = D5OntAdaptiveGridDriver.parse_cli(vcat(args,
+                    ["--tmp-dir", joinpath(root, "node_local")]))
+                ENV["TMPDIR"] = "unchanged"
+                got = temp_root_for(cli, root; rename_errno = _ -> 0)
+                Test.@test got == joinpath(root, "node_local") && ENV["TMPDIR"] == got
+                # A and B are refused on a rejecting filesystem (the guard is not skipped).
+                msg = error_message(() -> temp_root_for(cli, root; rename_errno = _ -> 22))
+                Test.@test msg !== nothing && occursin("RENAME_NOREPLACE", msg)
+            end
+        end
+    end
+
+    Test.@testset "temp root probe: real wrapper, errno and cleanup (Linux)" begin
+        dir = realpath(mktempdir())
+        if Sys.islinux()
+            # The real wrapper with RENAME_NOREPLACE onto an existing directory gives
+            # EEXIST (17): pins the flag value and the errno read through the wrapper.
+            # Without the flag, renaming onto an empty directory would succeed.
+            mkdir(joinpath(dir, "a"))
+            mkdir(joinpath(dir, "b"))
+            rc = Mycelia._metamdbg_linux_renameat2(Cint(-100), joinpath(dir, "a"),
+                Cint(-100), joinpath(dir, "b"), Cuint(1))
+            errno = Base.Libc.errno()
+            Test.@test rc != 0 && errno == 17
+            rm(joinpath(dir, "a"))
+            rm(joinpath(dir, "b"))
+            # The probe on this machine's temp filesystem succeeds and cleans up.
+            Test.@test noreplace_rename_errno(dir) == 0
+            Test.@test isempty(readdir(dir))
+            # A failure reports its errno; one whose errno reads 0 still fails closed.
+            Test.@test noreplace_rename_errno(dir;
+                rename = (_...) -> (Base.Libc.errno(22); Cint(-1))) == 22
+            Test.@test noreplace_rename_errno(dir;
+                rename = (_...) -> (Base.Libc.errno(0); Cint(-1))) == -1
+            # A throwing rename still removes the probe directory.
+            msg = error_message(() -> noreplace_rename_errno(dir;
+                rename = (_...) -> error("probe boom")))
+            Test.@test msg !== nothing && occursin("probe boom", msg)
+            Test.@test isempty(readdir(dir))
+        else
+            # Elsewhere nothing is probed (macOS uses renameatx_np).
+            Test.@test noreplace_rename_errno(dir;
+                rename = (_...) -> error("not called")) == 0
         end
     end
 

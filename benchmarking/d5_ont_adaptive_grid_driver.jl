@@ -582,7 +582,8 @@ const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
 
 `--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
 `--phase merge` | `--list`; plus `--output-dir` (non-empty), `--tmp-dir`
-(non-empty; the corrector's temp root, default `<output-dir>/tmp`), `--toy`,
+(phases A/B: the corrector's temp root, absolute, default `<output-dir>/tmp`),
+`--toy`,
 `--allow-sha-mismatch` (waive THIS checkout's code-version refusals: SHA differs
 from the manifest, dirty or unreadable git state), `--allow-mixed-code` (merge:
 publish rows written at more than one SHA or from an unclean tree),
@@ -592,11 +593,16 @@ unreadable or retryable; never waives mixed tau). Unknown arguments are errors.
 Phase B refuses to run without tau: the grid never chooses tau itself.
 """
 function parse_cli(args::AbstractVector{<:AbstractString})
-    # A mistyped switch (`--replann`) must not silently do nothing.
+    # A mistyped switch (`--replann`) must not silently do nothing, and a value
+    # flag given twice (the sbatch's --tmp-dir plus one in D5_ARGS) must not
+    # silently keep only the first.
     i = 1
+    seen = Set{String}()
     while i <= length(args)
         a = args[i]
         if a in CLI_VALUE_FLAGS
+            a in seen && error("$(a) given more than once")
+            push!(seen, a)
             i += 2
         elseif a in CLI_SWITCHES
             i += 1
