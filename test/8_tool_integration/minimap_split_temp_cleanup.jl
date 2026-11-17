@@ -463,19 +463,17 @@ Test.@testset "minimap2 split-index temp cleanup" begin
         Test.@test branch !== nothing
         Test.@test first(sweep) < first(branch)
 
-        # merge_and_map_single_end_samples keeps its sweep INSIDE the branch.
-        # `outbase` defaults to a date-only string, so two same-day runs in one
-        # CWD share a split prefix; the ownership check now makes that safe,
-        # but the position is left alone because hoisting it is a behaviour
-        # change this PR does not need. The remaining hole (a run killed AFTER
-        # writing `outfile` keeps its chunks, since the branch is then skipped
-        # forever) is a leak, not a deletion, and is now CLOSEABLE by hoisting
-        # -- tracked separately rather than done here.
+        # merge_and_map_single_end_samples: default outbase is unique per
+        # input set, so the sweep is hoisted BEFORE the cached-outfile branch
+        # (same as the other two call sites). A run killed after writing
+        # `outfile` no longer skips the sweep forever.
         seq_body = body_of("sequence-comparison.jl",
-            "    if !isfile(minimap_result.outfile)")
+            "function merge_and_map_single_end_samples(;")
         seq_sweep = findfirst("skip_if_owner_live = true", seq_body)
+        seq_branch = findfirst("if !isfile(minimap_result.outfile)", seq_body)
         Test.@test seq_sweep !== nothing
-        Test.@test first(seq_sweep) < first(findfirst("run(minimap_result.cmd)", seq_body))
+        Test.@test seq_branch !== nothing
+        Test.@test first(seq_sweep) < first(seq_branch)
 
         # prepare_binning_test_inputs: swept on BOTH paths now. Its previous
         # `outdir === nothing` gate had the same defect as the merge entry
