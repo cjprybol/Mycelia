@@ -467,8 +467,8 @@ end
     end
 
     Test.@testset "temp root: phases A and B get one, merge leaves TMPDIR alone" begin
+        root = realpath(mktempdir())  # before TMPDIR points nowhere
         withenv("TMPDIR" => "unchanged") do
-            root = realpath(mktempdir())
             merge_cli = D5OntAdaptiveGridDriver.parse_cli(["--phase", "merge"])
             Test.@test temp_root_for(merge_cli, root; rename_errno = _ -> 22) === nothing
             Test.@test ENV["TMPDIR"] == "unchanged" && !ispath(joinpath(root, "tmp"))
@@ -479,9 +479,12 @@ end
                 ENV["TMPDIR"] = "unchanged"
                 got = temp_root_for(cli, root; rename_errno = _ -> 0)
                 Test.@test got == joinpath(root, "node_local") && ENV["TMPDIR"] == got
-                # A and B are refused on a rejecting filesystem (the guard is not skipped).
+                # A and B are refused on a rejecting filesystem (the guard is not
+                # skipped), and the refusal leaves TMPDIR alone.
+                ENV["TMPDIR"] = "unchanged"
                 msg = error_message(() -> temp_root_for(cli, root; rename_errno = _ -> 22))
                 Test.@test msg !== nothing && occursin("RENAME_NOREPLACE", msg)
+                Test.@test ENV["TMPDIR"] == "unchanged"
             end
         end
     end
@@ -503,6 +506,13 @@ end
             # The probe on this machine's temp filesystem succeeds and cleans up.
             Test.@test noreplace_rename_errno(dir) == 0
             Test.@test isempty(readdir(dir))
+            # The probe passes AT_FDCWD and RENAME_NOREPLACE (a flag of 0 would let a
+            # Lustre rename succeed here while the corrector still fails).
+            calls = []
+            Test.@test noreplace_rename_errno(dir;
+                rename = (sfd, s, dfd, d, flags) -> (push!(calls, (sfd, dfd, flags));
+                Cint(0))) == 0
+            Test.@test calls == [(Cint(-100), Cint(-100), Cuint(1))]
             # A failure reports its errno; one whose errno reads 0 still fails closed.
             Test.@test noreplace_rename_errno(dir;
                 rename = (_...) -> (Base.Libc.errno(22); Cint(-1))) == 22
@@ -517,6 +527,54 @@ end
             # Elsewhere nothing is probed (macOS uses renameatx_np).
             Test.@test noreplace_rename_errno(dir;
                 rename = (_...) -> error("not called")) == 0
+        end
+    end
+
+    Test.@testset "sbatch temp-root cleanup: evidence kept on failure and on signals" begin
+        helper = joinpath(@__DIR__, "..", "..", "benchmarking", "d5_temp_root.sh")
+        Test.@test isfile(helper)
+        if Sys.islinux() && Sys.which("bash") !== nothing
+            # Runs the helper under bash: `script` gets $1 = helper, $2 = temp root,
+            # $3 = evidence dir, $4 = exit code.
+            function run_helper(script; rc = 0, populate = true, keep_exists = false)
+                base = realpath(mktempdir())
+                root = joinpath(base, "root")
+                mkdir(root)
+                populate && write(joinpath(root, "evidence.txt"), "kept")
+                keep = joinpath(base, "tmp_evidence", "job1")
+                keep_exists && mkpath(keep)
+                err = IOBuffer()
+                cmd = Cmd(["bash", "-c", script, "_", helper, root, keep, string(rc)])
+                proc = run(pipeline(ignorestatus(cmd); stderr = err))
+                return (; root, keep, code = proc.exitcode, log = String(take!(err)))
+            end
+            cleanup = raw"""source "$1" && d5_temp_root_cleanup "$4" "$2" "$3" """
+            # Non-zero exit: the temp root is copied whole, then removed.
+            r = run_helper(cleanup; rc = 3)
+            Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
+            Test.@test strip(read(joinpath(r.keep, "ORIGINAL_TEMP_ROOT"), String)) == r.root
+            Test.@test !ispath(r.root) && !ispath(r.keep * ".partial")
+            Test.@test occursin("preserved at", r.log) && occursin("memory.peak", r.log)
+            # Clean exit, or nothing to keep: removed, nothing copied.
+            r = run_helper(cleanup; rc = 0)
+            Test.@test !ispath(r.root) && !ispath(r.keep)
+            r = run_helper(cleanup; rc = 3, populate = false)
+            Test.@test !ispath(r.root) && !ispath(r.keep)
+            # An existing evidence dir is never overwritten; the WARN says so.
+            r = run_helper(cleanup; rc = 3, keep_exists = true)
+            Test.@test isempty(readdir(r.keep)) && !ispath(r.root)
+            Test.@test occursin("WARN", r.log) && occursin("already exists", r.log)
+            # SIGTERM (time limit, scancel) while the job runs: the traps turn it into
+            # exit 143, so the evidence is kept rather than deleted with status 0.
+            r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
+                true && kill -TERM $$ && sleep 30""")
+            Test.@test r.code == 143
+            Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
+            Test.@test !ispath(r.root) && occursin("rc=143", r.log)
+            # A normal exit code passes through the EXIT trap unchanged.
+            r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
+                exit 3""")
+            Test.@test r.code == 3 && isdir(r.keep) && !ispath(r.root)
         end
     end
 

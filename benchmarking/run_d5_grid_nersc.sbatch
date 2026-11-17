@@ -18,8 +18,8 @@
 #
 # Resources mirror run_track_a_baseline_nersc.sbatch (shared QOS, 200 GB covers a
 # T4 100x :iterative cell); re-size before the full launch from the toy run's
-# peak_rss_bytes PLUS the node-local temp root: it is tmpfs, charged to --mem,
-# and not in peak_rss_bytes (its size at exit is logged to the .err file).
+# cgroup memory.peak, logged to the .err file at exit. peak_rss_bytes alone is
+# too low: the node-local temp root is tmpfs, charged to --mem, not to RSS.
 # Flags on the sbatch command line override the directives above.
 #
 # PRE-STAGE ONCE on a login node (compute nodes have no outbound internet):
@@ -30,8 +30,9 @@
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
 #   # references: --list does not download; Phase A downloads into <root>/refs on
-#   # first use, so run one toy task interactively (add --tmp-dir /tmp/$USER-d5:
-#   # the default <root>/tmp is on Lustre and is refused) or pre-copy refs/.
+#   # first use, so run one toy task interactively (add
+#   # --tmp-dir "$(mktemp --directory)": the default <root>/tmp is on Lustre and
+#   # is refused) or pre-copy refs/.
 #
 # USAGE (submit from benchmarking/):
 #   Toy (3 read sets):
@@ -67,33 +68,6 @@ fi
 mkdir -p "${OUTDIR}" || { echo "ERROR: cannot create D5_OUTDIR=${OUTDIR}" >&2; exit 1; }
 OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2; exit 1; }
 [[ -n "${OUTDIR}" ]] || { echo "ERROR: D5_OUTDIR resolved to an empty path" >&2; exit 1; }
-# The :iterative corrector removes its temp directories with
-# renameat2(RENAME_NOREPLACE). Lustre ($SCRATCH) rejects that with EINVAL and the
-# corrector stops, so its temp root is node-local: /tmp on a Perlmutter compute
-# node is tmpfs (it counts against --mem) and is not a symlink. The runner
-# re-checks the rename before any cell runs. Override the base with D5_TMPDIR.
-# mktemp creates a fresh 0700 directory and fails if the name exists, so a
-# pre-planted path can never become what the EXIT trap removes.
-D5_TMP="$(mktemp --directory "${D5_TMPDIR:-/tmp}/d5_${SLURM_JOB_ID:-$$}.XXXXXX")" ||
-  { echo "ERROR: cannot create a temp root under ${D5_TMPDIR:-/tmp}" >&2; exit 1; }
-cleanup_temp_root() {
-  local rc=$?
-  echo "temp root ${D5_TMP} at exit: $(du --summarize --bytes "${D5_TMP}" 2>/dev/null | cut --fields=1) bytes" >&2
-  # On failure keep a copy: the corrector leaves fail-closed evidence under
-  # TMPDIR, cell error rows cite those paths, and the node is gone after the job.
-  if [[ "${rc}" -ne 0 && -n "$(ls --almost-all "${D5_TMP}" 2>/dev/null)" ]]; then
-    local keep="${OUTDIR}/tmp_evidence/${SLURM_JOB_ID:-$$}"
-    if mkdir --parents "${keep}" && cp --archive "${D5_TMP}/." "${keep}/"; then
-      echo "temp root preserved at ${keep}" >&2
-    else
-      echo "WARN: could not preserve ${D5_TMP}" >&2
-    fi
-  fi
-  rm --recursive --force -- "${D5_TMP}"
-}
-trap cleanup_temp_root EXIT
-D5_TMP="$(realpath "${D5_TMP}")" || { echo "ERROR: cannot resolve the temp root" >&2; exit 1; }
-export TMPDIR="${D5_TMP}"
 export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
 export LD_LIBRARY_PATH=""
@@ -105,6 +79,24 @@ if [[ ! -f d5_ont_adaptive_grid_run.jl ]]; then
   exit 1
 fi
 echo "Checkout: $(git -C .. rev-parse HEAD)  dirty: $(git -C .. status --porcelain --untracked-files=no | wc -l | tr -d ' ') files"
+
+# The :iterative corrector removes its temp directories with
+# renameat2(RENAME_NOREPLACE). Lustre ($SCRATCH) rejects that with EINVAL and the
+# corrector stops, so its temp root is node-local: /tmp on a Perlmutter compute
+# node is tmpfs (it counts against --mem) and is not a symlink. The runner
+# re-checks the rename before any cell runs. Override the base with D5_TMPDIR.
+# mktemp creates a fresh 0700 directory and fails if the name exists, so a
+# pre-planted path can never become what the EXIT trap removes. Cleanup, the
+# evidence copy on failure and signal handling live in d5_temp_root.sh.
+# shellcheck source=d5_temp_root.sh
+source ./d5_temp_root.sh || { echo "ERROR: cannot source d5_temp_root.sh" >&2; exit 1; }
+[[ "${D5_TMPDIR:-/tmp}" == /* ]] ||
+  { echo "ERROR: D5_TMPDIR must be an absolute path, got ${D5_TMPDIR}" >&2; exit 1; }
+D5_TMP_MADE="$(mktemp --directory "${D5_TMPDIR:-/tmp}/d5_${SLURM_JOB_ID:-$$}.XXXXXX")" ||
+  { echo "ERROR: cannot create a temp root under ${D5_TMPDIR:-/tmp}" >&2; exit 1; }
+d5_install_temp_root_traps "${D5_TMP_MADE}" "${OUTDIR}/tmp_evidence/${SLURM_JOB_ID:-$$}"
+D5_TMP="$(realpath "${D5_TMP_MADE}")" || { echo "ERROR: cannot resolve the temp root" >&2; exit 1; }
+export TMPDIR="${D5_TMP}"
 
 INDEX_ARGS=()
 if [[ "${PHASE}" == "A" || "${PHASE}" == "B" ]]; then

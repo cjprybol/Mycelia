@@ -16,7 +16,7 @@
 # run_d5_grid_nersc.sbatch, one array task per read set. `--tmp-dir` sets the
 # corrector's temp root (absolute; default <root>/tmp); it must accept
 # renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
-# Run by hand on Perlmutter with e.g. --tmp-dir /tmp/$USER-d5.
+# Run by hand on Perlmutter with --tmp-dir "$(mktemp --directory)".
 #
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
@@ -25,6 +25,7 @@
 #   <root>/readsets/<read_set_id>/survival.json 23-rung S / S_hat on RAW reads
 #   <root>/cells/<cell_id>/cell_result.json   one checkpoint per cell (atomic)
 #   <root>/cells/<cell_id>/corrected_survival.json  diagnostic, :iterative only
+#   <root>/tmp_evidence/<jobid>/            sbatch: temp root kept on a failed exit
 #   <root>/d5_cells.tsv, d5_survival.tsv, illumina_none_optimum.tsv,
 #   <root>/replicate_evaluability.tsv         written by --phase merge
 #
@@ -1015,8 +1016,9 @@ end
     noreplace_rename_errno(dir) -> Int
 
 Rename a fresh directory under `dir` with `renameat2(RENAME_NOREPLACE)` through
-Mycelia's own wrapper, the call the `:iterative` corrector makes when it removes
-its temp directories. Returns 0 on success, else the errno. Linux only: elsewhere
+Mycelia's own wrapper (`rename`, injectable for tests), the call the `:iterative`
+corrector makes when it removes its temp directories. Returns 0 on success, else
+the errno, or -1 when the rename failed and errno reads 0. Linux only: elsewhere
 returns 0 (macOS uses `renameatx_np`, which APFS supports).
 """
 function noreplace_rename_errno(dir::AbstractString;
