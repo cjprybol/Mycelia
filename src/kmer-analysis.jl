@@ -1574,6 +1574,129 @@ function canonicalize_kmer_counts(kmer_counts)
     return canonicalize_kmer_counts!(copy(kmer_counts))
 end
 
+function _validate_kmer_ambiguity_mode(ambiguity::Symbol)
+    if ambiguity !== :skip && ambiguity !== :expand && ambiguity !== :error
+        throw(ArgumentError(
+            "ambiguity must be :skip, :expand, or :error; got :$(ambiguity)",
+        ))
+    end
+    return ambiguity
+end
+
+function _unambiguous_kmer_counts(iterator)
+    kmer_counts = StatsBase.countmap([kmer for (kmer, index) in iterator])
+    return sort!(OrderedCollections.OrderedDict(kmer_counts))
+end
+
+function _sequence_has_uncertain_base(sequence, k::Int)
+    if length(sequence) < k
+        return false
+    end
+    for nt in sequence
+        if !BioSymbols.iscertain(nt)
+            return true
+        end
+    end
+    return false
+end
+
+function _reject_uncertain_kmer_bases(sequence, k::Int)
+    if length(sequence) < k
+        return nothing
+    end
+    for i in eachindex(sequence)
+        nt = sequence[i]
+        if !BioSymbols.iscertain(nt)
+            kind = BioSymbols.isambiguous(nt) ? "ambiguous base" : "uncertain base"
+            throw(ArgumentError(
+                "$(kind) $(nt) at position $(i); use ambiguity=:skip or ambiguity=:expand",
+            ))
+        end
+    end
+    return nothing
+end
+
+function _expanded_nucleotide_bases(nt::BioSymbols.DNA)
+    bits = BioSymbols.compatbits(nt)
+    return BioSymbols.DNA[
+        base for base in BioSymbols.ACGT if !iszero(bits & BioSymbols.compatbits(base))
+    ]
+end
+
+function _expanded_nucleotide_bases(nt::BioSymbols.RNA)
+    bits = BioSymbols.compatbits(nt)
+    return BioSymbols.RNA[
+        base for base in BioSymbols.ACGU if !iszero(bits & BioSymbols.compatbits(base))
+    ]
+end
+
+function _kmer_from_buffer(buffer::Vector{BioSymbols.DNA})
+    k = length(buffer)
+    return Kmers.DNAKmer{k}(String(Char.(buffer)))
+end
+
+function _kmer_from_buffer(buffer::Vector{BioSymbols.RNA})
+    k = length(buffer)
+    return Kmers.RNAKmer{k}(String(Char.(buffer)))
+end
+
+function _expand_kmer_window!(counts, sequence, start::Int, buffer, pos::Int)
+    if pos > length(buffer)
+        kmer = _kmer_from_buffer(buffer)
+        counts[kmer] = get(counts, kmer, 0) + 1
+        return nothing
+    end
+    nt = sequence[start + pos - 1]
+    choices = _expanded_nucleotide_bases(nt)
+    if isempty(choices)
+        throw(ArgumentError(
+            "cannot expand base $(nt) at position $(start + pos - 1) into unambiguous nucleotides",
+        ))
+    end
+    for choice in choices
+        buffer[pos] = choice
+        _expand_kmer_window!(counts, sequence, start, buffer, pos + 1)
+    end
+    return nothing
+end
+
+function _empty_expanded_kmer_counts(::Type{BioSymbols.DNA}, k::Int)
+    sentinel = Kmers.DNAKmer{k}("A"^k)
+    return Dict{typeof(sentinel), Int}()
+end
+
+function _empty_expanded_kmer_counts(::Type{BioSymbols.RNA}, k::Int)
+    sentinel = Kmers.RNAKmer{k}("A"^k)
+    return Dict{typeof(sentinel), Int}()
+end
+
+function _expanded_buffer(::Type{BioSymbols.DNA}, k::Int)
+    return Vector{BioSymbols.DNA}(undef, k)
+end
+
+function _expanded_buffer(::Type{BioSymbols.RNA}, k::Int)
+    return Vector{BioSymbols.RNA}(undef, k)
+end
+
+function _count_expanded_kmers(sequence, symbol_type::Type, k::Int)
+    counts = _empty_expanded_kmer_counts(symbol_type, k)
+    buffer = _expanded_buffer(symbol_type, k)
+    for start in 1:(length(sequence) - k + 1)
+        _expand_kmer_window!(counts, sequence, start, buffer, 1)
+    end
+    return sort!(OrderedCollections.OrderedDict(counts))
+end
+
+function _count_nucleic_acid_kmers(sequence, iterator, symbol_type::Type, k::Int, ambiguity::Symbol)
+    mode = _validate_kmer_ambiguity_mode(ambiguity)
+    if mode === :error
+        _reject_uncertain_kmer_bases(sequence, k)
+    elseif mode === :expand && _sequence_has_uncertain_base(sequence, k)
+        return _count_expanded_kmers(sequence, symbol_type, k)
+    end
+    return _unambiguous_kmer_counts(iterator)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1583,12 +1706,16 @@ smaller of a DNA sequence and its reverse complement, ensuring strand-independen
 # Arguments
 - `KMER_TYPE`: Type parameter specifying the k-mer size and structure
 - `sequences`: Iterator of biological sequences to analyze
+- `ambiguity::Symbol=:skip`: Passed through to `count_kmers`. `:skip` (default) drops
+  nucleic-acid k-mers that contain ambiguous bases. `:expand` counts every concrete
+  resolution. `:error` throws when a k-mer window contains an uncertain base.
 
 # Returns
 - `Dict{KMER_TYPE,Int}`: Dictionary mapping canonical k-mers to their counts
 """
-function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where {KMER_TYPE}
-    kmer_counts = count_kmers(KMER_TYPE, sequences)
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences;
+        ambiguity::Symbol = :skip) where {KMER_TYPE}
+    kmer_counts = count_kmers(KMER_TYPE, sequences; ambiguity = ambiguity)
     return canonicalize_kmer_counts!(kmer_counts)
 end
 
@@ -1600,6 +1727,11 @@ Count the frequency of each k-mer in a DNA sequence.
 # Arguments
 - `::Type{Kmers.Kmer{A,K}}`: K-mer type with alphabet A and length K
 - `sequence::BioSequences.LongSequence`: Input DNA sequence to analyze
+- `ambiguity::Symbol=:skip`: How to treat ambiguous bases such as `N` and other IUPAC codes.
+  `:skip` drops any k-mer that contains one, matching `Kmers.UnambiguousDNAMers` (the default).
+  `:expand` counts each unambiguous A/C/G/T resolution of those k-mers once.
+  `:error` throws if a k-mer window contains an ambiguous or otherwise uncertain base.
+  Gaps cannot be expanded and raise `ArgumentError` under `:expand`.
 
 # Returns
 A sorted dictionary mapping each k-mer to its frequency count in the sequence.
@@ -1609,12 +1741,15 @@ A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 - `K`: Length of k-mers
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}},
-        sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
-    # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
-    kmer_counts = StatsBase.countmap([kmer
-                                      for (kmer, index) in
-                                          Kmers.UnambiguousDNAMers{K}(sequence)])
-    return sort!(OrderedCollections.OrderedDict(kmer_counts))
+        sequence::BioSequences.LongSequence;
+        ambiguity::Symbol = :skip) where {A <: BioSequences.DNAAlphabet, K}
+    return _count_nucleic_acid_kmers(
+        sequence,
+        Kmers.UnambiguousDNAMers{K}(sequence),
+        BioSymbols.DNA,
+        K,
+        ambiguity,
+    )
 end
 
 """
@@ -1625,17 +1760,22 @@ Count the frequency of each k-mer in an RNA sequence.
 # Arguments
 - `Kmer`: Type parameter specifying the k-mer length K and RNA alphabet
 - `sequence`: Input RNA sequence to analyze
+- `ambiguity::Symbol=:skip`: Same contract as DNA `count_kmers`. The default uses
+  `Kmers.UnambiguousRNAMers`. `:expand` resolves IUPAC codes to A/C/G/U.
 
 # Returns
 - `Dict{Kmers.Kmer, Int}`: Sorted dictionary mapping each k-mer to its frequency count
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}},
-        sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
-    # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
-    kmer_counts = StatsBase.countmap([kmer
-                                      for (kmer, index) in
-                                          Kmers.UnambiguousRNAMers{K}(sequence)])
-    return sort!(OrderedCollections.OrderedDict(kmer_counts))
+        sequence::BioSequences.LongSequence;
+        ambiguity::Symbol = :skip) where {A <: BioSequences.RNAAlphabet, K}
+    return _count_nucleic_acid_kmers(
+        sequence,
+        Kmers.UnambiguousRNAMers{K}(sequence),
+        BioSymbols.RNA,
+        K,
+        ambiguity,
+    )
 end
 
 """
@@ -1646,38 +1786,53 @@ Count the frequency of amino acid k-mers in a biological sequence.
 # Arguments
 - `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
 - `sequence`: Input biological sequence to analyze
+- `ambiguity::Symbol=:skip`: Amino-acid counting accepts only `:skip`, which keeps the
+  current `Kmers.FwAAMers` counts. `:expand` and `:error` raise `ArgumentError`.
 
 # Returns
 A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}},
-        sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
+        sequence::BioSequences.LongSequence;
+        ambiguity::Symbol = :skip) where {A <: BioSequences.AminoAcidAlphabet, K}
+    mode = _validate_kmer_ambiguity_mode(ambiguity)
+    if mode !== :skip
+        throw(ArgumentError(
+            "ambiguity=:$(mode) is not supported for amino acid k-mers; only ambiguity=:skip is available",
+        ))
+    end
     kmer_counts = StatsBase.countmap(Kmers.FwAAMers{K}(sequence))
     return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
 
-# TODO add a way to handle ambiguity or not
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Count the frequency of amino acid k-mers in a biological sequence.
+Count k-mers in one FASTA or FASTQ record.
 
 # Arguments
-- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
-- `sequence`: Input biological sequence to analyze
+- `KMER_TYPE`: K-mer type (`Kmers.DNAKmer{K}`, `Kmers.RNAKmer{K}`, or `Kmers.AAKmer{K}`)
+- `record`: FASTA or FASTQ record
+- `ambiguity::Symbol=:skip`: Forwarded to the sequence counter. Nucleic-acid records
+  accept `:skip`, `:expand`, and `:error`. Amino-acid records accept only `:skip`.
 
 # Returns
-A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+A sorted dictionary mapping each k-mer to its frequency count in the record.
 """
 function count_kmers(::Type{KMER_TYPE},
-        record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+        record::R;
+        ambiguity::Symbol = :skip) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     # TODO: need to figure out how to infer the sequence type
+    _validate_kmer_ambiguity_mode(ambiguity)
     if eltype(KMER_TYPE) == BioSymbols.DNA
-        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record);
+            ambiguity = ambiguity)
     elseif eltype(KMER_TYPE) == BioSymbols.RNA
-        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record))
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record);
+            ambiguity = ambiguity)
     elseif eltype(KMER_TYPE) == BioSymbols.AminoAcid
-        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record))
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record);
+            ambiguity = ambiguity)
     else
         @error KMER_TYPE
     end
@@ -1691,16 +1846,18 @@ Count k-mers across multiple sequence records and return a sorted frequency tabl
 # Arguments
 - `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{3}` for 3-mers)
 - `records`: Vector of FASTA/FASTQ records to analyze
+- `ambiguity::Symbol=:skip`: Forwarded to each record. See DNA `count_kmers`.
 
 # Returns
 - `Dict{KMER_TYPE, Int}`: Sorted dictionary mapping k-mers to their frequencies
 """
 function count_kmers(::Type{KMER_TYPE},
-        records::AbstractVector{T}) where {
+        records::AbstractVector{T};
+        ambiguity::Symbol = :skip) where {
         KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    kmer_counts = count_kmers(KMER_TYPE, first(records))
+    kmer_counts = count_kmers(KMER_TYPE, first(records); ambiguity = ambiguity)
     for record in records[2:end]
-        _kmer_counts = count_kmers(KMER_TYPE, record)
+        _kmer_counts = count_kmers(KMER_TYPE, record; ambiguity = ambiguity)
         merge!(+, kmer_counts, _kmer_counts)
     end
     sort!(kmer_counts)
@@ -1714,13 +1871,15 @@ Counts k-mer occurrences in biological sequences from a FASTA/FASTQ reader.
 # Arguments
 - `KMER_TYPE`: Type parameter specifying the k-mer length and encoding (e.g., `DNAKmer{4}` for 4-mers)
 - `sequences`: A FASTA or FASTQ reader containing the biological sequences to analyze
+- `ambiguity::Symbol=:skip`: Forwarded to the collected records. See DNA `count_kmers`.
 
 # Returns
 A dictionary mapping k-mers to their counts in the input sequences
 """
 function count_kmers(::Type{KMER_TYPE},
-        sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
-    return count_kmers(KMER_TYPE, collect(sequences))
+        sequences::R;
+        ambiguity::Symbol = :skip) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
+    return count_kmers(KMER_TYPE, collect(sequences); ambiguity = ambiguity)
 end
 
 """
@@ -1731,15 +1890,17 @@ Count k-mers across multiple FASTA/FASTQ files and merge the results.
 # Arguments
 - `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{4}` for 4-mers)
 - `fastx_files`: Vector of paths to FASTA/FASTQ files
+- `ambiguity::Symbol=:skip`: Forwarded to each file. See DNA `count_kmers`.
 
 # Returns
 - `Dict{KMER_TYPE, Int}`: Dictionary mapping k-mers to their total counts across all files
 """
-function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {
+function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T};
+        ambiguity::Symbol = :skip) where {
         KMER_TYPE, T <: AbstractString}
-    kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
+    kmer_counts = count_kmers(KMER_TYPE, first(fastx_files); ambiguity = ambiguity)
     for file in fastx_files[2:end]
-        _kmer_counts = count_kmers(KMER_TYPE, file)
+        _kmer_counts = count_kmers(KMER_TYPE, file; ambiguity = ambiguity)
         kmer_counts = merge!(+, kmer_counts, _kmer_counts)
     end
     return kmer_counts
@@ -1753,13 +1914,15 @@ Count k-mers in a FASTA/FASTQ file and return their frequencies.
 # Arguments
 - `KMER_TYPE`: Type parameter specifying the k-mer type (e.g., `DNAKmer{K}`)
 - `fastx_file`: Path to input FASTA/FASTQ file
+- `ambiguity::Symbol=:skip`: Forwarded to the reader. See DNA `count_kmers`.
 
 # Returns
 - `Dict{KMER_TYPE, Int}`: Dictionary mapping each k-mer to its frequency
 """
-function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
+function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString;
+        ambiguity::Symbol = :skip) where {KMER_TYPE}
     fastx_io = open_fastx(fastx_file)
-    kmer_counts = count_kmers(KMER_TYPE, fastx_io)
+    kmer_counts = count_kmers(KMER_TYPE, fastx_io; ambiguity = ambiguity)
     close(fastx_io)
     return kmer_counts
 end
