@@ -23,6 +23,10 @@ import Kmers
 import Mycelia
 import Test
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 # Corrected label strings for read `index` of a ViterbiCorrectionResult.
 function poc_decoded_label_strings(
     result::Mycelia.ViterbiCorrectionResult, index::Integer
@@ -140,5 +144,49 @@ Test.@testset "Batched array-frontier Viterbi corrector PoC (td-qoo3)" begin
         Test.@test_throws ArgumentError Mycelia.batched_correct_observations(
             graph, observations; config=beam_config
         )
+    end
+
+    # Default `strand_mode=:auto` on a directed DNA graph with reverse-strand
+    # evidence resolves to `:doublestrand`. That used to throw even though the
+    # caller never asked for multi-strand decoding. Explicit `:doublestrand`
+    # stays out of PoC scope.
+    Test.@testset ":auto on a directed doublestrand graph does not throw" begin
+        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGTAC")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id="batched_poc_auto_ds", mode=:doublestrand
+        )
+        Test.@test Mycelia._resolve_viterbi_strand_mode(graph, :DNA, :auto) ==
+                   :doublestrand
+
+        observations = [
+            [
+                Kmers.DNAKmer{3}("ATG"),
+                Kmers.DNAKmer{3}("TGC"),
+                Kmers.DNAKmer{3}("GCG"),
+                Kmers.DNAKmer{3}("CGT"),
+            ],
+        ]
+
+        result = Mycelia.batched_correct_observations(graph, observations)
+        Test.@test result.diagnostics[:strand_mode] == :doublestrand
+        scalar = Mycelia.correct_observations(graph, observations)
+        Test.@test result.diagnostics[:strand_mode] == scalar.diagnostics[:strand_mode]
+        Test.@test poc_decoded_label_strings(result, 1) ==
+                   poc_decoded_label_strings(scalar, 1)
+        Test.@test result.paths[1].score === scalar.paths[1].score
+
+        singlestrand_config = Mycelia.ViterbiCorrectionConfig(strand_mode=:singlestrand)
+        forced = Mycelia.batched_correct_observations(
+            graph, observations; config=singlestrand_config)
+        Test.@test forced.diagnostics[:strand_mode] == :singlestrand
+
+        explicit = Mycelia.ViterbiCorrectionConfig(strand_mode=:doublestrand)
+        test_throws_message(
+            ArgumentError,
+            "explicit multi-strand"
+        ) do
+            Mycelia.batched_correct_observations(
+                graph, observations; config=explicit)
+        end
     end
 end

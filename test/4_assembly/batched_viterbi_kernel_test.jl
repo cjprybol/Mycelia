@@ -137,6 +137,40 @@ Test.@testset "Batched Viterbi corrector GPU kernel — Phase B (td-qoo3)" begin
         )
     end
 
+    # Mirrors the CPU PoC guard (td-gud3): default `:auto` on a directed graph
+    # that resolves to `:doublestrand` is decoded, not rejected.
+    Test.@testset ":auto on a directed doublestrand graph does not throw" begin
+        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGTAC")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id="kernel_poc_auto_ds", mode=:doublestrand
+        )
+        observations = [
+            [
+                Kmers.DNAKmer{3}("ATG"),
+                Kmers.DNAKmer{3}("TGC"),
+                Kmers.DNAKmer{3}("GCG"),
+                Kmers.DNAKmer{3}("CGT"),
+            ],
+        ]
+        result = Mycelia.kernel_batched_correct_observations(
+            graph, observations; backend=cpu_backend)
+        Test.@test result.diagnostics[:strand_mode] == :doublestrand
+        poc = Mycelia.batched_correct_observations(graph, observations)
+        Test.@test poc_decoded_label_strings(result, 1) ==
+                   poc_decoded_label_strings(poc, 1)
+        Test.@test result.paths[1].score === poc.paths[1].score
+
+        explicit = Mycelia.ViterbiCorrectionConfig(strand_mode=:doublestrand)
+        try
+            Mycelia.kernel_batched_correct_observations(
+                graph, observations; config=explicit, backend=cpu_backend)
+            Test.@test false
+        catch err
+            Test.@test err isa ArgumentError
+            Test.@test occursin("explicit multi-strand", sprint(showerror, err))
+        end
+    end
+
     Test.@testset "benchmark harness runs (CPU backend; GPU if available)" begin
         # Small sizes keep the CI run fast; the harness reports GPU throughput
         # only when a functional CUDA backend is detected (e.g. on Lovelace).

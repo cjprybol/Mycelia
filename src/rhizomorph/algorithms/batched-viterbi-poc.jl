@@ -51,7 +51,11 @@
 # corrected paths + scores to `correct_observations` per read.
 #
 # PoC scope limits (deliberate, per ADR §Prototype scope):
-#   * single-strand only (`strand_mode == :singlestrand`) — no strand branching;
+#   * explicit multi-strand requests (`:doublestrand`, `:canonical`) are rejected.
+#     `strand_mode=:auto` is resolved with the scalar decoder's resolver and
+#     accepted, including when a directed graph with reverse-strand evidence
+#     resolves to `:doublestrand` (td-gud3). The array frontier already indexes
+#     both strands; `:auto` just stops refusing that resolved mode;
 #   * `beam_width == typemax(Int)` (exact decode) — no beam pruning is applied,
 #     so equivalence is asserted against the exact scalar path;
 #   * MetaGraphsNext emission-scored observations only (the corrector's residual
@@ -436,12 +440,16 @@ Returns a [`ViterbiCorrectionResult`](@ref) with the same shape as
 compared directly against the scalar decoder (see
 [`batched_equivalence_oracle`](@ref)).
 
-PoC constraints (throws `ArgumentError` otherwise): single-strand graphs only
-(`strand_mode == :singlestrand`), exact decode (`beam_width == typemax(Int)`), and
-non-empty emission-scored observations against a `MetaGraphsNext.MetaGraph`. This
-is the CPU foundation the future SIMD (Phase A) and GPU (Phase B) kernels build
-on; it does not itself add any SIMD/GPU dependency and is not wired into the
-production corrector.
+PoC constraints (throws `ArgumentError` otherwise): an explicit multi-strand
+request (`strand_mode` of `:doublestrand` or `:canonical`) is rejected. The
+default `:auto` is resolved with the same rules as [`correct_observations`](@ref)
+and then decoded in that mode, so a directed graph whose reverse-strand evidence
+resolves `:auto` to `:doublestrand` does not throw. Exact decode
+(`beam_width == typemax(Int)`), and non-empty emission-scored observations
+against a `MetaGraphsNext.MetaGraph`, are still required. This is the CPU
+foundation the future SIMD (Phase A) and GPU (Phase B) kernels build on; it does
+not itself add any SIMD/GPU dependency and is not wired into the production
+corrector.
 """
 function batched_correct_observations(
         graph::MetaGraphsNext.MetaGraph,
@@ -464,11 +472,19 @@ function batched_correct_observations(
     end
 
     alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
+    requested_strand_mode = _normalize_viterbi_strand_mode(config.strand_mode)
     strand_mode = _resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
-    if strand_mode != :singlestrand
+    # Require singlestrand only for an explicit request. `:auto` is resolved
+    # first (a directed graph with reverse-strand evidence becomes
+    # `:doublestrand`) and then decoded in that mode, matching
+    # `correct_observations`. Explicit `:doublestrand` / `:canonical` stay
+    # outside this PoC (td-gud3).
+    if requested_strand_mode != :auto && strand_mode != :singlestrand
         throw(ArgumentError(
-            "batched PoC supports single-strand decoding only (resolved " *
-            "strand_mode=$strand_mode); multi-strand batching is deferred per the ADR."))
+            "batched PoC rejects explicit multi-strand decoding (requested " *
+            "$(config.strand_mode), resolved strand_mode=$strand_mode); " *
+            "multi-strand batching is deferred per the ADR. strand_mode=:auto " *
+            "is accepted and decoded in the resolved mode."))
     end
 
     transition_edge_weight = _viterbi_transition_edge_weight(graph, config.edge_weight)

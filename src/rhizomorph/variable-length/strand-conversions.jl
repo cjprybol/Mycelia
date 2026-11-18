@@ -77,7 +77,8 @@ end
 Convert a singlestrand variable-length graph (DNA/RNA) to canonical form.
 
 Canonical vertices use the `BioSequences.canonical` label; evidence from forward/RC is merged
-with strand flags preserved via `flip_evidence_strand`.
+with strand flags preserved via `flip_evidence_strand`. Vertex and edge payloads are copied
+before that merge, so the input graph's evidence is left unchanged.
 
 - Supported: `BioSequences.LongDNA{4}` and `BioSequences.LongRNA{4}` labels
 - Not supported: amino acids or generic strings (throws)
@@ -120,9 +121,11 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
         canon_v = BioSequences.canonical(v)
         push!(processed, v)
         push!(processed, rc_v)
-        # initialize vertex
+        # initialize vertex. MetaGraphsNext stores the assigned object by
+        # reference, and the evidence merge below calls add_evidence! on it.
+        # Copy first so flipped or merged evidence cannot land in the input graph.
         if !haskey(canon_graph, canon_v)
-            canon_graph[canon_v] = graph[v]
+            canon_graph[canon_v] = deepcopy(graph[v])
         end
         # merge evidence from v
         vdata = graph[v]
@@ -161,8 +164,11 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         canon_src = BioSequences.canonical(src)
         canon_dst = BioSequences.canonical(dst)
+        # Same alias as the vertex assignment above: the edge payload is stored
+        # by reference, then add_evidence! appends strand-corrected entries.
+        # overlap_length and the evidence containers must be copied first.
         if !haskey(canon_graph, canon_src, canon_dst)
-            canon_graph[canon_src, canon_dst] = graph[src, dst]
+            canon_graph[canon_src, canon_dst] = deepcopy(graph[src, dst])
         end
         edata = graph[src, dst]
         if hasproperty(edata, :evidence)
