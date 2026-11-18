@@ -248,3 +248,64 @@ Test.@testset "dynamic-k hashes and complements are case-insensitive (td-etyf)" 
     Test.@test Mycelia.Rhizomorph._dna_complement_char('n') ==
                Mycelia.Rhizomorph._dna_complement_char('N')
 end
+
+# td-05hf: residual-error counting must use the canonical window hash. The
+# case-equality check above makes a lowercase twin solid; it does not cover
+# reverse complement. A strand-sensitive hash counts a read and its reverse
+# complement as different k-mers, so one observation of each strand stays a
+# pair of singletons and the residual jumps to the clamp.
+Test.@testset "residual error matches for a read and its reverse complement (td-05hf)" begin
+    read = "ATGCGATACGCT"
+    rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(read)))
+    Test.@test read != rc
+    k = length(read)
+    forward_chars = collect(read)
+    rc_chars = collect(rc)
+    # The window is not its own reverse complement, so a strand-sensitive
+    # hash would not treat the two observations as the same k-mer.
+    Test.@test Mycelia.Rhizomorph._dynamic_k_window_hash(forward_chars, 1, k) !=
+               Mycelia.Rhizomorph._dynamic_k_window_hash(rc_chars, 1, k)
+
+    forward_pair = Mycelia.Rhizomorph._kmer_spectrum_residual_error([read, read], k, 2)
+    mixed_pair = Mycelia.Rhizomorph._kmer_spectrum_residual_error([read, rc], k, 2)
+    mixed_lower = Mycelia.Rhizomorph._kmer_spectrum_residual_error(
+        [read, lowercase(rc)], k, 2)
+    rc_pair = Mycelia.Rhizomorph._kmer_spectrum_residual_error([rc, rc], k, 2)
+    Test.@test forward_pair == mixed_pair == mixed_lower == rc_pair
+    Test.@test mixed_pair == 0.0
+
+    Test.@test Mycelia.Rhizomorph.estimate_residual_error([read, rc]; k_ref = k) ==
+               Mycelia.Rhizomorph.estimate_residual_error([read, read]; k_ref = k)
+    Test.@test Mycelia.Rhizomorph.estimate_residual_error([read]; k_ref = k) ==
+               Mycelia.Rhizomorph.estimate_residual_error([rc]; k_ref = k)
+    Test.@test Mycelia.Rhizomorph.estimate_residual_error([lowercase(read)]; k_ref = k) ==
+               Mycelia.Rhizomorph.estimate_residual_error([rc]; k_ref = k)
+
+    # Several windows, none repeated inside the read and none shared with the
+    # reverse complement under the strand-sensitive hash. Two forward copies
+    # are solid; one forward plus its reverse complement must be solid too.
+    long_read = "ATGCGATACGCTAA"
+    long_rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(long_read)))
+    k_win = 8
+    Test.@test long_read != long_rc
+    fwd_hashes = [
+        Mycelia.Rhizomorph._dynamic_k_window_hash(collect(long_read), start, k_win)
+        for start in 1:(length(long_read) - k_win + 1)
+    ]
+    rc_hashes = [
+        Mycelia.Rhizomorph._dynamic_k_window_hash(collect(long_rc), start, k_win)
+        for start in 1:(length(long_rc) - k_win + 1)
+    ]
+    Test.@test length(unique(fwd_hashes)) == length(fwd_hashes)
+    Test.@test isempty(intersect(Set(fwd_hashes), Set(rc_hashes)))
+    long_forward = Mycelia.Rhizomorph._kmer_spectrum_residual_error(
+        [long_read, long_read], k_win, 2)
+    long_mixed = Mycelia.Rhizomorph._kmer_spectrum_residual_error(
+        [long_read, long_rc], k_win, 2)
+    Test.@test long_forward == long_mixed
+    Test.@test long_mixed == 0.0
+    Test.@test Mycelia.Rhizomorph.estimate_residual_error(
+        [long_read, long_rc]; k_ref = k_win) ==
+               Mycelia.Rhizomorph.estimate_residual_error(
+        [long_read, long_read]; k_ref = k_win)
+end

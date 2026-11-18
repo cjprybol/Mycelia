@@ -37,12 +37,17 @@
 #      C=5-10, shrinking as coverage rises. This matters because an over-estimated
 #      e drives k = 1/e - 1 DOWN, toward the degenerate small-k regime.
 #
-#   P2 STRAND BIAS. The estimator hashes with `_dynamic_k_window_hash`, which is
+#   P2 STRAND BIAS. The estimator hashed with `_dynamic_k_window_hash`, which is
 #      NOT canonical, while the same file defines `_dynamic_k_canonical_window_hash`
 #      whose comment warns that non-canonical hashing counts a locus and its
 #      reverse complement as two different k-mers, "HALVING the measured coverage on
 #      both-strand read sets". Predict: at matched true error and coverage, the
 #      double-strand estimate is biased HIGHER than the single-strand estimate.
+#      STATUS (td-05hf): `_kmer_spectrum_residual_error` now calls
+#      `_dynamic_k_canonical_window_hash`, so a locus and its reverse complement
+#      share one count. P2 described the estimator before that change. The tables
+#      under benchmarking/results/estimate_residual_error_validation/ were
+#      measured then and are not regenerated here.
 #
 # A third effect is EXPECTED BEHAVIOUR, not a defect, and is measured to quantify
 # it: an indel shifts the frame and destroys every k-mer spanning it, so
