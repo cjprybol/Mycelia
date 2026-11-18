@@ -51,11 +51,14 @@
 # corrected paths + scores to `correct_observations` per read.
 #
 # PoC scope limits (deliberate, per ADR §Prototype scope):
-#   * explicit multi-strand requests (`:doublestrand`, `:canonical`) are rejected.
-#     `strand_mode=:auto` is resolved with the scalar decoder's resolver and
-#     accepted, including when a directed graph with reverse-strand evidence
-#     resolves to `:doublestrand` (td-gud3). The array frontier already indexes
-#     both strands; `:auto` just stops refusing that resolved mode;
+#   * strand mode is the scalar resolver's answer, including `:auto`. A directed
+#     graph with reverse-strand evidence resolves to `:doublestrand`; an
+#     undirected nucleotide graph resolves to `:canonical`. The frontier indexes
+#     both orientations and matches `correct_observations` on forward reads,
+#     reverse-complement reads, and a batch that uses both strands at once, so
+#     an explicit `:doublestrand` or `:canonical` request is decoded too
+#     (td-gud3). One weighted edge still carries a single strand, so a path
+#     does not switch strands mid-read;
 #   * `beam_width == typemax(Int)` (exact decode) — no beam pruning is applied,
 #     so equivalence is asserted against the exact scalar path;
 #   * MetaGraphsNext emission-scored observations only (the corrector's residual
@@ -440,16 +443,17 @@ Returns a [`ViterbiCorrectionResult`](@ref) with the same shape as
 compared directly against the scalar decoder (see
 [`batched_equivalence_oracle`](@ref)).
 
-PoC constraints (throws `ArgumentError` otherwise): an explicit multi-strand
-request (`strand_mode` of `:doublestrand` or `:canonical`) is rejected. The
-default `:auto` is resolved with the same rules as [`correct_observations`](@ref)
-and then decoded in that mode, so a directed graph whose reverse-strand evidence
-resolves `:auto` to `:doublestrand` does not throw. Exact decode
+PoC constraints (throws `ArgumentError` otherwise): exact decode
 (`beam_width == typemax(Int)`), and non-empty emission-scored observations
-against a `MetaGraphsNext.MetaGraph`, are still required. This is the CPU
-foundation the future SIMD (Phase A) and GPU (Phase B) kernels build on; it does
-not itself add any SIMD/GPU dependency and is not wired into the production
-corrector.
+against a `MetaGraphsNext.MetaGraph`. Strand mode is resolved with the same
+rules as [`correct_observations`](@ref), then decoded in that mode. `:auto` on
+a directed graph with reverse-strand evidence is `:doublestrand`, and on an
+undirected nucleotide graph is `:canonical`; an explicit request for either
+mode takes that same path. The frontier indexes both orientations and matches
+the scalar decoder on reverse-complement reads, so there is no separate
+multi-strand rejection. This is the CPU foundation the future SIMD (Phase A)
+and GPU (Phase B) kernels build on; it does not itself add any SIMD/GPU
+dependency and is not wired into the production corrector.
 """
 function batched_correct_observations(
         graph::MetaGraphsNext.MetaGraph,
@@ -472,20 +476,13 @@ function batched_correct_observations(
     end
 
     alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
-    requested_strand_mode = _normalize_viterbi_strand_mode(config.strand_mode)
+    # Same resolver as `correct_observations`. `:auto` may be `:doublestrand`
+    # (directed graph, reverse-strand evidence) or `:canonical` (undirected
+    # nucleotide graph). Explicit `:doublestrand` / `:canonical` resolve to
+    # those same modes and are decoded: the frontier already indexes both
+    # orientations and matches the scalar decoder on reverse-strand reads
+    # (td-gud3).
     strand_mode = _resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
-    # Require singlestrand only for an explicit request. `:auto` is resolved
-    # first (a directed graph with reverse-strand evidence becomes
-    # `:doublestrand`) and then decoded in that mode, matching
-    # `correct_observations`. Explicit `:doublestrand` / `:canonical` stay
-    # outside this PoC (td-gud3).
-    if requested_strand_mode != :auto && strand_mode != :singlestrand
-        throw(ArgumentError(
-            "batched PoC rejects explicit multi-strand decoding (requested " *
-            "$(config.strand_mode), resolved strand_mode=$strand_mode); " *
-            "multi-strand batching is deferred per the ADR. strand_mode=:auto " *
-            "is accepted and decoded in the resolved mode."))
-    end
 
     transition_edge_weight = _viterbi_transition_edge_weight(graph, config.edge_weight)
     transition_scoring = _viterbi_transition_scoring(graph, transition_edge_weight)

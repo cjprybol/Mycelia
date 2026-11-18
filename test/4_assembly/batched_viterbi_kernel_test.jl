@@ -137,38 +137,54 @@ Test.@testset "Batched Viterbi corrector GPU kernel — Phase B (td-qoo3)" begin
         )
     end
 
-    # Mirrors the CPU PoC guard (td-gud3): default `:auto` on a directed graph
-    # that resolves to `:doublestrand` is decoded, not rejected.
-    Test.@testset ":auto on a directed doublestrand graph does not throw" begin
-        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGTAC")]
+    # Same contract as the CPU PoC: a reverse-complement read, and a batch that
+    # holds that read next to a forward read, match scalar and CPU paths and
+    # scores. Explicit `:doublestrand` is decoded, not rejected.
+    Test.@testset "doublestrand batch matches scalar and CPU PoC on both strands" begin
+        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGT")]
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 3; dataset_id="kernel_poc_auto_ds", mode=:doublestrand
         )
-        observations = [
-            [
-                Kmers.DNAKmer{3}("ATG"),
-                Kmers.DNAKmer{3}("TGC"),
-                Kmers.DNAKmer{3}("GCG"),
-                Kmers.DNAKmer{3}("CGT"),
-            ],
+        forward = [
+            Kmers.DNAKmer{3}("ATG"),
+            Kmers.DNAKmer{3}("TGA"),
+            Kmers.DNAKmer{3}("GCG"),
+            Kmers.DNAKmer{3}("CGT"),
         ]
-        result = Mycelia.kernel_batched_correct_observations(
-            graph, observations; backend=cpu_backend)
-        Test.@test result.diagnostics[:strand_mode] == :doublestrand
-        poc = Mycelia.batched_correct_observations(graph, observations)
-        Test.@test poc_decoded_label_strings(result, 1) ==
-                   poc_decoded_label_strings(poc, 1)
-        Test.@test result.paths[1].score === poc.paths[1].score
+        reverse = [
+            Kmers.DNAKmer{3}("ACG"),
+            Kmers.DNAKmer{3}("CCC"),
+            Kmers.DNAKmer{3}("GCA"),
+            Kmers.DNAKmer{3}("CAT"),
+        ]
+
+        function step_strands(result, index)
+            return [step.strand for step in something(result.paths[index].path).steps]
+        end
+
+        reverse_oracle = Mycelia.kernel_batched_equivalence_oracle(
+            graph, [reverse]; backend=cpu_backend)
+        Test.@test reverse_oracle.passes
+        Test.@test reverse_oracle.kernel.diagnostics[:strand_mode] == :doublestrand
+        Test.@test poc_decoded_label_strings(reverse_oracle.kernel, 1) ==
+                   ["ACG", "CGC", "GCA", "CAT"]
+        Test.@test all(
+            ==(Mycelia.Rhizomorph.Reverse),
+            step_strands(reverse_oracle.kernel, 1)
+        )
+
+        mixed = Mycelia.kernel_batched_equivalence_oracle(
+            graph, [forward, reverse]; backend=cpu_backend)
+        Test.@test mixed.passes
+        Test.@test all(mixed.per_read)
+        Test.@test all(==(Mycelia.Rhizomorph.Forward), step_strands(mixed.kernel, 1))
+        Test.@test all(==(Mycelia.Rhizomorph.Reverse), step_strands(mixed.kernel, 2))
 
         explicit = Mycelia.ViterbiCorrectionConfig(strand_mode=:doublestrand)
-        try
-            Mycelia.kernel_batched_correct_observations(
-                graph, observations; config=explicit, backend=cpu_backend)
-            Test.@test false
-        catch err
-            Test.@test err isa ArgumentError
-            Test.@test occursin("explicit multi-strand", sprint(showerror, err))
-        end
+        explicit_oracle = Mycelia.kernel_batched_equivalence_oracle(
+            graph, [reverse]; config=explicit, backend=cpu_backend)
+        Test.@test explicit_oracle.passes
+        Test.@test explicit_oracle.kernel.diagnostics[:strand_mode] == :doublestrand
     end
 
     Test.@testset "benchmark harness runs (CPU backend; GPU if available)" begin

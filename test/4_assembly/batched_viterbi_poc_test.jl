@@ -23,10 +23,6 @@ import Kmers
 import Mycelia
 import Test
 
-if !isdefined(Main, :test_throws_message)
-    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
-end
-
 # Corrected label strings for read `index` of a ViterbiCorrectionResult.
 function poc_decoded_label_strings(
     result::Mycelia.ViterbiCorrectionResult, index::Integer
@@ -146,47 +142,80 @@ Test.@testset "Batched array-frontier Viterbi corrector PoC (td-qoo3)" begin
         )
     end
 
-    # Default `strand_mode=:auto` on a directed DNA graph with reverse-strand
-    # evidence resolves to `:doublestrand`. That used to throw even though the
-    # caller never asked for multi-strand decoding. Explicit `:doublestrand`
-    # stays out of PoC scope.
-    Test.@testset ":auto on a directed doublestrand graph does not throw" begin
-        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGTAC")]
+    # `:auto` on a directed DNA graph with reverse-strand evidence resolves to
+    # `:doublestrand`. A weighted edge stores one strand on both ends, so a
+    # single path does not switch strands; the batch below puts a forward read
+    # and a reverse-complement read on the same frontier. Explicit
+    # `:doublestrand` takes that same resolved path (it is not a separate
+    # rejection). Step strands are asserted, not only label/score agreement, so
+    # a decoder that stayed on Forward and happened to agree with itself fails.
+    Test.@testset "doublestrand batch matches the scalar decoder on both strands" begin
+        records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGT")]
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 3; dataset_id="batched_poc_auto_ds", mode=:doublestrand
         )
         Test.@test Mycelia._resolve_viterbi_strand_mode(graph, :DNA, :auto) ==
                    :doublestrand
 
-        observations = [
-            [
-                Kmers.DNAKmer{3}("ATG"),
-                Kmers.DNAKmer{3}("TGC"),
-                Kmers.DNAKmer{3}("GCG"),
-                Kmers.DNAKmer{3}("CGT"),
-            ],
+        forward = [
+            Kmers.DNAKmer{3}("ATG"),
+            Kmers.DNAKmer{3}("TGA"),
+            Kmers.DNAKmer{3}("GCG"),
+            Kmers.DNAKmer{3}("CGT"),
+        ]
+        reverse = [
+            Kmers.DNAKmer{3}("ACG"),
+            Kmers.DNAKmer{3}("CCC"),
+            Kmers.DNAKmer{3}("GCA"),
+            Kmers.DNAKmer{3}("CAT"),
         ]
 
-        result = Mycelia.batched_correct_observations(graph, observations)
-        Test.@test result.diagnostics[:strand_mode] == :doublestrand
-        scalar = Mycelia.correct_observations(graph, observations)
-        Test.@test result.diagnostics[:strand_mode] == scalar.diagnostics[:strand_mode]
-        Test.@test poc_decoded_label_strings(result, 1) ==
-                   poc_decoded_label_strings(scalar, 1)
-        Test.@test result.paths[1].score === scalar.paths[1].score
+        function step_strands(result, index)
+            return [step.strand for step in something(result.paths[index].path).steps]
+        end
+
+        reverse_oracle = Mycelia.batched_equivalence_oracle(graph, [reverse])
+        Test.@test reverse_oracle.passes
+        Test.@test reverse_oracle.batched.diagnostics[:strand_mode] == :doublestrand
+        Test.@test poc_decoded_label_strings(reverse_oracle.batched, 1) ==
+                   ["ACG", "CGC", "GCA", "CAT"]
+        Test.@test all(
+            ==(Mycelia.Rhizomorph.Reverse),
+            step_strands(reverse_oracle.batched, 1)
+        )
+
+        mixed = Mycelia.batched_equivalence_oracle(graph, [forward, reverse])
+        Test.@test mixed.passes
+        Test.@test all(mixed.per_read)
+        Test.@test poc_decoded_label_strings(mixed.batched, 1) ==
+                   ["ATG", "TGC", "GCG", "CGT"]
+        Test.@test poc_decoded_label_strings(mixed.batched, 2) ==
+                   ["ACG", "CGC", "GCA", "CAT"]
+        Test.@test all(==(Mycelia.Rhizomorph.Forward), step_strands(mixed.batched, 1))
+        Test.@test all(==(Mycelia.Rhizomorph.Reverse), step_strands(mixed.batched, 2))
+
+        explicit = Mycelia.ViterbiCorrectionConfig(strand_mode=:doublestrand)
+        explicit_oracle = Mycelia.batched_equivalence_oracle(
+            graph, [reverse]; config=explicit)
+        Test.@test explicit_oracle.passes
+        Test.@test explicit_oracle.batched.diagnostics[:strand_mode] == :doublestrand
+        Test.@test all(
+            ==(Mycelia.Rhizomorph.Reverse),
+            step_strands(explicit_oracle.batched, 1)
+        )
 
         singlestrand_config = Mycelia.ViterbiCorrectionConfig(strand_mode=:singlestrand)
         forced = Mycelia.batched_correct_observations(
-            graph, observations; config=singlestrand_config)
+            graph, [forward]; config=singlestrand_config)
         Test.@test forced.diagnostics[:strand_mode] == :singlestrand
 
-        explicit = Mycelia.ViterbiCorrectionConfig(strand_mode=:doublestrand)
-        test_throws_message(
-            ArgumentError,
-            "explicit multi-strand"
-        ) do
-            Mycelia.batched_correct_observations(
-                graph, observations; config=explicit)
-        end
+        canon = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id="batched_poc_auto_canon", mode=:canonical
+        )
+        Test.@test Mycelia._resolve_viterbi_strand_mode(canon, :DNA, :auto) ==
+                   :canonical
+        canon_oracle = Mycelia.batched_equivalence_oracle(canon, [reverse])
+        Test.@test canon_oracle.passes
+        Test.@test canon_oracle.batched.diagnostics[:strand_mode] == :canonical
     end
 end
