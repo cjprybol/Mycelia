@@ -555,7 +555,11 @@ Test.@testset "D5 grid runner" begin
                 keep = joinpath(base, "tmp_evidence", "job1")
                 keep_exists && mkpath(keep)
                 err = IOBuffer()
-                cmd = Cmd(["bash", "-c", script, "_", helper, root, keep, string(rc)])
+                # No real cgroup is read here: the memory branches have their own
+                # test on a fake tree below.
+                cmd = addenv(
+                    Cmd(["bash", "-c", script, "_", helper, root, keep, string(rc)]),
+                    "D5_PROC_CGROUP" => "/nonexistent")
                 proc = run(pipeline(ignorestatus(cmd); stderr = err))
                 return (; root, real_root, keep, code = proc.exitcode,
                     log = String(take!(err)))
@@ -574,7 +578,8 @@ Test.@testset "D5 grid runner" begin
             Test.@test occursin("bytes (end state, not the peak)", r.log)
             r = run_helper(cleanup; rc = 3)
             Test.@test !ispath(r.root) && !ispath(r.keep * ".partial")
-            Test.@test occursin("preserved at", r.log) && occursin("memory.peak", r.log)
+            Test.@test occursin("preserved at", r.log)
+            Test.@test occursin("cgroup memory.peak unavailable (no cgroup v2 directory", r.log)
             # The copy is announced before it starts, so a copy cut off by SIGKILL
             # shows as a "copying" line with no "preserved" line after it.
             Test.@test occursin("copying $(r.root) -> $(r.keep).partial", r.log)
@@ -618,6 +623,21 @@ Test.@testset "D5 grid runner" begin
                 chmod(dirname(r.keep), 0o755)
                 Test.@test r.code == 3 && !ispath(r.root) && !ispath(r.keep)
                 Test.@test occursin("cannot create $(r.keep).partial", r.log)
+                # A copy that fails part-way (an unreadable file) warns, leaves the
+                # .partial copy for inspection, and still removes the temp root.
+                r = run_helper(raw"""chmod 000 "$2/evidence.txt" && source "$1" &&
+                    d5_install_temp_root_traps "$2" "$3" && exit 3""")
+                Test.@test r.code == 3 && !ispath(r.root) && !ispath(r.keep)
+                Test.@test isdir(r.keep * ".partial")
+                Test.@test occursin("could not preserve", r.log)
+                # An unreadable subdirectory: du reports a lower bound, and rm cannot
+                # remove it, which is reported rather than passed over.
+                r = run_helper(raw"""mkdir "$2/sub" && touch "$2/sub/f" &&
+                    chmod 000 "$2/sub" && source "$1" &&
+                    d5_temp_root_cleanup 0 "$2" "$3" """)
+                Test.@test occursin(r"at least [0-9]+ bytes \(du incomplete", r.log)
+                Test.@test occursin("not fully removed", r.log)
+                chmod(joinpath(r.root, "sub"), 0o755)
             end
             # A temp root that is already gone: du fails and the size is reported
             # as unknown rather than as du's error text followed by "bytes".
@@ -625,21 +645,26 @@ Test.@testset "D5 grid runner" begin
                 source "$1" && d5_temp_root_cleanup 0 "$2" "$3" """)
             Test.@test occursin("size unknown, du failed", r.log)
             Test.@test !occursin(r"cannot access.*bytes", r.log)
-            # Memory is read at the first cgroup level with a numeric memory.max
-            # (SLURM sets --mem on the job, not on the batch shell's leaf), using a
-            # fake cgroup tree.
+            # Memory is read at the first cgroup level with a numeric memory.max, but
+            # never above job_<id>: higher levels hold every job on the node. A fake
+            # tree with a numeric limit above the job checks the bound.
             cg = realpath(mktempdir())
-            job = joinpath(cg, "job_1")
+            scope = joinpath(cg, "slurmstepd.scope")
+            job = joinpath(scope, "job_1")
             leaf = joinpath(job, "step_batch", "user", "task_0")
             mkpath(leaf)
+            write(joinpath(cg, "memory.max"), "99999\n")
+            write(joinpath(scope, "memory.max"), "99999\n")
+            write(joinpath(scope, "memory.peak"), "99999\n")
             write(joinpath(leaf, "memory.max"), "max\n")
             write(joinpath(leaf, "memory.peak"), "5\n")
             write(joinpath(job, "memory.max"), "1000\n")
             write(joinpath(job, "memory.peak"), "900\n")
-            write(joinpath(job, "memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\n")
-            proc_cgroup = joinpath(cg, "proc_self_cgroup")
-            write(proc_cgroup, "0::/job_1/step_batch/user/task_0\n")
-            function memory_log()
+            write(joinpath(job, "memory.current"), "800\n")
+            write(joinpath(job, "memory.events"), "low 0\nhigh 0\nmax 3\noom 2\noom_kill 1\n")
+            in_job = joinpath(cg, "proc_self_cgroup")
+            write(in_job, "0::/slurmstepd.scope/job_1/step_batch/user/task_0\n")
+            function memory_log(proc_cgroup = in_job)
                 err = IOBuffer()
                 script = raw"""source "$1" &&
                     D5_CGROUP_ROOT="$2" D5_PROC_CGROUP="$3" d5_log_memory_peak"""
@@ -652,11 +677,36 @@ Test.@testset "D5 grid runner" begin
             Test.@test occursin("memory.max 1000 bytes", mlog)
             Test.@test occursin("memory.peak (RSS + tmpfs + page cache) 900 bytes", mlog)
             Test.@test occursin("oom_kill 1", mlog)
-            # No numeric limit at any level: say so, and fall back to the leaf peak.
+            # No memory.peak at the limiting level (kernel < 5.19): memory.current,
+            # labelled as not a peak, and the by-hand advice.
+            mv(joinpath(job, "memory.peak"), joinpath(job, "memory.peak.off"))
+            mlog = memory_log()
+            Test.@test occursin("memory.peak unreadable (memory.current now 800", mlog)
+            Test.@test occursin("by hand", mlog)
+            mv(joinpath(job, "memory.peak.off"), joinpath(job, "memory.peak"))
+            # No numeric limit up to the job level: the walk stops there and does not
+            # report the node-wide level above it.
             write(joinpath(job, "memory.max"), "max\n")
             mlog = memory_log()
             Test.@test occursin("no numeric memory.max", mlog)
-            Test.@test occursin("leaf memory.peak: 5 bytes", mlog)
+            Test.@test occursin("leaf memory.peak: 5 bytes;", mlog)
+            Test.@test !occursin("99999", mlog)
+            # Not inside a job cgroup (a hand run): nothing is walked.
+            mkpath(joinpath(cg, "user.slice", "session"))
+            outside = joinpath(cg, "proc_outside")
+            write(outside, "0::/user.slice/session\n")
+            mlog = memory_log(outside)
+            Test.@test occursin("not inside a SLURM job_<id> cgroup", mlog)
+            Test.@test !occursin("99999", mlog)
+            # An unreadable memory.max stops the walk instead of skipping the level.
+            if ccall(:geteuid, Cuint, ()) != 0
+                write(joinpath(job, "memory.max"), "1000\n")
+                chmod(joinpath(job, "memory.max"), 0o000)
+                mlog = memory_log()
+                chmod(joinpath(job, "memory.max"), 0o644)
+                Test.@test occursin("memory.max at $(job) unreadable", mlog)
+                Test.@test !occursin("99999", mlog)
+            end
         else
             Test.@test_skip "temp-root cleanup runs under bash with GNU coreutils on Linux"
         end
