@@ -539,24 +539,40 @@ Test.@testset "D5 grid runner" begin
         if Sys.islinux() && Sys.which("bash") !== nothing
             # Runs the helper under bash: `script` gets $1 = helper, $2 = temp root,
             # $3 = evidence dir, $4 = exit code.
-            function run_helper(script; rc = 0, populate = true, keep_exists = false)
+            # With via_symlink the temp root is passed through a symlinked parent
+            # (a D5_TMPDIR that is a symlink); real_root is where it actually is.
+            function run_helper(script; rc = 0, populate = true, keep_exists = false,
+                    via_symlink = false)
                 base = realpath(mktempdir())
-                root = joinpath(base, "root")
-                mkdir(root)
-                populate && write(joinpath(root, "evidence.txt"), "kept")
+                real_root = joinpath(base, "real", "root")
+                mkpath(real_root)
+                root = real_root
+                if via_symlink
+                    symlink(joinpath(base, "real"), joinpath(base, "link"))
+                    root = joinpath(base, "link", "root")
+                end
+                populate && write(joinpath(real_root, "evidence.txt"), "kept")
                 keep = joinpath(base, "tmp_evidence", "job1")
                 keep_exists && mkpath(keep)
                 err = IOBuffer()
                 cmd = Cmd(["bash", "-c", script, "_", helper, root, keep, string(rc)])
                 proc = run(pipeline(ignorestatus(cmd); stderr = err))
-                return (; root, keep, code = proc.exitcode, log = String(take!(err)))
+                return (; root, real_root, keep, code = proc.exitcode,
+                    log = String(take!(err)))
             end
             cleanup = raw"""source "$1" && d5_temp_root_cleanup "$4" "$2" "$3" """
-            # Non-zero exit: the temp root is copied whole, then removed.
-            r = run_helper(cleanup; rc = 3)
+            # Non-zero exit: the temp root is copied whole, then removed. Both the
+            # path as given and its resolved form are recorded, so error rows that
+            # cite resolved TMPDIR paths map into the evidence dir.
+            r = run_helper(cleanup; rc = 3, via_symlink = true)
+            Test.@test r.root != r.real_root
             Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
             Test.@test strip(read(joinpath(r.keep, "ORIGINAL_TEMP_ROOT"), String)) == r.root
-            Test.@test strip(read(joinpath(r.keep, "RESOLVED_TEMP_ROOT"), String)) == r.root
+            Test.@test strip(read(joinpath(r.keep, "RESOLVED_TEMP_ROOT"), String)) ==
+                       r.real_root
+            Test.@test !ispath(r.real_root) && !ispath(r.keep * ".partial")
+            Test.@test occursin("bytes (end state, not the peak)", r.log)
+            r = run_helper(cleanup; rc = 3)
             Test.@test !ispath(r.root) && !ispath(r.keep * ".partial")
             Test.@test occursin("preserved at", r.log) && occursin("memory.peak", r.log)
             # The copy is announced before it starts, so a copy cut off by SIGKILL
@@ -591,17 +607,62 @@ Test.@testset "D5 grid runner" begin
             Test.@test read(joinpath(r.keep, "evidence.txt"), String) == "kept"
             Test.@test !ispath(r.keep * ".partial") && !ispath(r.root)
             # A failed copy (read-only evidence parent) warns, still removes the
-            # temp root, and leaves the job's exit code unchanged.
-            r = run_helper(raw"""source "$1" && d5_install_temp_root_traps "$2" "$3" &&
-                mkdir -p "$(dirname "$3")" && chmod a-w "$(dirname "$3")" && exit 3""")
-            chmod(dirname(r.keep), 0o755)
-            Test.@test r.code == 3 && !ispath(r.root) && !ispath(r.keep)
-            Test.@test occursin("could not preserve", r.log)
+            # temp root, and leaves the job's exit code unchanged. Root ignores
+            # write permission, so this case is skipped when run as root.
+            if ccall(:geteuid, Cuint, ()) == 0
+                Test.@test_skip "read-only evidence parent is writable by root"
+            else
+                r = run_helper(raw"""source "$1" &&
+                    d5_install_temp_root_traps "$2" "$3" && mkdir -p "$(dirname "$3")" &&
+                    chmod a-w "$(dirname "$3")" && exit 3""")
+                chmod(dirname(r.keep), 0o755)
+                Test.@test r.code == 3 && !ispath(r.root) && !ispath(r.keep)
+                Test.@test occursin("cannot create $(r.keep).partial", r.log)
+            end
+            # A temp root that is already gone: du fails and the size is reported
+            # as unknown rather than as du's error text followed by "bytes".
+            r = run_helper(raw"""rm -rf -- "$2" &&
+                source "$1" && d5_temp_root_cleanup 0 "$2" "$3" """)
+            Test.@test occursin("size unknown, du failed", r.log)
+            Test.@test !occursin(r"cannot access.*bytes", r.log)
+            # Memory is read at the first cgroup level with a numeric memory.max
+            # (SLURM sets --mem on the job, not on the batch shell's leaf), using a
+            # fake cgroup tree.
+            cg = realpath(mktempdir())
+            job = joinpath(cg, "job_1")
+            leaf = joinpath(job, "step_batch", "user", "task_0")
+            mkpath(leaf)
+            write(joinpath(leaf, "memory.max"), "max\n")
+            write(joinpath(leaf, "memory.peak"), "5\n")
+            write(joinpath(job, "memory.max"), "1000\n")
+            write(joinpath(job, "memory.peak"), "900\n")
+            write(joinpath(job, "memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\n")
+            proc_cgroup = joinpath(cg, "proc_self_cgroup")
+            write(proc_cgroup, "0::/job_1/step_batch/user/task_0\n")
+            function memory_log()
+                err = IOBuffer()
+                script = raw"""source "$1" &&
+                    D5_CGROUP_ROOT="$2" D5_PROC_CGROUP="$3" d5_log_memory_peak"""
+                run(pipeline(Cmd(["bash", "-c", script, "_", helper, cg, proc_cgroup]);
+                    stderr = err))
+                return String(take!(err))
+            end
+            mlog = memory_log()
+            Test.@test occursin("limiting level $(job):", mlog)
+            Test.@test occursin("memory.max 1000 bytes", mlog)
+            Test.@test occursin("memory.peak (RSS + tmpfs + page cache) 900 bytes", mlog)
+            Test.@test occursin("oom_kill 1", mlog)
+            # No numeric limit at any level: say so, and fall back to the leaf peak.
+            write(joinpath(job, "memory.max"), "max\n")
+            mlog = memory_log()
+            Test.@test occursin("no numeric memory.max", mlog)
+            Test.@test occursin("leaf memory.peak: 5 bytes", mlog)
         else
             Test.@test_skip "temp-root cleanup runs under bash with GNU coreutils on Linux"
         end
         # A requeued job keeps its SLURM_JOB_ID; the restart count keeps each
-        # attempt's evidence in its own directory.
+        # attempt's evidence in its own directory. A text check on the sbatch only:
+        # it does not run a requeue.
         sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", "run_d5_grid_nersc.sbatch")
         Test.@test occursin(
             raw"tmp_evidence/${SLURM_JOB_ID:-$$}.r${SLURM_RESTART_COUNT:-0}",

@@ -73,7 +73,8 @@ EXTRA_ARGS="${D5_ARGS:-}"
 TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
 
 # Toy/pilot is array indices 0-2. Refuse anything wider before module load,
-# mkdir, or mktemp, so a mis-pasted full submit cannot spend the allocation.
+# mkdir, or mktemp, so a mis-pasted full submit runs nothing: each task still
+# queues and starts briefly, then exits 1 here.
 # D5_FULL must be exactly 1. SLURM_ARRAY_TASK_MAX is the submitted array's last
 # index (a bare sbatch uses the #SBATCH --array default of 2). A non-integer
 # bound fails closed.
@@ -141,7 +142,8 @@ D5_TMP_MADE="$(mktemp --directory "${D5_TMPDIR:-/tmp}/d5_${SLURM_JOB_ID:-$$}.XXX
 # attempt's evidence apart (an existing evidence dir is never overwritten).
 d5_install_temp_root_traps "${D5_TMP_MADE}" \
   "${OUTDIR}/tmp_evidence/${SLURM_JOB_ID:-$$}.r${SLURM_RESTART_COUNT:-0}" ||
-  { rmdir -- "${D5_TMP_MADE}"; echo "ERROR: cannot install the temp-root traps" >&2; exit 1; }
+  { trap - EXIT TERM INT HUP; rmdir -- "${D5_TMP_MADE}"
+    echo "ERROR: cannot install the temp-root traps" >&2; exit 1; }
 D5_TMP="$(realpath "${D5_TMP_MADE}")" || { echo "ERROR: cannot resolve the temp root" >&2; exit 1; }
 export TMPDIR="${D5_TMP}"
 
