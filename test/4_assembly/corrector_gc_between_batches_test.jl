@@ -20,6 +20,11 @@
 #   * Integration (mycelia_iterative_assemble), forced small batch_size:
 #     gc_between_batches=false vs =true => byte-identical final corrected fastq,
 #     proving the keyword threads through public entry -> wrapper -> impl.
+#     verbose=true on both runs, and the banner line reports the resolved flag
+#     (enabled when the keyword is true, disabled when it is false and the env
+#     var is unset). The env fallback stays a case-sensitive allow-list
+#     ("1", "true", "yes" only), documented on _gc_between_batches_enabled and
+#     repeated on the banner line.
 #
 # Run directly:
 #   LD_LIBRARY_PATH='' julia --project=. \
@@ -103,15 +108,31 @@ Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
             max_k = 17, n_k_rungs = 3, max_iterations_per_k = 2,
             graph_mode = :canonical, skip_solid = true, cheap_correct = true,
             hard_window = true, soft_em = false, batch_size = 50,
-            gc_between_batches = gc, verbose = false,
+            gc_between_batches = gc, verbose = true,
             enable_checkpointing = false, output_dir = out)
 
-        r_off = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
-            run_full(; gc = false, out = joinpath(tmp, "off"))
+        # Julia 1.10 redirect_stdout does not accept an IOBuffer (Pipe / IOStream
+        # / path only). redirect_stdio(stdout=path) is the LTS-safe capture.
+        off_path = joinpath(tmp, "off.log")
+        r_off = redirect_stdio(stdout = off_path) do
+            Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+                run_full(; gc = false, out = joinpath(tmp, "off"))
+            end
         end
-        r_on = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
-            run_full(; gc = true, out = joinpath(tmp, "on"))
+        on_path = joinpath(tmp, "on.log")
+        r_on = redirect_stdio(stdout = on_path) do
+            Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+                run_full(; gc = true, out = joinpath(tmp, "on"))
+            end
         end
+        off_text = read(off_path, String)
+        on_text = read(on_path, String)
+        Test.@test occursin("Between-batch GC: disabled", off_text)
+        Test.@test occursin("keyword=false", off_text)
+        Test.@test occursin("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES=unset", off_text)
+        Test.@test occursin("case-sensitive allow-list", off_text)
+        Test.@test occursin("Between-batch GC: enabled", on_text)
+        Test.@test occursin("keyword=true", on_text)
 
         final_recs = res -> _recs(
             open(FASTX.FASTQ.Reader, res[:metadata][:final_fastq_file]) do rd
@@ -139,10 +160,48 @@ Test.@testset "corrector gc_between_batches keyword (td-3xob opt5)" begin
                 Test.@test gc_enabled(false) == true
             end
         end
-        # env rejects everything else (documented case-sensitive allow-list)
+        # env rejects everything else (case-sensitive allow-list documented on
+        # _gc_between_batches_enabled and on the verbose banner)
         for tok in ("0", "no", "TRUE", "on", "", "garbage")
             Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => tok) do
                 Test.@test gc_enabled(false) == false
+            end
+        end
+    end
+
+    # Banner line is pure (no assembler). Locks the resolved flag AND the
+    # case-sensitive policy text an env-driven log has to show.
+    Test.@testset "verbose banner line resolves the GC flag" begin
+        line_for = Mycelia._between_batch_gc_banner_line
+        Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+            off = line_for(false)
+            on = line_for(true)
+            Test.@test occursin("Between-batch GC: disabled", off)
+            Test.@test occursin("keyword=false", off)
+            Test.@test occursin("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES=unset", off)
+            Test.@test occursin("case-sensitive allow-list", off)
+            Test.@test occursin("\"1\", \"true\", \"yes\"", off)
+            Test.@test occursin("Between-batch GC: enabled", on)
+            Test.@test occursin("keyword=true", on)
+        end
+        Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => "yes") do
+            line = line_for(false)
+            Test.@test occursin("Between-batch GC: enabled", line)
+            Test.@test occursin(
+                "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES=\"yes\"", line)
+        end
+        Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => "TRUE") do
+            line = line_for(false)
+            Test.@test occursin("Between-batch GC: disabled", line)
+            Test.@test occursin(
+                "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES=\"TRUE\"", line)
+        end
+        for tok in ("1", "true", "yes", "TRUE", "On", "on")
+            Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => tok) do
+                enabled = Mycelia._gc_between_batches_enabled(false)
+                state = enabled ? "enabled" : "disabled"
+                Test.@test occursin(
+                    "Between-batch GC: $(state)", line_for(false))
             end
         end
     end
