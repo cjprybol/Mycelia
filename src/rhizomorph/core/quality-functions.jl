@@ -77,19 +77,44 @@ end
 # Until then: this is the documented default, and anything reporting a joint quality
 # should say which model produced it.
 
+const PHRED33_OFFSET = UInt8(33)
+
+"""
+    decode_phred33_byte(score::UInt8) -> UInt8
+
+Decode one Phred+33 encoded quality byte into a raw Phred score.
+
+# Throws
+- `ArgumentError` if `score` is below 33. Unsigned subtraction would wrap
+  (`UInt8(30) - UInt8(33) == 0xfd`), turning a low-confidence symbol into
+  near-maximum confidence.
+"""
+function decode_phred33_byte(score::UInt8)
+    if score < PHRED33_OFFSET
+        throw(ArgumentError(
+            "quality byte $(Int(score)) is below the Phred+33 offset 33; " *
+            "refusing to wrap it into a high-confidence score"))
+    end
+    return score - PHRED33_OFFSET
+end
+
 """
     decode_quality_scores(scores::AbstractVector{UInt8})
 
 Decode Phred+33 encoded quality scores into raw Phred values.
 
 # Arguments
-- `scores`: Vector of Phred+33 encoded quality scores
+- `scores`: Vector of Phred+33 encoded quality scores (ASCII bytes; Q0 is 33)
 
 # Returns
 - `Vector{Float64}`: Raw Phred scores as floating-point values
+
+# Throws
+- `ArgumentError` if any byte is below 33, rather than wrapping or emitting
+  a negative score
 """
 function decode_quality_scores(scores::AbstractVector{UInt8})
-    return Float64.(scores) .- 33.0
+    return Float64[decode_phred33_byte(s) for s in scores]
 end
 
 """
@@ -146,6 +171,15 @@ by adding Phred scores (which is equivalent to multiplying error probabilities).
 # Returns
 - `Vector{UInt8}`: Joint quality scores (raw Phred 0-255), or `nothing` if no quality data
 
+Evidence `quality_scores` are Phred+33 encoded bytes (as produced by
+`FASTX.quality(record)`). Each byte is decoded with `decode_phred33_byte`
+before the scores are combined.
+
+# Throws
+- `ArgumentError` if any evidence quality byte is below 33. The previous
+  unsigned subtract wrapped a raw Q30 (`UInt8(30)`) to 253, the
+  essentially-certain band.
+
 # Examples
 ```julia
 # Get joint quality for a k-mer across all reads in a dataset
@@ -181,11 +215,9 @@ function get_vertex_joint_quality(vertex_data, dataset_id::String)
     joint_scores = Vector{UInt8}(undef, k)
 
     for pos in 1:k
-        # Get all quality scores at this position (Phred+33 encoded)
-        position_scores_encoded = [obs[pos] for obs in quality_vectors]
-
-        # Decode from Phred+33 to raw Phred
-        position_scores = [s - UInt8(33) for s in position_scores_encoded]
+        # Decode Phred+33 bytes at this position; reject a sub-33 byte
+        # rather than wrapping it into the high-confidence band.
+        position_scores = [decode_phred33_byte(obs[pos]) for obs in quality_vectors]
 
         # Combine (add in log space)
         joint_scores[pos] = combine_phred_scores(position_scores)
@@ -231,7 +263,7 @@ function get_vertex_mean_quality(vertex_data, dataset_id::String)
 
     for pos in 1:k
         # Decode from Phred+33, compute mean
-        phred_scores = [Float64(obs[pos] - 33) for obs in quality_vectors]
+        phred_scores = [Float64(decode_phred33_byte(obs[pos])) for obs in quality_vectors]
         mean_scores[pos] = sum(phred_scores) / length(phred_scores)
     end
 
@@ -290,7 +322,7 @@ function get_vertex_min_quality(vertex_data, dataset_id::String)
 
     for pos in 1:k
         # Decode from Phred+33, find min
-        phred_scores = [obs[pos] - UInt8(33) for obs in quality_vectors]
+        phred_scores = [decode_phred33_byte(obs[pos]) for obs in quality_vectors]
         min_scores[pos] = minimum(phred_scores)
     end
 

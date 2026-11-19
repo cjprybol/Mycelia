@@ -1,0 +1,13 @@
+cell,arm,n_seeds_identical,n_seeds_compared,median_coverage_base_minus_context
+6000/1000/20x/e0.01,illumina,16,16,0.0
+6000/1000/20x/e0.01,nanopore,10,16,0.0
+6000/1000/20x/e0.02,illumina,16,16,0.0
+6000/1000/20x/e0.02,nanopore,7,16,0.0
+6000/1000/20x/e0.05,illumina,16,16,0.0
+6000/1000/20x/e0.05,nanopore,11,16,0.0
+6000/2000/20x/e0.01,illumina,16,16,0.0
+6000/2000/20x/e0.01,nanopore,13,16,0.0
+6000/2000/20x/e0.02,illumina,16,16,0.0
+6000/2000/20x/e0.02,nanopore,13,16,0.0
+6000/2000/20x/e0.05,illumina,16,16,0.0
+6000/2000/20x/e0.05,nanopore,13,16,0.0

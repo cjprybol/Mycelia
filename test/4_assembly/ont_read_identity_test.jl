@@ -22,6 +22,8 @@
 module OntReadIdentityTest
 
 import Test
+import CSV
+import DataFrames
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_read_identity.jl"))
 
@@ -130,6 +132,159 @@ Test.@testset "ONT read-identity helpers" begin
             sleep(1.1)          # mtime has 1-second granularity on some filesystems
             write(a, "@r1\nACGTACGT\n+\nIIIIIIII\n")
             Test.@test reads_cache_tag(a) != before
+        end
+    end
+
+    Test.@testset "coverage-50 cannot silently overwrite a coverage-30 identity table" begin
+        # td-jwpl: --coverage/--seed change which measurement is produced but
+        # leave the table the same shape, so a bare CSV.write into the default
+        # results directory would replace the committed coverage-30 tables with
+        # a coverage-50 measurement and leave no record of the swap.
+        provenance_30 = (
+            run_coverage = 30,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_30x_seed42.fq.gz",
+        )
+        provenance_50 = (
+            run_coverage = 50,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_50x_seed42.fq.gz",
+        )
+        rows = DataFrames.DataFrame(k = [11, 11], coverage = [10, 30], value = [1.0, 3.0])
+
+        mktempdir() do dir
+            path = joinpath(dir, "kmer_survival_ladder.tsv")
+            written = write_identity_table(path, rows, provenance_30)
+            Test.@test isfile(path)
+            Test.@test all(written.run_coverage .== 30)
+            Test.@test all(written.run_seed .== 42)
+            Test.@test identity_table_provenance(written) == provenance_30
+
+            # Same provenance may refresh the file.
+            write_identity_table(path, rows, provenance_30)
+            before = read(path)
+
+            Test.@test_throws ArgumentError write_identity_table(path, rows, provenance_50)
+            Test.@test read(path) == before
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_30
+
+            # An explicit override is required to replace a different measurement.
+            write_identity_table(path, rows, provenance_50; overwrite = true)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_50
+        end
+
+        # Committed ladder/per-read tables have no provenance columns today.
+        # A coverage-50 write must still be refused, and the file must not change.
+        mktempdir() do dir
+            path = joinpath(dir, "no_provenance.tsv")
+            CSV.write(path, rows; delim = '\t')
+            before = read(path)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) === nothing
+            Test.@test_throws ArgumentError write_identity_table(path, rows, provenance_50)
+            Test.@test read(path) == before
+        end
+
+        # The committed summary already records coverage/seed/version. Those
+        # legacy columns are enough to refuse a coverage-50 replacement.
+        mktempdir() do dir
+            path = joinpath(dir, "read_identity_summary.tsv")
+            legacy = DataFrames.DataFrame(
+                organism = ["Lambda"],
+                coverage = [30],
+                seed = [42],
+                badread_version = ["Badread v0.4.1"],
+                read_source = ["simulated"],
+                reads_file = ["ont_30x_seed42.fq.gz"],
+            )
+            CSV.write(path, legacy; delim = '\t')
+            before = read(path)
+            Test.@test identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')) ==
+                       provenance_30
+            Test.@test_throws ArgumentError write_identity_table(path, legacy, provenance_50)
+            Test.@test read(path) == before
+        end
+    end
+
+    Test.@testset "provenance is preflighted for every table before any write" begin
+        # td-jwpl review: checking one file at persist time can replace the
+        # ladder and then refuse the summary, leaving mixed provenance after
+        # the simulate/align run has already been paid for.
+        provenance_30 = (
+            run_coverage = 30,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_30x_seed42.fq.gz",
+        )
+        provenance_50 = (
+            run_coverage = 50,
+            run_seed = 42,
+            badread_version = "Badread v0.4.1",
+            read_source = "simulated",
+            reads_file = "ont_50x_seed42.fq.gz",
+        )
+        rows = DataFrames.DataFrame(k = [11], coverage = [30], value = [1.0])
+
+        mktempdir() do dir
+            Test.@test preflight_identity_tables(dir, provenance_30) === nothing
+
+            ladder = joinpath(dir, "kmer_survival_ladder.tsv")
+            per_read = joinpath(dir, "per_read_identity.tsv")
+            summary = joinpath(dir, "read_identity_summary.tsv")
+            write_identity_table(ladder, rows, provenance_30)
+            write_identity_table(per_read, rows, provenance_30)
+            CSV.write(summary, DataFrames.DataFrame(
+                coverage = [50],
+                seed = [42],
+                badread_version = ["Badread v0.4.1"],
+                read_source = ["simulated"],
+                reads_file = ["ont_50x_seed42.fq.gz"],
+            ); delim = '\t')
+            before = (read(ladder), read(per_read), read(summary))
+
+            err = try
+                preflight_identity_tables(dir, provenance_30)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ArgumentError
+            Test.@test occursin("read_identity_summary.tsv", err.msg)
+            Test.@test occursin("refusing to overwrite", err.msg)
+            Test.@test (read(ladder), read(per_read), read(summary)) == before
+            Test.@test preflight_identity_tables(dir, provenance_30; overwrite = true) === nothing
+            Test.@test (read(ladder), read(per_read), read(summary)) == before
+
+            # A same-provenance directory is not a refusal.
+            write_identity_table(summary, rows, provenance_30; overwrite = true)
+            Test.@test preflight_identity_tables(dir, provenance_30) === nothing
+            # And a different measurement is still refused without touching bytes.
+            matched = (read(ladder), read(per_read), read(summary))
+            err2 = try
+                preflight_identity_tables(dir, provenance_50)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err2 isa ArgumentError
+            Test.@test (read(ladder), read(per_read), read(summary)) == matched
+        end
+
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_read_identity.jl"), String)
+        preflight_at = findfirst("preflight_identity_tables(", src)
+        simulate_at = findfirst("simulate_nanopore_reads(", src)
+        align_at = findfirst("minimap2 -ax map-ont", src)
+        Test.@test preflight_at !== nothing && simulate_at !== nothing && align_at !== nothing
+        Test.@test first(preflight_at) < first(simulate_at)
+        Test.@test first(preflight_at) < first(align_at)
+        for write_at in findall("write_identity_table(joinpath", src)
+            Test.@test first(preflight_at) < first(write_at)
         end
     end
 

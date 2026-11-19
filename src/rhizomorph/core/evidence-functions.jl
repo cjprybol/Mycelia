@@ -455,6 +455,40 @@ function first_evidence_strand(evidence_map; default::StrandOrientation = Forwar
     return default
 end
 
+"""
+    preferred_evidence_strand(evidence_map; default=Forward)
+
+Return `Forward` when any evidence entry carries `Forward`, otherwise the strand
+of the first entry, otherwise `default`.
+
+Unlike `first_evidence_strand`, the result does not depend on evidence iteration
+order. In a `:doublestrand` graph each observation adds `Forward` evidence to the
+edges of its own walk, so a single-strand view built with this rule keeps that
+walk traversable on one strand. Edges with evidence on only one strand resolve to that
+strand, exactly as with `first_evidence_strand`.
+
+One strand per edge cannot serve both orientations: a walk supported only by
+reverse-complement evidence dead-ends at any edge that was also observed forward.
+
+# Example
+```julia
+strand = Mycelia.Rhizomorph.preferred_evidence_strand(edge_data.evidence)
+```
+"""
+function preferred_evidence_strand(evidence_map; default::StrandOrientation = Forward)
+    found = nothing
+    for dataset_evidence in values(evidence_map)
+        for evidence_set in values(dataset_evidence)
+            for entry in evidence_set
+                hasfield(typeof(entry), :strand) || continue
+                entry.strand == Forward && return Forward
+                found === nothing && (found = entry.strand)
+            end
+        end
+    end
+    return found === nothing ? default : found
+end
+
 # ============================================================================
 # Filtering Functions
 # ============================================================================
@@ -1144,10 +1178,10 @@ function add_evidence!(
     if !isempty(scores)
         # Decode from Phred+33 to raw Phred before aggregation
         if isempty(vertex.joint_quality)
-            append!(vertex.joint_quality, [s - UInt8(33) for s in scores])
+            append!(vertex.joint_quality, [decode_phred33_byte(s) for s in scores])
         else
             for i in eachindex(scores)
-                raw = Int(scores[i]) - 33
+                raw = Int(decode_phred33_byte(scores[i]))
                 vertex.joint_quality[i] = UInt8(clamp(
                     Int(vertex.joint_quality[i]) + raw, 0, 255))
             end
@@ -1157,7 +1191,7 @@ function add_evidence!(
             zeros(UInt8, length(scores))
         end
         for i in eachindex(scores)
-            raw = Int(scores[i]) - 33
+            raw = Int(decode_phred33_byte(scores[i]))
             ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
         end
         # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax).
@@ -1165,10 +1199,9 @@ function add_evidence!(
             zeros(UInt32, length(scores))
         end
         for i in eachindex(scores)
-            # max(0, ...) guards malformed sub-33 quality bytes (would throw
-            # InexactError); valid Phred+33 input is always >= 33 so this is a no-op
-            # there and preserves qsum == dataset_joint_quality below the 255 clamp.
-            ds_qsum[i] += UInt32(max(0, Int(scores[i]) - 33))
+            # decode_phred33_byte rejects a sub-33 byte instead of wrapping or
+            # clamping it (td-ozts). Valid Phred+33 input is always >= 33.
+            ds_qsum[i] += UInt32(decode_phred33_byte(scores[i]))
         end
     end
 
@@ -1201,10 +1234,10 @@ function add_evidence!(
     if !isempty(entry.from_quality)
         # Decode from Phred+33 before aggregation
         if isempty(edge.from_joint_quality)
-            append!(edge.from_joint_quality, [s - UInt8(33) for s in entry.from_quality])
+            append!(edge.from_joint_quality, [decode_phred33_byte(s) for s in entry.from_quality])
         else
             for i in eachindex(entry.from_quality)
-                raw = Int(entry.from_quality[i]) - 33
+                raw = Int(decode_phred33_byte(entry.from_quality[i]))
                 edge.from_joint_quality[i] = UInt8(clamp(
                     Int(edge.from_joint_quality[i]) + raw, 0, 255))
             end
@@ -1212,10 +1245,10 @@ function add_evidence!(
     end
     if !isempty(entry.to_quality)
         if isempty(edge.to_joint_quality)
-            append!(edge.to_joint_quality, [s - UInt8(33) for s in entry.to_quality])
+            append!(edge.to_joint_quality, [decode_phred33_byte(s) for s in entry.to_quality])
         else
             for i in eachindex(entry.to_quality)
-                raw = Int(entry.to_quality[i]) - 33
+                raw = Int(decode_phred33_byte(entry.to_quality[i]))
                 edge.to_joint_quality[i] = UInt8(clamp(
                     Int(edge.to_joint_quality[i]) + raw, 0, 255))
             end
@@ -1347,10 +1380,10 @@ function add_evidence!(
     scores = entry.quality_scores
     if !isempty(scores)
         if isempty(vertex.joint_quality)
-            append!(vertex.joint_quality, [s - UInt8(33) for s in scores])
+            append!(vertex.joint_quality, [decode_phred33_byte(s) for s in scores])
         else
             for i in eachindex(scores)
-                raw = Int(scores[i]) - 33
+                raw = Int(decode_phred33_byte(scores[i]))
                 vertex.joint_quality[i] = UInt8(clamp(
                     Int(vertex.joint_quality[i]) + raw, 0, 255))
             end
@@ -1359,7 +1392,7 @@ function add_evidence!(
             zeros(UInt8, length(scores))
         end
         for i in eachindex(scores)
-            raw = Int(scores[i]) - 33
+            raw = Int(decode_phred33_byte(scores[i]))
             ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
         end
         # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax). Kept
@@ -1372,10 +1405,9 @@ function add_evidence!(
             zeros(UInt32, length(scores))
         end
         for i in eachindex(scores)
-            # max(0, ...) guards malformed sub-33 quality bytes (would throw
-            # InexactError); valid Phred+33 input is always >= 33 so this is a no-op
-            # there and preserves qsum == dataset_joint_quality below the 255 clamp.
-            ds_qsum[i] += UInt32(max(0, Int(scores[i]) - 33))
+            # decode_phred33_byte rejects a sub-33 byte instead of wrapping or
+            # clamping it (td-ozts). Valid Phred+33 input is always >= 33.
+            ds_qsum[i] += UInt32(decode_phred33_byte(scores[i]))
         end
     end
 
@@ -1413,10 +1445,10 @@ function add_evidence!(
     # Aggregate quality for source and destination
     if !isempty(entry.from_quality)
         if isempty(edge.from_joint_quality)
-            append!(edge.from_joint_quality, [s - UInt8(33) for s in entry.from_quality])
+            append!(edge.from_joint_quality, [decode_phred33_byte(s) for s in entry.from_quality])
         else
             for i in eachindex(entry.from_quality)
-                raw = Int(entry.from_quality[i]) - 33
+                raw = Int(decode_phred33_byte(entry.from_quality[i]))
                 edge.from_joint_quality[i] = UInt8(clamp(
                     Int(edge.from_joint_quality[i]) + raw, 0, 255))
             end
@@ -1424,10 +1456,10 @@ function add_evidence!(
     end
     if !isempty(entry.to_quality)
         if isempty(edge.to_joint_quality)
-            append!(edge.to_joint_quality, [s - UInt8(33) for s in entry.to_quality])
+            append!(edge.to_joint_quality, [decode_phred33_byte(s) for s in entry.to_quality])
         else
             for i in eachindex(entry.to_quality)
-                raw = Int(entry.to_quality[i]) - 33
+                raw = Int(decode_phred33_byte(entry.to_quality[i]))
                 edge.to_joint_quality[i] = UInt8(clamp(
                     Int(edge.to_joint_quality[i]) + raw, 0, 255))
             end

@@ -52,7 +52,9 @@ function _collect_dynamic_k_sequences(observations)
 end
 
 function _dynamic_k_character_sequences(sequences::Vector{String})::Vector{Vector{Char}}
-    return [collect(sequence) for sequence in sequences]
+    # Fold case once so every downstream hash, spectrum, and canonical count
+    # treats a soft-masked base as the same k-mer as its uppercase form (td-etyf).
+    return [collect(uppercase(sequence)) for sequence in sequences]
 end
 
 function _dynamic_k_search_space(min_k::Int, max_k::Int)::Vector{Int}
@@ -90,7 +92,27 @@ function _dynamic_k_alphabet_size(sequences::Vector{String})::Int
 end
 
 function _dynamic_k_window_hash(characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
-    return UInt64(hash(view(characters, start_index:(start_index + k - 1))))
+    # Case-insensitive. A view over a UnitRange has 1-based axes
+    # (`Base.OneTo(k)`), so `hash` of that view equals `hash` of a k-length
+    # `Vector{Char}` with the same contents. A lowercase window is folded into
+    # that k-length buffer (td-etyf). Already-uppercase windows hash the view.
+    last = start_index + k - 1
+    needs_fold = false
+    for index in start_index:last
+        character = characters[index]
+        if character != uppercase(character)
+            needs_fold = true
+            break
+        end
+    end
+    if !needs_fold
+        return UInt64(hash(view(characters, start_index:last)))
+    end
+    folded = Vector{Char}(undef, k)
+    for offset in 1:k
+        folded[offset] = uppercase(characters[start_index + offset - 1])
+    end
+    return UInt64(hash(folded))
 end
 
 function _calculate_dynamic_k_sparsity(
@@ -206,23 +228,23 @@ end
 # of the registered collision floor `k >= ceil(log_|A|(G/p))` should lift from
 # here rather than re-derive.
 #
-# THREE DEFECTS must be fixed before that machinery is relied upon. All three
-# are silent -- none raises -- but by three DIFFERENT mechanisms; only defect 2
-# involves the `clamp`:
+# THREE DEFECTS were recorded before that machinery can be relied upon. Defect 2
+# is fixed (td-etyf): |A| and the window hash now both fold case, so they count
+# the same alphabet. Defects 1 and 3 remain. Both are silent -- neither raises:
 #   1. `float(|A|)^k` overflows to Inf for |A| >= 1128, so sparsity = 1 - n/Inf
 #      is exactly 1.0 -- maximally sparse regardless of data. In range, so the
 #      clamp does nothing. Reachable here because this function's OWN
 #      `max_search_k` defaults to 101 (not, as an earlier note said, because of
 #      `dynamic_k_prime_pattern`'s default -- that is called after this loop
 #      with an explicit `max_k`).
-#   2. |A| is measured after uppercasing while the window hash does NOT fold
-#      case, so numerator and denominator are counted over different spaces;
-#      sparsity can go negative and `clamp` returns exactly 0.0 -- maximally
-#      dense. This is the clamp-boundary case.
+#   2. FIXED (td-etyf). |A| was measured after uppercasing while the window hash
+#      did not fold case, so the numerator and denominator were counted over
+#      different spaces and `clamp` could return exactly 0.0. Both sides now
+#      fold case.
 #   3. FORWARD-LOOKING, not a present defect: the denominator is `|A|^k` with no
-#      reverse-complement adjustment. This function hashes raw character windows
-#      and takes no `graph_mode`, so it is never in Canonical mode today. It
-#      matters only if this machinery is lifted into a strand-aware caller,
+#      reverse-complement adjustment. This function hashes case-folded character
+#      windows and takes no `graph_mode`, so it is never in Canonical mode today.
+#      It matters only if this machinery is lifted into a strand-aware caller,
 #      where `|A|^k` would overstate the space ~2x.
 """
     select_dynamic_kmer_plan(
@@ -449,12 +471,15 @@ function _largest_prime_at_most(n::Int)::Int
 end
 
 # --- k-mer count spectrum over reads (shared by both connectivity measures) -----
-_dna_complement_char(c::Char)::Char = c == 'A' ? 'T' :
-                                      c == 'T' ? 'A' :
-                                      c == 'C' ? 'G' :
-                                      c == 'G' ? 'C' :
-                                      c == 'a' ? 't' :
-                                      c == 't' ? 'a' : c == 'c' ? 'g' : c == 'g' ? 'c' : c
+# Uppercase first so a soft-masked base and its uppercase form share one
+# complement (td-etyf). Non-ACGT characters are returned uppercased unchanged.
+function _dna_complement_char(c::Char)::Char
+    upper = uppercase(c)
+    return upper == 'A' ? 'T' :
+           upper == 'T' ? 'A' :
+           upper == 'C' ? 'G' :
+           upper == 'G' ? 'C' : upper
+end
 
 # Canonical hash of a k-length window: min(hash(window), hash(revcomp(window))). The
 # corrected-read RE-ASSEMBLY runs on a DOUBLESTRAND (canonical) de Bruijn graph, so
@@ -464,10 +489,18 @@ _dna_complement_char(c::Char)::Char = c == 'A' ? 'T' :
 # k-adaptation on well-covered reads (the reuse-oracle regime).
 function _dynamic_k_canonical_window_hash(
         characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
-    forward_hash = _dynamic_k_window_hash(characters, start_index, k)
+    # Normalize case before both halves so a soft-masked (lowercase) window
+    # and its uppercase / reverse-complement forms share one canonical hash
+    # (td-etyf). The reverse-complement half already uppercased; the forward
+    # half previously hashed raw characters and the two were incomparable.
+    normalized = Vector{Char}(undef, k)
+    for offset in 0:(k - 1)
+        normalized[offset + 1] = uppercase(characters[start_index + offset])
+    end
+    forward_hash = _dynamic_k_window_hash(normalized, 1, k)
     revcomp = Vector{Char}(undef, k)
     for offset in 0:(k - 1)
-        revcomp[k - offset] = _dna_complement_char(uppercase(characters[start_index + offset]))
+        revcomp[k - offset] = _dna_complement_char(normalized[offset + 1])
     end
     reverse_hash = UInt64(hash(revcomp))
     return min(forward_hash, reverse_hash)
@@ -554,6 +587,36 @@ function median_solid_kmer_multiplicity(reads, k::Int; solid_min::Int = 2)::Floa
     solid_counts = Int[c for c in values(counts) if c >= solid_min]
     isempty(solid_counts) && return 0.0
     return Float64(Statistics.median(solid_counts))
+end
+
+"""
+    solid_kmer_survival(reads, k; solid_min = 2) -> Float64
+
+Reference-free estimate of `S(k)`, the k-mer SURVIVAL fraction in the registered
+level-set rule on `select_reassembly_k`: the fraction of all length-`k` CANONICAL
+window OCCURRENCES over `reads` that fall on a k-mer seen `>= solid_min` times.
+
+Why this and not `median_solid_kmer_multiplicity`: an occurrence is the unit, so the
+statistic is read-position weighted. A genomic window read error-free recurs at any
+non-trivial coverage and counts toward `S(k)`; an error window is mostly a singleton
+and counts against it. Error k-mers that happen to recur (systematic residual indels
+shared by a few reads) DO enter the numerator, but each contributes only its own few
+occurrences, so they cannot dominate it the way they dominate a median over DISTINCT
+solid k-mers (see the td-jt7r caveat on that function). On clean reads `S(k)` ≈ 1 at
+every k; on raw high-error reads it decays roughly like `(1-e)^k`.
+
+Returns `0.0` when no window of length `k` exists.
+"""
+function solid_kmer_survival(reads, k::Int; solid_min::Int = 2)::Float64
+    counts = _kmer_count_spectrum(reads, k; canonical = true)
+    total = 0
+    solid = 0
+    for c in values(counts)
+        total += c
+        c >= solid_min && (solid += c)
+    end
+    total == 0 && return 0.0
+    return solid / total
 end
 
 """
@@ -649,10 +712,21 @@ end
 # non-increasing in k by construction, so an argmax would always return the
 # smallest admissible rung and the measurement would do no work.
 #
-# This function is retained as the control point because it is wired, NOT
-# because its criterion is sound. Replacing the criterion is downstream work.
+# UPDATE (2026-11-16): the default is the legacy median-solid criterion again.
+# `:survival` (S(k) = solid_kmer_survival, tau = 0.5) stays available as an
+# opt-in. Tau 0.5 is unverified at real scale, and on the E2E toy it trades
+# seed-3 illumina identity from 1.0 down to 0.9667. Pending Cameron's pick.
 """
-    select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
+    select_reassembly_k(
+        reads,
+        ceiling_k;
+        floor_k = 7,
+        connectivity_floor = 6.0,
+        genome_size_floor = true,
+        size_ref_k = 17,
+        criterion = :median_solid,
+        survival_tau = 0.5,
+    ) -> Int
 
 Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`,
 using a COVERAGE-AWARE CONNECTIVITY criterion. Iterating candidates DESCENDING from
@@ -690,8 +764,12 @@ function select_reassembly_k(
         floor_k::Int = 7,
         connectivity_floor::Float64 = 6.0,
         genome_size_floor::Bool = true,
-        size_ref_k::Int = 17
+        size_ref_k::Int = 17,
+        criterion::Symbol = :median_solid,
+        survival_tau::Float64 = 0.5
 )::Int
+    criterion in (:survival, :median_solid) ||
+        throw(ArgumentError("criterion must be :survival or :median_solid, got $(criterion)"))
     effective_floor = min(floor_k, ceiling_k)
     # Genome-size-aware uniqueness floor (td-jt7r): never let the drop-down fall below
     # the k whose k-mer space keeps genomic k-mers unique, so a multi-kb genome cannot
@@ -713,10 +791,15 @@ function select_reassembly_k(
     candidates = vcat(lower_primes, ceiling_k)   # ascending; ceiling is the largest
     # Descend from the ceiling: the LARGEST candidate whose solid backbone still meets
     # the connectivity floor is the most specific k that keeps the graph joined.
+    # Default criterion is :median_solid (legacy connectivity floor). :survival is
+    # the opt-in level set k* = max { k : S(k) >= survival_tau }, with S(k) =
+    # solid_kmer_survival. survival_tau = 0.5 is unverified at real scale.
+    # connectivity_floor is used only by :median_solid.
     for k in Iterators.reverse(candidates)
-        if median_solid_kmer_multiplicity(reads, k) >= connectivity_floor
-            return k
-        end
+        keep = criterion === :survival ?
+               solid_kmer_survival(reads, k) >= survival_tau :
+               median_solid_kmer_multiplicity(reads, k) >= connectivity_floor
+        keep && return k
     end
     # Nothing qualifies (very low coverage / very high error): fall back to the
     # SMALLEST candidate, i.e. the most-connected k still in range. Three

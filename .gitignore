@@ -82,6 +82,11 @@ benchmarking/results/track_a_baseline/cells/
 benchmarking/results/td-jt7r-*/
 !benchmarking/results/*evidence*/
 
+# td-2rxh analysis figures are regenerable via
+# `benchmarking/td2rxh_paired_analysis.jl` (CSV / report.md stay tracked).
+benchmarking/results/td2rxh-evidence/*/analysis/*.png
+benchmarking/results/td2rxh-evidence/*/analysis/*.svg
+
 # Agent worktrees
 trees/
 

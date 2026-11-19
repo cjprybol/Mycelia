@@ -32,9 +32,19 @@ Test.@testset "calibrated gate frontier smoke (err=0.10, single pass)" begin
     base_point = (name = "noskip+nogate", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
         beam_width = nothing, calibrated_gap_threshold = nothing)
-    gated_point = (name = "calibrated-gap-2.0", skip_solid = false, cheap_correct = true,
+    # Threshold recalibrated for the per-base decode scale (substitution decoder
+    # repair: each read base is emitted once, so Viterbi margins are per-base, a
+    # Q-scaled mismatch of a few nats, not up to k times that). Measured on this
+    # toy (box, 2026-11-11): 0.25 keeps the ungated over_rate (0.000185); 0.5-2 give
+    # identical metrics (recall 0.045, over_rate 0.0, correction_rate 0.0045, 27
+    # true fixes); 3 and 4 start reverting true fixes; 6 and above revert every
+    # Viterbi edit (recall 0.0217, the Stage-0 fixes only). 1.0 is the geometric
+    # midpoint of the 0.5-2 plateau. The previous value 16 now equals Inf here.
+    # Real-scale operating points are a benchmark question
+    # (assess_frontier_dominance).
+    gated_point = (name = "calibrated-gap-1.0", skip_solid = false, cheap_correct = true,
         hard_window = false, soft_em = false, n_k_rungs = 1, max_iterations_per_k = 1,
-        beam_width = nothing, calibrated_gap_threshold = 2.0)
+        beam_width = nothing, calibrated_gap_threshold = 1.0)
 
     # Permissive limit: gate engaged (records gaps) but reverts nothing.
     permissive_point = merge(base_point,
