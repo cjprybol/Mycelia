@@ -100,8 +100,12 @@ d5_load_julia() { module load julia/1.10.10; }
 # sbatch runs a spooled copy of this file, so the shared body is found from the
 # submit directory (benchmarking/); `bash <this file>` finds it next to the file.
 D5_BENCH_DIR="${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}"
+[[ -r "${D5_BENCH_DIR}/d5_grid_task.sh" ]] || {
+  echo "ERROR: no readable ${D5_BENCH_DIR}/d5_grid_task.sh; submit from the benchmarking/ directory of the checkout." >&2
+  exit 1
+}
 # shellcheck source=d5_grid_task.sh
 source "${D5_BENCH_DIR}/d5_grid_task.sh"
-# d5_grid_task.sh always exits; reaching this line means it could not be read.
-echo "ERROR: cannot run ${D5_BENCH_DIR}/d5_grid_task.sh; submit from the benchmarking/ directory of the checkout." >&2
+# d5_grid_task.sh always ends in exit; reaching this line means it stopped early.
+echo "ERROR: ${D5_BENCH_DIR}/d5_grid_task.sh returned without exiting (status $?)." >&2
 exit 1

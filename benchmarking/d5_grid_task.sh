@@ -6,8 +6,8 @@
 #   D5_SITE_NAME   site label for the log
 #   D5_SITE_DEPOT  default JULIA_DEPOT_PATH on that site
 #   D5_BENCH_DIR   the checkout's benchmarking/ directory
-#   d5_load_julia  function that puts julia 1.10 on PATH (returns non-zero if it
-#                  cannot)
+#   d5_load_julia  function that puts julia 1.10.10 on PATH (returns non-zero if
+#                  it cannot; the body refuses then, and refuses any other version)
 # Environment (both sites): D5_PHASE (A | A-cells | B | merge), D5_OUTDIR,
 # D5_ARGS, D5_FULL, D5_TMPDIR. See the wrappers for USAGE.
 set -uo pipefail
@@ -45,13 +45,20 @@ OUTDIR="${D5_OUTDIR:?set D5_OUTDIR to the grid output root (one root per grid)}"
 echo "=== D5 grid (${D5_SITE_NAME}) phase=${PHASE} task=${TASK_INDEX} ==="
 echo "Job: ${SLURM_JOB_ID:-none}  Array: ${SLURM_ARRAY_JOB_ID:-none}  Node: ${SLURM_NODELIST:-none}  CPUs: ${SLURM_CPUS_PER_TASK:-unset}  Start: $(date)"
 
-d5_load_julia
+d5_load_julia || { echo "ERROR: d5_load_julia failed (${D5_SITE_NAME})." >&2; exit 1; }
 JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
   echo "ERROR: julia not runnable after d5_load_julia (${D5_SITE_NAME})." >&2
   exit 1
 fi
-echo "Julia: ${JULIA} ($("${JULIA}" --version 2>&1))"
+# One grid, one julia: the toy ran 1.10.10, and the merge does not refuse rows
+# from mixed julia versions, so a different julia is refused here, on every site.
+D5_JULIA_VERSION="1.10.10"
+JULIA_VERSION_LINE="$("${JULIA}" --version 2>&1)"
+if [[ "${JULIA_VERSION_LINE}" != "julia version ${D5_JULIA_VERSION}" ]]; then
+  echo "ERROR: the D5 grid requires julia ${D5_JULIA_VERSION}; ${JULIA} reports '${JULIA_VERSION_LINE}' (${D5_SITE_NAME})." >&2
+  exit 1
+fi
 
 # No `set -e` here, so every step that defines a root must fail loudly: an
 # empty OUTDIR would otherwise make the runner write the grid into the checkout.
@@ -61,8 +68,14 @@ OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2
 # Four Julia threads on every site, as in the toy run (array 61473595), so the
 # grid is one configuration whatever --cpus-per-task a site's wrapper requests.
 export JULIA_NUM_THREADS=4
+# An inherited depot (sbatch exports the submit environment) wins over the
+# site default; the log says which, since the depot holds the packages and the
+# conda environments the tools come from.
+DEPOT_SOURCE="inherited from the submit environment"
+[[ -n "${JULIA_DEPOT_PATH:-}" ]] || DEPOT_SOURCE="site default"
 export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${D5_SITE_DEPOT}}"
 export LD_LIBRARY_PATH=""
+echo "Julia: ${JULIA} (${JULIA_VERSION_LINE}); threads ${JULIA_NUM_THREADS}; depot ${JULIA_DEPOT_PATH} (${DEPOT_SOURCE})"
 
 cd "${D5_BENCH_DIR}" || exit 1
 if [[ ! -f d5_ont_adaptive_grid_run.jl ]]; then
@@ -72,11 +85,12 @@ fi
 echo "Checkout: $(git -C .. rev-parse HEAD)  dirty: $(git -C .. status --porcelain --untracked-files=no | wc -l | tr -d ' ') files"
 
 # The :iterative corrector removes its temp directories with
-# renameat2(RENAME_NOREPLACE). Lustre (Perlmutter $SCRATCH, Lawrencium
-# /global/scratch) rejects that with EINVAL and the corrector stops, so its temp
-# root is node-local /tmp (on Perlmutter, tmpfs that counts against --mem). The
-# runner re-checks the rename before any cell runs. Override the base with
-# D5_TMPDIR. mktemp creates a fresh 0700 directory and fails if the name exists,
+# renameat2(RENAME_NOREPLACE). Lustre rejects that with EINVAL and the corrector
+# stops (measured on Perlmutter $SCRATCH; Lawrencium /global/scratch is also
+# Lustre and is assumed to behave the same), so the temp root is node-local /tmp
+# (on Perlmutter, tmpfs that counts against --mem and is not a symlink). The
+# runner re-checks the rename before any cell runs, on every site. Override the
+# base with D5_TMPDIR. mktemp creates a fresh 0700 directory and fails if the name exists,
 # so a pre-planted path can never become what the EXIT trap removes. Cleanup, the
 # evidence copy on failure and signal handling live in d5_temp_root.sh.
 # shellcheck source=d5_temp_root.sh

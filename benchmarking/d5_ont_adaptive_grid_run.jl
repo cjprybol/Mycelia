@@ -563,9 +563,9 @@ function run_phase_a(cli, root)
         context = cell_context(prepared.meta, base)
         cells = D5OntAdaptiveGridDriver.read_set_task_cells(rs; cli.toy,
             cli.skip_iterative)
-        n_deferred = length(phase_cells(rs, :A, cli.toy)) - length(cells)
-        n_deferred > 0 &&
-            println("  deferred $(n_deferred) :iterative cell(s) to cell tasks")
+        for c in setdiff(phase_cells(rs, :A, cli.toy), cells)
+            println("  deferred  $(D5OntAdaptiveGridDriver.cell_id(c)): cell task")
+        end
         for cell in cells
             push!(statuses, run_phase_a_cell(root, cell, prepared, ref, context))
         end

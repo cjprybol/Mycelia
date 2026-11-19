@@ -1,4 +1,5 @@
-# Node-local temp-root cleanup for run_d5_grid_nersc.sbatch (td-yddpr.5).
+# Node-local temp-root cleanup for d5_grid_task.sh, the D5 array task shared by
+# run_d5_grid_nersc.sbatch and run_d5_grid_lrc.sbatch (td-yddpr.5).
 # Sourced, not executed. GNU coreutils (long flags). Tested by
 # test/4_assembly/d5_ont_adaptive_grid_run_test.jl on Linux.
 
@@ -64,7 +65,7 @@ d5_log_memory_peak() {
 # size and remove it.
 # Further TERM/INT/HUP are ignored here: a second scancel during the copy would
 # otherwise exit mid-cleanup, leaving a whole copy named .partial and the temp
-# root on tmpfs. SLURM's SIGKILL after KillWait (30 s on Perlmutter) still
+# root on tmpfs. SLURM's SIGKILL after KillWait (30 s on Perlmutter and Lawrencium) still
 # bounds the cleanup; the "copying" line marks where a killed copy stopped.
 d5_temp_root_cleanup() {
   trap '' TERM INT HUP

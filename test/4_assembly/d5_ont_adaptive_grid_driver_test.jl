@@ -459,7 +459,9 @@ Test.@testset "D5 grid driver" begin
             rs; toy = false, skip_iterative = true)]
         Test.@test length(kept) == 720
         Test.@test count(c -> c.corrector === :none, kept) == 672
-        Test.@test count(c -> c.stratum === :validation && c.k_policy > 64, kept) == 48
+        Test.@test count(
+            c -> c.stratum === :validation &&
+                 !D5OntAdaptiveGridDriver.assembler_accepts_k(c.k_policy), kept) == 48
         # The order follows the read-set array, so cell tasks sharing a read set
         # are adjacent and a read set's index is recoverable from its cell.
         rs_order = [findfirst(==(D5OntAdaptiveGridDriver.read_set_of(c)),

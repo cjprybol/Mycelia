@@ -765,7 +765,8 @@ Test.@testset "D5 grid runner" begin
             for bad in ("4", "-1")
                 out = error_message(() -> select_cell(D5OntAdaptiveGridDriver.parse_cli(
                     ["--phase", "A", "--cell-index", bad, "--toy"])))
-                Test.@test out !== nothing && occursin("out of range 0:3", out)
+                Test.@test out !== nothing &&
+                           occursin("--cell-index $(bad) out of range 0:3", out)
             end
 
             # A prepared read set loads with its recorded read count checked.
@@ -780,6 +781,21 @@ Test.@testset "D5 grid runner" begin
                 merge(meta, Dict("n_reads" => 3)))
             msg = error_message(() -> load_prepared_read_set(rs, root))
             Test.@test msg !== nothing && occursin("has 2 reads on disk", msg)
+        end
+
+        mktempdir() do root
+            # A cell task on a prepared read set runs exactly the cell its index
+            # names, and nothing else: cell 2 of the toy is ONT 99%/100x k29
+            # (checkpointed ok, so it is served from cache, no assembly).
+            alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy = true)
+            target = alone[3]
+            Test.@test D5OntAdaptiveGridDriver.cell_id(target) ==
+                       "ont__id99__cov100x__Lambda__seed42__iterative__k29__validation__scalable"
+            plant_read_set(root, D5OntAdaptiveGridDriver.read_set_of(target))
+            save_row(root, row_for(target))
+            Test.@test phase_a(["--cell-index", "2", "--toy"], root) == ["ok"]
+            Test.@test readdir(joinpath(root, "cells")) ==
+                       [D5OntAdaptiveGridDriver.cell_id(target)]
         end
 
         mktempdir() do root
@@ -813,6 +829,13 @@ Test.@testset "D5 grid runner" begin
             for c in cells
                 Test.@test isfile(checkpoint_path(root, c)) == (c.corrector === :none)
             end
+            # Run by hand without --skip-iterative, the same read-set task runs all
+            # four cells (the :iterative two now checkpointed ok, so cached).
+            for c in cells
+                c.corrector === :iterative && save_row(root, row_for(c))
+            end
+            Test.@test phase_a(["--read-set-index", "0", "--toy"], root) ==
+                       ["ok", "ok", "ok", "ok"]
         end
 
         mktempdir() do root
@@ -856,9 +879,13 @@ Test.@testset "D5 grid runner" begin
         toy = printed(true)
         Test.@test occursin("read sets (toy): 3 -> --array=0-2", toy)
         Test.@test occursin("(:iterative, --cell-index) (toy): 4 -> --array=0-3", toy)
-        Test.@test occursin(
-            "cell 3: illumina__cov30x__Lambda__seed42__iterative__k21__illumina_control__scalable",
-            toy)
+        for (j, id) in enumerate((
+            "ont__id95__cov10x__Lambda__seed42__iterative__k21__grid__scalable",
+            "ont__id95__cov10x__Lambda__seed42__iterative__k31__grid__scalable",
+            "ont__id99__cov100x__Lambda__seed42__iterative__k29__validation__scalable",
+            "illumina__cov30x__Lambda__seed42__iterative__k21__illumina_control__scalable"))
+            Test.@test occursin("  cell $(j - 1): $(id)\n", toy)
+        end
     end
     Test.@testset "expected cells for the toy and the full grid" begin
         Test.@test length(expected_cells(true, false)) == 7
@@ -953,44 +980,71 @@ Test.@testset "D5 grid runner" begin
                 Test.@test bad_full.code == 1 &&
                            occursin("D5_PHASE must be A, A-cells", bad_full.log)
             end
-            # The phase -> runner argv mapping, end to end through the real sbatch:
-            # a fake `julia` records its arguments and a fake `module` does nothing.
-            # GNU coreutils (mktemp --directory, realpath, rm --recursive), so Linux.
-            if !Sys.islinux() || Sys.which("bash") === nothing
-                Test.@test_skip "sbatch argv check needs Linux and bash"
+            # The wrapper -> task body -> runner path, end to end through the real
+            # sbatch: a fake `julia` records its arguments and environment, and a
+            # fake `module` succeeds unless told to fail. Needs bash and GNU
+            # coreutils (mktemp --directory, realpath, rm --recursive).
+            gnu = Sys.which("bash") !== nothing &&
+                  try
+                success(pipeline(`mktemp --version`; stdout = devnull, stderr = devnull))
+            catch
+                false
+            end
+            if !gnu
+                Test.@test_skip "sbatch argv check needs bash and GNU coreutils"
             else
                 mktempdir() do dir
                     bin = mkpath(joinpath(dir, "bin"))
                     argv_file = joinpath(dir, "argv.txt")
                     write(joinpath(bin, "julia"),
                         "#!/bin/bash\n" *
-                        "if [[ \"\${1:-}\" == \"--version\" ]]; then echo fake; exit 0; fi\n" *
-                        "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n")
-                    write(joinpath(bin, "module"), "#!/bin/bash\nexit 0\n")
+                        "if [[ \"\${1:-}\" == \"--version\" ]]; then\n" *
+                        "  echo \"\${D5_FAKE_VERSION:-julia version 1.10.10}\"; exit 0\n" *
+                        "fi\n" *
+                        "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n" *
+                        "printf '%s\\n' \"\${JULIA_NUM_THREADS:-unset}\" " *
+                        "\"\${JULIA_DEPOT_PATH:-unset}\" > \"\${D5_FAKE_ARGV}.env\"\n" *
+                        "[[ \"\${D5_FAKE_EXIT:-0}\" == 0 ]] || " *
+                        "echo evidence > \"\${TMPDIR}/evidence.txt\"\n" *
+                        "exit \"\${D5_FAKE_EXIT:-0}\"\n")
+                    write(joinpath(bin, "module"),
+                        "#!/bin/bash\nexit \"\${D5_FAKE_MODULE_EXIT:-0}\"\n")
                     chmod(joinpath(bin, "julia"), 0o755)
                     chmod(joinpath(bin, "module"), 0o755)
-                    function runner_argv(phase, task; d5_args = "--toy")
+                    function runner_argv(phase, task; d5_args = "--toy", tag = "",
+                            extra = Dict{String, String}(), script = sbatch,
+                            submit_dir = dirname(sbatch))
                         rm(argv_file; force = true)
-                        out = mkpath(joinpath(dir, "out_$(phase)_$(task)"))
+                        rm(argv_file * ".env"; force = true)
+                        out = mkpath(joinpath(dir, "out_$(phase)_$(task)$(tag)"))
                         env = Dict{String, String}(
                             "PATH" => bin * ":" * get(ENV, "PATH", "/usr/bin"),
                             "HOME" => homedir(), "D5_FULL" => "0", "D5_PHASE" => phase,
                             "D5_ARGS" => d5_args, "D5_OUTDIR" => out,
                             "D5_TMPDIR" => mkpath(joinpath(dir, "tmp")),
                             "D5_FAKE_ARGV" => argv_file, "D5_PROC_CGROUP" => "/nonexistent",
-                            "SLURM_SUBMIT_DIR" => dirname(sbatch),
+                            "SLURM_SUBMIT_DIR" => submit_dir,
+                            "SLURM_CPUS_PER_TASK" => "12",
                             "SLURM_ARRAY_TASK_ID" => string(task),
                             "SLURM_ARRAY_TASK_MAX" => string(task))
+                        merge!(env, extra)
                         log = IOBuffer()
-                        proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
+                        proc = run(pipeline(ignorestatus(Cmd(`bash $script`; env = env));
                             stdout = log, stderr = log))
                         argv = isfile(argv_file) ? readlines(argv_file) : String[]
-                        return (; code = proc.exitcode, argv, log = String(take!(log)))
+                        julia_env = isfile(argv_file * ".env") ?
+                                    readlines(argv_file * ".env") : String[]
+                        return (; code = proc.exitcode, argv, julia_env, out,
+                            log = String(take!(log)))
                     end
                     flag_value(argv, flag) =
                         let i = findfirst(==(flag), argv)
                             i === nothing ? nothing : argv[i + 1]
                         end
+                    site_depot = Dict(
+                        "run_d5_grid_nersc.sbatch" => "/global/cfs/projectdirs/m4269/cjprybol/.julia_depot",
+                        "run_d5_grid_lrc.sbatch" => "/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot")[wrapper]
+
                     a = runner_argv("A", 1)
                     Test.@test a.code == 0
                     Test.@test a.argv[1:4] ==
@@ -999,6 +1053,17 @@ Test.@testset "D5 grid runner" begin
                     Test.@test flag_value(a.argv, "--read-set-index") == "1"
                     Test.@test "--skip-iterative" in a.argv && "--toy" in a.argv
                     Test.@test !("--cell-index" in a.argv)
+                    # 4 Julia threads whatever --cpus-per-task is (12 here), and the
+                    # site's depot when the submit environment has none.
+                    Test.@test a.julia_env == ["4", site_depot]
+                    Test.@test occursin("threads 4; depot $(site_depot) (site default)",
+                        a.log)
+                    inherited = runner_argv("A", 1; tag = "_depot",
+                        extra = Dict("JULIA_DEPOT_PATH" => "/elsewhere/depot"))
+                    Test.@test inherited.julia_env == ["4", "/elsewhere/depot"]
+                    Test.@test occursin("(inherited from the submit environment)",
+                        inherited.log)
+
                     cells = runner_argv("A-cells", 2)
                     Test.@test cells.code == 0
                     Test.@test cells.argv[3:4] == ["--phase", "A"]
@@ -1006,9 +1071,12 @@ Test.@testset "D5 grid runner" begin
                     Test.@test !("--read-set-index" in cells.argv)
                     Test.@test !("--skip-iterative" in cells.argv)
                     Test.@test !any(occursin("A-cells"), cells.argv)
+                    # D5_ARGS is word-split: each flag and value is its own argument.
                     b = runner_argv("B", 0; d5_args = "--toy --tau 0.8 --tau-hat 0.6")
                     Test.@test b.code == 0 && b.argv[3:4] == ["--phase", "B"]
                     Test.@test flag_value(b.argv, "--read-set-index") == "0"
+                    Test.@test flag_value(b.argv, "--tau") == "0.8"
+                    Test.@test flag_value(b.argv, "--tau-hat") == "0.6"
                     Test.@test !("--skip-iterative" in b.argv)
                     m = runner_argv("merge", 0)
                     Test.@test m.code == 0 && m.argv[3:4] == ["--phase", "merge"]
@@ -1019,7 +1087,51 @@ Test.@testset "D5 grid runner" begin
                     Test.@test startswith(flag_value(cells.argv, "--tmp-dir"),
                         realpath(joinpath(dir, "tmp")))
                     Test.@test flag_value(cells.argv, "--output-dir") ==
-                               realpath(joinpath(dir, "out_A-cells_2"))
+                               realpath(cells.out)
+
+                    # The runner's exit code is the task's, and a failed task keeps
+                    # what it left in the temp root.
+                    retry = runner_argv("A", 1; tag = "_exit3",
+                        extra = Dict("D5_FAKE_EXIT" => "3"))
+                    Test.@test retry.code == 3 && occursin(">>> RETRY phase=A", retry.log)
+                    evidence = joinpath(retry.out, "tmp_evidence")
+                    Test.@test isdir(evidence) && length(readdir(evidence)) == 1 &&
+                               isfile(joinpath(evidence, only(readdir(evidence)),
+                                   "evidence.txt"))
+                    blocked = runner_argv("merge", 0; tag = "_exit3",
+                        extra = Dict("D5_FAKE_EXIT" => "3"))
+                    Test.@test blocked.code == 3 &&
+                               occursin(">>> BLOCKED merge", blocked.log)
+                    failed = runner_argv("A-cells", 2; tag = "_exit7",
+                        extra = Dict("D5_FAKE_EXIT" => "7"))
+                    Test.@test failed.code == 7 && occursin("(exit 7)", failed.log)
+
+                    # Any julia but 1.10.10 is refused before the runner starts.
+                    wrong = runner_argv("A", 1; tag = "_v112",
+                        extra = Dict("D5_FAKE_VERSION" => "julia version 1.12.1"))
+                    Test.@test wrong.code == 1 && isempty(wrong.argv)
+                    Test.@test occursin("requires julia 1.10.10", wrong.log)
+                    if wrapper == "run_d5_grid_nersc.sbatch"
+                        nomod = runner_argv("A", 1; tag = "_nomodule",
+                            extra = Dict("D5_FAKE_MODULE_EXIT" => "1"))
+                        Test.@test nomod.code == 1 && isempty(nomod.argv)
+                        Test.@test occursin("d5_load_julia failed", nomod.log)
+                    end
+
+                    # sbatch runs a spooled copy of the wrapper, so the body is
+                    # found through SLURM_SUBMIT_DIR, not next to the script.
+                    spool = mkpath(joinpath(dir, "spool"))
+                    spooled = joinpath(spool, "slurm_script")
+                    cp(sbatch, spooled; force = true)
+                    via_spool = runner_argv("A-cells", 2; tag = "_spool", script = spooled)
+                    Test.@test via_spool.code == 0
+                    Test.@test flag_value(via_spool.argv, "--cell-index") == "2"
+                    # Submitted from the wrong directory: refused, nothing run.
+                    elsewhere = runner_argv("A-cells", 2; tag = "_wrongdir",
+                        script = spooled, submit_dir = mkpath(joinpath(dir, "elsewhere")))
+                    Test.@test elsewhere.code == 1 && isempty(elsewhere.argv)
+                    Test.@test occursin("submit from the benchmarking/ directory",
+                        elsewhere.log)
                 end
             end
         end
