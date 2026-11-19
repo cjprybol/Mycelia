@@ -203,10 +203,11 @@ Test.@testset "Generation - compute_sequence_likelihood" begin
     graph = _build_test_ngram_graph()
     weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
 
-    # A valid traversal of the graph should have finite likelihood
+    # A valid traversal of the graph should have finite likelihood.
+    # The chain has one outgoing edge at every step, so each transition
+    # probability is 1 and the log-likelihood is exactly 0.
     ll = Mycelia.Rhizomorph.compute_sequence_likelihood("ABCDEF", weighted; k = 3)
-    Test.@test isfinite(ll)
-    Test.@test ll <= 0.0  # log-likelihood is non-positive
+    Test.@test ll == 0.0
 
     # A sequence too short for any transition → 0.0
     ll_short = Mycelia.Rhizomorph.compute_sequence_likelihood("AB", weighted; k = 3)
@@ -236,6 +237,152 @@ Test.@testset "Generation - compute_sequence_likelihood" begin
         zero_weight_graph, "AAA", "AAT") == 0.0
     Test.@test Mycelia.Rhizomorph.compute_sequence_likelihood(
         "AAAT", zero_weight_graph; k = 3) == -Inf
+end
+
+Test.@testset "Generation - transition denominator is local out-weight" begin
+    # Fan-out at "ABC" (weights 1 and 3) plus a disjoint heavy edge. A denominator
+    # that is the single edge, the out-degree, or the sum of every edge in the
+    # graph produces a different probability than 1/4 and 3/4.
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0
+    )
+
+    function add_edge!(src, dst, weight)
+        haskey(graph, src) || (graph[src] = nothing)
+        haskey(graph, dst) || (graph[dst] = nothing)
+        graph[src, dst] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            weight, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+        return nothing
+    end
+
+    add_edge!("ABC", "BCD", 1.0)
+    add_edge!("ABC", "BCX", 3.0)
+    add_edge!("BCD", "CDE", 2.0)
+    add_edge!("BCD", "CDZ", 2.0)
+    add_edge!("WWW", "WWX", 100.0)
+
+    # The previous O(E) denominator, recomputed inline. The out-neighbor sum
+    # must agree with it on every stored edge, including the heavy distractor.
+    function reference_probability(src, dst)
+        haskey(graph, src, dst) || return 0.0
+        edge_weight = graph[src, dst].weight
+        total = 0.0
+        for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(graph)
+            edge_src == src || continue
+            total += graph[edge_src, edge_dst].weight
+        end
+        total == 0.0 && return 0.0
+        return edge_weight / total
+    end
+
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        graph, "ABC", "BCD") == 0.25
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        graph, "ABC", "BCX") == 0.75
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        graph, "BCD", "CDE") == 0.5
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        graph, "WWW", "WWX") == 1.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        graph, "ABC", "WWW") == 0.0
+
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+            graph, src, dst) == reference_probability(src, dst)
+    end
+
+    # "ABCDE" walks ABC->BCD (1/4) then BCD->CDE (1/2).
+    Test.@test Mycelia.Rhizomorph.compute_sequence_likelihood(
+        "ABCDE", graph; k = 3) == -3.0
+    Test.@test Mycelia.Rhizomorph.compute_sequence_likelihood(
+        "ABCX", graph; k = 3) == log2(0.75)
+    Test.@test Mycelia.Rhizomorph.compute_sequence_likelihood(
+        "WWWX", graph; k = 3) == 0.0
+
+    # Undirected edges are stored once, with the smaller vertex code as the
+    # source. Insertion order C, A, B assigns those codes, so the stored edges
+    # are C->A (5), C->B (3), and A->B (2). "A" is incident to two edges, but
+    # only A->B is stored at A: probability 1, while the reverse of C->A is
+    # 5/2. Summing every neighbor would yield 2/7 and 5/7.
+    undirected = MetaGraphsNext.MetaGraph(
+        Mycelia.Graphs.Graph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0
+    )
+    undirected["C"] = nothing
+    undirected["A"] = nothing
+    undirected["B"] = nothing
+    undirected["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+    undirected["C", "A"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        5.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+    undirected["B", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+    function undirected_reference(src, dst)
+        haskey(undirected, src, dst) || return 0.0
+        edge_weight = undirected[src, dst].weight
+        total = 0.0
+        for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(undirected)
+            edge_src == src || continue
+            total += undirected[edge_src, edge_dst].weight
+        end
+        total == 0.0 && return 0.0
+        return edge_weight / total
+    end
+
+    for (src, dst) in MetaGraphsNext.edge_labels(undirected)
+        got = Mycelia.Rhizomorph._compute_edge_transition_probability(
+            undirected, src, dst)
+        Test.@test got == undirected_reference(src, dst)
+        # The reverse orientation is the same undirected edge. Its numerator is
+        # that edge's weight, and its denominator is the stored-source mass at
+        # the other endpoint, which the neighbor-sum would inflate.
+        reverse_probability = Mycelia.Rhizomorph._compute_edge_transition_probability(
+            undirected, dst, src)
+        Test.@test reverse_probability == undirected_reference(dst, src)
+    end
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "C", "A") == 5.0 / 8.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "C", "B") == 3.0 / 8.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "A", "B") == 1.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "A", "C") == 5.0 / 2.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "B", "A") == 0.0
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "B", "C") == 0.0
+    Test.@test Mycelia.Graphs.ne(undirected) >= 3
+
+    # Payloads that are not StrandWeightedEdgeData contribute weight 1, so two
+    # outgoing edges split the probability in half regardless of the payload.
+    plain = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Int,
+        weight_function = _ -> 0.0,
+        default_weight = 0.0
+    )
+    plain["A"] = nothing
+    plain["B"] = nothing
+    plain["C"] = nothing
+    plain["A", "B"] = 7
+    plain["A", "C"] = 100
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        plain, "A", "B") == 0.5
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        plain, "A", "C") == 0.5
 end
 
 Test.@testset "Generation - temperature control" begin
