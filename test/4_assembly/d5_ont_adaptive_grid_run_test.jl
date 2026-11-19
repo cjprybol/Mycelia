@@ -711,12 +711,12 @@ Test.@testset "D5 grid runner" begin
             Test.@test_skip "temp-root cleanup runs under bash with GNU coreutils on Linux"
         end
         # A requeued job keeps its SLURM_JOB_ID; the restart count keeps each
-        # attempt's evidence in its own directory. A text check on the sbatch only:
-        # it does not run a requeue.
-        sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", "run_d5_grid_nersc.sbatch")
+        # attempt's evidence in its own directory. A text check on the shared task
+        # body only: it does not run a requeue.
+        task_body = joinpath(@__DIR__, "..", "..", "benchmarking", "d5_grid_task.sh")
         Test.@test occursin(
             raw"tmp_evidence/${SLURM_JOB_ID:-$$}.r${SLURM_RESTART_COUNT:-0}",
-            read(sbatch, String))
+            read(task_body, String))
     end
 
     Test.@testset "cell task: needs a prepared read set, never simulates" begin
@@ -741,9 +741,11 @@ Test.@testset "D5 grid runner" begin
                     "error_rate_estimate_diagnostic" => 0.0))
             return rs_dir
         end
-        phase_a(args, root) = run_phase_a(
-            D5OntAdaptiveGridDriver.parse_cli(vcat(["--phase", "A",
-                "--allow-sha-mismatch"], args)), root)
+        phase_a(args,
+            root) = run_phase_a(
+            D5OntAdaptiveGridDriver.parse_cli(vcat(
+                ["--phase", "A",
+                    "--allow-sha-mismatch"], args)), root)
         toy_rs = D5OntAdaptiveGridDriver.toy_read_sets()
 
         mktempdir() do root
@@ -784,9 +786,11 @@ Test.@testset "D5 grid runner" begin
             # Full grid: the remedy names the FULL-grid read-set index and no --toy.
             # ONT 95%/10x Lambda seed 42 is read set 24 (24 ONT 90% read sets first).
             alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy = false)
-            j = findfirst(c -> D5OntAdaptiveGridDriver.read_set_id(
-                D5OntAdaptiveGridDriver.read_set_of(c)) ==
-                               "ont__id95__cov10x__Lambda__seed42", alone) - 1
+            j = findfirst(
+                c -> D5OntAdaptiveGridDriver.read_set_id(
+                    D5OntAdaptiveGridDriver.read_set_of(c)) ==
+                     "ont__id95__cov10x__Lambda__seed42",
+                alone) - 1
             msg = error_message(() -> phase_a(["--cell-index", string(j)], root))
             Test.@test msg !== nothing && occursin("is not prepared", msg)
             Test.@test occursin("--read-set-index 24 --skip-iterative)", msg)
@@ -862,152 +866,161 @@ Test.@testset "D5 grid runner" begin
         Test.@test length(expected_cells(false, true)) == 1008 + 96 + 336 + 144 + 48
     end
 
-    Test.@testset "sbatch full array requires D5_FULL=1; default is the toy" begin
-        sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", "run_d5_grid_nersc.sbatch")
-        lines = readlines(sbatch)
-        directives = filter(line -> startswith(line, "#SBATCH"), lines)
-        Test.@test count(d -> occursin("--array=0-2", d), directives) == 1
-        Test.@test !any(d -> occursin("0-95", d), directives)
-        if Sys.which("bash") === nothing
-            Test.@test_skip "bash unavailable"
-        else
-            # No D5_OUTDIR: a refused array exits in the gate, and an allowed
-            # array dies on the unbound-variable check. Neither path reaches
-            # module load, mkdir, or mktemp.
-            function run_gate(; extra = Dict{String, String}())
-                env = Dict{String, String}(
-                    "PATH" => get(ENV, "PATH", "/usr/bin"),
-                    "HOME" => homedir(),
-                    "D5_FULL" => "0")
-                merge!(env, extra)
-                out = IOBuffer()
-                err = IOBuffer()
-                proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
-                    stdout = out, stderr = err))
-                return (; code = proc.exitcode,
-                    log = String(take!(out)) * String(take!(err)))
-            end
-            refused = run_gate(;
-                extra = Dict(
-                "SLURM_ARRAY_TASK_ID" => "0", "SLURM_ARRAY_TASK_MAX" => "95"))
-            Test.@test refused.code == 1
-            Test.@test occursin("D5_FULL=1", refused.log)
-            Test.@test occursin("outside the toy", refused.log)
-            Test.@test !occursin("set D5_OUTDIR", refused.log)
-            # A task id past the toy is refused even when the max is unset.
-            past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "5"))
-            Test.@test past.code == 1 && occursin("outside the toy", past.log)
-            # D5_FULL must be exactly 1.
-            almost = run_gate(;
-                extra = Dict(
-                "D5_FULL" => "true", "SLURM_ARRAY_TASK_MAX" => "95"))
-            Test.@test almost.code == 1 && occursin("outside the toy", almost.log)
-            garbage = run_gate(; extra = Dict("SLURM_ARRAY_TASK_MAX" => "abc"))
-            Test.@test garbage.code == 1 && occursin("non-negative integers", garbage.log)
-            # Toy max, and an approved full array, both pass the gate and stop
-            # on the missing output root.
-            toy = run_gate(;
-                extra = Dict(
-                "SLURM_ARRAY_TASK_ID" => "2", "SLURM_ARRAY_TASK_MAX" => "2"))
-            Test.@test toy.code == 1 && occursin("set D5_OUTDIR", toy.log)
-            Test.@test !occursin("outside the toy", toy.log)
-            approved = run_gate(;
-                extra = Dict(
-                "D5_FULL" => "1", "SLURM_ARRAY_TASK_ID" => "95",
-                "SLURM_ARRAY_TASK_MAX" => "95"))
-            Test.@test approved.code == 1 && occursin("set D5_OUTDIR", approved.log)
-            Test.@test !occursin("outside the toy", approved.log)
-            # Cell tasks: the toy has 4 :iterative cells, so 0-3 pass and 4 does not.
-            cells_toy = run_gate(;
-                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "3",
-                "SLURM_ARRAY_TASK_MAX" => "3"))
-            Test.@test cells_toy.code == 1 && occursin("set D5_OUTDIR", cells_toy.log)
-            cells_past = run_gate(;
-                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "0",
-                "SLURM_ARRAY_TASK_MAX" => "719"))
-            Test.@test cells_past.code == 1 && occursin("outside the toy", cells_past.log)
-            Test.@test occursin("D5_PHASE=A-cells", cells_past.log)
-            # The boundary itself: cell task 4 is the first index past the toy.
-            cells_four = run_gate(;
-                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "4",
-                "SLURM_ARRAY_TASK_MAX" => "4"))
-            Test.@test cells_four.code == 1 && occursin("outside the toy", cells_four.log)
-            # Read-set tasks keep the 0-2 toy: index 3 is refused there.
-            rs_past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "3"))
-            Test.@test rs_past.code == 1 && occursin("outside the toy", rs_past.log)
-            bad = run_gate(; extra = Dict("D5_PHASE" => "cells"))
-            Test.@test bad.code == 1 && occursin("D5_PHASE must be A, A-cells", bad.log)
-            # An unknown phase is refused even on an approved (D5_FULL=1) array.
-            bad_full = run_gate(; extra = Dict("D5_PHASE" => "cells", "D5_FULL" => "1"))
-            Test.@test bad_full.code == 1 &&
-                       occursin("D5_PHASE must be A, A-cells", bad_full.log)
-        end
-        # The phase -> runner argv mapping, end to end through the real sbatch:
-        # a fake `julia` records its arguments and a fake `module` does nothing.
-        # GNU coreutils (mktemp --directory, realpath, rm --recursive), so Linux.
-        if !Sys.islinux() || Sys.which("bash") === nothing
-            Test.@test_skip "sbatch argv check needs Linux and bash"
-        else
-            mktempdir() do dir
-                bin = mkpath(joinpath(dir, "bin"))
-                argv_file = joinpath(dir, "argv.txt")
-                write(joinpath(bin, "julia"),
-                    "#!/bin/bash\n" *
-                    "if [[ \"\${1:-}\" == \"--version\" ]]; then echo fake; exit 0; fi\n" *
-                    "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n")
-                write(joinpath(bin, "module"), "#!/bin/bash\nexit 0\n")
-                chmod(joinpath(bin, "julia"), 0o755)
-                chmod(joinpath(bin, "module"), 0o755)
-                function runner_argv(phase, task; d5_args = "--toy")
-                    rm(argv_file; force = true)
-                    out = mkpath(joinpath(dir, "out_$(phase)_$(task)"))
+    # Both site wrappers source the same task body (d5_grid_task.sh); each is
+    # exercised end to end, so a wrapper that sources the wrong file, or none,
+    # fails here.
+    for wrapper in ("run_d5_grid_nersc.sbatch", "run_d5_grid_lrc.sbatch")
+        Test.@testset "sbatch full array requires D5_FULL=1; default is the toy ($(wrapper))" begin
+            sbatch = joinpath(@__DIR__, "..", "..", "benchmarking", wrapper)
+            lines = readlines(sbatch)
+            directives = filter(line -> startswith(line, "#SBATCH"), lines)
+            Test.@test count(d -> occursin("--array=0-2", d), directives) == 1
+            Test.@test !any(d -> occursin("0-95", d), directives)
+            if Sys.which("bash") === nothing
+                Test.@test_skip "bash unavailable"
+            else
+                # No D5_OUTDIR: a refused array exits in the gate, and an allowed
+                # array dies on the unbound-variable check. Neither path reaches
+                # module load, mkdir, or mktemp.
+                function run_gate(; extra = Dict{String, String}())
                     env = Dict{String, String}(
-                        "PATH" => bin * ":" * get(ENV, "PATH", "/usr/bin"),
-                        "HOME" => homedir(), "D5_FULL" => "0", "D5_PHASE" => phase,
-                        "D5_ARGS" => d5_args, "D5_OUTDIR" => out,
-                        "D5_TMPDIR" => mkpath(joinpath(dir, "tmp")),
-                        "D5_FAKE_ARGV" => argv_file, "D5_PROC_CGROUP" => "/nonexistent",
-                        "SLURM_SUBMIT_DIR" => dirname(sbatch),
-                        "SLURM_ARRAY_TASK_ID" => string(task),
-                        "SLURM_ARRAY_TASK_MAX" => string(task))
-                    log = IOBuffer()
+                        "PATH" => get(ENV, "PATH", "/usr/bin"),
+                        "HOME" => homedir(),
+                        "D5_FULL" => "0")
+                    merge!(env, extra)
+                    out = IOBuffer()
+                    err = IOBuffer()
                     proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
-                        stdout = log, stderr = log))
-                    argv = isfile(argv_file) ? readlines(argv_file) : String[]
-                    return (; code = proc.exitcode, argv, log = String(take!(log)))
+                        stdout = out, stderr = err))
+                    return (; code = proc.exitcode,
+                        log = String(take!(out)) * String(take!(err)))
                 end
-                flag_value(argv, flag) =
-                    let i = findfirst(==(flag), argv)
-                        i === nothing ? nothing : argv[i + 1]
+                refused = run_gate(;
+                    extra = Dict(
+                    "SLURM_ARRAY_TASK_ID" => "0", "SLURM_ARRAY_TASK_MAX" => "95"))
+                Test.@test refused.code == 1
+                Test.@test occursin("D5_FULL=1", refused.log)
+                Test.@test occursin("outside the toy", refused.log)
+                Test.@test !occursin("set D5_OUTDIR", refused.log)
+                # A task id past the toy is refused even when the max is unset.
+                past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "5"))
+                Test.@test past.code == 1 && occursin("outside the toy", past.log)
+                # D5_FULL must be exactly 1.
+                almost = run_gate(;
+                    extra = Dict(
+                    "D5_FULL" => "true", "SLURM_ARRAY_TASK_MAX" => "95"))
+                Test.@test almost.code == 1 && occursin("outside the toy", almost.log)
+                garbage = run_gate(; extra = Dict("SLURM_ARRAY_TASK_MAX" => "abc"))
+                Test.@test garbage.code == 1 &&
+                           occursin("non-negative integers", garbage.log)
+                # Toy max, and an approved full array, both pass the gate and stop
+                # on the missing output root.
+                toy = run_gate(;
+                    extra = Dict(
+                    "SLURM_ARRAY_TASK_ID" => "2", "SLURM_ARRAY_TASK_MAX" => "2"))
+                Test.@test toy.code == 1 && occursin("set D5_OUTDIR", toy.log)
+                Test.@test !occursin("outside the toy", toy.log)
+                approved = run_gate(;
+                    extra = Dict(
+                    "D5_FULL" => "1", "SLURM_ARRAY_TASK_ID" => "95",
+                    "SLURM_ARRAY_TASK_MAX" => "95"))
+                Test.@test approved.code == 1 && occursin("set D5_OUTDIR", approved.log)
+                Test.@test !occursin("outside the toy", approved.log)
+                # Cell tasks: the toy has 4 :iterative cells, so 0-3 pass and 4 does not.
+                cells_toy = run_gate(;
+                    extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "3",
+                    "SLURM_ARRAY_TASK_MAX" => "3"))
+                Test.@test cells_toy.code == 1 && occursin("set D5_OUTDIR", cells_toy.log)
+                cells_past = run_gate(;
+                    extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "0",
+                    "SLURM_ARRAY_TASK_MAX" => "719"))
+                Test.@test cells_past.code == 1 &&
+                           occursin("outside the toy", cells_past.log)
+                Test.@test occursin("D5_PHASE=A-cells", cells_past.log)
+                # The boundary itself: cell task 4 is the first index past the toy.
+                cells_four = run_gate(;
+                    extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "4",
+                    "SLURM_ARRAY_TASK_MAX" => "4"))
+                Test.@test cells_four.code == 1 &&
+                           occursin("outside the toy", cells_four.log)
+                # Read-set tasks keep the 0-2 toy: index 3 is refused there.
+                rs_past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "3"))
+                Test.@test rs_past.code == 1 && occursin("outside the toy", rs_past.log)
+                bad = run_gate(; extra = Dict("D5_PHASE" => "cells"))
+                Test.@test bad.code == 1 && occursin("D5_PHASE must be A, A-cells", bad.log)
+                # An unknown phase is refused even on an approved (D5_FULL=1) array.
+                bad_full = run_gate(; extra = Dict("D5_PHASE" => "cells", "D5_FULL" => "1"))
+                Test.@test bad_full.code == 1 &&
+                           occursin("D5_PHASE must be A, A-cells", bad_full.log)
+            end
+            # The phase -> runner argv mapping, end to end through the real sbatch:
+            # a fake `julia` records its arguments and a fake `module` does nothing.
+            # GNU coreutils (mktemp --directory, realpath, rm --recursive), so Linux.
+            if !Sys.islinux() || Sys.which("bash") === nothing
+                Test.@test_skip "sbatch argv check needs Linux and bash"
+            else
+                mktempdir() do dir
+                    bin = mkpath(joinpath(dir, "bin"))
+                    argv_file = joinpath(dir, "argv.txt")
+                    write(joinpath(bin, "julia"),
+                        "#!/bin/bash\n" *
+                        "if [[ \"\${1:-}\" == \"--version\" ]]; then echo fake; exit 0; fi\n" *
+                        "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n")
+                    write(joinpath(bin, "module"), "#!/bin/bash\nexit 0\n")
+                    chmod(joinpath(bin, "julia"), 0o755)
+                    chmod(joinpath(bin, "module"), 0o755)
+                    function runner_argv(phase, task; d5_args = "--toy")
+                        rm(argv_file; force = true)
+                        out = mkpath(joinpath(dir, "out_$(phase)_$(task)"))
+                        env = Dict{String, String}(
+                            "PATH" => bin * ":" * get(ENV, "PATH", "/usr/bin"),
+                            "HOME" => homedir(), "D5_FULL" => "0", "D5_PHASE" => phase,
+                            "D5_ARGS" => d5_args, "D5_OUTDIR" => out,
+                            "D5_TMPDIR" => mkpath(joinpath(dir, "tmp")),
+                            "D5_FAKE_ARGV" => argv_file, "D5_PROC_CGROUP" => "/nonexistent",
+                            "SLURM_SUBMIT_DIR" => dirname(sbatch),
+                            "SLURM_ARRAY_TASK_ID" => string(task),
+                            "SLURM_ARRAY_TASK_MAX" => string(task))
+                        log = IOBuffer()
+                        proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
+                            stdout = log, stderr = log))
+                        argv = isfile(argv_file) ? readlines(argv_file) : String[]
+                        return (; code = proc.exitcode, argv, log = String(take!(log)))
                     end
-                a = runner_argv("A", 1)
-                Test.@test a.code == 0
-                Test.@test a.argv[1:4] ==
-                           ["--project=..", "d5_ont_adaptive_grid_run.jl", "--phase", "A"]
-                Test.@test flag_value(a.argv, "--read-set-index") == "1"
-                Test.@test "--skip-iterative" in a.argv && "--toy" in a.argv
-                Test.@test !("--cell-index" in a.argv)
-                cells = runner_argv("A-cells", 2)
-                Test.@test cells.code == 0
-                Test.@test cells.argv[3:4] == ["--phase", "A"]
-                Test.@test flag_value(cells.argv, "--cell-index") == "2"
-                Test.@test !("--read-set-index" in cells.argv)
-                Test.@test !("--skip-iterative" in cells.argv)
-                Test.@test !any(occursin("A-cells"), cells.argv)
-                b = runner_argv("B", 0; d5_args = "--toy --tau 0.8 --tau-hat 0.6")
-                Test.@test b.code == 0 && b.argv[3:4] == ["--phase", "B"]
-                Test.@test flag_value(b.argv, "--read-set-index") == "0"
-                Test.@test !("--skip-iterative" in b.argv)
-                m = runner_argv("merge", 0)
-                Test.@test m.code == 0 && m.argv[3:4] == ["--phase", "merge"]
-                Test.@test !any(f -> f in m.argv,
-                    ("--read-set-index", "--cell-index", "--skip-iterative"))
-                # Every task hands the runner a node-local temp root and the
-                # resolved output root.
-                Test.@test startswith(flag_value(cells.argv, "--tmp-dir"),
-                    realpath(joinpath(dir, "tmp")))
-                Test.@test flag_value(cells.argv, "--output-dir") ==
-                           realpath(joinpath(dir, "out_A-cells_2"))
+                    flag_value(argv, flag) =
+                        let i = findfirst(==(flag), argv)
+                            i === nothing ? nothing : argv[i + 1]
+                        end
+                    a = runner_argv("A", 1)
+                    Test.@test a.code == 0
+                    Test.@test a.argv[1:4] ==
+                               [
+                        "--project=..", "d5_ont_adaptive_grid_run.jl", "--phase", "A"]
+                    Test.@test flag_value(a.argv, "--read-set-index") == "1"
+                    Test.@test "--skip-iterative" in a.argv && "--toy" in a.argv
+                    Test.@test !("--cell-index" in a.argv)
+                    cells = runner_argv("A-cells", 2)
+                    Test.@test cells.code == 0
+                    Test.@test cells.argv[3:4] == ["--phase", "A"]
+                    Test.@test flag_value(cells.argv, "--cell-index") == "2"
+                    Test.@test !("--read-set-index" in cells.argv)
+                    Test.@test !("--skip-iterative" in cells.argv)
+                    Test.@test !any(occursin("A-cells"), cells.argv)
+                    b = runner_argv("B", 0; d5_args = "--toy --tau 0.8 --tau-hat 0.6")
+                    Test.@test b.code == 0 && b.argv[3:4] == ["--phase", "B"]
+                    Test.@test flag_value(b.argv, "--read-set-index") == "0"
+                    Test.@test !("--skip-iterative" in b.argv)
+                    m = runner_argv("merge", 0)
+                    Test.@test m.code == 0 && m.argv[3:4] == ["--phase", "merge"]
+                    Test.@test !any(f -> f in m.argv,
+                        ("--read-set-index", "--cell-index", "--skip-iterative"))
+                    # Every task hands the runner a node-local temp root and the
+                    # resolved output root.
+                    Test.@test startswith(flag_value(cells.argv, "--tmp-dir"),
+                        realpath(joinpath(dir, "tmp")))
+                    Test.@test flag_value(cells.argv, "--output-dir") ==
+                               realpath(joinpath(dir, "out_A-cells_2"))
+                end
             end
         end
     end
