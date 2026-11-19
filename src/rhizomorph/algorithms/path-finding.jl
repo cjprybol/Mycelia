@@ -1314,6 +1314,13 @@ function _viterbi_state_sort_key(state)
     return (string(state[1]), Int(state[2]))
 end
 
+# Graph Viterbi frontier prune. Stays separate from `Mycelia._prune_correction_beam`
+# in `src/viterbi-next.jl` (td-63vh): this helper is typed to
+# `(vertex, StrandOrientation)`, backpointers are `(predecessor, transition_prob)`,
+# `beam_log_threshold` drops states more than that many nats below the best
+# score, and equal scores rank by `_viterbi_state_sort_key` (vertex string, then
+# strand). The correction helper is generic over state, width-only, and ranks
+# ties by `hash(state)`.
 function _prune_viterbi_beam(
         scores::Dict{Tuple{T, StrandOrientation}, Float64},
         predecessors::Dict{
