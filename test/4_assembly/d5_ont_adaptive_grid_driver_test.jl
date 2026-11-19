@@ -417,6 +417,71 @@ Test.@testset "D5 grid driver" begin
         Test.@test a.read_set_index == 5 && a.tau === nothing
         Test.@test D5OntAdaptiveGridDriver.parse_cli(["--list"]).phase === :list
     end
+
+    Test.@testset "cell tasks: every Phase A cell runs in exactly one task" begin
+        D = D5OntAdaptiveGridDriver
+        for toy in (false, true)
+            alone = D.cells_run_alone(; toy)
+            sets = toy ? D.toy_read_sets() : D.read_sets()
+            phase_a = [c for rs in sets for c in D.phase_a_cells_of(rs; toy)]
+            in_read_set_tasks = filter(c -> !D.runs_alone(c), phase_a)
+            # A partition: the two task kinds together cover Phase A, no overlap.
+            Test.@test length(alone) + length(in_read_set_tasks) == length(phase_a)
+            Test.@test isempty(intersect(Set(D.cell_id.(alone)),
+                Set(D.cell_id.(in_read_set_tasks))))
+            Test.@test Set(D.cell_id.(vcat(alone, in_read_set_tasks))) ==
+                       Set(D.cell_id.(phase_a))
+            Test.@test allunique(D.cell_id.(alone))
+            Test.@test all(c -> c.corrector === :iterative, alone)
+            Test.@test all(c -> D.assembler_accepts_k(c.k_policy), alone)
+            # Every :iterative cell the assembler can take runs alone.
+            Test.@test !any(
+                c -> c.corrector === :iterative &&
+                     D.assembler_accepts_k(c.k_policy), in_read_set_tasks)
+        end
+        alone = D.cells_run_alone(; toy = false)
+        # 504 ONT grid + 48 assemblable validation + 168 Illumina :iterative cells.
+        Test.@test length(alone) == 720
+        Test.@test count(c -> c.stratum === :grid, alone) == 504
+        Test.@test count(c -> c.stratum === :validation, alone) == 48
+        Test.@test count(c -> c.stratum === :illumina_control, alone) == 168
+        # The order follows the read-set array, so cell tasks sharing a read set
+        # are adjacent and a read set's index is recoverable from its cell.
+        rs_order = [findfirst(==(D.read_set_of(c)), D.read_sets()) for c in alone]
+        Test.@test issorted(rs_order)
+        toy_ids = D.cell_id.(D.cells_run_alone(; toy = true))
+        Test.@test toy_ids == [
+            "ont__id95__cov10x__Lambda__seed42__iterative__k21__grid__scalable",
+            "ont__id95__cov10x__Lambda__seed42__iterative__k31__grid__scalable",
+            "ont__id99__cov100x__Lambda__seed42__iterative__k29__validation__scalable",
+            "illumina__cov30x__Lambda__seed42__iterative__k21__illumina_control__scalable"]
+    end
+
+    Test.@testset "CLI: --cell-index and --skip-iterative" begin
+        D = D5OntAdaptiveGridDriver
+        c = D.parse_cli(["--phase", "A", "--cell-index", "7"])
+        Test.@test c.cell_index == 7 && c.read_set_index === nothing && !c.skip_iterative
+        r = D.parse_cli(["--phase", "A", "--read-set-index", "3", "--skip-iterative"])
+        Test.@test r.read_set_index == 3 && r.skip_iterative && r.cell_index === nothing
+        Test.@test D.parse_cli(["--phase", "A", "--read-set-index", "3"]).skip_iterative ==
+                   false
+        for (args, needle) in (
+            (["--phase", "A", "--cell-index", "1", "--read-set-index", "1"],
+                "select different task kinds"),
+            (["--phase", "B", "--tau", "0.8", "--tau-hat", "0.6", "--cell-index", "1"],
+                "--cell-index is for --phase A only"),
+            (["--phase", "A", "--cell-index", "1", "--skip-iterative"],
+                "--skip-iterative applies to --phase A --read-set-index only"),
+            (
+                ["--phase", "B", "--tau", "0.8", "--tau-hat", "0.6", "--read-set-index",
+                    "1", "--skip-iterative"],
+                "--skip-iterative applies to --phase A --read-set-index only"),
+            (["--phase", "A", "--cell-index", "1", "--cell-index", "2"],
+                "--cell-index given more than once"))
+            msg = error_message(() -> D.parse_cli(args))
+            Test.@test msg !== nothing && occursin(needle, msg)
+        end
+    end
 end
 
 end # module

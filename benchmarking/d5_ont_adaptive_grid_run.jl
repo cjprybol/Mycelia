@@ -4,7 +4,10 @@
 #
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --list
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase A \
-#       --read-set-index <0..95> --output-dir <root>
+#       --read-set-index <0..95> --skip-iterative --output-dir <root>
+#   # then, once that read set is prepared, each :iterative cell alone:
+#   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase A \
+#       --cell-index <0..719> --output-dir <root>
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase merge \
 #       --output-dir <root>
 #   # Only after a human has set tau and tau_hat (lock step 2):
@@ -12,8 +15,10 @@
 #       --tau <x> --tau-hat <y> [--read-set-index i] --output-dir <root>
 #
 # `--toy` restricts every phase to the pre-declared toy subset (3 read sets,
-# 7 cells); point it at its own --output-dir. On Perlmutter use
-# run_d5_grid_nersc.sbatch, one array task per read set. `--tmp-dir` sets the
+# 7 cells); point it at its own --output-dir. Without --skip-iterative a
+# read-set task runs all of its cells itself. On Perlmutter use
+# run_d5_grid_nersc.sbatch: one array of read-set tasks, then one array of cell
+# tasks (an :iterative cell can take most of a day). `--tmp-dir` sets the
 # corrector's temp root (absolute; default <root>/tmp); it must accept
 # renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
 # Run by hand on Perlmutter with --tmp-dir "$(mktemp --directory)".
@@ -235,20 +240,30 @@ function measure_identity(reads_path::AbstractString, ref_path::AbstractString,
 end
 
 """
+A read set whose `readset.json` marker exists, with its reads checked against
+the recorded count; `nothing` when the read set has not been prepared.
+"""
+function load_prepared_read_set(rs, root::AbstractString)
+    rs_dir = joinpath(root, "readsets", D5OntAdaptiveGridDriver.read_set_id(rs))
+    marker = joinpath(rs_dir, "readset.json")
+    isfile(marker) || return nothing
+    meta = JSON.parsefile(marker)
+    records = check_read_count(reduce(vcat, read_records.(meta["reads_paths"])),
+        meta, rs_dir)
+    return (; meta, records)
+end
+
+"""
 Simulate (or reuse) one read set and compute its survival vector once.
 `readset.json` is written LAST, so its presence means the read set is complete;
 anything else in the directory is discarded and regenerated.
 """
 function prepare_read_set(rs, ref, root::AbstractString)
+    prepared = load_prepared_read_set(rs, root)
+    prepared === nothing || return prepared
     rs_id = D5OntAdaptiveGridDriver.read_set_id(rs)
     rs_dir = joinpath(root, "readsets", rs_id)
     marker = joinpath(rs_dir, "readset.json")
-    if isfile(marker)
-        meta = JSON.parsefile(marker)
-        records = check_read_count(reduce(vcat, read_records.(meta["reads_paths"])),
-            meta, rs_dir)
-        return (; meta, records)
-    end
     isdir(rs_dir) && rm(rs_dir; recursive = true)
     work = joinpath(rs_dir, "work")
     mkpath(work)
@@ -503,7 +518,7 @@ function selected_read_sets(toy::Bool)
 end
 
 function phase_cells(rs, phase::Symbol, toy::Bool)
-    phase === :A && toy && return D5OntAdaptiveGridDriver.toy_cells(rs)
+    phase === :A && return D5OntAdaptiveGridDriver.phase_a_cells_of(rs; toy)
     cells = D5OntAdaptiveGridDriver.cells_for_read_set(rs; phase)
     if toy
         # Toy Phase B covers the adaptive cells of the toy read sets only.
@@ -523,12 +538,23 @@ function read_sets_for(cli)
     return [sets[cli.read_set_index + 1]]
 end
 
+"""
+Phase A runs as two kinds of array task:
+
+  * read-set task (`--read-set-index i`): prepare the read set (simulate, measure
+    identity, survival on raw reads) and run its cells. With `--skip-iterative`
+    it leaves the `cells_run_alone` cells to cell tasks.
+  * cell task (`--cell-index j`): one `cells_run_alone` cell, on a read set that
+    its read-set task has already prepared. A cell task never simulates: several
+    cell tasks share each read set, and each would otherwise rebuild it.
+"""
 function run_phase_a(cli, root)
-    cli.read_set_index === nothing &&
-        error("--phase A requires --read-set-index (one read set per array task)")
+    cli.read_set_index === nothing && cli.cell_index === nothing &&
+        error("--phase A requires --read-set-index or --cell-index (one task each)")
     base = run_context_base()
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
+    cli.cell_index === nothing || return [run_cell_task(cli, root, base)]
     statuses = String[]
     for rs in read_sets_for(cli)
         println("=== read set $(D5OntAdaptiveGridDriver.read_set_id(rs)) ===")
@@ -536,14 +562,50 @@ function run_phase_a(cli, root)
         prepared = prepare_read_set(rs, ref, root)
         context = cell_context(prepared.meta, base)
         for cell in phase_cells(rs, :A, cli.toy)
-            push!(statuses,
-                run_or_resume(root, cell, context; phase = :A) do cell_dir
-                    assemble_cell(cell, Int(cell.k_policy), prepared.records, ref,
-                        cell_dir, context; phase = :A)
-                end)
+            if cli.skip_iterative && D5OntAdaptiveGridDriver.runs_alone(cell)
+                println("  deferred  $(D5OntAdaptiveGridDriver.cell_id(cell)): cell task")
+                continue
+            end
+            push!(statuses, run_phase_a_cell(root, cell, prepared, ref, context))
         end
     end
     return statuses
+end
+
+function run_phase_a_cell(root, cell, prepared, ref, context)
+    run_or_resume(root, cell, context; phase = :A) do cell_dir
+        assemble_cell(cell, Int(cell.k_policy), prepared.records, ref, cell_dir,
+            context; phase = :A)
+    end
+end
+
+"""The `cells_run_alone` cell that `--cell-index` (0-based) names."""
+function select_cell(cli)
+    cells = D5OntAdaptiveGridDriver.cells_run_alone(; toy = cli.toy)
+    (0 <= cli.cell_index < length(cells)) ||
+        error("--cell-index $(cli.cell_index) out of range 0:$(length(cells) - 1)")
+    return cells[cli.cell_index + 1]
+end
+
+"""
+Run one cell task. Refuses (exit 1, no checkpoint written) when the cell's read
+set is not prepared, so the cell stays `absent` in a merge instead of becoming
+an error row.
+"""
+function run_cell_task(cli, root, base)
+    cell = select_cell(cli)
+    rs = D5OntAdaptiveGridDriver.read_set_of(cell)
+    rs_id = D5OntAdaptiveGridDriver.read_set_id(rs)
+    println("=== cell $(D5OntAdaptiveGridDriver.cell_id(cell)) (read set $(rs_id)) ===")
+    prepared = load_prepared_read_set(rs, root)
+    if prepared === nothing
+        rs_index = findfirst(==(rs), selected_read_sets(cli.toy)) - 1
+        error("read set $(rs_id) is not prepared under $(root). Run its read-set " *
+              "task first (--phase A --read-set-index $(rs_index) --skip-iterative" *
+              "$(cli.toy ? " --toy" : "")), then resubmit this cell index.")
+    end
+    ref = prepare_reference(rs.organism, joinpath(root, "refs"))
+    return run_phase_a_cell(root, cell, prepared, ref, cell_context(prepared.meta, base))
 end
 
 """
@@ -1000,7 +1062,13 @@ function print_counts(toy::Bool)
         infeasible)
     sets = selected_read_sets(toy)
     println("read sets$(toy ? " (toy)" : ""): $(length(sets)) -> --array=0-$(length(sets) - 1)")
+    alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy)
+    println("Phase A cells run alone (:iterative, --cell-index)$(toy ? " (toy)" : ""): ",
+        "$(length(alone)) -> --array=0-$(length(alone) - 1)")
     if toy
+        for (j, c) in enumerate(alone)
+            println("  cell $(j - 1): $(D5OntAdaptiveGridDriver.cell_id(c))")
+        end
         for rs in sets
             println("  $(D5OntAdaptiveGridDriver.read_set_id(rs)): ",
                 join(

@@ -228,6 +228,37 @@ function toy_cells(read_set)
     return filter(keep, cells_for_read_set(read_set; phase = :A))
 end
 
+"""Phase A cells of one read set: the toy's selection when `toy`, else all of them."""
+function phase_a_cells_of(read_set; toy::Bool)
+    toy ? toy_cells(read_set) : cells_for_read_set(read_set; phase = :A)
+end
+
+"""
+    runs_alone(cell) -> Bool
+
+True for a Phase A cell that gets its own array task: the `:iterative` corrector
+at a k the assembler accepts. One such cell took 8.9 h (Lambda, ONT 99%/100x, toy
+job 61473595_1), so a read set's cells cannot share one 48 h task. Every other
+Phase A cell (`:none`, or a k the assembler rejects) runs in its read set's task.
+"""
+function runs_alone(cell)
+    cell.corrector === :iterative && cell.k_policy !== :adaptive &&
+        assembler_accepts_k(cell.k_policy)
+end
+
+"""
+    cells_run_alone(; toy) -> Vector{NamedTuple}
+
+Every Phase A cell for which `runs_alone` holds, in a fixed order: read sets in
+array order, then cells in enumeration order. `--cell-index j` (0-based) runs
+`cells_run_alone(; toy)[j + 1]`; the read-set task with `--skip-iterative` runs
+the rest, so every Phase A cell is run by exactly one task.
+"""
+function cells_run_alone(; toy::Bool)
+    sets = toy ? toy_read_sets() : read_sets()
+    return [c for rs in sets for c in phase_a_cells_of(rs; toy) if runs_alone(c)]
+end
+
 # === Survival ===
 
 """
@@ -572,15 +603,17 @@ end
 
 # === CLI parsing (pure, so the tau requirement is testable) ===
 
-const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--tau", "--tau-hat",
-    "--output-dir", "--tmp-dir")
+const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--cell-index", "--tau",
+    "--tau-hat", "--output-dir", "--tmp-dir")
 const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
-    "--allow-incomplete", "--allow-mixed-code")
+    "--allow-incomplete", "--allow-mixed-code", "--skip-iterative")
 
 """
     parse_cli(args) -> NamedTuple
 
-`--phase A --read-set-index i` | `--phase B --tau x --tau-hat y` |
+`--phase A --read-set-index i [--skip-iterative]` | `--phase A --cell-index j`
+(one `cells_run_alone` cell; its read set must already be prepared) |
+`--phase B --tau x --tau-hat y` |
 `--phase merge` | `--list`; plus `--output-dir` (non-empty), `--tmp-dir`
 (phases A/B: the corrector's temp root, absolute, default `<output-dir>/tmp`),
 `--toy`,
@@ -631,6 +664,17 @@ function parse_cli(args::AbstractVector{<:AbstractString})
         error("--phase must be A, B or merge, got $(repr(phase_raw))")
     index_raw = value("--read-set-index")
     read_set_index = index_raw === nothing ? nothing : parse(Int, index_raw)
+    cell_raw = value("--cell-index")
+    cell_index = cell_raw === nothing ? nothing : parse(Int, cell_raw)
+    skip_iterative = "--skip-iterative" in args
+    if cell_index !== nothing
+        phase === :A || error("--cell-index is for --phase A only")
+        read_set_index === nothing ||
+            error("--cell-index and --read-set-index select different task kinds; " *
+                  "give one")
+    end
+    skip_iterative && !(phase === :A && read_set_index !== nothing) &&
+        error("--skip-iterative applies to --phase A --read-set-index only")
     tau_raw = value("--tau")
     tau_hat_raw = value("--tau-hat")
     if phase === :B && (tau_raw === nothing || tau_hat_raw === nothing)
@@ -643,7 +687,8 @@ function parse_cli(args::AbstractVector{<:AbstractString})
     for (name, t) in (("--tau", tau), ("--tau-hat", tau_hat))
         t === nothing || (0.0 <= t <= 1.0) || error("$(name) must be in [0, 1], got $(t)")
     end
-    return (; phase, read_set_index, tau, tau_hat, toy = "--toy" in args,
+    return (; phase, read_set_index, cell_index, skip_iterative, tau, tau_hat,
+        toy = "--toy" in args,
         output_dir = path_value("--output-dir"), tmp_dir = path_value("--tmp-dir"),
         allow_sha_mismatch = "--allow-sha-mismatch" in args,
         replan = "--replan" in args, allow_incomplete = "--allow-incomplete" in args,

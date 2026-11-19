@@ -719,6 +719,48 @@ Test.@testset "D5 grid runner" begin
             read(sbatch, String))
     end
 
+    Test.@testset "cell task: needs a prepared read set, never simulates" begin
+        D = D5OntAdaptiveGridDriver
+        mktempdir() do root
+            cli = D.parse_cli(["--phase", "A", "--cell-index", "2", "--toy"])
+            cell = select_cell(cli)
+            Test.@test D.cell_id(cell) ==
+                       "ont__id99__cov100x__Lambda__seed42__iterative__k29__validation__scalable"
+            rs = D.read_set_of(cell)
+            Test.@test load_prepared_read_set(rs, root) === nothing
+            msg = error_message(() -> run_cell_task(cli, root, run_context_base()))
+            Test.@test msg !== nothing && occursin("is not prepared", msg)
+            # The toy's 99%/100x read set is read-set index 1.
+            Test.@test occursin("--read-set-index 1 --skip-iterative --toy", msg)
+            # Refusing writes nothing: the cell stays absent in a merge.
+            Test.@test !isfile(checkpoint_path(root, cell))
+            Test.@test !isdir(joinpath(root, "readsets"))
+            out = error_message(() -> select_cell(D.parse_cli(
+                ["--phase", "A", "--cell-index", "4", "--toy"])))
+            Test.@test out !== nothing && occursin("--cell-index 4 out of range 0:3", out)
+
+            # A prepared read set loads with its recorded read count checked.
+            rs_dir = joinpath(root, "readsets", D.read_set_id(rs))
+            mkpath(rs_dir)
+            reads = joinpath(rs_dir, "reads.fq")
+            write(reads, "@r1\nACGTACGT\n+\nIIIIIIII\n@r2\nTTGGCCAA\n+\nIIIIIIII\n")
+            meta = Dict("read_set_id" => D.read_set_id(rs), "reads_paths" => [reads],
+                "n_reads" => 2)
+            D.save_json_atomically(joinpath(rs_dir, "readset.json"), meta)
+            prepared = load_prepared_read_set(rs, root)
+            Test.@test length(prepared.records) == 2
+            D.save_json_atomically(joinpath(rs_dir, "readset.json"),
+                merge(meta, Dict("n_reads" => 3)))
+            msg = error_message(() -> load_prepared_read_set(rs, root))
+            Test.@test msg !== nothing && occursin("has 2 reads on disk", msg)
+        end
+        # A read-set task with --skip-iterative leaves exactly these cells out.
+        for rs in D.toy_read_sets()
+            kept = filter(c -> !D.runs_alone(c), phase_cells(rs, :A, true))
+            Test.@test all(c -> c.corrector === :none, kept)
+        end
+    end
+
     Test.@testset "expected cells for the toy and the full grid" begin
         Test.@test length(expected_cells(true, false)) == 7
         Test.@test length(expected_cells(false, false)) == 1008 + 96 + 336
@@ -780,7 +822,30 @@ Test.@testset "D5 grid runner" begin
                 "SLURM_ARRAY_TASK_MAX" => "95"))
             Test.@test approved.code == 1 && occursin("set D5_OUTDIR", approved.log)
             Test.@test !occursin("outside the toy", approved.log)
+            # Cell tasks: the toy has 4 :iterative cells, so 0-3 pass and 4 does not.
+            cells_toy = run_gate(;
+                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "3",
+                "SLURM_ARRAY_TASK_MAX" => "3"))
+            Test.@test cells_toy.code == 1 && occursin("set D5_OUTDIR", cells_toy.log)
+            cells_past = run_gate(;
+                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "0",
+                "SLURM_ARRAY_TASK_MAX" => "719"))
+            Test.@test cells_past.code == 1 && occursin("outside the toy", cells_past.log)
+            Test.@test occursin("D5_PHASE=A-cells", cells_past.log)
+            # Read-set tasks keep the 0-2 toy: index 3 is refused there.
+            rs_past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "3"))
+            Test.@test rs_past.code == 1 && occursin("outside the toy", rs_past.log)
+            bad = run_gate(; extra = Dict("D5_PHASE" => "cells"))
+            Test.@test bad.code == 1 && occursin("D5_PHASE must be A, A-cells", bad.log)
         end
+        # The phase -> runner flag mapping, as text: no julia runs in this test.
+        text = read(sbatch, String)
+        Test.@test occursin(
+            raw"A) INDEX_ARGS=(--read-set-index \"${TASK_INDEX}\" --skip-iterative)",
+            text)
+        Test.@test occursin(
+            raw"A-cells) RUNNER_PHASE=A; INDEX_ARGS=(--cell-index \"${TASK_INDEX}\")",
+            text)
     end
 end
 
