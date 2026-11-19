@@ -1,0 +1,204 @@
+[ Info: corrector=:iterative is running with sequencing_tech=:illumina (substitution-only correction). For long / indel-prone reads set sequencing_tech=:nanopore or :pacbio_clr to enable indel-aware correction.
+[ Info: iterative corrector: short read (61 observations) on a dense graph (7372 vertices > 256); bounding Viterbi beam_width=256 to keep the retained frontier O(1) instead of O(n_vertices) per depth (td-35ux). Pass beam_width=typemax(Int) to force exact.
+[ Info: iterative corrector: short read (47 observations) on a dense graph (7372 vertices > 256); bounding Viterbi beam_width=256 to keep the retained frontier O(1) instead of O(n_vertices) per depth (td-35ux). Pass beam_width=typemax(Int) to force exact.
+[ Info: iterative corrector: short read (490 observations) on a dense graph (7372 vertices > 256); bounding Viterbi beam_width=256 to keep the retained frontier O(1) instead of O(n_vertices) per depth (td-35ux). Pass beam_width=typemax(Int) to force exact.
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 14
+│   substitution_length_divergences = 3
+│   fraction = 0.214
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 14
+│   substitution_length_divergences = 3
+│   fraction = 0.214
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 14
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 14
+│   substitution_length_divergences = 3
+│   fraction = 0.214
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 14
+│   window_anchor_rejections = 2
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 14
+│   substitution_length_divergences = 3
+│   fraction = 0.214
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 20
+│   fraction = 0.167
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 4
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 25
+│   fraction = 0.208
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 3
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 31
+│   fraction = 0.258
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 2
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 33
+│   fraction = 0.275
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 40
+│   fraction = 0.333
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 40
+│   fraction = 0.333
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 120
+│   substitution_length_divergences = 60
+│   fraction = 0.5
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 120
+│   substitution_length_divergences = 51
+│   fraction = 0.425
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 120
+│   substitution_length_divergences = 70
+│   fraction = 0.583
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 120
+│   substitution_length_divergences = 72
+│   fraction = 0.6
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 120
+│   substitution_length_divergences = 108
+│   fraction = 0.9
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 120
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 120
+│   substitution_length_divergences = 108
+│   fraction = 0.9
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 3
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 16
+│   fraction = 0.267
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 7
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 20
+│   fraction = 0.333
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 5
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 22
+│   fraction = 0.367
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 5
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 22
+│   fraction = 0.367
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 19
+│   fraction = 0.317
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: substitution decode reconstruction was length-divergent; failed open to the original (uncorrected) read to preserve the length contract.
+│   total_reads = 60
+│   substitution_length_divergences = 20
+│   fraction = 0.333
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5916
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 35
+│   fraction = 0.583
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 32
+│   fraction = 0.533
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 63
+│   fraction = 1.05
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: rejected independently decoded indel window(s) whose terminal overlap did not match the following window's original anchor.
+│   total_reads = 60
+│   window_anchor_rejections = 1
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5866
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 68
+│   fraction = 1.133
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 229
+│   fraction = 3.817
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910
+┌ Warning: iterative corrector: a MAJORITY of substitution decodes this pass were length-divergent and failed open to the original (uncorrected) read — the corrector is mostly pass-through (see the decode-truncation defect), not a working corrector.
+│   total_reads = 60
+│   substitution_length_divergences = 232
+│   fraction = 3.867
+└ @ Mycelia /global/home/groups-sw/pc_mfnanofabio/cjprybol/Mycelia/.worktrees/td-4mbg-fix/src/iterative-assembly.jl:5910

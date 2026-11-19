@@ -309,7 +309,6 @@ function write_threshold_table(out_dir, rows; sweep_dir = SWEEP_DIR)
     return df
 end
 
-
 """
     assert_reference_matches_organism(organism, reference; organisms = ORGANISMS)
 
@@ -321,6 +320,8 @@ script's own INTERPRETATION block reads "genome fraction stays near zero even
 at 80%" as evidence for an assembler defect, so a mismatched reference would
 supply that evidence while looking entirely normal (td-19c7).
 """
+function assert_reference_matches_organism end
+
 function _reference_fasta_header_and_length(path::AbstractString)
     isfile(path) || error("reference file does not exist: $(path)")
     header = ""
@@ -376,6 +377,39 @@ function assert_reference_matches_organism(organism, reference; organisms = ORGA
     return nothing
 end
 
+"""
+    rescorable_cells(selected, references) -> Vector
+
+Return the cells that have a `contigs.fasta` and a reference for their
+organism. The two skip predicates used to live only inside the
+`PROGRAM_FILE` entry point, so they could not be pinned by a test.
+"""
+function rescorable_cells(selected, references)
+    return filter(selected) do cell
+        if !isfile(joinpath(cell["cell_dir"], "contigs.fasta"))
+            @warn "contigs missing; skipping" cell = cell["cell_id"]
+            return false
+        end
+        if !haskey(references, cell["organism"])
+            @warn "no reference for organism; skipping cell" organism=cell["organism"] cell=cell["cell_id"]
+            return false
+        end
+        return true
+    end
+end
+
+"""
+    all_selected_cells_unusable(selected, rescorable) -> Bool
+
+True when cells were selected and every one was unusable. That is a
+failure shape, not a no-op: the sweep tree has censored cells worth
+rescoring and this host cannot rescore any of them. The entry point
+exits 1 in this case so a shell driver does not read success.
+"""
+function all_selected_cells_unusable(selected, rescorable)
+    isempty(rescorable) && !isempty(selected)
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     println("=== ONT alignment-threshold diagnostic (td-4e19d.28) ===")
     println("Start: $(Dates.now())")
@@ -420,17 +454,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # contigs are the bulky ones an operator deletes to reclaim space (the
     # .gitignore advertises ~149k contigs for ONT/30x/k=11) while keeping the
     # small JSON checkpoints that put the cell in `selected` in the first place.
-    rescorable = filter(selected) do cell
-        if !isfile(joinpath(cell["cell_dir"], "contigs.fasta"))
-            @warn "contigs missing; skipping" cell = cell["cell_id"]
-            return false
-        end
-        if !haskey(references, cell["organism"])
-            @warn "no reference for organism; skipping cell" organism=cell["organism"] cell=cell["cell_id"]
-            return false
-        end
-        return true
-    end
+    rescorable = rescorable_cells(selected, references)
     length(rescorable) == length(selected) ||
         println("  rescorable after dropping unusable cells: $(length(rescorable))")
 
@@ -440,7 +464,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # gitignored). Without this the script printed only "End: <timestamp>" and
     # exited 0, which a shell driver reads as success. Note the asymmetry it
     # corrects: the isempty(selected) case above already explains itself.
-    if isempty(rescorable) && !isempty(selected)
+    if all_selected_cells_unusable(selected, rescorable)
         println("  (every selected cell was unusable on this host — nothing " *
                 "was rescored and nothing was written)")
         @warn "all $(length(selected)) selected cells were skipped; the sweep " *

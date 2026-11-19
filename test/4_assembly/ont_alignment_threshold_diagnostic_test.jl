@@ -386,12 +386,48 @@ Test.@testset "ONT alignment-threshold diagnostic helpers" begin
 
         # The helper must actually be called on the reference passed to rescore,
         # otherwise a unit-tested function can sit unused next to the old bug.
-        src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
-                "ont_alignment_threshold_diagnostic.jl"), String)
+        src = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking",
+                "ont_alignment_threshold_diagnostic.jl"),
+            String)
         Test.@test occursin("function assert_reference_matches_organism", src)
         Test.@test occursin(r"assert_reference_matches_organism\(\s*organism\s*,\s*references\[organism\]", src)
     end
 
+    Test.@testset "rescorable_cells drops unusable cells and is testable (td-6mzb)" begin
+        # The skip predicates and the all-skipped failure used to live only
+        # inside `if abspath(PROGRAM_FILE) == @__FILE__`, which no test
+        # enters. Extracting them lets both skip reasons, and the
+        # every-cell-skipped failure, be pinned.
+        mktempdir() do dir
+            function cell(id, organism; contigs = false)
+                cell_dir = joinpath(dir, id)
+                mkpath(cell_dir)
+                if contigs
+                    write(joinpath(cell_dir, "contigs.fasta"), ">c\nACGT\n")
+                end
+                return Dict(
+                    "cell_id" => id,
+                    "cell_dir" => cell_dir,
+                    "organism" => organism
+                )
+            end
+            good = cell("Lambda__ont__k21__30x__seed42", "Lambda"; contigs = true)
+            missing_fa = cell("T4__ont__k21__30x__seed42", "T4"; contigs = false)
+            unknown = cell("X__ont__k21__30x__seed42", "UnknownOrg"; contigs = true)
+            references = Dict("Lambda" => "/tmp/fake-lambda.fna",
+                "T4" => "/tmp/fake-t4.fna")
+
+            kept = rescorable_cells([good, missing_fa, unknown], references)
+            Test.@test length(kept) == 1
+            Test.@test kept[1]["cell_id"] == good["cell_id"]
+
+            Test.@test !all_selected_cells_unusable([good, missing_fa], kept)
+            Test.@test all_selected_cells_unusable(
+                [missing_fa, unknown], rescorable_cells([missing_fa, unknown], references))
+            Test.@test !all_selected_cells_unusable(NamedTuple[], NamedTuple[])
+        end
+    end
 end
 
 end  # module

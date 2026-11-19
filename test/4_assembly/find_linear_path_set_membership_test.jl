@@ -239,11 +239,11 @@ Test.@testset "find_linear_path Set-membership (td-kokn)" begin
         # The current (Set) implementation is near-linear and clearly below the
         # Vector reference's super-linear (~2) slope. The load-bearing claim is
         # the QUALITATIVE ordering -- Set scales strictly better than Vector --
-        # not any exact gap. A fixed near-threshold gap (previously > 0.4) flaps
-        # on timing noise (observed 0.3985 vs 0.4 on a loaded CI runner), so the
-        # separation is asserted as a strict ordering plus a loose tolerance that
-        # stays well clear of the noise floor.
-        Test.@test a_current < 1.5
+        # not any exact absolute slope. A fixed cap `a_current < 1.5` failed CI
+        # on an untouched PR (run 39999649550: 1.556 < 1.5) even though this
+        # testset already warms up and takes a min of 5 trials. Drop the
+        # absolute cap; keep the relative comparison and a loose gap that stays
+        # well clear of the noise floor (a previous > 0.4 gap flapped at 0.3985).
         Test.@test a_reference > 1.6
         Test.@test a_current < a_reference
         Test.@test a_reference - a_current > 0.2

@@ -349,11 +349,7 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     function parse_overlap_str(s::AbstractString)
         m = match(Regex("\\d+"), s)
         isnothing(m) && return 0
-        try
-            return parse(Int, m.captures[1])
-        catch
-            return 0
-        end
+        return parse(Int, m.match)
     end
 
     # Parse GFA file content
@@ -402,7 +398,8 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
 
     if kmer_type == String
         segment_lengths = Set(length(sequence) for sequence in values(segments))
-        all_zero_link_overlaps = all(parse_overlap_str(overlap_str) == 0 for (_, _, _, _, overlap_str) in links)
+        all_zero_link_overlaps = all(parse_overlap_str(overlap_str) == 0
+        for (_, _, _, _, overlap_str) in links)
         default_string_overlap = if length(segment_lengths) == 1 && all_zero_link_overlaps
             max(first(segment_lengths) - 1, 0)
         else
@@ -534,11 +531,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
     function parse_overlap_str(s::AbstractString)
         m = match(Regex("\\d+"), s)
         isnothing(m) && return 0
-        try
-            return parse(Int, m.captures[1])
-        catch
-            return 0
-        end
+        return parse(Int, m.match)
     end
 
     # Parse GFA to detect segment lengths

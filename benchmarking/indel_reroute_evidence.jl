@@ -44,10 +44,26 @@
 # checkout must be first on the load path, and every loaded package must be the
 # one the load path resolves to -- so a dependency preloaded from another
 # environment (e.g. by a depot startup.jl) is refused too. --startup-file=no is
-# still required: it is what keeps a startup file from running at all.
-# Not covered: preferences and artifact overrides from a depot (the sbatch sets
-# JULIA_LOAD_PATH="@:@stdlib", which drops the global environment's
-# preferences; depot artifacts/Overrides.toml is not checked).
+# still required on direct and sbatch runs: it is what keeps a startup file
+# from running at all (sbatch also unsets MYCELIA_PROJECT and JULIA_PROJECT and
+# pins JULIA_LOAD_PATH="@:@stdlib").
+#
+# Not covered (one list; the check_provenance docstring defers to this file header):
+# - depot artifacts/Overrides.toml in any DEPOT_PATH entry can redirect a JLL
+#   artifact. JULIA_DEPOT_PATH is not in the run label. Folding an Overrides.toml
+#   hash into the label, or refusing when one exists, is a format decision and
+#   is not taken here.
+# - LocalPreferences.toml outside the global environment (for example a
+#   project-local, untracked file). "@:@stdlib" drops only the global
+#   environment's preferences. Hashing LocalPreferences.toml into the run label
+#   is the same format decision, not taken here.
+# - a precompile cache built from another checkout (Julia 1.10 checks source
+#   path and mtime; not probed).
+# - Manifest `path =` dependencies are hashed by path, not content. The current
+#   Manifest has none.
+# - packages loaded after check_provenance (during the arms) are not re-checked.
+# - the package-mismatch refusal is defence in depth for direct runs; sbatch
+#   `--startup-file=no` already blocks the preload it guards against.
 #
 # Options:
 #   --seeds a,b,c    replicate seeds            (default 42,43,44)
@@ -429,9 +445,7 @@ still refused).
 
 Returns the Mycelia path. Throws `ArgumentError` on a mismatch, and
 `Base.IOError` (from `realpath`) when `project` does not exist. Not covered:
-depot preferences and `artifacts/Overrides.toml` (see the header), a
-precompile cache built from another checkout, and Manifest `path =`
-dependencies (hashed by path, not content; the current Manifest has none).
+the gaps listed in the file header under "Not covered".
 """
 function check_provenance(project::AbstractString;
         loaded::AbstractString = pathof(Mycelia),
