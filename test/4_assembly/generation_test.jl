@@ -266,15 +266,16 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
     add_edge!("BCD", "CDZ", 2.0)
     add_edge!("WWW", "WWX", 100.0)
 
-    # The previous O(E) denominator, recomputed inline. The out-neighbor sum
-    # must agree with it on every stored edge, including the heavy distractor.
-    function reference_probability(src, dst)
-        haskey(graph, src, dst) || return 0.0
-        edge_weight = graph[src, dst].weight
+    # The previous O(E) denominator, recomputed inline. One oracle for both
+    # directed and undirected graphs: the out-neighbor sum must agree with it
+    # on every stored edge, including the heavy distractor.
+    function reference_probability(g, src, dst)
+        haskey(g, src, dst) || return 0.0
+        edge_weight = g[src, dst].weight
         total = 0.0
-        for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(graph)
+        for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(g)
             edge_src == src || continue
-            total += graph[edge_src, edge_dst].weight
+            total += g[edge_src, edge_dst].weight
         end
         total == 0.0 && return 0.0
         return edge_weight / total
@@ -293,7 +294,7 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
-            graph, src, dst) == reference_probability(src, dst)
+            graph, src, dst) == reference_probability(graph, src, dst)
     end
 
     # "ABCDE" walks ABC->BCD (1/4) then BCD->CDE (1/2).
@@ -305,10 +306,9 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
         "WWWX", graph; k = 3) == 0.0
 
     # Undirected edges are stored once, with the smaller vertex code as the
-    # source. Insertion order C, A, B assigns those codes, so the stored edges
-    # are C->A (5), C->B (3), and A->B (2). "A" is incident to two edges, but
-    # only A->B is stored at A: probability 1, while the reverse of C->A is
-    # 5/2. Summing every neighbor would yield 2/7 and 5/7.
+    # source. Insertion order C, A, B assigns those codes, so C owns both C->A
+    # (5) and C->B (3). The equivalence loop locks that stored-source
+    # denominator, including orientations whose mass is not a probability.
     undirected = MetaGraphsNext.MetaGraph(
         Mycelia.Graphs.Graph(),
         label_type = String,
@@ -327,25 +327,15 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
     undirected["B", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
         3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
 
-    function undirected_reference(src, dst)
-        haskey(undirected, src, dst) || return 0.0
-        edge_weight = undirected[src, dst].weight
-        total = 0.0
-        for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(undirected)
-            edge_src == src || continue
-            total += undirected[edge_src, edge_dst].weight
-        end
-        total == 0.0 && return 0.0
-        return edge_weight / total
-    end
+    # Same stored-source scan as `reference_probability`, named for this graph.
+    undirected_reference(src, dst) = reference_probability(undirected, src, dst)
 
     for (src, dst) in MetaGraphsNext.edge_labels(undirected)
         got = Mycelia.Rhizomorph._compute_edge_transition_probability(
             undirected, src, dst)
         Test.@test got == undirected_reference(src, dst)
-        # The reverse orientation is the same undirected edge. Its numerator is
-        # that edge's weight, and its denominator is the stored-source mass at
-        # the other endpoint, which the neighbor-sum would inflate.
+        # The reverse orientation is the same undirected edge. Compare it to
+        # the stored-source oracle without treating that value as a probability.
         reverse_probability = Mycelia.Rhizomorph._compute_edge_transition_probability(
             undirected, dst, src)
         Test.@test reverse_probability == undirected_reference(dst, src)
@@ -356,12 +346,16 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
         undirected, "C", "B") == 3.0 / 8.0
     Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
         undirected, "A", "B") == 1.0
-    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
-        undirected, "A", "C") == 5.0 / 2.0
-    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
-        undirected, "B", "A") == 0.0
-    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
-        undirected, "B", "C") == 0.0
+    # A->C is 5/2 today, and B->A / B->C are 0, even though those edges exist.
+    # A follow-up bead should sum every incident edge, which makes these 5/7,
+    # 2/5, and 3/5. @test_broken records that gap so the quirk is not a passing
+    # contract a later fix would have to break.
+    Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "A", "C") == 5.0 / 7.0
+    Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "B", "A") == 2.0 / 5.0
+    Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "B", "C") == 3.0 / 5.0
     Test.@test Mycelia.Graphs.ne(undirected) >= 3
 
     # Payloads that are not StrandWeightedEdgeData contribute weight 1, so two
