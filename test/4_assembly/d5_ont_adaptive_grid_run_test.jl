@@ -1001,11 +1001,15 @@ Test.@testset "D5 grid runner" begin
                         "if [[ \"\${1:-}\" == \"--version\" ]]; then\n" *
                         # A julia that misreports unless probed with LD_LIBRARY_PATH
                         # cleared, and one that cannot start (stderr, exit 1).
-                        "  [[ -z \"\${LD_LIBRARY_PATH:-}\" ]] || " *
-                        "{ echo 'julia version ldpath-leak'; exit 0; }\n" *
+                        # The broken check comes first: juliaup's channel error
+                        # does not depend on LD_LIBRARY_PATH, so a check run with
+                        # the inherited path would also see it.
                         "  [[ -z \"\${D5_FAKE_BROKEN:-}\" ]] || " *
                         "{ echo \"\${D5_FAKE_BROKEN}\" >&2; exit 1; }\n" *
-                        "  echo \"\${D5_FAKE_VERSION:-julia version 1.10.10}\"; exit 0\n" *
+                        "  [[ -z \"\${LD_LIBRARY_PATH:-}\" ]] || " *
+                        "{ echo 'julia version ldpath-leak'; exit 0; }\n" *
+                        "  echo \"\${D5_FAKE_VERSION:-julia version 1.10.10}\"\n" *
+                        "  exit \"\${D5_FAKE_VERSION_EXIT:-0}\"\n" *
                         "fi\n" *
                         "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n" *
                         "printf '%s\\n' \"\${JULIA_NUM_THREADS:-unset}\" " *
@@ -1090,6 +1094,16 @@ Test.@testset "D5 grid runner" begin
                     Test.@test override.julia_env[1:2] == ["4", "/elsewhere/depot"]
                     Test.@test occursin("depot /elsewhere/depot (D5_DEPOT override)",
                         override.log)
+                    # Both set: the inherited depot is ignored, and the hint says
+                    # D5_DEPOT already chose.
+                    both = runner_argv("A", 1; tag = "_bothdepots",
+                        extra = Dict("JULIA_DEPOT_PATH" => "/inherited/depot",
+                            "D5_DEPOT" => "/elsewhere/depot"))
+                    Test.@test both.julia_env[1:2] == ["4", "/elsewhere/depot"]
+                    Test.@test occursin(
+                        "Ignored the submit shell's JULIA_DEPOT_PATH=/inherited/depot " *
+                        "(D5_DEPOT is set)", both.log)
+                    Test.@test !occursin("set D5_DEPOT to choose", both.log)
 
                     cells = runner_argv("A-cells", 2)
                     Test.@test cells.code == 0
@@ -1151,7 +1165,15 @@ Test.@testset "D5 grid runner" begin
                         extra = Dict("D5_FAKE_BROKEN" => "ERROR: `1.10.10` from environment variable JULIAUP_CHANNEL is not installed."))
                     Test.@test broken.code == 1 && isempty(broken.argv)
                     Test.@test occursin("requires julia 1.10.10", broken.log)
-                    Test.@test occursin("JULIAUP_CHANNEL is not installed", broken.log)
+                    Test.@test occursin(
+                        "reports 'ERROR: `1.10.10` from environment variable " *
+                        "JULIAUP_CHANNEL is not installed.' (exit 1)", broken.log)
+                    # The right string with a failing exit status is refused too.
+                    failing = runner_argv("A", 1; tag = "_versionexit",
+                        extra = Dict("D5_FAKE_VERSION_EXIT" => "1"))
+                    Test.@test failing.code == 1 && isempty(failing.argv)
+                    Test.@test occursin("reports 'julia version 1.10.10' (exit 1)",
+                        failing.log)
                     if wrapper == "run_d5_grid_nersc.sbatch"
                         nomod = runner_argv("A", 1; tag = "_nomodule",
                             extra = Dict("D5_FAKE_MODULE_EXIT" => "1"))

@@ -64,8 +64,10 @@ D5_JULIA_VERSION="1.10.10"
 # stderr kept: a julia that cannot start (a library path, or juliaup's "channel
 # not installed") is refused below with its own message quoted.
 JULIA_VERSION_LINE="$(LD_LIBRARY_PATH="" "${JULIA}" --version 2>&1)"
-if [[ "${JULIA_VERSION_LINE}" != "julia version ${D5_JULIA_VERSION}" ]]; then
-  echo "ERROR: the D5 grid requires julia ${D5_JULIA_VERSION}; ${JULIA} reports '${JULIA_VERSION_LINE}' (${D5_SITE_NAME})." >&2
+JULIA_VERSION_STATUS=$?
+if [[ "${JULIA_VERSION_STATUS}" -ne 0 ||
+  "${JULIA_VERSION_LINE}" != "julia version ${D5_JULIA_VERSION}" ]]; then
+  echo "ERROR: the D5 grid requires julia ${D5_JULIA_VERSION}; ${JULIA} reports '${JULIA_VERSION_LINE}' (exit ${JULIA_VERSION_STATUS}) (${D5_SITE_NAME})." >&2
   exit 1
 fi
 
