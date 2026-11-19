@@ -1,10 +1,13 @@
 # opt1: serial-vs-parallel corrector scaling (phix, 20x, batch_size=50)
 
 Records the measured wall-clock effect of the opt1 `Threads.@threads` per-read
-decode change on the `:scalable` corrector, and confirms byte-identical accuracy
-across thread counts. This is a smoke-scale sanity measurement, not a scaling
-study — see caveats below before drawing any conclusion beyond "identical
-output, directional timing."
+decode change on the `:scalable` corrector, and records that the aggregate
+accuracy metrics matched across thread counts. This is a smoke-scale sanity
+measurement, not a scaling study, and it does not hash corrected reads or
+soft-EM weights (that byte-identity lock is
+`test/4_assembly/parallel_soft_em_byte_identity_test.jl`). See caveats below
+before drawing any conclusion beyond "matching aggregate metrics, directional
+timing."
 
 ## Setup
 
@@ -22,18 +25,19 @@ output, directional timing."
 - 3 repetitions per thread count (`-t 1` and `-t 8`), run back-to-back on an
   otherwise-idle laptop, no other heavy processes observed running concurrently
 
-## Accuracy identity (load-bearing result)
+## Aggregate accuracy metrics (not a byte-identity check)
 
-All 6 runs (3x `-t 1`, 3x `-t 8`) produced **byte-identical** accuracy metrics:
+All 6 runs (3x `-t 1`, 3x `-t 8`) produced **identical aggregate** accuracy metrics:
 
 - `recall = 0.9276773296244785`
 - `precision = 1.0`
 - `over_correction_rate = 0.0`
 - `correction_rate = 0.012369031061659713`
 
-No divergence across thread counts on any of the 6 runs. This confirms the opt1
-parallel decode path is deterministic and produces the same corrected output
-regardless of thread count, at least at this scale and seed.
+No divergence across thread counts on any of the 6 runs. These are summary
+rates. This benchmark did not compare corrected reads or soft-EM weights, so it
+is not evidence those outputs are byte-identical. That lock is the unit test
+named above.
 
 ## Timing (`corrector_runtime_s`, directional — not a scaling study)
 
@@ -66,10 +70,10 @@ effect, and it is not the primary metric this task tracks.
   pipeline (graph construction, I/O, reference download/parsing), so
   `Threads.@threads` over per-read decode doesn't have enough parallel work per
   batch to show a clear win at this scale.
-- **The value of opt1 demonstrated here is the accuracy-identity result, not a
-  timing win.** Parallel and serial decode produce byte-identical
-  recall/precision/correction_rate across 6 independent runs — the correctness
-  bar opt1 needed to clear.
+- **The value of opt1 demonstrated here is matching aggregate accuracy
+  metrics, not a timing win.** Parallel and serial runs produced the same
+  recall/precision/correction_rate across 6 independent runs. That is a summary
+  comparison, not a byte-level comparison of corrected reads or soft-EM weights.
 - **Do not extrapolate a multiplier from this run.** A single-genome,
   single-scale A/B on a shared laptop with ~15% run-to-run timing noise is not
   sufficient to report a headline speedup number. Larger genomes / higher
