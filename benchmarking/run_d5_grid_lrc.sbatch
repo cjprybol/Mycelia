@@ -21,8 +21,10 @@
 # Why these directives (cluster facts read with sinfo / scontrol / sacctmgr on
 # 2026-11-19):
 #   lr7 shares nodes (OverSubscribe=FORCE:1; 56 cores, 257-503 GB). lr6 is
-#   whole-node only, with 95 GB on most nodes: under the 113 GB peak RSS
-#   projected (not measured) for a T4 100x :iterative cell.
+#   whole-node only, with 95 GB on most nodes: under the ~113 GB peak RSS
+#   projected (not measured) for a T4 100x :iterative cell, from a linear fit
+#   of the toy's two :iterative peak_rss_bytes points (35 GB at 0.49 Mb of
+#   reads, 55.9 GB at 4.89 Mb) to T4 100x's 16.9 Mb.
 #   lr_normal allows 72 h, above the ~41 h projected (not measured) for the
 #   slowest cell, T4 90-95%/100x :iterative, from the toy run.
 #   12 CPUs for 4 Julia threads (pinned in d5_grid_task.sh): the toy's tasks
@@ -37,21 +39,23 @@
 # PRE-STAGE ONCE on a login node (from the checkout root):
 #   export JULIA_DEPOT_PATH=/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5
 #   export LD_LIBRARY_PATH=""
-#   # The grid's own depot (5.5 GB with the conda envs, staged 2026-11-19): the
-#   # group's shared .julia_depot had a partially extracted package
-#   # (Xorg_xkbcomp_jll) that broke precompilation, and it is on home (VAST),
-#   # not /global/scratch, whose Lustre client dropped out on the login nodes
-#   # that day. Submit with JULIA_DEPOT_PATH unset so this default applies;
-#   # the task log says which depot was used.
+#   # The grid's own depot (5.5 GB with the conda envs, staged 2026-11-19). On
+#   # 2026-11-19 the group's shared .julia_depot did not precompile (observed:
+#   # Xorg_xkbcomp_jll's src/wrappers missing), and a depot staged on
+#   # /global/scratch was cut off when that Lustre client returned ESHUTDOWN on
+#   # the login node, so this one is on home (VAST). Tasks use it whatever the
+#   # submit shell exports (login shells export the group depot); set D5_DEPOT
+#   # to override.
 #   julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
 #   # references: copy <toy root>/refs/ into a new full root before its read-set
 #   # array starts, so 96 tasks do not download the same files at once.
-#   julia is juliaup's (~/.juliaup/bin, channel lts = 1.10.10 on 2026-11-19).
-#   d5_grid_task.sh refuses any version but 1.10.10, so a juliaup update, or
-#   another julia first on the submit shell's PATH, stops the task instead of
-#   changing the grid.
+#   juliaup add 1.10.10
+#   # julia is juliaup's pinned 1.10.10 channel (JULIAUP_CHANNEL, set in
+#   # d5_load_julia below), not lts or the juliaup default, which an update or
+#   # `juliaup default` would move. d5_grid_task.sh refuses any other version,
+#   # so another julia first on the submit shell's PATH stops the task.
 #
 # USAGE (submit from benchmarking/; output roots under /global/scratch/users/$USER):
 #   Toy: 3 read sets (the default array), then its 4 :iterative cells:
@@ -76,8 +80,10 @@ set -uo pipefail
 
 D5_SITE_NAME="Lawrencium"
 D5_SITE_DEPOT="/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5"
-# juliaup's julia, unless one is already on PATH.
+# juliaup's julia, unless one is already on PATH, on the pinned 1.10.10 channel
+# (`juliaup add 1.10.10`; juliaup refuses an unknown channel loudly).
 d5_load_julia() {
+  export JULIAUP_CHANNEL=1.10.10
   command -v julia >/dev/null 2>&1 || export PATH="${HOME}/.juliaup/bin:${PATH}"
 }
 # sbatch runs a spooled copy of this file, so the shared body is found from the
@@ -89,6 +95,7 @@ D5_BENCH_DIR="${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}"
 }
 # shellcheck source=d5_grid_task.sh
 source "${D5_BENCH_DIR}/d5_grid_task.sh"
-# d5_grid_task.sh always ends in exit; reaching this line means it stopped early.
-echo "ERROR: ${D5_BENCH_DIR}/d5_grid_task.sh returned without exiting (status $?)." >&2
+# d5_grid_task.sh always ends in exit; reaching this line means it stopped early
+# (a return, or a syntax error, which bash reports just above).
+echo "ERROR: ${D5_BENCH_DIR}/d5_grid_task.sh stopped without exiting (status $?)." >&2
 exit 1

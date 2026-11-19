@@ -1003,7 +1003,8 @@ Test.@testset "D5 grid runner" begin
                         "fi\n" *
                         "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n" *
                         "printf '%s\\n' \"\${JULIA_NUM_THREADS:-unset}\" " *
-                        "\"\${JULIA_DEPOT_PATH:-unset}\" > \"\${D5_FAKE_ARGV}.env\"\n" *
+                        "\"\${JULIA_DEPOT_PATH:-unset}\" \"\${LD_LIBRARY_PATH-unset}\" " *
+                        "\"\${JULIAUP_CHANNEL-unset}\" > \"\${D5_FAKE_ARGV}.env\"\n" *
                         "[[ \"\${D5_FAKE_EXIT:-0}\" == 0 ]] || " *
                         "echo evidence > \"\${TMPDIR}/evidence.txt\"\n" *
                         "exit \"\${D5_FAKE_EXIT:-0}\"\n")
@@ -1023,6 +1024,8 @@ Test.@testset "D5 grid runner" begin
                             "D5_ARGS" => d5_args, "D5_OUTDIR" => out,
                             "D5_TMPDIR" => mkpath(joinpath(dir, "tmp")),
                             "D5_FAKE_ARGV" => argv_file, "D5_PROC_CGROUP" => "/nonexistent",
+                            # A login shell's library path, which the body clears.
+                            "LD_LIBRARY_PATH" => "/bogus/lib",
                             "SLURM_SUBMIT_DIR" => submit_dir,
                             "SLURM_CPUS_PER_TASK" => "12",
                             "SLURM_ARRAY_TASK_ID" => string(task),
@@ -1053,16 +1056,28 @@ Test.@testset "D5 grid runner" begin
                     Test.@test flag_value(a.argv, "--read-set-index") == "1"
                     Test.@test "--skip-iterative" in a.argv && "--toy" in a.argv
                     Test.@test !("--cell-index" in a.argv)
-                    # 4 Julia threads whatever --cpus-per-task is (12 here), and the
-                    # site's depot when the submit environment has none.
-                    Test.@test a.julia_env == ["4", site_depot]
+                    # 4 Julia threads whatever --cpus-per-task is (12 here), the
+                    # site's depot, LD_LIBRARY_PATH cleared, and on Lawrencium the
+                    # pinned juliaup channel.
+                    channel = wrapper == "run_d5_grid_lrc.sbatch" ? "1.10.10" : "unset"
+                    Test.@test a.julia_env == ["4", site_depot, "", channel]
                     Test.@test occursin("threads 4; depot $(site_depot) (site default)",
                         a.log)
+                    # A login shell's depot is ignored, as Lawrencium's dotfiles
+                    # export the group depot (trailing colon included).
                     inherited = runner_argv("A", 1; tag = "_depot",
-                        extra = Dict("JULIA_DEPOT_PATH" => "/elsewhere/depot"))
-                    Test.@test inherited.julia_env == ["4", "/elsewhere/depot"]
-                    Test.@test occursin("(inherited from the submit environment)",
+                        extra = Dict("JULIA_DEPOT_PATH" => "/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot:"))
+                    Test.@test inherited.julia_env[1:2] == ["4", site_depot]
+                    Test.@test occursin(
+                        "Ignored the submit shell's JULIA_DEPOT_PATH=" *
+                        "/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot:",
                         inherited.log)
+                    # Only D5_DEPOT chooses another depot.
+                    override = runner_argv("A", 1; tag = "_d5depot",
+                        extra = Dict("D5_DEPOT" => "/elsewhere/depot"))
+                    Test.@test override.julia_env[1:2] == ["4", "/elsewhere/depot"]
+                    Test.@test occursin("depot /elsewhere/depot (D5_DEPOT override)",
+                        override.log)
 
                     cells = runner_argv("A-cells", 2)
                     Test.@test cells.code == 0
@@ -1107,11 +1122,17 @@ Test.@testset "D5 grid runner" begin
                         extra = Dict("D5_FAKE_EXIT" => "7"))
                     Test.@test failed.code == 7 && occursin("(exit 7)", failed.log)
 
-                    # Any julia but 1.10.10 is refused before the runner starts.
-                    wrong = runner_argv("A", 1; tag = "_v112",
-                        extra = Dict("D5_FAKE_VERSION" => "julia version 1.12.1"))
-                    Test.@test wrong.code == 1 && isempty(wrong.argv)
-                    Test.@test occursin("requires julia 1.10.10", wrong.log)
+                    # Any julia but exactly 1.10.10 is refused before the runner
+                    # starts, including near misses a prefix or substring match
+                    # would let through.
+                    for (n, v) in enumerate(("julia version 1.12.1",
+                        "julia version 1.10.13", "julia version 1.10.9",
+                        "julia version 1.10.10-DEV"))
+                        wrong = runner_argv("A", 1; tag = "_version$(n)",
+                            extra = Dict("D5_FAKE_VERSION" => v))
+                        Test.@test wrong.code == 1 && isempty(wrong.argv)
+                        Test.@test occursin("requires julia 1.10.10", wrong.log)
+                    end
                     if wrapper == "run_d5_grid_nersc.sbatch"
                         nomod = runner_argv("A", 1; tag = "_nomodule",
                             extra = Dict("D5_FAKE_MODULE_EXIT" => "1"))

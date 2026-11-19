@@ -34,8 +34,9 @@
 # merge and toy tasks.
 #
 # Resources mirror run_track_a_baseline_nersc.sbatch (shared QOS, 200 GB). The
-# Lambda 100x :iterative cell peaked at 55.9 GB RSS (sacct MaxRSS 64,657,632 KiB,
-# 61.7 GiB; sacct reports KiB); T4 is 3.5x larger and unmeasured. Re-size from
+# Lambda 100x :iterative cell's sampled peak_rss_bytes was 55.9 GB; the task's
+# sacct MaxRSS was 64,657,632 KiB (66.2 GB; sacct reports KiB). T4 is 3.5x larger
+# and unmeasured. Re-size from
 # the cgroup memory.peak logged to the .err file at exit. peak_rss_bytes alone
 # is too low: the node-local temp root is tmpfs, charged to --mem, not to RSS.
 # On the shared QOS --mem also sets the CPUs charged: 200G allocated 108 of 256.
@@ -106,6 +107,7 @@ D5_BENCH_DIR="${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}"
 }
 # shellcheck source=d5_grid_task.sh
 source "${D5_BENCH_DIR}/d5_grid_task.sh"
-# d5_grid_task.sh always ends in exit; reaching this line means it stopped early.
-echo "ERROR: ${D5_BENCH_DIR}/d5_grid_task.sh returned without exiting (status $?)." >&2
+# d5_grid_task.sh always ends in exit; reaching this line means it stopped early
+# (a return, or a syntax error, which bash reports just above).
+echo "ERROR: ${D5_BENCH_DIR}/d5_grid_task.sh stopped without exiting (status $?)." >&2
 exit 1

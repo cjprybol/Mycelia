@@ -4,12 +4,15 @@
 #
 # The wrapper sets, before sourcing:
 #   D5_SITE_NAME   site label for the log
-#   D5_SITE_DEPOT  default JULIA_DEPOT_PATH on that site
+#   D5_SITE_DEPOT  the site's JULIA_DEPOT_PATH for the grid
 #   D5_BENCH_DIR   the checkout's benchmarking/ directory
-#   d5_load_julia  function that puts julia 1.10.10 on PATH (returns non-zero if
-#                  it cannot; the body refuses then, and refuses any other version)
+#   d5_load_julia  function that puts julia 1.10.10 on PATH. The body refuses
+#                  when it returns non-zero, and refuses any other julia version
+#                  whatever it returns (on Lawrencium it cannot fail; the version
+#                  check is the guard there).
 # Environment (both sites): D5_PHASE (A | A-cells | B | merge), D5_OUTDIR,
-# D5_ARGS, D5_FULL, D5_TMPDIR. See the wrappers for USAGE.
+# D5_ARGS, D5_FULL, D5_TMPDIR, D5_DEPOT (overrides D5_SITE_DEPOT). See the
+# wrappers for USAGE.
 set -uo pipefail
 
 PHASE="${D5_PHASE:-A}"
@@ -45,6 +48,9 @@ OUTDIR="${D5_OUTDIR:?set D5_OUTDIR to the grid output root (one root per grid)}"
 echo "=== D5 grid (${D5_SITE_NAME}) phase=${PHASE} task=${TASK_INDEX} ==="
 echo "Job: ${SLURM_JOB_ID:-none}  Array: ${SLURM_ARRAY_JOB_ID:-none}  Node: ${SLURM_NODELIST:-none}  CPUs: ${SLURM_CPUS_PER_TASK:-unset}  Start: $(date)"
 
+# The submit shell's JULIA_DEPOT_PATH, read before a site's julia load can touch
+# it, so the log can say it was ignored (see the depot block below).
+INHERITED_DEPOT="${JULIA_DEPOT_PATH:-}"
 d5_load_julia || { echo "ERROR: d5_load_julia failed (${D5_SITE_NAME})." >&2; exit 1; }
 JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
@@ -54,7 +60,8 @@ fi
 # One grid, one julia: the toy ran 1.10.10, and the merge does not refuse rows
 # from mixed julia versions, so a different julia is refused here, on every site.
 D5_JULIA_VERSION="1.10.10"
-JULIA_VERSION_LINE="$("${JULIA}" --version 2>&1)"
+# Probed with LD_LIBRARY_PATH cleared, as the runner is run below.
+JULIA_VERSION_LINE="$(LD_LIBRARY_PATH="" "${JULIA}" --version 2>&1)"
 if [[ "${JULIA_VERSION_LINE}" != "julia version ${D5_JULIA_VERSION}" ]]; then
   echo "ERROR: the D5 grid requires julia ${D5_JULIA_VERSION}; ${JULIA} reports '${JULIA_VERSION_LINE}' (${D5_SITE_NAME})." >&2
   exit 1
@@ -68,14 +75,22 @@ OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2
 # Four Julia threads on every site, as in the toy run (array 61473595), so the
 # grid is one configuration whatever --cpus-per-task a site's wrapper requests.
 export JULIA_NUM_THREADS=4
-# An inherited depot (sbatch exports the submit environment) wins over the
-# site default; the log says which, since the depot holds the packages and the
-# conda environments the tools come from.
-DEPOT_SOURCE="inherited from the submit environment"
-[[ -n "${JULIA_DEPOT_PATH:-}" ]] || DEPOT_SOURCE="site default"
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${D5_SITE_DEPOT}}"
+# The depot holds the packages and the conda environments the tools come from,
+# so the grid uses the site's depot, never one inherited from the submit shell:
+# login shells export one (on Lawrencium the group depot, which does not
+# precompile), and sbatch passes the submit environment through. Only an
+# explicit D5_DEPOT overrides it.
+if [[ -n "${D5_DEPOT:-}" ]]; then
+  DEPOT_SOURCE="D5_DEPOT override"
+else
+  DEPOT_SOURCE="site default"
+fi
+export JULIA_DEPOT_PATH="${D5_DEPOT:-${D5_SITE_DEPOT}}"
 export LD_LIBRARY_PATH=""
 echo "Julia: ${JULIA} (${JULIA_VERSION_LINE}); threads ${JULIA_NUM_THREADS}; depot ${JULIA_DEPOT_PATH} (${DEPOT_SOURCE})"
+if [[ -n "${INHERITED_DEPOT}" && "${INHERITED_DEPOT}" != "${JULIA_DEPOT_PATH}" ]]; then
+  echo "Ignored the submit shell's JULIA_DEPOT_PATH=${INHERITED_DEPOT} (set D5_DEPOT to choose a depot)."
+fi
 
 cd "${D5_BENCH_DIR}" || exit 1
 if [[ ! -f d5_ont_adaptive_grid_run.jl ]]; then
