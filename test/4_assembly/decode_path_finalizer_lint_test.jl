@@ -6,8 +6,9 @@
 # (scripts/check_decode_path_finalizers.py, wired from .github/workflows/ci.yml):
 # the current decode-path set is clean, a missing required file fails closed,
 # and a new finalizer / WeakRef / WeakKeyDict in code fails the guard.
-# Comments and string literals do not count as introductions. A '#' inside a
-# string must not hide a later call.
+# Comments and string literals do not count as introductions. A '#' or a
+# newline inside a "..." string must not hide a later call. String
+# interpolation is out of scope, same as eval of a constructed token.
 #
 # No Mycelia load. Run directly:
 #   julia --project=. test/4_assembly/decode_path_finalizer_lint_test.jl
@@ -30,6 +31,11 @@ function _lint(args::Vector{String})
 end
 
 Test.@testset "decode-path finalizer lint (td-3vge)" begin
+    if Sys.which("python3") === nothing
+        Test.@test_skip "python3 is not on PATH; CI lint runs scripts/check_decode_path_finalizers.py"
+        return
+    end
+
     Test.@test isfile(_SCRIPT)
 
     Test.@testset "current decode path is clean and fully listed" begin
@@ -70,6 +76,7 @@ Test.@testset "decode-path finalizer lint (td-3vge)" begin
             ("nested.jl", "#= outer #= finalizer =# still =#\nx = 1\n", true, ""),
             ("string.jl", "msg = \"finalizer WeakRef WeakKeyDict\"\n", true, ""),
             ("hash_string.jl", "s = \"a#b\"; finalizer(identity, Ref(1))\n", false, "finalizer"),
+            ("multiline_string.jl", "s = \"a\nb\"; finalizer(identity, Ref(1))\n", false, "finalizer"),
             ("other_name.jl", "my_finalizer = 1\n", true, ""),
         )
         for (name, body, ok, token) in cases

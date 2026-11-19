@@ -7,10 +7,12 @@ would let ``GC.gc()`` between batches change results. None of these tokens
 exist on the decode path today (td-3vge item 5). This guard fails when one
 shows up in code.
 
-Comments, strings, character literals, and command literals are masked before
-the search, so documenting the ban does not trip the guard and a ``#`` inside
-a string cannot hide a later call. ``eval`` of a constructed token is out of
-scope.
+Comments, strings, character literals, and command literals are masked
+before the search, so documenting the ban does not trip the guard. A
+regular ``"..."`` string may span lines and ends only at an unescaped
+``"``, so a newline or a ``#`` inside the literal cannot hide a later
+call. String interpolation (``$(...)``) is masked with the rest of the
+literal, and ``eval`` of a constructed token is out of scope.
 
 The scanned set is the iterative corrector's per-read decode (the code that
 runs between opt5's between-batch ``GC.gc()``) plus the Viterbi modules and
@@ -59,7 +61,11 @@ GLOBS = (
 
 
 def mask_non_code(text: str) -> str:
-    """Replace comments and literals with spaces, preserving newlines."""
+    """Replace comments and literals with spaces, preserving newlines.
+
+    A regular double-quoted string ends only at an unescaped ``"`` and may
+    span lines. ``$(...)`` inside a literal stays masked (out of scope).
+    """
     chars = list(text)
     n = len(chars)
     i = 0
@@ -106,14 +112,14 @@ def mask_non_code(text: str) -> str:
                         break
                     i += 1
             else:
+                # Julia "..." may contain newlines. End only at an unescaped ".
                 i += 1
                 while i < n:
                     if chars[i] == "\\":
-                        i += 2
+                        i = min(i + 2, n)
                         continue
-                    if chars[i] == '"' or chars[i] == "\n":
-                        if chars[i] == '"':
-                            i += 1
+                    if chars[i] == '"':
+                        i += 1
                         break
                     i += 1
             blank(start, i)
@@ -122,7 +128,7 @@ def mask_non_code(text: str) -> str:
             # Character literal. Copy it through so '#' does not start a comment.
             i += 1
             if i < n and chars[i] == "\\":
-                i += 2
+                i = min(i + 2, n)
             elif i < n:
                 i += 1
             if i < n and chars[i] == "'":
@@ -133,7 +139,7 @@ def mask_non_code(text: str) -> str:
             i += 1
             while i < n:
                 if chars[i] == "\\":
-                    i += 2
+                    i = min(i + 2, n)
                     continue
                 if chars[i] == "`":
                     i += 1
