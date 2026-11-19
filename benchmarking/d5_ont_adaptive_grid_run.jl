@@ -561,11 +561,12 @@ function run_phase_a(cli, root)
         ref = prepare_reference(rs.organism, joinpath(root, "refs"))
         prepared = prepare_read_set(rs, ref, root)
         context = cell_context(prepared.meta, base)
-        for cell in phase_cells(rs, :A, cli.toy)
-            if cli.skip_iterative && D5OntAdaptiveGridDriver.runs_alone(cell)
-                println("  deferred  $(D5OntAdaptiveGridDriver.cell_id(cell)): cell task")
-                continue
-            end
+        cells = D5OntAdaptiveGridDriver.read_set_task_cells(rs; cli.toy,
+            cli.skip_iterative)
+        n_deferred = length(phase_cells(rs, :A, cli.toy)) - length(cells)
+        n_deferred > 0 &&
+            println("  deferred $(n_deferred) :iterative cell(s) to cell tasks")
+        for cell in cells
             push!(statuses, run_phase_a_cell(root, cell, prepared, ref, context))
         end
     end
@@ -602,7 +603,8 @@ function run_cell_task(cli, root, base)
         rs_index = findfirst(==(rs), selected_read_sets(cli.toy)) - 1
         error("read set $(rs_id) is not prepared under $(root). Run its read-set " *
               "task first (--phase A --read-set-index $(rs_index) --skip-iterative" *
-              "$(cli.toy ? " --toy" : "")), then resubmit this cell index.")
+              "$(cli.toy ? " --toy" : "")), then resubmit --cell-index " *
+              "$(cli.cell_index).")
     end
     ref = prepare_reference(rs.organism, joinpath(root, "refs"))
     return run_phase_a_cell(root, cell, prepared, ref, cell_context(prepared.meta, base))

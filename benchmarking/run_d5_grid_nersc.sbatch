@@ -30,8 +30,8 @@
 # merge and toy tasks.
 #
 # Resources mirror run_track_a_baseline_nersc.sbatch (shared QOS, 200 GB). The
-# Lambda 100x :iterative cell peaked at 56 GB RSS (sacct MaxRSS 64.7 GB); T4 is
-# 3.5x larger and unmeasured. Re-size from the cgroup memory.peak logged to the
+# Lambda 100x :iterative cell peaked at 55.9 GB RSS (sacct MaxRSS 64,657,632 KiB,
+# 61.7 GiB; sacct reports KiB); T4 is 3.5x larger and unmeasured. Re-size from the cgroup memory.peak logged to the
 # .err file at exit. peak_rss_bytes alone is too low: the node-local temp root
 # is tmpfs, charged to --mem, not to RSS.
 # Flags on the sbatch command line override the directives above.
@@ -51,15 +51,19 @@
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
 #   # references: --list does not download; Phase A downloads into <root>/refs on
-#   # first use, so run one toy task interactively (add
-#   # --tmp-dir "$(mktemp --directory)": the default <root>/tmp is on Lustre and
-#   # is refused) or pre-copy refs/.
+#   # first use, so run one toy read-set task interactively with
+#   # --skip-iterative (without it the read set's :iterative cells run on the
+#   # login node, up to 8.9 h each), adding --tmp-dir "$(mktemp --directory)"
+#   # (the default <root>/tmp is on Lustre and is refused), or pre-copy refs/.
 #
 # USAGE (submit from benchmarking/):
 #   The default array is indices 0-2; only D5_ARGS="--toy" makes them the toy
-#   read sets (without it they are the first three full-grid read sets at the
-#   12 h envelope). The launch host is chosen at launch by allocation burn-down
-#   (todo hpc-burndown.py); this file is the NERSC entry point.
+#   read sets (without it they are the first three full-grid read sets, at the
+#   48 h directive unless --time is given). The launch host is chosen at launch
+#   by allocation burn-down (todo hpc-burndown.py); this file is the NERSC entry
+#   point. Read-set task walltime is unmeasured above Lambda 100x (simulation,
+#   identity and survival of up to 17 Mb of reads); a timed-out read-set task
+#   restarts its read set from scratch.
 #   Toy: 3 read sets (the default array), then its 4 :iterative cells:
 #     D5_ARGS="--toy" D5_OUTDIR="$SCRATCH/d5_grid_toy" \
 #       sbatch --parsable --time=02:00:00 run_d5_grid_nersc.sbatch

@@ -252,11 +252,27 @@ end
 Every Phase A cell for which `runs_alone` holds, in a fixed order: read sets in
 array order, then cells in enumeration order. `--cell-index j` (0-based) runs
 `cells_run_alone(; toy)[j + 1]`; the read-set task with `--skip-iterative` runs
-the rest, so every Phase A cell is run by exactly one task.
+the rest (`read_set_task_cells`), so every Phase A cell is run by exactly one
+task. The list depends on `assembler_accepts_k`: lifting the k <= 64 cap
+(td-yddpr.6) adds cells and shifts every later index, so a grid must not change
+code mid-run (the run manifest refuses a different SHA unless
+--allow-sha-mismatch is given).
 """
 function cells_run_alone(; toy::Bool)
     sets = toy ? toy_read_sets() : read_sets()
     return [c for rs in sets for c in phase_a_cells_of(rs; toy) if runs_alone(c)]
+end
+
+"""
+    read_set_task_cells(read_set; toy, skip_iterative) -> Vector{NamedTuple}
+
+The Phase A cells a read-set task runs: all of the read set's cells, or with
+`skip_iterative` those for which `runs_alone` is false (the cell tasks run the
+others).
+"""
+function read_set_task_cells(read_set; toy::Bool, skip_iterative::Bool)
+    cells = phase_a_cells_of(read_set; toy)
+    return skip_iterative ? filter(c -> !runs_alone(c), cells) : cells
 end
 
 # === Survival ===

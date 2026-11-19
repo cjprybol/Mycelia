@@ -419,37 +419,54 @@ Test.@testset "D5 grid driver" begin
     end
 
     Test.@testset "cell tasks: every Phase A cell runs in exactly one task" begin
-        D = D5OntAdaptiveGridDriver
         for toy in (false, true)
-            alone = D.cells_run_alone(; toy)
-            sets = toy ? D.toy_read_sets() : D.read_sets()
-            phase_a = [c for rs in sets for c in D.phase_a_cells_of(rs; toy)]
-            in_read_set_tasks = filter(c -> !D.runs_alone(c), phase_a)
+            alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy)
+            sets = toy ? D5OntAdaptiveGridDriver.toy_read_sets() :
+                   D5OntAdaptiveGridDriver.read_sets()
+            phase_a = [c for rs in sets
+                       for c in D5OntAdaptiveGridDriver.phase_a_cells_of(rs; toy)]
+            # What run_phase_a's read-set tasks actually run (the production
+            # function, not a re-derivation of its predicate).
+            in_read_set_tasks = [c for rs in sets
+                                 for c in D5OntAdaptiveGridDriver.read_set_task_cells(
+                rs; toy, skip_iterative = true)]
+            ids(cs) = D5OntAdaptiveGridDriver.cell_id.(cs)
             # A partition: the two task kinds together cover Phase A, no overlap.
             Test.@test length(alone) + length(in_read_set_tasks) == length(phase_a)
-            Test.@test isempty(intersect(Set(D.cell_id.(alone)),
-                Set(D.cell_id.(in_read_set_tasks))))
-            Test.@test Set(D.cell_id.(vcat(alone, in_read_set_tasks))) ==
-                       Set(D.cell_id.(phase_a))
-            Test.@test allunique(D.cell_id.(alone))
+            Test.@test isempty(intersect(Set(ids(alone)), Set(ids(in_read_set_tasks))))
+            Test.@test Set(ids(vcat(alone, in_read_set_tasks))) == Set(ids(phase_a))
+            Test.@test allunique(ids(alone))
             Test.@test all(c -> c.corrector === :iterative, alone)
-            Test.@test all(c -> D.assembler_accepts_k(c.k_policy), alone)
-            # Every :iterative cell the assembler can take runs alone.
-            Test.@test !any(
-                c -> c.corrector === :iterative &&
-                     D.assembler_accepts_k(c.k_policy), in_read_set_tasks)
+            Test.@test all(c -> D5OntAdaptiveGridDriver.assembler_accepts_k(c.k_policy),
+                alone)
+            # Without --skip-iterative a read-set task runs every one of its cells.
+            Test.@test all(
+                rs -> ids(D5OntAdaptiveGridDriver.read_set_task_cells(
+                    rs; toy, skip_iterative = false)) ==
+                      ids(D5OntAdaptiveGridDriver.phase_a_cells_of(rs; toy)),
+                sets)
         end
-        alone = D.cells_run_alone(; toy = false)
+        alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy = false)
         # 504 ONT grid + 48 assemblable validation + 168 Illumina :iterative cells.
         Test.@test length(alone) == 720
         Test.@test count(c -> c.stratum === :grid, alone) == 504
         Test.@test count(c -> c.stratum === :validation, alone) == 48
         Test.@test count(c -> c.stratum === :illumina_control, alone) == 168
+        # Read-set tasks keep the :none cells and the 48 validation cells whose k
+        # the assembler rejects (recorded as infeasible, never run alone).
+        kept = [c for rs in D5OntAdaptiveGridDriver.read_sets()
+                for c in D5OntAdaptiveGridDriver.read_set_task_cells(
+            rs; toy = false, skip_iterative = true)]
+        Test.@test length(kept) == 720
+        Test.@test count(c -> c.corrector === :none, kept) == 672
+        Test.@test count(c -> c.stratum === :validation && c.k_policy > 64, kept) == 48
         # The order follows the read-set array, so cell tasks sharing a read set
         # are adjacent and a read set's index is recoverable from its cell.
-        rs_order = [findfirst(==(D.read_set_of(c)), D.read_sets()) for c in alone]
+        rs_order = [findfirst(==(D5OntAdaptiveGridDriver.read_set_of(c)),
+                        D5OntAdaptiveGridDriver.read_sets()) for c in alone]
         Test.@test issorted(rs_order)
-        toy_ids = D.cell_id.(D.cells_run_alone(; toy = true))
+        toy_ids = D5OntAdaptiveGridDriver.cell_id.(
+            D5OntAdaptiveGridDriver.cells_run_alone(; toy = true))
         Test.@test toy_ids == [
             "ont__id95__cov10x__Lambda__seed42__iterative__k21__grid__scalable",
             "ont__id95__cov10x__Lambda__seed42__iterative__k31__grid__scalable",
@@ -458,13 +475,13 @@ Test.@testset "D5 grid driver" begin
     end
 
     Test.@testset "CLI: --cell-index and --skip-iterative" begin
-        D = D5OntAdaptiveGridDriver
-        c = D.parse_cli(["--phase", "A", "--cell-index", "7"])
+        c = D5OntAdaptiveGridDriver.parse_cli(["--phase", "A", "--cell-index", "7"])
         Test.@test c.cell_index == 7 && c.read_set_index === nothing && !c.skip_iterative
-        r = D.parse_cli(["--phase", "A", "--read-set-index", "3", "--skip-iterative"])
+        r = D5OntAdaptiveGridDriver.parse_cli(
+            ["--phase", "A", "--read-set-index", "3", "--skip-iterative"])
         Test.@test r.read_set_index == 3 && r.skip_iterative && r.cell_index === nothing
-        Test.@test D.parse_cli(["--phase", "A", "--read-set-index", "3"]).skip_iterative ==
-                   false
+        Test.@test !D5OntAdaptiveGridDriver.parse_cli(
+            ["--phase", "A", "--read-set-index", "3"]).skip_iterative
         for (args, needle) in (
             (["--phase", "A", "--cell-index", "1", "--read-set-index", "1"],
                 "select different task kinds"),
@@ -478,7 +495,7 @@ Test.@testset "D5 grid driver" begin
                 "--skip-iterative applies to --phase A --read-set-index only"),
             (["--phase", "A", "--cell-index", "1", "--cell-index", "2"],
                 "--cell-index given more than once"))
-            msg = error_message(() -> D.parse_cli(args))
+            msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(args))
             Test.@test msg !== nothing && occursin(needle, msg)
         end
     end

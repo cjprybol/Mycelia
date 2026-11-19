@@ -720,47 +720,142 @@ Test.@testset "D5 grid runner" begin
     end
 
     Test.@testset "cell task: needs a prepared read set, never simulates" begin
-        D = D5OntAdaptiveGridDriver
+        # A read set as its read-set task leaves it: readset.json written last,
+        # reads on disk, and the reference staged where prepare_reference looks
+        # (download_genome_by_accession reuses an existing <refs>/<accession>.fna).
+        function plant_read_set(root, rs)
+            refs = mkpath(joinpath(root, "refs"))
+            info = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[rs.organism]
+            write(joinpath(refs, info.accession * ".fna"),
+                ">$(info.accession)\n" * "ACGT"^(info.expected_bp ÷ 4) *
+                "A"^(info.expected_bp % 4) * "\n")
+            rs_dir = mkpath(joinpath(root, "readsets",
+                D5OntAdaptiveGridDriver.read_set_id(rs)))
+            reads = joinpath(rs_dir, "reads.fq")
+            write(reads, "@r1\nACGTACGT\n+\nIIIIIIII\n@r2\nTTGGCCAA\n+\nIIIIIIII\n")
+            D5OntAdaptiveGridDriver.save_json_atomically(joinpath(rs_dir, "readset.json"),
+                Dict("read_set_id" => D5OntAdaptiveGridDriver.read_set_id(rs),
+                    "reads_paths" => [reads], "n_reads" => 2, "read_bases" => 16,
+                    "identity_params" => nothing, "simulator_argv" => "planted",
+                    "error_model" => "planted", "qscore_model" => "planted",
+                    "error_rate_estimate_diagnostic" => 0.0))
+            return rs_dir
+        end
+        phase_a(args, root) = run_phase_a(
+            D5OntAdaptiveGridDriver.parse_cli(vcat(["--phase", "A",
+                "--allow-sha-mismatch"], args)), root)
+        toy_rs = D5OntAdaptiveGridDriver.toy_read_sets()
+
         mktempdir() do root
-            cli = D.parse_cli(["--phase", "A", "--cell-index", "2", "--toy"])
-            cell = select_cell(cli)
-            Test.@test D.cell_id(cell) ==
-                       "ont__id99__cov100x__Lambda__seed42__iterative__k29__validation__scalable"
-            rs = D.read_set_of(cell)
-            Test.@test load_prepared_read_set(rs, root) === nothing
-            msg = error_message(() -> run_cell_task(cli, root, run_context_base()))
+            # Through run_phase_a: a cell index dispatches to the cell task, which
+            # refuses before staging anything.
+            msg = error_message(() -> phase_a(["--cell-index", "2", "--toy"], root))
             Test.@test msg !== nothing && occursin("is not prepared", msg)
             # The toy's 99%/100x read set is read-set index 1.
             Test.@test occursin("--read-set-index 1 --skip-iterative --toy", msg)
-            # Refusing writes nothing: the cell stays absent in a merge.
-            Test.@test !isfile(checkpoint_path(root, cell))
+            Test.@test occursin("resubmit --cell-index 2", msg)
+            Test.@test !isdir(joinpath(root, "refs"))
             Test.@test !isdir(joinpath(root, "readsets"))
-            out = error_message(() -> select_cell(D.parse_cli(
-                ["--phase", "A", "--cell-index", "4", "--toy"])))
-            Test.@test out !== nothing && occursin("--cell-index 4 out of range 0:3", out)
+            Test.@test !isdir(joinpath(root, "cells"))
+            msg = error_message(() -> phase_a(["--toy"], root))
+            Test.@test msg !== nothing &&
+                       occursin("requires --read-set-index or --cell-index", msg)
+            for bad in ("4", "-1")
+                out = error_message(() -> select_cell(D5OntAdaptiveGridDriver.parse_cli(
+                    ["--phase", "A", "--cell-index", bad, "--toy"])))
+                Test.@test out !== nothing && occursin("out of range 0:3", out)
+            end
 
             # A prepared read set loads with its recorded read count checked.
-            rs_dir = joinpath(root, "readsets", D.read_set_id(rs))
-            mkpath(rs_dir)
-            reads = joinpath(rs_dir, "reads.fq")
-            write(reads, "@r1\nACGTACGT\n+\nIIIIIIII\n@r2\nTTGGCCAA\n+\nIIIIIIII\n")
-            meta = Dict("read_set_id" => D.read_set_id(rs), "reads_paths" => [reads],
-                "n_reads" => 2)
-            D.save_json_atomically(joinpath(rs_dir, "readset.json"), meta)
-            prepared = load_prepared_read_set(rs, root)
-            Test.@test length(prepared.records) == 2
-            D.save_json_atomically(joinpath(rs_dir, "readset.json"),
+            cell = select_cell(D5OntAdaptiveGridDriver.parse_cli(
+                ["--phase", "A", "--cell-index", "2", "--toy"]))
+            rs = D5OntAdaptiveGridDriver.read_set_of(cell)
+            Test.@test load_prepared_read_set(rs, root) === nothing
+            rs_dir = plant_read_set(root, rs)
+            Test.@test length(load_prepared_read_set(rs, root).records) == 2
+            meta = JSON.parsefile(joinpath(rs_dir, "readset.json"))
+            D5OntAdaptiveGridDriver.save_json_atomically(joinpath(rs_dir, "readset.json"),
                 merge(meta, Dict("n_reads" => 3)))
             msg = error_message(() -> load_prepared_read_set(rs, root))
             Test.@test msg !== nothing && occursin("has 2 reads on disk", msg)
         end
-        # A read-set task with --skip-iterative leaves exactly these cells out.
-        for rs in D.toy_read_sets()
-            kept = filter(c -> !D.runs_alone(c), phase_cells(rs, :A, true))
-            Test.@test all(c -> c.corrector === :none, kept)
+
+        mktempdir() do root
+            # Full grid: the remedy names the FULL-grid read-set index and no --toy.
+            # ONT 95%/10x Lambda seed 42 is read set 24 (24 ONT 90% read sets first).
+            alone = D5OntAdaptiveGridDriver.cells_run_alone(; toy = false)
+            j = findfirst(c -> D5OntAdaptiveGridDriver.read_set_id(
+                D5OntAdaptiveGridDriver.read_set_of(c)) ==
+                               "ont__id95__cov10x__Lambda__seed42", alone) - 1
+            msg = error_message(() -> phase_a(["--cell-index", string(j)], root))
+            Test.@test msg !== nothing && occursin("is not prepared", msg)
+            Test.@test occursin("--read-set-index 24 --skip-iterative)", msg)
+            Test.@test !occursin("--toy", msg)
+        end
+
+        mktempdir() do root
+            # Toy read-set task with --skip-iterative, through run_phase_a: its two
+            # :none cells are checkpointed ok (served from cache, no assembly), and
+            # its two :iterative cells are left to cell tasks.
+            rs = toy_rs[1]
+            plant_read_set(root, rs)
+            cells = D5OntAdaptiveGridDriver.toy_cells(rs)
+            for c in cells
+                c.corrector === :none && save_row(root, row_for(c))
+            end
+            statuses = phase_a(["--read-set-index", "0", "--skip-iterative", "--toy"],
+                root)
+            Test.@test statuses == ["ok", "ok"]
+            for c in cells
+                Test.@test isfile(checkpoint_path(root, c)) == (c.corrector === :none)
+            end
+        end
+
+        mktempdir() do root
+            # Full-grid ONT 99%/100x Lambda seed 42 (read set 66): 7 :none cells
+            # (cached ok) and 8 validation cells above the assembler's k limit run
+            # in the read-set task; the 8 infeasible rows need no assembler. The 7
+            # grid and 8 assemblable validation :iterative cells are deferred.
+            rs = D5OntAdaptiveGridDriver.read_sets()[67]
+            Test.@test D5OntAdaptiveGridDriver.read_set_id(rs) ==
+                       "ont__id99__cov100x__Lambda__seed42"
+            plant_read_set(root, rs)
+            cells = D5OntAdaptiveGridDriver.cells_for_read_set(rs; phase = :A)
+            for c in cells
+                c.corrector === :none && save_row(root, row_for(c))
+            end
+            statuses = phase_a(["--read-set-index", "66", "--skip-iterative"], root)
+            Test.@test length(statuses) == 15
+            Test.@test count(==("ok"), statuses) == 7
+            Test.@test count(==(D5OntAdaptiveGridDriver.STATUS_INFEASIBLE_K), statuses) == 8
+            for c in cells
+                ran_here = c.corrector === :none ||
+                           !D5OntAdaptiveGridDriver.assembler_accepts_k(c.k_policy)
+                Test.@test isfile(checkpoint_path(root, c)) == ran_here
+            end
         end
     end
 
+    Test.@testset "--list prints both array sizes" begin
+        function printed(toy)
+            path, io = mktemp()
+            try
+                redirect_stdout(() -> print_counts(toy), io)
+            finally
+                close(io)
+            end
+            return read(path, String)
+        end
+        full = printed(false)
+        Test.@test occursin("read sets: 96 -> --array=0-95", full)
+        Test.@test occursin("(:iterative, --cell-index): 720 -> --array=0-719", full)
+        toy = printed(true)
+        Test.@test occursin("read sets (toy): 3 -> --array=0-2", toy)
+        Test.@test occursin("(:iterative, --cell-index) (toy): 4 -> --array=0-3", toy)
+        Test.@test occursin(
+            "cell 3: illumina__cov30x__Lambda__seed42__iterative__k21__illumina_control__scalable",
+            toy)
+    end
     Test.@testset "expected cells for the toy and the full grid" begin
         Test.@test length(expected_cells(true, false)) == 7
         Test.@test length(expected_cells(false, false)) == 1008 + 96 + 336
@@ -832,20 +927,89 @@ Test.@testset "D5 grid runner" begin
                 "SLURM_ARRAY_TASK_MAX" => "719"))
             Test.@test cells_past.code == 1 && occursin("outside the toy", cells_past.log)
             Test.@test occursin("D5_PHASE=A-cells", cells_past.log)
+            # The boundary itself: cell task 4 is the first index past the toy.
+            cells_four = run_gate(;
+                extra = Dict("D5_PHASE" => "A-cells", "SLURM_ARRAY_TASK_ID" => "4",
+                "SLURM_ARRAY_TASK_MAX" => "4"))
+            Test.@test cells_four.code == 1 && occursin("outside the toy", cells_four.log)
             # Read-set tasks keep the 0-2 toy: index 3 is refused there.
             rs_past = run_gate(; extra = Dict("SLURM_ARRAY_TASK_ID" => "3"))
             Test.@test rs_past.code == 1 && occursin("outside the toy", rs_past.log)
             bad = run_gate(; extra = Dict("D5_PHASE" => "cells"))
             Test.@test bad.code == 1 && occursin("D5_PHASE must be A, A-cells", bad.log)
+            # An unknown phase is refused even on an approved (D5_FULL=1) array.
+            bad_full = run_gate(; extra = Dict("D5_PHASE" => "cells", "D5_FULL" => "1"))
+            Test.@test bad_full.code == 1 &&
+                       occursin("D5_PHASE must be A, A-cells", bad_full.log)
         end
-        # The phase -> runner flag mapping, as text: no julia runs in this test.
-        text = read(sbatch, String)
-        Test.@test occursin(
-            raw"A) INDEX_ARGS=(--read-set-index \"${TASK_INDEX}\" --skip-iterative)",
-            text)
-        Test.@test occursin(
-            raw"A-cells) RUNNER_PHASE=A; INDEX_ARGS=(--cell-index \"${TASK_INDEX}\")",
-            text)
+        # The phase -> runner argv mapping, end to end through the real sbatch:
+        # a fake `julia` records its arguments and a fake `module` does nothing.
+        # GNU coreutils (mktemp --directory, realpath, rm --recursive), so Linux.
+        if !Sys.islinux() || Sys.which("bash") === nothing
+            Test.@test_skip "sbatch argv check needs Linux and bash"
+        else
+            mktempdir() do dir
+                bin = mkpath(joinpath(dir, "bin"))
+                argv_file = joinpath(dir, "argv.txt")
+                write(joinpath(bin, "julia"),
+                    "#!/bin/bash\n" *
+                    "if [[ \"\${1:-}\" == \"--version\" ]]; then echo fake; exit 0; fi\n" *
+                    "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n")
+                write(joinpath(bin, "module"), "#!/bin/bash\nexit 0\n")
+                chmod(joinpath(bin, "julia"), 0o755)
+                chmod(joinpath(bin, "module"), 0o755)
+                function runner_argv(phase, task; d5_args = "--toy")
+                    rm(argv_file; force = true)
+                    out = mkpath(joinpath(dir, "out_$(phase)_$(task)"))
+                    env = Dict{String, String}(
+                        "PATH" => bin * ":" * get(ENV, "PATH", "/usr/bin"),
+                        "HOME" => homedir(), "D5_FULL" => "0", "D5_PHASE" => phase,
+                        "D5_ARGS" => d5_args, "D5_OUTDIR" => out,
+                        "D5_TMPDIR" => mkpath(joinpath(dir, "tmp")),
+                        "D5_FAKE_ARGV" => argv_file, "D5_PROC_CGROUP" => "/nonexistent",
+                        "SLURM_SUBMIT_DIR" => dirname(sbatch),
+                        "SLURM_ARRAY_TASK_ID" => string(task),
+                        "SLURM_ARRAY_TASK_MAX" => string(task))
+                    log = IOBuffer()
+                    proc = run(pipeline(ignorestatus(Cmd(`bash $sbatch`; env = env));
+                        stdout = log, stderr = log))
+                    argv = isfile(argv_file) ? readlines(argv_file) : String[]
+                    return (; code = proc.exitcode, argv, log = String(take!(log)))
+                end
+                flag_value(argv, flag) =
+                    let i = findfirst(==(flag), argv)
+                        i === nothing ? nothing : argv[i + 1]
+                    end
+                a = runner_argv("A", 1)
+                Test.@test a.code == 0
+                Test.@test a.argv[1:4] ==
+                           ["--project=..", "d5_ont_adaptive_grid_run.jl", "--phase", "A"]
+                Test.@test flag_value(a.argv, "--read-set-index") == "1"
+                Test.@test "--skip-iterative" in a.argv && "--toy" in a.argv
+                Test.@test !("--cell-index" in a.argv)
+                cells = runner_argv("A-cells", 2)
+                Test.@test cells.code == 0
+                Test.@test cells.argv[3:4] == ["--phase", "A"]
+                Test.@test flag_value(cells.argv, "--cell-index") == "2"
+                Test.@test !("--read-set-index" in cells.argv)
+                Test.@test !("--skip-iterative" in cells.argv)
+                Test.@test !any(occursin("A-cells"), cells.argv)
+                b = runner_argv("B", 0; d5_args = "--toy --tau 0.8 --tau-hat 0.6")
+                Test.@test b.code == 0 && b.argv[3:4] == ["--phase", "B"]
+                Test.@test flag_value(b.argv, "--read-set-index") == "0"
+                Test.@test !("--skip-iterative" in b.argv)
+                m = runner_argv("merge", 0)
+                Test.@test m.code == 0 && m.argv[3:4] == ["--phase", "merge"]
+                Test.@test !any(f -> f in m.argv,
+                    ("--read-set-index", "--cell-index", "--skip-iterative"))
+                # Every task hands the runner a node-local temp root and the
+                # resolved output root.
+                Test.@test startswith(flag_value(cells.argv, "--tmp-dir"),
+                    realpath(joinpath(dir, "tmp")))
+                Test.@test flag_value(cells.argv, "--output-dir") ==
+                           realpath(joinpath(dir, "out_A-cells_2"))
+            end
+        end
     end
 end
 
