@@ -16,10 +16,12 @@
 #           2000 bp cells. The pre-registration ASSUMED PR #487 cannot reroute
 #           them: every read there is long (n_obs > 1024 at every k used);
 #       (c) the fixed-toy oracle passes at BOTH commits, and its illumina sha is
-#           equal between them. The pre-registration says "19/19". Implemented
-#           as: every severity == "gate" row passes except the prewiring-sha row,
-#           because amendment 4 reports equality with the historical prewiring
-#           sha descriptively rather than gating it; the one advisory row
+#           equal between them. Amendment 4 says "19/19" and reports equality
+#           with the historical prewiring sha descriptively (a mismatch there
+#           does not void). Amendment 5 says every severity == "gate" row
+#           passes; the prewiring check is itself a gate row, so that sentence
+#           conflicts with amendment 4. Implemented as amendment 4: every gate
+#           row passes except the prewiring-sha row, and the one advisory row
 #           (host-load-dependent wall clock) is reported, not gated. An oracle
 #           file is accepted only with exactly the 19 expected checks, each once
 #           and at its expected severity (18 gate, 1 advisory), and a sibling
@@ -49,7 +51,7 @@
 # commit or the same directory or oracle file (compared by realpath), oracle
 # files failing the shape or provenance checks above, a shard that is cut short
 # (no final newline, or a row whose field count differs from its header) or has
-# a quoted field, and
+# a quoted field, an arm other than illumina or nanopore, and
 # (as in td2rxh amendment 3) a pair with no contigs in either arm,
 # n_reads <= 0, or arms reporting different read counts.
 # SUPPORTED requires p < alpha; an undefined test (every x = 0) is reported as
@@ -204,7 +206,9 @@ end
 
 Read every `seed<N>.csv` shard in `dir` twice: typed (for statistics, checked by
 `validate_shards`) and as strings (for the G0 field-identity checks, so a value
-that parses equal but differs on disk is still a difference).
+that parses equal but differs on disk is still a difference). An arm outside
+`TD4MBG_ARMS` is an error: `pair_arms` would otherwise ignore it and a typo
+would look like a missing row.
 """
 function load_run(dir::AbstractString)::NamedTuple
     isdir(dir) || throw(ArgumentError("shard directory not found: $(dir)"))
@@ -222,6 +226,9 @@ function load_run(dir::AbstractString)::NamedTuple
         cols = :setequal
     )
     validate_shards(typed)
+    unknown_arms = sort(collect(setdiff(unique(string.(typed.arm)), TD4MBG_ARMS)))
+    isempty(unknown_arms) || throw(ArgumentError(
+        "arms outside $(join(TD4MBG_ARMS, ", ")): $(join(unknown_arms, ", "))"))
     label = only(unique(string.(typed.label)))
     paired, unpaired = pair_arms(typed)
     return (
@@ -263,15 +270,37 @@ function label_problems(
     return problems
 end
 
+"""
+    _seed_key(field) -> Union{Int, Nothing}
+
+Integer seed used to find a string-typed row. The typed load accepts any
+spelling `Int` accepts, including the `2.0` a `Float64` column writes, but
+`string(seed)` is only `"2"`. Keying on that exact text reported a present row
+as absent. A canonical integer (`"2"`, `"02"`) and a float spelling of an
+integer (`"2.0"`) both key as `2`; the field text is still compared later, so
+`"2"` versus `"2.0"` stays a difference. Anything else does not match.
+"""
+function _seed_key(field)::Union{Int, Nothing}
+    text = strip(string(field))
+    n = tryparse(Int, text)
+    n !== nothing && return n
+    f = tryparse(Float64, text)
+    if f !== nothing && isfinite(f) && isinteger(f) && typemin(Int) <= f <= typemax(Int)
+        return Int(f)
+    end
+    return nothing
+end
+
 function _string_row(
         df::DataFrames.DataFrame,
         cell::AbstractString,
         seed::Integer,
         arm::AbstractString
 )
-    idx = findall(
-        isequal.(df.cell, cell) .& isequal.(df.seed, string(seed)) .& isequal.(df.arm, arm),
-    )
+    keys = [_seed_key(s) for s in df.seed]
+    idx = findall(isequal.(df.cell, cell) .& isequal.(keys, seed) .& isequal.(df.arm, arm))
+    length(idx) > 1 && throw(ArgumentError(
+        "duplicate rows for $(cell) seed $(seed) $(arm)"))
     return length(idx) == 1 ? df[only(idx), :] : nothing
 end
 
@@ -343,7 +372,9 @@ name and severity pins; they are kept for their more specific messages.
 
 `gates_pass` is true iff every `gate` row passes EXCEPT the
 `$(TD4MBG_ORACLE_SHA_CHECK)` row: that row compares with the historical prewiring
-sha, which amendment 4 reports descriptively rather than gating. The illumina
+sha, which amendment 4 reports descriptively rather than gating. Amendment 5's
+"every gate row passes" conflicts with that exception, because this check is a
+gate row; this function follows amendment 4. The illumina
 sha itself is parsed from that row's detail and compared across commits by the
 caller.
 """
@@ -906,9 +937,9 @@ function td4mbg_analysis(;
         println(
             io,
             "demoted_whole_read_routes: NOT CAPTURED. The td2rxh harness does not export " *
-            "it (amendment 5).\n\nwall_seconds_per_read is confounded with node " *
-            "placement (BASE and FIX tasks ran on different nodes) and is not " *
-            "attributable to the code change.\n"
+            "it (amendment 5).\n\nwall_seconds_per_read is not a gate. This analysis " *
+            "does not read node placement, so a difference in that column is not " *
+            "attributed to the code change.\n"
         )
         _table(io, counters)
         if drift !== nothing
