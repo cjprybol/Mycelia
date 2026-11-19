@@ -13,8 +13,11 @@
 #   * The seed must come from an explicit `--seed N`, or be RECOVERED from a run
 #     log via `--run-log`.
 #   * `--assume-default-seed` is the only way to fall back on the harness's
-#     documented default (42), and it records that weaker provenance in the
-#     sidecar rather than pretending the value was observed.
+#     documented default (42). That weaker provenance is written on every row
+#     the tool supplies, in `seed_provenance`, and recorded in the sidecar.
+#     The sidecar is an audit record: `rgv_paired_wilcoxon.jl` reads the
+#     column. A row marked `documented-default` cannot be reported as an
+#     observed replicate.
 #   * The original CSV is NEVER modified in place. Output goes to a new path and a
 #     sidecar JSON records the source file, the seed, and exactly how the seed was
 #     determined, so the audit trail survives.
@@ -22,10 +25,15 @@
 # WHAT IS RECOVERABLE
 # -------------------
 # `run_rgv_sweep_{lrc,nersc}.sbatch` export `MYCELIA_RGV_SEED` and now echo
-# `SEED=<n>` into the run log; the harness banner now prints `Seed : <n>`. Any of
-# those three forms is recognized. The completed Lovelace sweep predates all
-# three, so its seed is recoverable only as the documented default 42 — which is
-# exactly the case `--assume-default-seed` exists to label honestly.
+# `SEED=<n>` into the run log; the harness banner prints
+# `Seeds : <list>` — plural, comma-space separated, even when the list has one
+# seed (`Seeds          : $(join(seeds, ", "))`). Any of those three forms is
+# recognized. A multi-seed banner is an error, not "no seed found": the log
+# states several seeds, so attributing one would be a guess and must not be
+# reported as "this log predates seed logging". The completed Lovelace sweep
+# predates all three forms, so its seed is recoverable only as the documented
+# default 42 — which is exactly the case `--assume-default-seed` exists to
+# label honestly.
 #
 # USAGE
 # -----
@@ -46,7 +54,8 @@
 #     --csv PATH                 (required) sweep CSV to backfill
 #     --seed N                   seed to write; provenance "explicit"
 #     --run-log PATH             recover the seed from a run log
-#     --assume-default-seed      fall back to 42; provenance "documented-default"
+#     --assume-default-seed      fall back to 42; per-row seed_provenance
+#                                "documented-default ..." (the analysis qualifies)
 #     --metric-source VALUE      also backfill `metric_source` (e.g. "quast")
 #     --quast-min-contig BP      also backfill `quast_min_contig` (e.g. 500)
 #     --output PATH              output CSV (default <csv-stem>_seedbackfill.csv)
@@ -90,14 +99,35 @@ The harness default for `MYCELIA_RGV_SEED`, mirrored from
 """
 const RGV_DEFAULT_SEED = 42
 
+"""
+Substring marking a seed this tool ASSUMED (`--assume-default-seed`) rather than
+one the operator stated or one recovered from a log.
+
+`rgv_paired_wilcoxon.jl` matches on this substring and refuses an unqualified
+report when any analyzed row carries it. The two scripts are included
+separately, so the coupling is pinned by a behavioural round-trip rather than a
+shared binding.
+"""
+const SEED_PROVENANCE_ASSUMED_MARKER = "documented-default"
+
+"""
+Label for a `seed` value this tool did not write, because the row already
+carried it. Those rows are evidence; an assumed seed is a claim.
+"""
+const SEED_PROVENANCE_OBSERVED = "observed"
+
 # Three forms in which the seed can appear in a run log:
 #   sbatch echo    "    ERR=...  K=21  SEED=42  QUAST=true"
+#                  (or a comma list: SEED=42,123,456)
 #   sbatch export  'export MYCELIA_RGV_SEED="42"'  /  MYCELIA_RGV_SEED=42
-#   harness banner "Seed           : 42"
+#   harness banner "Seeds          : 42"
+#                  "Seeds          : 42, 123, 456"
+# The banner is the string the sweep prints today, plural even for one seed.
+# `Seeds?` still accepts the older singular `Seed : <n>` form.
 const SEED_LOG_PATTERNS = (
     r"\bSEED=\"?([\d,]+)\"?"i,
     r"\bMYCELIA_RGV_SEED=\"?([\d,]+)\"?",
-    r"^\s*Seed\s*:\s*(\d+)\s*$"
+    r"^\s*Seeds?\s*:\s*([\d,\s]+)$"
 )
 
 """
@@ -142,7 +172,46 @@ function recover_seed_from_log(log_path::AbstractString)
 end
 
 """
-    insert_seed_column!(df, seed) -> DataFrames.DataFrame
+    _mark_seed_provenance!(df, supplied, label) -> DataFrames.DataFrame
+
+Record, per row, how the `seed` value was justified.
+
+`supplied[i]` is true for rows whose seed THIS CALL wrote. Those rows receive
+`label` (the request's provenance string, which contains
+`SEED_PROVENANCE_ASSUMED_MARKER` when the seed was assumed). Rows it did not
+write keep whatever `seed_provenance` they already carried, or
+`SEED_PROVENANCE_OBSERVED` if the column is new. Re-running can only label rows
+it actually fills — it cannot launder an assumed seed back to observed by
+passing a stronger label over a column that already agrees.
+
+No column is created when nothing was supplied and none exists: a table whose
+seeds were already populated should not gain a column claiming this tool
+justified them.
+"""
+function _mark_seed_provenance!(df::DataFrames.DataFrame,
+        supplied::AbstractVector{Bool}, label::AbstractString)
+    n = DataFrames.nrow(df)
+    length(supplied) == n ||
+        error("seed provenance mask has length $(length(supplied)), expected $n rows")
+    present = "seed_provenance" in DataFrames.names(df)
+    (!any(supplied) && !present) && return df
+    prior = present ?
+            String[ismissing(v) ? SEED_PROVENANCE_OBSERVED : string(v)
+                   for v in df.seed_provenance] :
+            fill(SEED_PROVENANCE_OBSERVED, n)
+    labels = String[supplied[i] ? String(label) : prior[i] for i in 1:n]
+    if present
+        df[!, :seed_provenance] = labels
+    else
+        pos = findfirst(==("seed"), DataFrames.names(df))
+        idx = pos === nothing ? DataFrames.ncol(df) + 1 : pos + 1
+        DataFrames.insertcols!(df, idx, :seed_provenance => labels)
+    end
+    return df
+end
+
+"""
+    insert_seed_column!(df, seed; provenance=nothing) -> DataFrames.DataFrame
 
 Insert `seed` immediately after `k`, matching the live sweep schema's column
 order. If `k` is absent the column is appended.
@@ -150,8 +219,15 @@ order. If `k` is absent the column is appended.
 Throws if `df` already has a `seed` column holding a value other than `seed` —
 silently rewriting an existing replicate identifier would corrupt provenance
 rather than add it.
+
+When `provenance` is given, every row whose seed this call wrote is labelled
+with that string in `seed_provenance`. Rows that already carried the value are
+not relabelled.
 """
-function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
+function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer;
+        provenance::Union{Nothing, AbstractString} = nothing)
+    n = DataFrames.nrow(df)
+    supplied = falses(n)
     if "seed" in DataFrames.names(df)
         # A legacy CSV can carry the HEADER with empty cells, which CSV.jl reads as
         # `missing`. That is "present but unpopulated", not "present with a
@@ -160,29 +236,34 @@ function insert_seed_column!(df::DataFrames.DataFrame, seed::Integer)
         # impossible on its intended input. Fill it instead.
         existing = unique(skipmissing(df.seed))
         if isempty(existing)
-            df[!, :seed] = fill(Int(seed), DataFrames.nrow(df))
-            return df
-        end
-        if length(existing) == 1 && first(existing) == seed
+            df[!, :seed] = fill(Int(seed), n)
+            supplied .= true
+        elseif length(existing) == 1 && first(existing) == seed
             # PARTIALLY populated is the case between "all missing" and "conflicting":
             # some rows carry `seed`, others are `missing`. `skipmissing` above hides
             # those holes, so returning early here reported success while leaving the
             # table unpairable — and `require_pairing_schema` then rejects it with a
             # hint pointing back at THIS tool, so the operator ping-pongs forever.
             # The populated values already agree with `seed`, so filling the holes
-            # asserts nothing new.
+            # asserts nothing new about those values. Only the holes are labelled
+            # with this call's provenance.
             if any(ismissing, df.seed)
-                df[!, :seed] = fill(Int(seed), DataFrames.nrow(df))
+                supplied = BitVector(ismissing(v) for v in df.seed)
+                df[!, :seed] = fill(Int(seed), n)
             end
-            return df
+        else
+            error("CSV already has a `seed` column with value(s) " *
+                  "$(join(string.(existing), ", ")); refusing to overwrite it with $seed.")
         end
-        error("CSV already has a `seed` column with value(s) " *
-              "$(join(string.(existing), ", ")); refusing to overwrite it with $seed.")
+    else
+        pos = findfirst(==("k"), DataFrames.names(df))
+        idx = pos === nothing ? DataFrames.ncol(df) + 1 : pos + 1
+        DataFrames.insertcols!(df, idx, :seed => fill(Int(seed), n))
+        supplied .= true
     end
-    n = DataFrames.nrow(df)
-    pos = findfirst(==("k"), DataFrames.names(df))
-    idx = pos === nothing ? DataFrames.ncol(df) + 1 : pos + 1
-    DataFrames.insertcols!(df, idx, :seed => fill(Int(seed), n))
+    if provenance !== nothing
+        _mark_seed_provenance!(df, supplied, provenance)
+    end
     return df
 end
 
@@ -320,7 +401,10 @@ function backfill_seed(csv_path::AbstractString;
         error("output already exists: $out (pass --force to overwrite)")
     end
     df = CSV.read(csv_path, DataFrames.DataFrame)
-    insert_seed_column!(df, seed)
+    # The provenance string rides in the CSV, not only in the sidecar. The
+    # sidecar is read by nothing downstream; `seed_provenance` is what
+    # `rgv_paired_wilcoxon.jl` uses to tell an assumed seed from an observed one.
+    insert_seed_column!(df, seed; provenance = provenance)
     # A `seed`-only backfill DEAD-ENDS: the analysis then refuses the same file for
     # having no metric-definition column, and nothing else could supply one. The
     # documented backfill -> analyse workflow has to be completable, so the same
@@ -348,6 +432,9 @@ function backfill_seed(csv_path::AbstractString;
                 "output_csv" => abspath(out),
                 "seed" => Int(seed),
                 "seed_provenance" => String(provenance),
+                "seed_provenance_column" => "seed_provenance" in DataFrames.names(df) ?
+                                            "seed_provenance" : nothing,
+                "seed_provenance_assumed_marker" => SEED_PROVENANCE_ASSUMED_MARKER,
                 "metric_source_backfilled" => metric_source === nothing ? nothing :
                                               String(metric_source),
                 "quast_min_contig_backfilled" => quast_min_contig === nothing ? nothing :
@@ -372,12 +459,116 @@ end
 
 # === CLI ====================================================================
 
-function _bf_arg(flag)
-    i = findfirst(==(flag), ARGS)
-    return (i !== nothing && i < length(ARGS)) ? ARGS[i + 1] : nothing
+const _BF_KNOWN_FLAGS = (
+    "--csv", "--seed", "--run-log", "--assume-default-seed",
+    "--metric-source", "--quast-min-contig", "--output", "--force",
+)
+const _BF_VALUE_FLAGS = (
+    "--csv", "--seed", "--run-log", "--metric-source",
+    "--quast-min-contig", "--output",
+)
+
+"""
+    _cli_problem(args, known, value_flags) -> Union{String, Nothing}
+
+`nothing` when `args` only uses known flags and every value-taking flag is
+followed by a value. Otherwise a message naming the problem.
+
+An unknown flag used to be ignored, and `_bf_arg` used to return the next
+token unconditionally, so `--output --force` named a file `--force`.
+"""
+function _cli_problem(args, known, value_flags)
+    known_set = Set(String.(known))
+    value_set = Set(String.(value_flags))
+    for a in args
+        if startswith(a, "--") && !(a in known_set)
+            return "unrecognized flag `$a`"
+        end
+    end
+    for (i, a) in enumerate(args)
+        a in value_set || continue
+        if i == length(args) || startswith(args[i + 1], "--")
+            nxt = i == length(args) ? "end of arguments" : "`$(args[i + 1])`"
+            return "`$a` requires a value, not $nxt"
+        end
+    end
+    return nothing
+end
+
+function _bf_arg(flag, args = ARGS)
+    i = findfirst(==(flag), args)
+    i === nothing && return nothing
+    if i == length(args) || startswith(args[i + 1], "--")
+        error("`$flag` requires a value, not " *
+              (i == length(args) ? "end of arguments" : "`$(args[i + 1])`"))
+    end
+    return args[i + 1]
+end
+
+"""
+    resolve_backfill_seed(; explicit, run_log, assume_default) -> (seed, provenance)
+
+Turn the three justification flags into one seed and the provenance string
+written onto every row this tool supplies.
+
+`--seed` and `--run-log` together are a check, not a precedence rule. The log
+is read, and a missing seed or a different seed is an error. Letting `--seed`
+win silently is how an operator's guess hides a log that says something else
+(or a log this parser cannot read).
+"""
+function resolve_backfill_seed(;
+        explicit::Union{Nothing, AbstractString},
+        run_log::Union{Nothing, AbstractString},
+        assume_default::Bool)
+    if explicit !== nothing && run_log !== nothing
+        stated = parse(Int, explicit)
+        recovered = recover_seed_from_log(run_log)
+        if recovered === nothing
+            error("--seed $stated and --run-log were both passed, but no seed was " *
+                  "found in $(abspath(run_log)). Refusing to ignore the log and keep " *
+                  "the operator's value: that is how a log this parser cannot read " *
+                  "gets labelled as an explicit seed. Pass only one of --seed and " *
+                  "--run-log.")
+        end
+        if recovered != stated
+            error("--seed $stated disagrees with seed $recovered recovered from " *
+                  "$(abspath(run_log)). Refusing to let --seed silently supersede " *
+                  "the log. Pass only the source you intend to trust.")
+        end
+        return stated,
+               "explicit (--seed $stated), agrees with run log ($(abspath(run_log)))"
+    elseif explicit !== nothing
+        seed = parse(Int, explicit)
+        return seed, "explicit (--seed $seed)"
+    elseif run_log !== nothing
+        recovered = recover_seed_from_log(run_log)
+        if recovered === nothing
+            if assume_default
+                return RGV_DEFAULT_SEED,
+                       "$(SEED_PROVENANCE_ASSUMED_MARKER) ($RGV_DEFAULT_SEED); " *
+                       "no seed found in $(abspath(run_log))"
+            end
+            error("no seed found in $run_log. That log predates SEED being " *
+                  "echoed. Pass --seed N if you know it, or --assume-default-seed to " *
+                  "record the documented default ($RGV_DEFAULT_SEED) with weaker provenance.")
+        end
+        return recovered, "recovered-from-run-log ($(abspath(run_log)))"
+    elseif assume_default
+        return RGV_DEFAULT_SEED,
+               "$(SEED_PROVENANCE_ASSUMED_MARKER) ($RGV_DEFAULT_SEED); no run log supplied"
+    else
+        error("the seed must be justified. Pass one of --seed N, --run-log PATH, " *
+              "or --assume-default-seed. Inventing a seed would make an unpairable run " *
+              "look pairable.")
+    end
 end
 
 function main()
+    problem = _cli_problem(ARGS, _BF_KNOWN_FLAGS, _BF_VALUE_FLAGS)
+    if problem !== nothing
+        println(stderr, "ERROR: $problem")
+        return 2
+    end
     csv_path = _bf_arg("--csv")
     if csv_path === nothing
         println(stderr,
@@ -390,39 +581,13 @@ function main()
     explicit = _bf_arg("--seed")
     run_log = _bf_arg("--run-log")
     assume_default = "--assume-default-seed" in ARGS
-
-    seed = nothing
-    provenance = ""
-    if explicit !== nothing
-        seed = parse(Int, explicit)
-        provenance = "explicit (--seed $seed)"
-    elseif run_log !== nothing
-        recovered = recover_seed_from_log(run_log)
-        if recovered === nothing
-            if assume_default
-                seed = RGV_DEFAULT_SEED
-                provenance = "documented-default ($RGV_DEFAULT_SEED); no seed found in " *
-                             "$(abspath(run_log))"
-            else
-                println(stderr,
-                    "ERROR: no seed found in $run_log. That log predates SEED being " *
-                    "echoed. Pass --seed N if you know it, or --assume-default-seed to " *
-                    "record the documented default ($RGV_DEFAULT_SEED) with weaker provenance.")
-                return 1
-            end
-        else
-            seed = recovered
-            provenance = "recovered-from-run-log ($(abspath(run_log)))"
-        end
-    elseif assume_default
-        seed = RGV_DEFAULT_SEED
-        provenance = "documented-default ($RGV_DEFAULT_SEED); no run log supplied"
-    else
-        println(stderr,
-            "ERROR: the seed must be justified. Pass one of --seed N, --run-log PATH, " *
-            "or --assume-default-seed. Inventing a seed would make an unpairable run " *
-            "look pairable.")
-        return 2
+    seed, provenance = try
+        resolve_backfill_seed(;
+            explicit = explicit, run_log = run_log, assume_default = assume_default)
+    catch e
+        e isa ErrorException || rethrow()
+        println(stderr, "ERROR: ", sprint(showerror, e))
+        return 1
     end
 
     ms = _bf_arg("--metric-source")
@@ -438,6 +603,12 @@ function main()
     println("Source     : $csv_path")
     println("Seed       : $seed")
     println("Provenance : $provenance")
+    if occursin(SEED_PROVENANCE_ASSUMED_MARKER, provenance)
+        println("             NOTE: this seed was ASSUMED, not observed. Rows this tool " *
+                "supplied are labelled \"$provenance\" in seed_provenance, and " *
+                "rgv_paired_wilcoxon.jl will not treat the analysis as an " *
+                "unqualified report.")
+    end
     # Report what was WRITTEN, not what was requested. Naming a definition the CSV
     # already carries asserts nothing, so no provenance column is created — and
     # announcing one anyway is an assurance the sidecar contradicts in the same run.

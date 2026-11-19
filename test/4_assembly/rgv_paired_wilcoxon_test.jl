@@ -569,6 +569,13 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             Test.@test !occursin("NaN", text)
             round = JSON.parsefile(jp)                      # must parse back
             Test.@test round["metrics"][1]["median_relative_improvement"] === nothing
+            # Per-pair fields stay numbers. `_json_num` would have written null
+            # for a non-finite value, and the figure builds Float64[...] from them.
+            pair0 = round["metrics"][1]["pairs"][1]
+            for field in ("control", "treatment", "difference")
+                Test.@test pair0[field] isa Real
+                Test.@test isfinite(pair0[field])
+            end
             # And the figure can consume it without a NaN blowing up the axes.
             Test.@test round["metrics"][1]["n_pairs"] == 6
         end
@@ -1078,12 +1085,157 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
             Test.@test occursin("Error rates swept", text)
             Test.@test occursin("0.01, 0.05", text)
             Test.@test occursin("~360 paired comparisons", text)
-            # Every outcome decide() can emit must be defined in the legend, or a
-            # reader meets a verdict string the report never explains.
-            for outcome in ("SUPPORTED", "PARTIALLY SUPPORTED", "FALSIFIED",
-                "NOT SUPPORTED", "INDETERMINATE")
-                Test.@test occursin("**$outcome**", text)
+            # The legend's tokens are pinned by driving `decide`, not by a
+            # hardcoded list of the names a previous fix remembered to print.
+            # See "the legend is derived from decide".
+        end
+    end
+
+    Test.@testset "the legend is derived from decide" begin
+        # One fixture per `return` in `decide`. Adding a branch without a
+        # fixture fails the source-count check; a leading token the legend
+        # does not bold fails the occursin check. The two undefined branches
+        # share the token INDETERMINATE — a lowercase "indeterminate" would
+        # show up here as its own token and miss `**INDETERMINATE**`.
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                "rgv_paired_wilcoxon.jl"), String)
+        start = findfirst("function decide(result, adjusted_p)", src)
+        stop = findnext("Substring identifying a metric definition", src, last(start))
+        body = src[first(start):first(stop)]
+        n_return = count(r"(?m)^\s*return ", body)
+
+        verdicts = String[
+            decide((direction = :none, n_pairs = 6,
+                    median_relative_improvement = 0.5), 0.01),
+            decide((direction = :higher, n_pairs = 0,
+                    median_relative_improvement = NaN), NaN),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = 0.5), NaN),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = 0.5), 0.2),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = NaN), 0.01),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = -0.4), 0.01),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = 0.5), 0.01),
+            decide((direction = :higher, n_pairs = 6,
+                    median_relative_improvement = 0.05), 0.01),
+        ]
+        Test.@test n_return == length(unique(verdicts))
+        labels = String[]
+        for v in verdicts
+            cut = findfirst(" (", v)
+            push!(labels, cut === nothing ? v : v[1:prevind(v, first(cut))])
+        end
+        Test.@test "reported" in labels
+        Test.@test "INDETERMINATE" in labels
+        Test.@test !("indeterminate" in labels)
+
+        df = _pwt_frame([(seed = s, error_rate = e, naive = 1000.0, iterative = 1600.0)
+                         for (s, e) in [(42, 0.01), (42, 0.05), (123, 0.01),
+            (123, 0.05), (456, 0.01), (456, 0.05)]];
+            provenance = "observed")
+        a = run_paired_analysis(df; metrics = (:quast_nga50,))
+        mktempdir() do dir
+            text = read(write_paired_report(joinpath(dir, "r.md"), a;
+                    csv_paths = ["f.csv"]), String)
+            for label in unique(labels)
+                Test.@test occursin("**$label**", text)
             end
         end
+    end
+
+    Test.@testset "mixed seed column types are an explained error" begin
+        cells = [(seed = s, error_rate = 0.01, naive = 1000.0, iterative = 1400.0)
+                 for s in (42, 123, 456)]
+        a = _pwt_frame(cells; provenance = "observed")
+        b = DataFrames.DataFrame(a)
+        b[!, :seed] = string.(b.seed)
+        merged = vcat(a, b; cols = :union)
+        msg = _pwt_throws_with(
+            () -> run_paired_analysis(merged; metrics = (:quast_nga50,)),
+            ["seed", "mixes types", "String", "Int64", "isless"])
+        Test.@test occursin("Re-export every shard", msg)
+    end
+
+    Test.@testset "an assumed seed cannot earn an unqualified report" begin
+        # td-dypu: `--assume-default-seed` used to look like a harness-observed
+        # run. The provenance string the resolver writes has to reach report.md
+        # and results.json. An explicit seed, and a harness table with no
+        # seed_provenance column, stay unqualified on this axis.
+        mktempdir() do dir
+            bare = _pwt_frame(
+                [(seed = 42, error_rate = e, naive = 1000.0, iterative = 1500.0)
+                 for e in (0.01, 0.05)];
+                with_seed = false, provenance = "observed")
+            src = joinpath(dir, "legacy.csv")
+            CSV.write(src, bare)
+            seed, prov = _PWTBackfill.resolve_backfill_seed(;
+                explicit = nothing, run_log = nothing, assume_default = true)
+            out, _, _ = _PWTBackfill.backfill_seed(src;
+                seed = seed, provenance = prov,
+                output_path = joinpath(dir, "assumed.csv"))
+            assumed_df = CSV.read(out, DataFrames.DataFrame)
+            # The metric columns were already on the legacy table; backfill must
+            # not have asserted them. The seed it supplied is assumed.
+            Test.@test all(occursin.(_PWTBackfill.SEED_PROVENANCE_ASSUMED_MARKER,
+                assumed_df.seed_provenance))
+            a = run_paired_analysis(assumed_df; metrics = (:quast_nga50,))
+            Test.@test a.seed_provenance_assumed
+            Test.@test a.n_rows_assumed_seed == DataFrames.nrow(assumed_df)
+            text = read(write_paired_report(joinpath(dir, "assumed.md"), a;
+                    csv_paths = [out]), String)
+            Test.@test occursin("SEED PROVENANCE ASSUMED, NOT OBSERVED", text)
+            Test.@test occursin("not an unqualified report", text)
+            payload = paired_analysis_json(a; csv_paths = [out])
+            Test.@test payload["seed_provenance_assumed"] == true
+            Test.@test payload["n_rows_assumed_seed"] == DataFrames.nrow(assumed_df)
+
+            explicit_seed, explicit_prov = _PWTBackfill.resolve_backfill_seed(;
+                explicit = "42", run_log = nothing, assume_default = false)
+            out_x, _, _ = _PWTBackfill.backfill_seed(src;
+                seed = explicit_seed, provenance = explicit_prov,
+                output_path = joinpath(dir, "explicit.csv"))
+            explicit_df = CSV.read(out_x, DataFrames.DataFrame)
+            ax = run_paired_analysis(explicit_df; metrics = (:quast_nga50,))
+            Test.@test !ax.seed_provenance_assumed
+            text_x = read(write_paired_report(joinpath(dir, "explicit.md"), ax;
+                    csv_paths = [out_x]), String)
+            Test.@test !occursin("SEED PROVENANCE ASSUMED", text_x)
+
+            observed = _pwt_frame(
+                [(seed = s, error_rate = 0.01, naive = 1000.0, iterative = 1500.0)
+                 for s in (42, 123, 456)];
+                provenance = "observed")
+            ao = run_paired_analysis(observed; metrics = (:quast_nga50,))
+            Test.@test !ao.seed_provenance_assumed
+            text_o = read(write_paired_report(joinpath(dir, "observed.md"), ao;
+                    csv_paths = ["harness.csv"]), String)
+            Test.@test !occursin("SEED PROVENANCE ASSUMED", text_o)
+            Test.@test paired_analysis_json(ao; csv_paths = ["harness.csv"])["seed_provenance_assumed"] ==
+                       false
+        end
+    end
+
+    Test.@testset "unknown flags and flag-valued arguments are rejected" begin
+        Test.@test _cli_problem(["--csv", "a.csv", "--metric-source", "quast"],
+            _PW_KNOWN_FLAGS, _PW_VALUE_FLAGS) === nothing
+        Test.@test occursin("unrecognized flag",
+            something(_cli_problem(["--csv", "a.csv", "--metirc-source", "quast"],
+                _PW_KNOWN_FLAGS, _PW_VALUE_FLAGS), ""))
+        Test.@test occursin("requires a value",
+            something(_cli_problem(
+                ["--csv", "a.csv", "--output-dir", "--allow-mixed-src"],
+                _PW_KNOWN_FLAGS, _PW_VALUE_FLAGS), ""))
+        _pwt_throws_with(() -> _pw_arg("--output-dir", ["--output-dir", "--keep-not-ok"]),
+            ["requires a value", "--keep-not-ok"])
+    end
+
+    Test.@testset "a non-finite pair value is not serialized as null" begin
+        _pwt_throws_with(() -> _json_finite(NaN),
+            ["not a finite number", "Float64"])
+        _pwt_throws_with(() -> _json_finite(nothing),
+            ["not a finite number"])
     end
 end
