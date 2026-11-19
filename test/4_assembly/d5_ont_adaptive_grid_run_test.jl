@@ -1070,7 +1070,8 @@ Test.@testset "D5 grid runner" begin
                     Test.@test flag_value(cells.argv, "--cell-index") == "2"
                     Test.@test !("--read-set-index" in cells.argv)
                     Test.@test !("--skip-iterative" in cells.argv)
-                    Test.@test !any(occursin("A-cells"), cells.argv)
+                    # An exact element: the output root's path contains "A-cells".
+                    Test.@test !("A-cells" in cells.argv)
                     # D5_ARGS is word-split: each flag and value is its own argument.
                     b = runner_argv("B", 0; d5_args = "--toy --tau 0.8 --tau-hat 0.6")
                     Test.@test b.code == 0 && b.argv[3:4] == ["--phase", "B"]
