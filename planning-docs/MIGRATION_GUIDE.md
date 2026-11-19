@@ -61,7 +61,7 @@ User-facing k-mer and qualmer builders do **not** take that enum. They take
 
 6. **Variable-length overlap defaults.** `build_biosequence_graph` and `build_quality_biosequence_graph` defaulted to `min_overlap=100` and `graph_mode=DoubleStrand`. `build_fasta_graph`, `build_fastq_graph`, and `build_string_graph` default to `min_overlap=3` and build a singlestrand graph. Overlap search only keeps odd lengths. `_normalize_min_overlap` rounds an even value up by 1, so the old default `100` becomes `101`. There is no `graph_mode` keyword on these builders. DNA/RNA doublestrand or canonical form is a second call: `convert_variable_length_to_doublestrand` or `convert_variable_length_to_canonical`. `build_fastq_graph` has no `min_quality` filter.
 
-7. **No k-mer graph → FASTA-graph converter.** `kmer_graph_to_biosequence_graph` and `qualmer_graph_to_quality_biosequence_graph` were removed. `collapse_linear_chains!` only collapses graphs whose vertex data already have a `sequence` field (variable-length and string vertices). It does not turn a k-mer graph into an OLC graph.
+7. **The k-mer graph → FASTA-graph converters were renamed.** `kmer_graph_to_biosequence_graph` and `qualmer_graph_to_quality_biosequence_graph` were removed. The replacement is `Mycelia.Rhizomorph.convert_fixed_to_variable(graph)`, which relabels k-mer or qualmer vertices as variable-length BioSequence vertices with overlaps derived from k. Follow it with `collapse_linear_chains!` to get unitigs, as `assemble_genome` does when `compact_unitigs` is set. `collapse_linear_chains!` alone does nothing to a k-mer graph: it only collapses vertices whose data already have a `sequence` field. The reverse direction is `convert_variable_to_fixed(graph, KmerType; drop_quality=false)`, and `drop_quality_scores(graph)` removes quality evidence. These correspond to the ecosystem plan's `collapse_to_variable_length`, `fragment_to_fixed_length`, and `remove_quality_scores`.
 
 8. **GFA moved, and the header string changed.** `Mycelia.write_gfa_next` / `Mycelia.read_gfa_next` are gone. Graph I/O is `Mycelia.Rhizomorph.write_gfa_next` and `Mycelia.Rhizomorph.read_gfa_next`. New GFA headers use `MY:Z:Mycelia-Rhizomorph` (the old k-mer writer wrote `MY:Z:Mycelia-Next`). `write_gfa_next` gained `segment_naming` (`:numeric` or `:sequence`). `Mycelia.Rhizomorph.write_gfa` is a different method: it takes an `AssemblyResult`, not a raw graph.
 
@@ -74,7 +74,10 @@ User-facing k-mer and qualmer builders do **not** take that enum. They take
 ## Graph construction
 
 `records` below are `FASTX` records (`Mycelia.open_fastx` yields them).
-File helpers open plain or `.gz` / `.bz2` / `.xz` paths themselves.
+The k-mer, qualmer, FASTA, and FASTQ file helpers open plain or `.gz` paths
+through `open_fastx`. Some docstrings also mention `.bz2` and `.xz`, but
+`open_fastx` does not decompress them. The n-gram and string file helpers read
+plain text only.
 
 ### Fixed-length builders
 
@@ -417,9 +420,10 @@ No Rhizomorph builder uses `Base.@deprecate`. Removed Mycelia builders are
 absent: calling them is an `UndefVarError`, not a warning with a forwarding
 method.
 
-Still accepted, and marked deprecated in the docstring, is the `lightweight`
-keyword on `build_kmer_graph`, `build_kmer_graph_from_file`,
-`build_kmer_graph_from_files`, and `build_ngram_graph`:
+Still accepted is the `lightweight` keyword on six builders:
+`build_kmer_graph` and `build_ngram_graph`, each with its `_from_file` and
+`_from_files` variant. Only the `build_kmer_graph` and `build_ngram_graph`
+docstrings mark it deprecated:
 
 | Keyword | Effect |
 | --- | --- |
@@ -476,7 +480,7 @@ enum is required. K-mer and qualmer builders want the symbols `:singlestrand`,
 
 **Does `lightweight=true` still work?**
 
-Yes on the four builders listed under Deprecation notes. It is a silent
+Yes on the six builders listed under Deprecation notes. It is a silent
 remap onto `memory_profile`. Prefer `memory_profile=:lightweight`.
 
 **Can I simplify a graph with one call?**
