@@ -87,29 +87,9 @@ import BioSequences
 # Shared helpers (used by both driver and worker)
 # ===========================================================================
 
-"""
-    parse_quast_metric(report_tsv, metric) -> Union{Missing, Float64}
-
-Return the numeric value of `metric` from a QUAST `report.tsv`, or `missing` if
-the file/metric is absent or the value is non-numeric (QUAST prints "-" when a
-metric could not be computed, e.g. NGA50 when nothing aligns — the empirical
-signature we expect for the BROKEN canonical mode).
-"""
-function parse_quast_metric(report_tsv::String, metric::String)::Union{Missing, Float64}
-    isfile(report_tsv) || return missing
-    result::Union{Missing, Float64} = missing
-    open(report_tsv, "r") do io
-        for line in eachline(io)
-            fields = split(line, '\t')
-            if length(fields) >= 2 && strip(fields[1]) == metric
-                parsed = tryparse(Float64, strip(fields[2]))
-                result = parsed === nothing ? missing : parsed
-                break
-            end
-        end
-    end
-    return result
-end
+# QUAST report.tsv parsing lives in the shared, dependency-free helper so this
+# driver and the correction-validation sweep cannot drift. No local copy.
+include(joinpath(@__DIR__, "quast_report_parsing.jl"))
 
 """
     load_reads_from_paths(fwd, rev) -> Vector{FASTX.FASTQ.Record}

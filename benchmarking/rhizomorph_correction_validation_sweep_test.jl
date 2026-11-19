@@ -6,6 +6,12 @@
 # dependency-free — it includes only the pure guard helpers, so it runs in
 # milliseconds without loading Mycelia, hitting the network, or assembling.
 #
+# The QUAST section also locks the shared parser's hardening contract
+# (exact sibling labels, fields[2] attribution, duplicate rows, whitespace,
+# scientific notation) and that mode_comparison.jl includes that parser
+# instead of a local copy. The mode-comparison script is source-checked, not
+# executed.
+#
 # Run:
 #   LD_LIBRARY_PATH='' julia --project=. \
 #     benchmarking/rhizomorph_correction_validation_sweep_test.jl
@@ -120,7 +126,7 @@ Test.@testset "rhizomorph correction validation scale guard" begin
     Test.@test scale_verdict_allowed(10.0, 2_000; floor = 100_000) == false
 end
 
-Test.@testset "QUAST report parsing + per-arm metric wiring" begin
+Test.@testset "QUAST parse_quast_metric hardening + per-arm metric wiring" begin
     mktempdir() do dir
         # --- Fixture: a minimal QUAST report.tsv with the four metrics we wire --
         report_tsv = joinpath(dir, "report.tsv")
@@ -161,6 +167,133 @@ Test.@testset "QUAST report parsing + per-arm metric wiring" begin
         Test.@test f.quast_num_misassemblies === missing
         Test.@test f.quast_duplication_ratio === missing
     end
+
+    # Deferred #406 hardening. These lock the shared parser's contract now that
+    # mode_comparison.jl includes it instead of carrying a private copy.
+    Test.@testset "sibling metrics stay exact" begin
+        mktempdir() do dir
+            # Longer sibling labels sit next to the names the sweep actually
+            # queries. A prefix or substring match would attribute the wrong row.
+            report_tsv = joinpath(dir, "report.tsv")
+            open(report_tsv, "w") do io
+                println(io, "Assembly\tcontigs")
+                println(io, "# contigs\t12")
+                println(io, "# misassembled contigs\t7")
+                println(io, "# misassemblies\t3")
+                println(io, "# local misassemblies\t11")
+                println(io, "N50\t100")
+                println(io, "NG50\t200")
+                println(io, "NA50\t300")
+                println(io, "NGA50\t8421")
+                println(io, "NGA75\t400")
+                println(io, "LGA50\t500")
+            end
+
+            Test.@test parse_quast_metric(report_tsv, "# misassemblies") == 3.0
+            Test.@test parse_quast_metric(report_tsv, "# misassembled contigs") == 7.0
+            Test.@test parse_quast_metric(report_tsv, "# local misassemblies") == 11.0
+            Test.@test parse_quast_metric(report_tsv, "N50") == 100.0
+            Test.@test parse_quast_metric(report_tsv, "NG50") == 200.0
+            Test.@test parse_quast_metric(report_tsv, "NA50") == 300.0
+            Test.@test parse_quast_metric(report_tsv, "NGA50") == 8421.0
+            Test.@test parse_quast_metric(report_tsv, "NGA75") == 400.0
+            Test.@test parse_quast_metric(report_tsv, "LGA50") == 500.0
+
+            # Exact label only: a prefix, a substring, or a case fold is absent.
+            Test.@test parse_quast_metric(report_tsv, "# misassemble") === missing
+            Test.@test parse_quast_metric(report_tsv, "# misassembled") === missing
+            Test.@test parse_quast_metric(report_tsv, "misassemblies") === missing
+            Test.@test parse_quast_metric(report_tsv, "NGA") === missing
+            Test.@test parse_quast_metric(report_tsv, "GA50") === missing
+            Test.@test parse_quast_metric(report_tsv, "nga50") === missing
+            Test.@test parse_quast_metric(report_tsv, "NGA50 ") === missing
+
+            # The per-arm helper must keep the same exact names, not a sibling.
+            q = quast_metrics_for_report(report_tsv)
+            Test.@test q.metric_source == "quast"
+            Test.@test q.quast_num_misassemblies == 3.0
+            Test.@test q.quast_nga50 == 8421.0
+        end
+    end
+
+    Test.@testset "multi-value columns attribute fields[2]" begin
+        mktempdir() do dir
+            # QUAST writes one column per assembly. This parser scores a single
+            # arm, so the value is column 2 even when later assemblies disagree.
+            report_tsv = joinpath(dir, "report.tsv")
+            open(report_tsv, "w") do io
+                println(io, "Assembly\tarm_a\tarm_b")
+                println(io, "NGA50\t111\t9999")
+                println(io, "# misassemblies\t1\t8")
+                println(io, "# misassembled contigs\t4\t6")
+                println(io, "Genome fraction (%)\t10.5\t80.0")
+                println(io, "Duplication ratio\t1.01\t2.50")
+                # A non-numeric first value must not be tokenized into 0 or 4,
+                # and must not fall through to the next assembly's column.
+                println(io, "# unaligned contigs\t0 + 4 part\t1 + 2 part")
+                # An empty first value column is missing, not the next column.
+                println(io, "NA50\t\t500")
+            end
+
+            Test.@test parse_quast_metric(report_tsv, "NGA50") == 111.0
+            Test.@test parse_quast_metric(report_tsv, "# misassemblies") == 1.0
+            Test.@test parse_quast_metric(report_tsv, "# misassembled contigs") == 4.0
+            Test.@test parse_quast_metric(report_tsv, "Genome fraction (%)") == 10.5
+            Test.@test parse_quast_metric(report_tsv, "Duplication ratio") == 1.01
+            Test.@test parse_quast_metric(report_tsv, "# unaligned contigs") === missing
+            Test.@test parse_quast_metric(report_tsv, "NA50") === missing
+
+            q = quast_metrics_for_report(report_tsv)
+            Test.@test q.metric_source == "quast"
+            Test.@test q.quast_nga50 == 111.0
+            Test.@test q.quast_num_misassemblies == 1.0
+            Test.@test q.quast_genome_fraction == 10.5
+            Test.@test q.quast_duplication_ratio == 1.01
+        end
+    end
+
+    Test.@testset "duplicate rows, whitespace, and scientific notation" begin
+        mktempdir() do dir
+            # First matching row wins, including a non-numeric first row. A later
+            # duplicate must not backfill a value the first row already refused.
+            duplicates = joinpath(dir, "duplicates.tsv")
+            open(duplicates, "w") do io
+                println(io, "NGA50\t100")
+                println(io, "NGA50\t2e2")
+                println(io, "# misassemblies\t-")
+                println(io, "# misassemblies\t9")
+            end
+            Test.@test parse_quast_metric(duplicates, "NGA50") == 100.0
+            Test.@test parse_quast_metric(duplicates, "# misassemblies") === missing
+
+            messy = joinpath(dir, "messy.tsv")
+            open(messy, "w") do io
+                write(io, "  NGA50 \t 1.5e3 \r\n")
+                println(io, "")
+                println(io, "   ")
+                println(io, "Genome fraction (%)\t  9.437E+1 \t99.0")
+                println(io, "  # misassemblies \t  3E0  ")
+                println(io, "Duplication ratio\t1.25e-1")
+            end
+            Test.@test parse_quast_metric(messy, "NGA50") == 1.5e3
+            # The third column (99.0) is another assembly, not this value.
+            Test.@test parse_quast_metric(messy, "Genome fraction (%)") == 9.437e1
+            Test.@test parse_quast_metric(messy, "# misassemblies") == 3.0
+            Test.@test parse_quast_metric(messy, "Duplication ratio") == 1.25e-1
+        end
+    end
+end
+
+Test.@testset "mode_comparison uses the shared QUAST parser" begin
+    # Executing mode_comparison.jl would load Mycelia and start the benchmark.
+    # The dedup is a source contract: include the shared file, no local copy.
+    src = read(joinpath(@__DIR__, "mode_comparison.jl"), String)
+    # Parsing never executes the script (no Mycelia load, no benchmark run).
+    Test.@test Meta.parseall(src) isa Expr
+    Test.@test occursin(
+        "include(joinpath(@__DIR__, \"quast_report_parsing.jl\"))", src)
+    Test.@test !occursin(r"^function parse_quast_metric\b"m, src)
+    Test.@test !occursin(r"^parse_quast_metric\([^)]*\)\s*="m, src)
 end
 
 Test.@testset "DataFrame schema push! guards column-name drift" begin
