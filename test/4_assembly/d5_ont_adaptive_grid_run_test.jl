@@ -1043,7 +1043,7 @@ Test.@testset "D5 grid runner" begin
                         end
                     site_depot = Dict(
                         "run_d5_grid_nersc.sbatch" => "/global/cfs/projectdirs/m4269/cjprybol/.julia_depot",
-                        "run_d5_grid_lrc.sbatch" => "/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot")[wrapper]
+                        "run_d5_grid_lrc.sbatch" => "/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5")[wrapper]
 
                     a = runner_argv("A", 1)
                     Test.@test a.code == 0

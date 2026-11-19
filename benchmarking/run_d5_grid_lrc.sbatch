@@ -35,8 +35,14 @@
 # overrides); the runner checks the corrector's rename there before any cell.
 #
 # PRE-STAGE ONCE on a login node (from the checkout root):
-#   export JULIA_DEPOT_PATH=/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot
+#   export JULIA_DEPOT_PATH=/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5
 #   export LD_LIBRARY_PATH=""
+#   # The grid's own depot (5.5 GB with the conda envs, staged 2026-11-19): the
+#   # group's shared .julia_depot had a partially extracted package
+#   # (Xorg_xkbcomp_jll) that broke precompilation, and it is on home (VAST),
+#   # not /global/scratch, whose Lustre client dropped out on the login nodes
+#   # that day. Submit with JULIA_DEPOT_PATH unset so this default applies;
+#   # the task log says which depot was used.
 #   julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
@@ -69,7 +75,7 @@
 set -uo pipefail
 
 D5_SITE_NAME="Lawrencium"
-D5_SITE_DEPOT="/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot"
+D5_SITE_DEPOT="/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5"
 # juliaup's julia, unless one is already on PATH.
 d5_load_julia() {
   command -v julia >/dev/null 2>&1 || export PATH="${HOME}/.juliaup/bin:${PATH}"
