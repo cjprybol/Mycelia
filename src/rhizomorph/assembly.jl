@@ -458,6 +458,15 @@ struct AssemblyConfig
     # k-mer will prune real sequence.
     traversal_min_quality::Float64
 
+    # How the corrector route picks its RE-ASSEMBLY k (td-yddpr.5). Only consulted
+    # when corrector=:iterative. `:connectivity` (default) keeps today's behavior
+    # byte-for-byte: `config.k` is a CEILING and `select_reassembly_k` may lower it
+    # to keep the corrected-read graph connected. `:fixed` re-assembles at exactly
+    # the requested k, which a fixed-k benchmark comparator needs: under
+    # `:connectivity` a "k=31" cell can silently assemble at a smaller k, and the
+    # registered D5 comparator rungs would no longer be fixed.
+    reassembly_k_policy::Symbol
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -488,7 +497,8 @@ struct AssemblyConfig
             olc_tool::Symbol = :auto,
             olc_options::NamedTuple = (;),
             traversal_weighting::Symbol = :evidence,
-            traversal_min_quality::Float64 = 60.0
+            traversal_min_quality::Float64 = 60.0,
+            reassembly_k_policy::Symbol = :connectivity
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -526,6 +536,11 @@ struct AssemblyConfig
         # default.
         effective_qualmer_memory_profile = qualmer_memory_profile === nothing ?
                                            :full : qualmer_memory_profile
+        # Capture this before the k=31 default below. `:fixed` must see whether
+        # the caller passed k; checking `k === nothing` after the default is
+        # dead code (`AssemblyConfig(; reassembly_k_policy=:fixed)` would
+        # otherwise store k=31 and return).
+        k_explicit = k !== nothing
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -645,6 +660,18 @@ struct AssemblyConfig
         if traversal_weighting == :evidence && traversal_min_quality != 60.0
             @warn "traversal_min_quality is only used when traversal_weighting=:quality " *
                   "and is ignored for traversal_weighting=:$(traversal_weighting)."
+        end
+        if !(reassembly_k_policy in (:connectivity, :fixed))
+            error("reassembly_k_policy must be :connectivity or :fixed, got " *
+                  "reassembly_k_policy=:$(reassembly_k_policy)")
+        end
+        if reassembly_k_policy == :fixed && !k_explicit
+            error("reassembly_k_policy=:fixed requires an explicit k: there is no " *
+                  "requested k to hold the re-assembly at.")
+        end
+        if reassembly_k_policy != :connectivity && corrector != :iterative
+            @warn "reassembly_k_policy is only used when corrector=:iterative and is " *
+                  "ignored for corrector=:$(corrector)."
         end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
@@ -792,7 +819,8 @@ struct AssemblyConfig
             olc_tool,
             olc_options,
             traversal_weighting,
-            traversal_min_quality
+            traversal_min_quality,
+            reassembly_k_policy
         )
     end
 end
@@ -2511,7 +2539,10 @@ function _assemble_with_iterative_corrector(
         # graph connected; clean / high-coverage (Illumina) reads keep the ceiling
         # UNCHANGED (byte-identical, graph-reuse stays eligible).
         reassembly_ceiling = config.k === nothing ? max_k : config.k
-        reassembly_k = select_reassembly_k(corrected_reads, reassembly_ceiling)
+        # `:fixed` (opt-in, td-yddpr.5) bypasses the connectivity criterion so a
+        # fixed-k comparator really assembles at the k it names.
+        reassembly_k = config.reassembly_k_policy == :fixed ? reassembly_ceiling :
+                       select_reassembly_k(corrected_reads, reassembly_ceiling)
         if reassembly_k != reassembly_ceiling
             _log_info(config,
                 "Re-assembly k adapted $(reassembly_ceiling) -> $(reassembly_k) " *
@@ -2608,6 +2639,7 @@ function _assemble_with_iterative_corrector(
         # connected (the un-shatter fix for high-error long reads).
         assembly.assembly_stats["reassembly_k_ceiling"] = reassembly_ceiling
         assembly.assembly_stats["reassembly_k"] = reassembly_k
+        assembly.assembly_stats["reassembly_k_policy"] = String(config.reassembly_k_policy)
         # Provenance (FIX 4): stamp BOTH the caller's requested skip_solid and the
         # value the tier actually used, so the tier's silent override cannot hide.
         # `skip_solid` is retained as the EFFECTIVE value for back-compat.
