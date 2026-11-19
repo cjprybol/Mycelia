@@ -344,12 +344,14 @@ Test.@testset "Generation - transition denominator is local out-weight" begin
         undirected, "C", "A") == 5.0 / 8.0
     Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
         undirected, "C", "B") == 3.0 / 8.0
-    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
-        undirected, "A", "B") == 1.0
-    # A->C is 5/2 today, and B->A / B->C are 0, even though those edges exist.
-    # A follow-up bead should sum every incident edge, which makes these 5/7,
-    # 2/5, and 3/5. @test_broken records that gap so the quirk is not a passing
-    # contract a later fix would have to break.
+    # C owns both of its edges, so 5/8 and 3/8 match a sum of incident edges.
+    # A->B is 1 today because only that edge is stored at A; A is also incident
+    # to C-A (5), so the incident-edge denominator is 2/7. A->C is 5/2 today,
+    # and B->A / B->C are 0. A follow-up bead (td-1v0w.1) should sum every
+    # incident edge and update undirected_reference with it. @test_broken
+    # records that gap so the quirk is not a passing contract.
+    Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
+        undirected, "A", "B") == 2.0 / 7.0
     Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
         undirected, "A", "C") == 5.0 / 7.0
     Test.@test_broken Mycelia.Rhizomorph._compute_edge_transition_probability(
