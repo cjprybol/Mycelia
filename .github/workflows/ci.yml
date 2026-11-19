@@ -72,6 +72,12 @@ jobs:
             echo "${violations}"
           fi
 
+      # opt5 (td-3vge item 5): between-batch GC is output-neutral only while
+      # decode-path modules do not introduce finalizer / WeakRef / WeakKeyDict.
+      # The script fails closed if a required decode-path file disappears.
+      - name: Check decode-path modules for finalizer and weak refs
+        run: python3 scripts/check_decode_path_finalizers.py
+
   test:
     # Weekly schedule is for the td2rxh slow lane only.
     if: github.event_name != 'schedule'
