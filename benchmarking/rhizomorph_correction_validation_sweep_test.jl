@@ -8,8 +8,8 @@
 #
 # The QUAST section also locks the shared parser's hardening contract
 # (exact sibling labels, fields[2] attribution, duplicate rows, whitespace,
-# scientific notation) and that mode_comparison.jl includes that parser
-# instead of a local copy. The mode-comparison script is source-checked, not
+# scientific notation) and that the single-report benchmark drivers include
+# that parser instead of a local copy. Those scripts are source-checked, not
 # executed.
 #
 # Run:
@@ -284,16 +284,32 @@ Test.@testset "QUAST parse_quast_metric hardening + per-arm metric wiring" begin
     end
 end
 
-Test.@testset "mode_comparison uses the shared QUAST parser" begin
-    # Executing mode_comparison.jl would load Mycelia and start the benchmark.
+Test.@testset "benchmark drivers use the shared QUAST parser" begin
+    # Executing these scripts would load Mycelia and start a benchmark.
     # The dedup is a source contract: include the shared file, no local copy.
-    src = read(joinpath(@__DIR__, "mode_comparison.jl"), String)
-    # Parsing never executes the script (no Mycelia load, no benchmark run).
-    Test.@test Meta.parseall(src) isa Expr
-    Test.@test occursin(
-        "include(joinpath(@__DIR__, \"quast_report_parsing.jl\"))", src)
-    Test.@test !occursin(r"^function parse_quast_metric\b"m, src)
-    Test.@test !occursin(r"^parse_quast_metric\([^)]*\)\s*="m, src)
+    # `\s*` after `^` catches an indented copy inside `let` or `module`.
+    local_def = r"^\s*function parse_quast_metric\b"m
+    local_assign = r"^\s*parse_quast_metric\([^)]*\)\s*="m
+    Test.@test occursin(local_def, "module M\n    function parse_quast_metric(x)\n    end\nend\n")
+    Test.@test occursin(local_assign, "let\n    parse_quast_metric(x) = 1\nend\n")
+    Test.@test !occursin(local_def, "function parse_quast_metrics(report)\nend\n")
+
+    for name in (
+        "mode_comparison.jl",
+        "ecoli_lightweight_crashtest.jl",
+        "ecoli_qualmer_memory_gate.jl",
+        "track_a_lambda_pilot.jl",
+        "headroom_pilot.jl",
+        "iterative_vs_naive.jl",
+    )
+        src = read(joinpath(@__DIR__, name), String)
+        # Parsing never executes the script (no Mycelia load, no benchmark run).
+        Test.@test Meta.parseall(src) isa Expr
+        Test.@test occursin(
+            "include(joinpath(@__DIR__, \"quast_report_parsing.jl\"))", src)
+        Test.@test !occursin(local_def, src)
+        Test.@test !occursin(local_assign, src)
+    end
 end
 
 Test.@testset "DataFrame schema push! guards column-name drift" begin

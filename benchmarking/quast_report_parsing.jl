@@ -7,8 +7,12 @@
 # logic in milliseconds without loading Mycelia or running QUAST.
 #
 # `parse_quast_metric` was extracted from mode_comparison.jl's inline parser.
-# mode_comparison.jl includes this file and does not keep a local copy. The
-# correction-validation sweep and its unit test include it as well.
+# The single-report benchmark drivers include this file and do not keep a local
+# copy: mode_comparison.jl, ecoli_lightweight_crashtest.jl,
+# ecoli_qualmer_memory_gate.jl, track_a_lambda_pilot.jl, headroom_pilot.jl, and
+# iterative_vs_naive.jl. The correction-validation sweep and its unit test
+# include it as well. ont_k_sweep.jl's `parse_quast_metrics` is a different
+# multi-metric reader and stays local.
 
 """
     parse_quast_metric(report_tsv, metric) -> Union{Missing, Float64}

@@ -90,23 +90,8 @@ results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
 println("Working directory: $benchmark_dir")
 
-# === QUAST report.tsv parsing (reused verbatim from the crashtest) ===
-
-function parse_quast_metric(report_tsv::String, metric::String)::Union{Missing, Float64}
-    isfile(report_tsv) || return missing
-    result::Union{Missing, Float64} = missing
-    open(report_tsv, "r") do io
-        for line in eachline(io)
-            fields = split(line, '\t')
-            if length(fields) >= 2 && strip(fields[1]) == metric
-                parsed = tryparse(Float64, strip(fields[2]))
-                result = parsed === nothing ? missing : parsed
-                break
-            end
-        end
-    end
-    return result
-end
+# QUAST report.tsv parsing. Shared helper; no local copy.
+include(joinpath(@__DIR__, "quast_report_parsing.jl"))
 
 function load_reads(sim)::Vector{FASTX.FASTQ.Record}
     records = FASTX.FASTQ.Record[]
