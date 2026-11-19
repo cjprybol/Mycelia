@@ -999,6 +999,12 @@ Test.@testset "D5 grid runner" begin
                     write(joinpath(bin, "julia"),
                         "#!/bin/bash\n" *
                         "if [[ \"\${1:-}\" == \"--version\" ]]; then\n" *
+                        # A julia that misreports unless probed with LD_LIBRARY_PATH
+                        # cleared, and one that cannot start (stderr, exit 1).
+                        "  [[ -z \"\${LD_LIBRARY_PATH:-}\" ]] || " *
+                        "{ echo 'julia version ldpath-leak'; exit 0; }\n" *
+                        "  [[ -z \"\${D5_FAKE_BROKEN:-}\" ]] || " *
+                        "{ echo \"\${D5_FAKE_BROKEN}\" >&2; exit 1; }\n" *
                         "  echo \"\${D5_FAKE_VERSION:-julia version 1.10.10}\"; exit 0\n" *
                         "fi\n" *
                         "printf '%s\\n' \"\$@\" > \"\${D5_FAKE_ARGV}\"\n" *
@@ -1063,6 +1069,12 @@ Test.@testset "D5 grid runner" begin
                     Test.@test a.julia_env == ["4", site_depot, "", channel]
                     Test.@test occursin("threads 4; depot $(site_depot) (site default)",
                         a.log)
+                    # Nothing inherited, or the same depot inherited: nothing ignored.
+                    Test.@test !occursin("Ignored the submit shell", a.log)
+                    same = runner_argv("A", 1; tag = "_samedepot",
+                        extra = Dict("JULIA_DEPOT_PATH" => site_depot))
+                    Test.@test same.code == 0 &&
+                               !occursin("Ignored the submit shell", same.log)
                     # A login shell's depot is ignored, as Lawrencium's dotfiles
                     # export the group depot (trailing colon included).
                     inherited = runner_argv("A", 1; tag = "_depot",
@@ -1133,6 +1145,13 @@ Test.@testset "D5 grid runner" begin
                         Test.@test wrong.code == 1 && isempty(wrong.argv)
                         Test.@test occursin("requires julia 1.10.10", wrong.log)
                     end
+                    # A julia that cannot start is refused with its own message
+                    # quoted (e.g. juliaup's channel-not-installed error).
+                    broken = runner_argv("A", 1; tag = "_broken",
+                        extra = Dict("D5_FAKE_BROKEN" => "ERROR: `1.10.10` from environment variable JULIAUP_CHANNEL is not installed."))
+                    Test.@test broken.code == 1 && isempty(broken.argv)
+                    Test.@test occursin("requires julia 1.10.10", broken.log)
+                    Test.@test occursin("JULIAUP_CHANNEL is not installed", broken.log)
                     if wrapper == "run_d5_grid_nersc.sbatch"
                         nomod = runner_argv("A", 1; tag = "_nomodule",
                             extra = Dict("D5_FAKE_MODULE_EXIT" => "1"))

@@ -36,7 +36,11 @@
 # /global/scratch is Lustre, so the temp root is node-local /tmp (D5_TMPDIR
 # overrides); the runner checks the corrector's rename there before any cell.
 #
-# PRE-STAGE ONCE on a login node (from the checkout root):
+# PRE-STAGE ONCE on a login node (from the checkout root), with the julia the
+# tasks use (the staged depot was built on 2026-11-19 by juliaup's lts channel,
+# then 1.10.10, the same binary as the 1.10.10 channel):
+#   juliaup add 1.10.10
+#   export JULIAUP_CHANNEL=1.10.10
 #   export JULIA_DEPOT_PATH=/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5
 #   export LD_LIBRARY_PATH=""
 #   # The grid's own depot (5.5 GB with the conda envs, staged 2026-11-19). On
@@ -51,11 +55,11 @@
 #       ["badread", "art", "minimap2", "quast"])'
 #   # references: copy <toy root>/refs/ into a new full root before its read-set
 #   # array starts, so 96 tasks do not download the same files at once.
-#   juliaup add 1.10.10
 #   # julia is juliaup's pinned 1.10.10 channel (JULIAUP_CHANNEL, set in
 #   # d5_load_julia below), not lts or the juliaup default, which an update or
 #   # `juliaup default` would move. d5_grid_task.sh refuses any other version,
-#   # so another julia first on the submit shell's PATH stops the task.
+#   # so another julia first on the submit shell's PATH stops the task, and a
+#   # removed channel stops it with juliaup's own message in the log.
 #
 # USAGE (submit from benchmarking/; output roots under /global/scratch/users/$USER):
 #   Toy: 3 read sets (the default array), then its 4 :iterative cells:
@@ -81,7 +85,8 @@ set -uo pipefail
 D5_SITE_NAME="Lawrencium"
 D5_SITE_DEPOT="/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot_d5"
 # juliaup's julia, unless one is already on PATH, on the pinned 1.10.10 channel
-# (`juliaup add 1.10.10`; juliaup refuses an unknown channel loudly).
+# (`juliaup add 1.10.10`). A missing channel makes juliaup exit with an error,
+# which d5_grid_task.sh quotes when it refuses the task.
 d5_load_julia() {
   export JULIAUP_CHANNEL=1.10.10
   command -v julia >/dev/null 2>&1 || export PATH="${HOME}/.juliaup/bin:${PATH}"

@@ -35,10 +35,10 @@
 #
 # Resources mirror run_track_a_baseline_nersc.sbatch (shared QOS, 200 GB). The
 # Lambda 100x :iterative cell's sampled peak_rss_bytes was 55.9 GB; the task's
-# sacct MaxRSS was 64,657,632 KiB (66.2 GB; sacct reports KiB). T4 is 3.5x larger
-# and unmeasured. Re-size from
-# the cgroup memory.peak logged to the .err file at exit. peak_rss_bytes alone
-# is too low: the node-local temp root is tmpfs, charged to --mem, not to RSS.
+# sacct MaxRSS was 64,657,632 KiB (66.2 GB; sacct reports KiB). T4 is 3.5x
+# larger and unmeasured. Re-size from the cgroup memory.peak logged to the .err
+# file at exit. peak_rss_bytes alone is too low: the node-local temp root is
+# tmpfs, charged to --mem, not to RSS.
 # On the shared QOS --mem also sets the CPUs charged: 200G allocated 108 of 256.
 # Flags on the sbatch command line override the directives above.
 #

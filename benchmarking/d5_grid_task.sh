@@ -53,14 +53,16 @@ echo "Job: ${SLURM_JOB_ID:-none}  Array: ${SLURM_ARRAY_JOB_ID:-none}  Node: ${SL
 INHERITED_DEPOT="${JULIA_DEPOT_PATH:-}"
 d5_load_julia || { echo "ERROR: d5_load_julia failed (${D5_SITE_NAME})." >&2; exit 1; }
 JULIA="$(command -v julia || true)"
-if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
-  echo "ERROR: julia not runnable after d5_load_julia (${D5_SITE_NAME})." >&2
+if [[ -z "${JULIA}" ]]; then
+  echo "ERROR: no julia on PATH after d5_load_julia (${D5_SITE_NAME})." >&2
   exit 1
 fi
 # One grid, one julia: the toy ran 1.10.10, and the merge does not refuse rows
 # from mixed julia versions, so a different julia is refused here, on every site.
 D5_JULIA_VERSION="1.10.10"
-# Probed with LD_LIBRARY_PATH cleared, as the runner is run below.
+# Probed with LD_LIBRARY_PATH cleared, as the runner is run below, and with
+# stderr kept: a julia that cannot start (a library path, or juliaup's "channel
+# not installed") is refused below with its own message quoted.
 JULIA_VERSION_LINE="$(LD_LIBRARY_PATH="" "${JULIA}" --version 2>&1)"
 if [[ "${JULIA_VERSION_LINE}" != "julia version ${D5_JULIA_VERSION}" ]]; then
   echo "ERROR: the D5 grid requires julia ${D5_JULIA_VERSION}; ${JULIA} reports '${JULIA_VERSION_LINE}' (${D5_SITE_NAME})." >&2
@@ -77,9 +79,9 @@ OUTDIR="$(realpath "${OUTDIR}")" || { echo "ERROR: cannot resolve D5_OUTDIR" >&2
 export JULIA_NUM_THREADS=4
 # The depot holds the packages and the conda environments the tools come from,
 # so the grid uses the site's depot, never one inherited from the submit shell:
-# login shells export one (on Lawrencium the group depot, which does not
-# precompile), and sbatch passes the submit environment through. Only an
-# explicit D5_DEPOT overrides it.
+# login shells export one (on Lawrencium the group depot, which did not
+# precompile on 2026-11-19), and sbatch passes the submit environment through.
+# Only an explicit D5_DEPOT overrides it.
 if [[ -n "${D5_DEPOT:-}" ]]; then
   DEPOT_SOURCE="D5_DEPOT override"
 else
@@ -89,7 +91,11 @@ export JULIA_DEPOT_PATH="${D5_DEPOT:-${D5_SITE_DEPOT}}"
 export LD_LIBRARY_PATH=""
 echo "Julia: ${JULIA} (${JULIA_VERSION_LINE}); threads ${JULIA_NUM_THREADS}; depot ${JULIA_DEPOT_PATH} (${DEPOT_SOURCE})"
 if [[ -n "${INHERITED_DEPOT}" && "${INHERITED_DEPOT}" != "${JULIA_DEPOT_PATH}" ]]; then
-  echo "Ignored the submit shell's JULIA_DEPOT_PATH=${INHERITED_DEPOT} (set D5_DEPOT to choose a depot)."
+  if [[ -n "${D5_DEPOT:-}" ]]; then
+    echo "Ignored the submit shell's JULIA_DEPOT_PATH=${INHERITED_DEPOT} (D5_DEPOT is set)."
+  else
+    echo "Ignored the submit shell's JULIA_DEPOT_PATH=${INHERITED_DEPOT} (set D5_DEPOT to choose a depot)."
+  fi
 fi
 
 cd "${D5_BENCH_DIR}" || exit 1
