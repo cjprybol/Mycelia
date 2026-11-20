@@ -13,6 +13,8 @@
 #   * re-running is idempotent, and a previously merged cell that disagrees with
 #     its source is a collision rather than an overwrite
 #   * the expected-matrix constants mirrored from the harness have not drifted
+#   * an empty cells/ is fatal (not a silent shrink), an unparseable waiver errors,
+#     Ctrl-C is not swallowed, and cells are copied only after validation passes
 #
 # Dependency-free apart from JSON / SHA / DataFrames / CSV (all direct Mycelia
 # deps that load without importing Mycelia). No network, no QUAST, no assembly.
@@ -718,6 +720,366 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
         finally
             empty!(ARGS);
             append!(ARGS, saved)
+        end
+    end
+
+    # Run `main` against a fresh ARGS and always restore the process vector.
+    # The test file and the script share Main, so a leaked ARGS poisons the
+    # next file in the Pkg.test() sweep.
+    # Do-block calls pass the function first: `_tam_with_args(args) do ... end`.
+    function _tam_with_args(f, args)
+        saved = copy(ARGS)
+        try
+            empty!(ARGS)
+            append!(ARGS, String.(args))
+            return f()
+        finally
+            empty!(ARGS)
+            append!(ARGS, saved)
+        end
+    end
+
+    Test.@testset "n3: cells/ itself is a tree; a coincidental layout is not" begin
+        cid = "Lambda__illumina__30x__seed42__qualmer"
+        mktempdir() do dir
+            host = joinpath(dir, "run")
+            _tam_write_cell(host, cid, _tam_cell())
+            cells = joinpath(host, "cells")
+            # Both spellings the header documents, including a trailing slash
+            # (Julia's basename of a slash-terminated path is "").
+            for path in (cells, cells * "/")
+                result = merge_hosts(["h" => path]; expected_ids = [cid])
+                Test.@test result.unreachable_sources == String[]
+                Test.@test result.empty_sources == String[]
+                Test.@test haskey(result.merged, cid)
+                Test.@test basename(rstrip(result.per_host[1].root, '/')) == "cells"
+            end
+
+            # Stricter than "some child holds cell_result.json": a directory that
+            # is not named cells, and does not contain cells/, is not a tree even
+            # when the checkpoint layout matches one level down.
+            decoy = joinpath(dir, "not-a-cells-dir")
+            decoy_dir = joinpath(decoy, cid)
+            mkpath(decoy_dir)
+            open(joinpath(decoy_dir, "cell_result.json"), "w") do io
+                JSON.print(io, _tam_cell(), 2)
+            end
+            decoy_result = merge_hosts(["typo" => decoy]; expected_ids = [cid])
+            Test.@test decoy_result.unreachable_sources == ["typo"]
+            Test.@test isempty(decoy_result.merged)
+            code, problems = merge_exit_status(decoy_result; allow_incomplete = true)
+            Test.@test code == 1
+            Test.@test any(p -> p.kind == :unreachable_source && p.fatal, problems)
+        end
+    end
+
+    Test.@testset "n3: _atomic_write uses a unique temp in the same directory" begin
+        mktempdir() do dir
+            target = joinpath(dir, "track_a_results.tsv")
+            write(target, "kept\n")
+            seen = String[]
+            for i in 1:4
+                _atomic_write(target) do io
+                    extras = setdiff(readdir(dir), ["track_a_results.tsv"])
+                    append!(seen, extras)
+                    write(io, "payload-$i\n")
+                end
+            end
+            # A fixed `.<basename>.tmp` makes this 1, and two publishers collide.
+            Test.@test length(unique(seen)) == 4
+            Test.@test all(n -> n != ".track_a_results.tsv.tmp", seen)
+            Test.@test all(n -> dirname(joinpath(dir, n)) == dir, seen)
+            Test.@test read(target, String) == "payload-4\n"
+            Test.@test readdir(dir) == ["track_a_results.tsv"]
+
+            # The implementation is the harness's, not a second copy.
+            harness = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                    "track_a_baseline_benchmark.jl"), String)
+            shared = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                    "atomic_publish.jl"), String)
+            merge_src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+                    "track_a_merge_hosts.jl"), String)
+            Test.@test occursin("atomic_publish.jl", harness)
+            Test.@test occursin("atomic_publish.jl", merge_src)
+            Test.@test length(collect(eachmatch(r"function _publish_atomically", harness))) == 0
+            Test.@test length(collect(eachmatch(r"function _publish_atomically", shared))) == 1
+            Test.@test occursin("tempname(dir)", shared)
+            Test.@test !occursin("basename(path) * \".tmp\"", merge_src)
+
+            threw = try
+                _atomic_write(target) do io
+                    write(io, "partial")
+                    throw(InterruptException())
+                end
+                nothing
+            catch e
+                e
+            end
+            Test.@test threw isa InterruptException
+            Test.@test read(target, String) == "payload-4\n"
+            Test.@test readdir(dir) == ["track_a_results.tsv"]
+        end
+    end
+
+    Test.@testset "td-9qvg: an empty cells/ is fatal, not a silent shrink" begin
+        cid = "Lambda__illumina__30x__seed42__qualmer"
+        mktempdir() do dir
+            full = joinpath(dir, "full")
+            empty_host = joinpath(dir, "empty")
+            _tam_write_cell(full, cid, _tam_cell())
+            mkpath(joinpath(empty_host, "cells"))
+            # The other host holds every expected id, so missing_ids is empty.
+            # Without the empty-tree refusal the merge exits 0 and the empty
+            # host simply disappears from the table.
+            result = merge_hosts(["full" => full, "empty" => empty_host];
+                expected_ids = [cid])
+            Test.@test haskey(result.merged, cid)
+            Test.@test isempty(result.missing_ids)
+            Test.@test result.empty_sources == ["empty"]
+            code, problems = merge_exit_status(result;
+                allow_incomplete = true, allow_collisions = true)
+            Test.@test code == 1
+            Test.@test any(p -> p.kind == :empty_cells && p.fatal, problems)
+            Test.@test any(p -> occursin("cells/ is empty", p.message) &&
+                                occursin("empty", p.message), problems)
+
+            # The cells/ spelling of an empty tree is the same refusal, not
+            # "unreachable" for one spelling and "fine" for the other.
+            direct = merge_hosts(["h" => joinpath(empty_host, "cells")];
+                expected_ids = [cid])
+            Test.@test direct.empty_sources == ["h"]
+            Test.@test isempty(direct.unreachable_sources)
+            code_direct, _ = merge_exit_status(direct; allow_incomplete = true)
+            Test.@test code_direct == 1
+
+            # A cell directory with no checkpoint yet is in progress, which
+            # `--allow-incomplete` may waive. That is not an empty cells/.
+            running = joinpath(dir, "running")
+            mkpath(joinpath(running, "cells", cid))
+            partial = merge_hosts(["h" => running]; expected_ids = [cid])
+            Test.@test isempty(partial.empty_sources)
+            Test.@test partial.missing_ids == [cid]
+            Test.@test first(merge_exit_status(partial; allow_incomplete = true)) == 0
+            Test.@test first(merge_exit_status(partial)) == 1
+        end
+    end
+
+    Test.@testset "td-9qvg: an unparseable waiver errors instead of being ignored" begin
+        Test.@test _waiver_from_args("--allow-incomplete", String[]) == false
+        Test.@test _waiver_from_args("--allow-incomplete", ["--allow-incomplete"])
+        Test.@test _waiver_from_args("--allow-incomplete", ["--allow-incomplete=true"])
+        Test.@test _waiver_from_args("--allow-incomplete", ["--allow-incomplete=TRUE"])
+        Test.@test _waiver_from_args("--allow-incomplete", ["--allow-incomplete=1"])
+        Test.@test _waiver_from_args("--allow-incomplete", ["--allow-incomplete=yes"])
+        Test.@test !_waiver_from_args("--allow-incomplete", ["--allow-incomplete=false"])
+        Test.@test !_waiver_from_args("--allow-incomplete", ["--allow-incomplete=0"])
+        Test.@test !_waiver_from_args("--allow-incomplete", ["--allow-incomplete=no"])
+        # Last token wins, same rule as allow_shrink_from_args.
+        Test.@test _waiver_from_args("--allow-collisions",
+            ["--allow-collisions=false", "--allow-collisions"])
+        Test.@test !_waiver_from_args("--allow-collisions",
+            ["--allow-collisions", "--allow-collisions=false"])
+        for flag in ("--allow-incomplete", "--allow-collisions")
+            _tam_throws_with(() -> _waiver_from_args(flag, ["$(flag)=not-a-bool"]),
+                ["unparseable waiver", "$(flag)=not-a-bool"])
+            _tam_throws_with(() -> _waiver_from_args(flag, ["$(flag)="]),
+                ["unparseable waiver"])
+        end
+
+        mktempdir() do dir
+            out = joinpath(dir, "out")
+            rc = _tam_with_args([
+                "--host", "h=$(joinpath(dir, "missing"))",
+                "--output-dir", out,
+                "--allow-incomplete=not-a-bool",
+            ]) do
+                main()
+            end
+            # Usage error, and nothing was published on the way out.
+            Test.@test rc == 2
+            Test.@test !isdir(out)
+        end
+
+        threw = try
+            _waiver_or_usage("--allow-incomplete";
+                parse = (flag, args) -> throw(InterruptException()))
+            nothing
+        catch e
+            e
+        end
+        Test.@test threw isa InterruptException
+    end
+
+    Test.@testset "td-9qvg: Ctrl-C is rethrown from broad catches" begin
+        cid = "Lambda__illumina__30x__seed42__qualmer"
+        mktempdir() do dir
+            host = joinpath(dir, "h")
+            _tam_write_cell(host, cid, _tam_cell())
+            root = joinpath(host, "cells")
+            threw = try
+                discover_cells(root; parsefile = _ -> throw(InterruptException()))
+                nothing
+            catch e
+                e
+            end
+            Test.@test threw isa InterruptException
+            # A real parse failure is still recorded, not promoted to an interrupt
+            # and not dropped.
+            cells, unreadable = discover_cells(root; parsefile = _ -> error("bad json"))
+            Test.@test isempty(cells)
+            Test.@test any(u -> occursin("unparseable", u[2]) && occursin("bad json", u[2]),
+                unreadable)
+
+            result = merge_hosts(["h" => host]; expected_ids = [cid])
+            out = joinpath(dir, "merged")
+            dest = joinpath(out, "cells", cid, "cell_result.json")
+            mkpath(dirname(dest))
+            write(dest, "not-json")
+            copy_threw = try
+                copy_merged_cells(result, out;
+                    parsefile = _ -> throw(InterruptException()))
+                nothing
+            catch e
+                e
+            end
+            Test.@test copy_threw isa InterruptException
+            Test.@test read(dest, String) == "not-json"
+        end
+
+        threw = try
+            _harness_const_capture(r"const";
+                readfile = (path, T) -> throw(InterruptException()))
+            nothing
+        catch e
+            e
+        end
+        Test.@test threw isa InterruptException
+        Test.@test _harness_const_capture(r"const";
+            readfile = (path, T) -> error("unreadable")) === nothing
+
+        threw = try
+            track_a_absent_defaults_match_harness(;
+                parse = _ -> throw(InterruptException()))
+            nothing
+        catch e
+            e
+        end
+        Test.@test threw isa InterruptException
+        ok, _ = track_a_absent_defaults_match_harness(; parse = _ -> error("nope"))
+        Test.@test ok == false
+
+        df = DataFrames.DataFrame(quast_evidence = ["quast:scored"])
+        threw = try
+            _apply_metric_definition_check(df;
+                check = (args...; kwargs...) -> throw(InterruptException()))
+            nothing
+        catch e
+            e
+        end
+        Test.@test threw isa InterruptException
+        Test.@test _apply_metric_definition_check(df;
+            check = (args...; kwargs...) -> error("mixed definitions")) == 1
+
+        # Every broad catch in the merge script and the shared publisher names
+        # the interrupt and rethrows it. A new catch that swallows Ctrl-C fails
+        # this count instead of shipping.
+        for rel in ("benchmarking/track_a_merge_hosts.jl", "benchmarking/atomic_publish.jl")
+            src = read(joinpath(@__DIR__, "..", "..", rel), String)
+            n_catch = length(collect(eachmatch(r"(?m)^[ \t]*catch\b", src)))
+            n_rethrow = length(collect(eachmatch(
+                r"InterruptException && rethrow\(\)", src)))
+            Test.@test n_catch == n_rethrow
+            Test.@test n_catch > 0
+        end
+    end
+
+    Test.@testset "td-9qvg: copy_merged_cells runs only after validation succeeds" begin
+        cid = "Lambda__illumina__30x__seed42__qualmer"
+        other = "Lambda__illumina__30x__seed42__kmer"
+        mktempdir() do dir
+            host = joinpath(dir, "h")
+            _tam_write_cell(host, cid, _tam_cell())
+            out = joinpath(dir, "failed")
+            rc = _tam_with_args([
+                "--host", "h=$host",
+                "--output-dir", out,
+                "--organisms", "Lambda",
+                "--technologies", "illumina",
+                "--coverages", "30",
+                "--seeds", "42",
+                "--arms", "qualmer,kmer",
+            ]) do
+                main()
+            end
+            Test.@test rc == 1
+            Test.@test !isdir(joinpath(out, "cells"))
+            Test.@test !isfile(joinpath(out, "track_a_results.tsv"))
+            Test.@test !isfile(joinpath(out, "track_a_results_provenance.tsv"))
+            Test.@test isfile(joinpath(out, "merge_report.md"))
+
+            # The same gap, waived, is allowed to publish — the gate is
+            # validation, not "never copy".
+            waived = joinpath(dir, "waived")
+            rc_ok = _tam_with_args([
+                "--host", "h=$host",
+                "--output-dir", waived,
+                "--allow-incomplete=true",
+                "--organisms", "Lambda",
+                "--technologies", "illumina",
+                "--coverages", "30",
+                "--seeds", "42",
+                "--arms", "qualmer,kmer",
+            ]) do
+                main()
+            end
+            Test.@test rc_ok == 0
+            Test.@test isfile(joinpath(waived, "cells", cid, "cell_result.json"))
+            Test.@test !isfile(joinpath(waived, "cells", other, "cell_result.json"))
+            Test.@test isfile(joinpath(waived, "track_a_results.tsv"))
+
+            # A complete one-cell matrix copies and publishes.
+            done = joinpath(dir, "done")
+            rc_done = _tam_with_args([
+                "--host", "h=$host",
+                "--output-dir", done,
+                "--organisms", "Lambda",
+                "--technologies", "illumina",
+                "--coverages", "30",
+                "--seeds", "42",
+                "--arms", "qualmer",
+            ]) do
+                main()
+            end
+            Test.@test rc_done == 0
+            Test.@test isfile(joinpath(done, "cells", cid, "cell_result.json"))
+            Test.@test isfile(joinpath(done, "track_a_results.tsv"))
+            Test.@test isfile(joinpath(done, "track_a_results_provenance.tsv"))
+
+            # Empty cells/ plus a host that already holds the expected id used
+            # to exit 0 under --allow-incomplete and shrink the table to that
+            # host. It must not publish cells or tables.
+            empty_host = joinpath(dir, "empty")
+            mkpath(joinpath(empty_host, "cells"))
+            shrunk = joinpath(dir, "shrunk")
+            rc_empty = _tam_with_args([
+                "--host", "full=$host",
+                "--host", "empty=$empty_host",
+                "--output-dir", shrunk,
+                "--allow-incomplete=true",
+                "--organisms", "Lambda",
+                "--technologies", "illumina",
+                "--coverages", "30",
+                "--seeds", "42",
+                "--arms", "qualmer",
+            ]) do
+                main()
+            end
+            Test.@test rc_empty == 1
+            Test.@test !isdir(joinpath(shrunk, "cells"))
+            Test.@test !isfile(joinpath(shrunk, "track_a_results.tsv"))
+            report = read(joinpath(shrunk, "merge_report.md"), String)
+            Test.@test occursin("EMPTY cells/", report)
+            Test.@test occursin("Matrix complete and collision-free: NO", report)
         end
     end
 end

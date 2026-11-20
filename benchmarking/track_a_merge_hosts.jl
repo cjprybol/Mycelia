@@ -67,7 +67,10 @@
 #     --output-dir PATH        merge destination (default results/track_a_baseline_merged)
 #     --no-copy-cells          write tables + report only; do not materialize cells/
 #     --allow-collisions       report content collisions but exit 0
+#                              (`=true`/`=false` also accepted; an unparseable
+#                              value is a usage error, not a silent no-op)
 #     --allow-incomplete       report missing cells but exit 0
+#                              (same `=true`/`=false` rule as --allow-collisions)
 #     --assert-single-metric-definition
 #                              additionally require ONE quast_evidence class among
 #                              non-empty assemblies (fails a host-mixed matrix)
@@ -92,6 +95,10 @@ import Dates
 # `--assert-single-metric-definition` can reuse the one definition of the check
 # rather than reimplementing it.
 include(joinpath(@__DIR__, "metric_source_guard.jl"))
+# Unique-temp rename shared with the harness (`_publish_atomically`). Included
+# rather than reimplemented: a fixed `.<basename>.tmp` collides when two merges
+# publish the same path. See atomic_publish.jl.
+include(joinpath(@__DIR__, "atomic_publish.jl"))
 
 # === Expected matrix ========================================================
 #
@@ -280,7 +287,7 @@ Returns `cells::Dict{String, Any}` mapping cell id to the parsed checkpoint, and
 directories whose checkpoint is missing (cell still running) or unparseable.
 Both are reported; neither is silently dropped.
 """
-function discover_cells(root::AbstractString)
+function discover_cells(root::AbstractString; parsefile::Function = JSON.parsefile)
     cells = Dict{String, Any}()
     unreadable = Tuple{String, String}[]
     isdir(root) || return cells, unreadable
@@ -293,11 +300,13 @@ function discover_cells(root::AbstractString)
             continue
         end
         try
-            parsed = JSON.parsefile(ckpt)
+            parsed = parsefile(ckpt)
             parsed isa AbstractDict ||
                 error("checkpoint is not a JSON object (got $(typeof(parsed)))")
             cells[entry] = parsed
         catch e
+            # A Ctrl-C during a read is not an unreadable checkpoint.
+            e isa InterruptException && rethrow()
             push!(unreadable, (entry, "unparseable: $(sprint(showerror, e))"))
         end
     end
@@ -326,6 +335,8 @@ Returns a NamedTuple with:
   * `duplicates` — `Vector`: cell ids present on >1 host with IDENTICAL content
   * `missing_ids`, `unexpected_ids` — expected-matrix reconciliation
   * `per_host`   — per-source discovery counts and unreadable entries
+  * `empty_sources` — hosts whose `cells/` exists and contains no cell directories.
+                      Fatal: an empty tree is not "zero cells, matrix still fine".
 
 A cell involved in a content collision is deliberately EXCLUDED from `merged`:
 there is no defensible winner, so it must not enter the analyzed matrix at all.
@@ -352,11 +363,25 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
         # not a checkpoint tree at all (a typo landing on some other directory)
         # would report `exists = true` with zero cells and escape the guard —
         # exactly the silent-shrink this check exists to stop.
-        looks_like_tree = isdir(joinpath(path, "cells")) ||
-                          (isdir(root) && any(isfile(joinpath(root, e, "cell_result.json"))
-        for e in (isdir(root) ? readdir(root) : String[])))
-        exists = isdir(root) && looks_like_tree
-        cells, unreadable = discover_cells(root)
+        #
+        # The tree check is the directory name, not "some child has
+        # cell_result.json". `cells_root` resolves both accepted spellings — the
+        # results root, and `--host …/cells` itself — to a directory whose
+        # basename is `cells`. A layout that merely contains
+        # `<id>/cell_result.json` is not a tree; that heuristic accepted
+        # coincidental directories. `rstrip` is required because Julia's
+        # `basename` of a slash-terminated path is `""`, so `--host …/cells/`
+        # would otherwise fail the check. An empty `cells/` still matches, and
+        # the empty-source check below refuses it: the two spellings used to
+        # disagree (parent/cells empty looked real; cells/ empty looked
+        # unreachable) and the real one silently contributed nothing.
+        looks_like_tree = isdir(root) && basename(rstrip(root, '/')) == "cells"
+        exists = looks_like_tree
+        # Do not scan a path that failed the tree check. Discovery would otherwise
+        # ingest `<id>/cell_result.json` from a coincidental directory and merge
+        # those cells even while recording the source as unreachable.
+        cells, unreadable = exists ? discover_cells(root) :
+                            (Dict{String, Any}(), Tuple{String, String}[])
         push!(per_host,
             (host = String(label), root = root, exists = exists,
                 discovered = length(cells), unreadable = unreadable))
@@ -405,13 +430,22 @@ function merge_hosts(sources::AbstractVector; expected_ids::AbstractVector{<:Abs
     unexpected_ids = sort(collect(setdiff(Set{String}(keys(seen)), expected)))
 
     unreachable = [h.host for h in per_host if !h.exists]
+    # A cells/ that exists but holds no cell directories contributed nothing.
+    # In-progress cells (a directory, no checkpoint yet) are NOT this case:
+    # those are missing cells, which `--allow-incomplete` may waive. An empty
+    # directory is an operator error (wrong path, unmounted tree, mkdir of the
+    # destination) and must not shrink the merged table.
+    empty_sources = [h.host
+                     for h in per_host
+                     if h.exists && h.discovered == 0 && isempty(h.unreadable)]
     malformed = sort([cid
                       for (cid, cell) in merged
                       if is_malformed_evidence(quast_evidence(cell))])
     return (merged = merged, origin = origin, digests = digests,
         collisions = collisions, duplicates = duplicates,
         missing_ids = missing_ids, unexpected_ids = unexpected_ids,
-        unreachable_sources = unreachable, malformed_cells = malformed,
+        unreachable_sources = unreachable, empty_sources = empty_sources,
+        malformed_cells = malformed,
         per_host = per_host, expected_n = length(expected))
 end
 
@@ -480,12 +514,13 @@ const TRACK_A_ABSENT_DEFAULTS = Dict{String, Any}(
 # Zero matches and two-or-more matches are therefore both a refusal to answer, not a
 # pass. `read` is inside the try because `isfile` says nothing about readability: a
 # chmod-000 harness threw SystemError rather than returning a verdict.
-function _harness_const_capture(pattern::Regex)
+function _harness_const_capture(pattern::Regex; readfile::Function = read)
     harness = joinpath(@__DIR__, "track_a_baseline_benchmark.jl")
     isfile(harness) || return nothing
     src = try
-        read(harness, String)
-    catch
+        readfile(harness, String)
+    catch e
+        e isa InterruptException && rethrow()
         return nothing
     end
     matches = collect(eachmatch(pattern, src))
@@ -548,13 +583,14 @@ the correct literal and then mutates it at load (`OPTIONAL_KEY_DEFAULTS[:k] = v`
 a host-conditional branch) is invisible here. That is irreducible for a source-literal
 guard; it is stated so nobody reads the fail-closed claim as broader than it is.
 """
-function track_a_absent_defaults_match_harness()
+function track_a_absent_defaults_match_harness(; parse::Function = Meta.parse)
     capture = _harness_const_capture(
         r"(?m)^const\s+OPTIONAL_KEY_DEFAULTS\s*=\s*(Dict\{Symbol,\s*Any\}\(.*?\))\s*$"s)
     capture === nothing && return (false, Dict{String, Any}())
     expr = try
-        Meta.parse(capture)
-    catch
+        parse(capture)
+    catch e
+        e isa InterruptException && rethrow()
         return (false, Dict{String, Any}())
     end
     (expr isa Expr && expr.head === :call) || return (false, Dict{String, Any}())
@@ -692,9 +728,18 @@ function write_merge_report(path::AbstractString, result; output_dir::AbstractSt
         println(io, "- Identical duplicates across hosts (benign): $(length(result.duplicates))")
         println(io, "- **CONTENT COLLISIONS: $(length(result.collisions))** (must be 0)")
         println(io, "- Cell ids outside the expected matrix: $(length(result.unexpected_ids))")
-        complete = length(result.missing_ids) == 0 && isempty(result.collisions)
+        # An unreachable or empty source is not a complete merge, even when the
+        # other host happens to hold every expected id (the silent-shrink case).
+        complete = length(result.missing_ids) == 0 && isempty(result.collisions) &&
+                   isempty(result.unreachable_sources) && isempty(result.empty_sources)
         println(io,
             "\n**Matrix complete and collision-free: $(complete ? "YES" : "NO")**\n")
+        if !isempty(result.empty_sources)
+            println(io,
+                "**EMPTY cells/ for host(s):** $(join(result.empty_sources, ", ")). " *
+                "An empty checkpoint directory is not a partial matrix and is not " *
+                "waived by `--allow-incomplete`.\n")
+        end
 
         if !isempty(result.collisions)
             println(io, "## Content collisions\n")
@@ -818,7 +863,8 @@ destination that DIFFERS from the source is never overwritten — it is returned
 a conflict, because the previously merged state disagreeing with the source is
 the same class of anomaly as a cross-host collision.
 """
-function copy_merged_cells(result, output_dir::AbstractString)
+function copy_merged_cells(result, output_dir::AbstractString;
+        parsefile::Function = JSON.parsefile)
     dest_root = joinpath(output_dir, "cells")
     mkpath(dest_root)
     copied = String[]
@@ -829,8 +875,9 @@ function copy_merged_cells(result, output_dir::AbstractString)
         dest = joinpath(cell_dir, "cell_result.json")
         if isfile(dest)
             existing = try
-                JSON.parsefile(dest)
-            catch
+                parsefile(dest)
+            catch e
+                e isa InterruptException && rethrow()
                 nothing
             end
             if existing isa AbstractDict && cell_digest(existing) == result.digests[cell_id]
@@ -887,6 +934,18 @@ function merge_exit_status(result;
                           "host(s): " * join(result.unreachable_sources, ", ") *
                           ". Expected <path>/cells/<cell_id>/cell_result.json. " *
                           "Refusing to treat an unreachable source as an empty one."))
+    end
+    # Same class of operator error as an unreachable source. `--allow-incomplete`
+    # says the matrix is partial; it does not say an empty `cells/` may stand in
+    # for a host and shrink the table to whoever else showed up.
+    if !isempty(result.empty_sources)
+        push!(problems,
+            (kind = :empty_cells, fatal = true,
+                message = "cells/ is empty for host(s): " *
+                          join(result.empty_sources, ", ") *
+                          ". An empty checkpoint directory contributed nothing. " *
+                          "Refusing to publish a merged table that silently omits " *
+                          "that host. --allow-incomplete does not waive this."))
     end
     if !isempty(result.malformed_cells)
         push!(problems,
@@ -986,24 +1045,87 @@ function _parse_host_spec(spec::AbstractString)
 end
 
 """
-    _atomic_write(f, path)
+    _waiver_from_args(flag, args) -> Bool
 
-Write via `f(io)` to a sibling temp file and `mv` it into place, so a reader never
-observes a partially-written table and an interrupted run leaves the previous
-contents intact.
+Parse one `--allow-*` waiver. A bare flag enables it. `flag=true|1|yes` enables
+it and `flag=false|0|no` disables it (case-insensitive). Any other `flag=...`
+value errors: `"--allow-incomplete" in ARGS` used to ignore the near-miss
+`--allow-incomplete=true`, so an operator who thought they had waived a gate
+had not, and an unparseable value disappeared the same way.
+
+Last matching token wins, matching `allow_shrink_from_args` in `ont_k_sweep.jl`.
 """
-function _atomic_write(f, path::AbstractString)
-    dir = dirname(path)
-    mkpath(dir)
-    tmp = joinpath(dir, "." * basename(path) * ".tmp")
-    try
-        open(f, tmp, "w")
-        mv(tmp, path; force = true)
-    catch
-        isfile(tmp) && rm(tmp; force = true)
-        rethrow()
+function _waiver_from_args(flag::AbstractString, args)
+    enabled = false
+    prefix = flag * "="
+    for token in args
+        if token == flag
+            enabled = true
+        elseif startswith(token, prefix)
+            raw = split(token, '='; limit = 2)[2]
+            value = lowercase(strip(raw))
+            if value in ("true", "1", "yes")
+                enabled = true
+            elseif value in ("false", "0", "no")
+                enabled = false
+            else
+                error("unparseable waiver $(repr(token)); " *
+                      "use $flag or $flag=true|false")
+            end
+        end
     end
-    return path
+    return enabled
+end
+
+# Print a usage error and return `nothing` so `main` can exit 2. Interrupt is
+# not a bad flag: rethrow it.
+function _waiver_or_usage(flag::AbstractString; parse::Function = _waiver_from_args)
+    try
+        return parse(flag, ARGS)
+    catch e
+        e isa InterruptException && rethrow()
+        println(stderr, "ERROR: " * sprint(showerror, e))
+        return nothing
+    end
+end
+
+"""
+    _apply_metric_definition_check(provenance_df; check) -> Int
+
+Run `--assert-single-metric-definition` on the scored rows. Returns 0 when the
+check passes or there is nothing scored to compare, and 1 when the check fails.
+`InterruptException` is rethrown: Ctrl-C is not a failed metric definition.
+"""
+function _apply_metric_definition_check(provenance_df;
+        check::Function = assert_single_metric_definition)
+    # Ask the question the flag is FOR: do the cells that were actually SCORED
+    # share one metric definition? Passing the unfiltered table asked a
+    # different question and answered it uselessly — every realistic 288-cell
+    # matrix contains at least one empty assembly, so `n/a:empty-assembly`
+    # always sat alongside `quast:scored` and the check fired on every clean
+    # run. Malformed cells are excluded here only because they are already a
+    # separate FATAL problem; they are never silently tolerated.
+    scored = provenance_df[
+        .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .&
+        .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
+    if DataFrames.nrow(scored) == 0
+        println("\nmetric-definition check: no scored cells to compare — skipped")
+        return 0
+    end
+    try
+        check(scored;
+            columns = (:quast_evidence,),
+            context = "merged Track A matrix (scored cells only)")
+        println("\nmetric-definition check: single quast_evidence class " *
+                "across $(DataFrames.nrow(scored)) scored cells — OK")
+        return 0
+    catch e
+        e isa InterruptException && rethrow()
+        println(stderr, "\nERROR: metric-definition check failed:")
+        showerror(stderr, e)
+        println(stderr)
+        return 1
+    end
 end
 
 function main()
@@ -1027,8 +1149,10 @@ function main()
     output_dir = something(_arg_value("--output-dir"),
         joinpath(@__DIR__, "results", "track_a_baseline_merged"))
     copy_cells = !("--no-copy-cells" in ARGS)
-    allow_collisions = "--allow-collisions" in ARGS
-    allow_incomplete = "--allow-incomplete" in ARGS
+    allow_collisions = _waiver_or_usage("--allow-collisions")
+    allow_collisions === nothing && return 2
+    allow_incomplete = _waiver_or_usage("--allow-incomplete")
+    allow_incomplete === nothing && return 2
     assert_single_def = "--assert-single-metric-definition" in ARGS
 
     organisms = something(_arg_list("--organisms"), TRACK_A_ORGANISMS)
@@ -1058,22 +1182,10 @@ function main()
     results_path = joinpath(output_dir, "track_a_results.tsv")
     provenance_path = joinpath(output_dir, "track_a_results_provenance.tsv")
 
-    if copy_cells
-        copied, skipped, dest_conflicts = copy_merged_cells(result, output_dir)
-        println("Cells materialized: $(length(copied)) new, $(length(skipped)) already identical")
-        if !isempty(dest_conflicts)
-            append!(result.collisions, dest_conflicts)
-            println(stderr,
-                "WARNING: $(length(dest_conflicts)) previously-merged cell(s) differ " *
-                "from their source and were NOT overwritten.")
-        end
-    end
-
-    # The report is a DIAGNOSTIC and is always written — it is how the operator
-    # finds out what went wrong.
-    report_path = write_merge_report(
-        joinpath(output_dir, "merge_report.md"), result; output_dir = output_dir)
-
+    # Validate BEFORE materializing cells. Copying first turned a failed merge
+    # into a real `cells/` tree — a smaller-but-plausible checkpoint store — even
+    # when the tables themselves stayed behind the gate.
+    report_path = joinpath(output_dir, "merge_report.md")
     rc,
     problems = merge_exit_status(result;
         allow_collisions = allow_collisions, allow_incomplete = allow_incomplete,
@@ -1086,33 +1198,44 @@ function main()
         end
     end
 
-    if assert_single_def
-        # Ask the question the flag is FOR: do the cells that were actually SCORED
-        # share one metric definition? Passing the unfiltered table asked a
-        # different question and answered it uselessly — every realistic 288-cell
-        # matrix contains at least one empty assembly, so `n/a:empty-assembly`
-        # always sat alongside `quast:scored` and the check fired on every clean
-        # run. Malformed cells are excluded here only because they are already a
-        # separate FATAL problem above; they are never silently tolerated.
-        scored = provenance_df[
-        .!startswith.(String.(provenance_df.quast_evidence), "n/a:") .& .!is_malformed_evidence.(String.(provenance_df.quast_evidence)), :]
-        if DataFrames.nrow(scored) == 0
-            println("\nmetric-definition check: no scored cells to compare — skipped")
-        else
-            try
-                assert_single_metric_definition(scored;
-                    columns = (:quast_evidence,),
-                    context = "merged Track A matrix (scored cells only)")
-                println("\nmetric-definition check: single quast_evidence class " *
-                        "across $(DataFrames.nrow(scored)) scored cells — OK")
-            catch e
-                println(stderr, "\nERROR: metric-definition check failed:")
-                showerror(stderr, e)
-                println(stderr)
-                rc = 1
-            end
-        end
+    if assert_single_def && _apply_metric_definition_check(provenance_df) != 0
+        rc = 1
     end
+
+    if rc == 0 && copy_cells
+        copied, skipped, dest_conflicts = copy_merged_cells(result, output_dir)
+        println("Cells materialized: $(length(copied)) new, $(length(skipped)) already identical")
+        if !isempty(dest_conflicts)
+            append!(result.collisions, dest_conflicts)
+            # Destination disagreements are collisions. Re-decide so
+            # `--allow-collisions` still waives them and a real disagreement
+            # still blocks the tables.
+            rc, problems = merge_exit_status(result;
+                allow_collisions = allow_collisions,
+                allow_incomplete = allow_incomplete,
+                report_hint = report_path)
+            for p in problems
+                p.kind == :collisions || continue
+                if p.fatal
+                    println(stderr, "ERROR: $(p.message)")
+                else
+                    @warn "WAIVED via --allow-$(p.kind). $(p.message)"
+                end
+            end
+            println(stderr,
+                "WARNING: $(length(dest_conflicts)) previously-merged cell(s) differ " *
+                "from their source and were NOT overwritten.")
+        end
+    elseif copy_cells
+        println(stderr,
+            "Cells NOT materialized (merge did not pass its gate). The previous " *
+            "contents of\n  $(joinpath(output_dir, "cells"))\nare left intact.")
+    end
+
+    # The report is a DIAGNOSTIC and is always written — it is how the operator
+    # finds out what went wrong. Written after the copy attempt so a destination
+    # conflict is in the report the error message points at.
+    write_merge_report(report_path, result; output_dir = output_dir)
 
     # TABLES ARE WRITTEN ONLY BEHIND THE GATE. They are the artifact a downstream
     # analysis reads, so writing them before the completeness/collision check meant
@@ -1143,6 +1266,7 @@ function main()
     println("  identical duplicates: $(length(result.duplicates))")
     println("  CONTENT COLLISIONS:   $(length(result.collisions))")
     println("  malformed checkpoints:$(length(result.malformed_cells))")
+    println("  empty cells/:         $(length(result.empty_sources))")
     println("  missing:              $(length(result.missing_ids))")
     println("  unexpected ids:       $(length(result.unexpected_ids))")
     println("\nWrote:\n  $report_path" *
