@@ -8,9 +8,11 @@
 # a complete table, which is worse than a short table: a short one is detectable,
 # a corrupt one is not.
 #
-# `tempname(dir)` is unique per call, so concurrent writers cannot collide, and
-# the rename stays atomic because the temp is in the same directory (same
-# filesystem) as the target.
+# `mktemp(dir)` creates the file (O_EXCL) in the same directory as the target, so
+# two writers cannot be handed the same path before either creates it. A
+# name-only temporary path does not: it returns a path and leaves creation to
+# the caller, and two callers can observe the same free name. The rename stays
+# atomic because the temp is on the same filesystem as the target.
 #
 # This used to live only as `_publish_atomically` in `track_a_baseline_benchmark.jl`.
 # That file imports Mycelia and reads `ARGS` at load, so `track_a_merge_hosts.jl`
@@ -22,17 +24,21 @@
 Write via `write!(tmp_path)` to a unique temp file in `dirname(target)`, then
 rename it onto `target`.
 
-An exception removes the temp and leaves `target` unchanged. `InterruptException`
-is rethrown after that cleanup; it is not turned into a successful publish.
+The temp file is created with `mktemp` before `write!` runs, and that handle is
+closed so `write!` can open the path itself. An exception removes the temp and
+leaves `target` unchanged. `InterruptException` is rethrown after that cleanup;
+it is not turned into a successful publish.
 """
 function _publish_atomically(write!, target::AbstractString)
     dir = dirname(target)
     mkpath(dir)
-    tmp = tempname(dir)
+    tmp, io = mktemp(dir)
     try
+        close(io)
         write!(tmp)
         mv(tmp, target; force = true)
     catch e
+        isopen(io) && close(io)
         isfile(tmp) && rm(tmp; force = true)
         # Ctrl-C must propagate. The cleanup above is the only work this catch
         # does; every exception, interrupt included, is rethrown.
