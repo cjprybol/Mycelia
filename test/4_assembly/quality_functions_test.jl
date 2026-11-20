@@ -186,11 +186,11 @@ Test.@testset "Quality Functions" begin
     end
 
     Test.@testset "get_vertex_joint_quality - rejects a sub-33 byte instead of wrapping" begin
-        # QualityEvidenceEntry is documented as storing raw Phred (0-60), and
-        # evidence_structures_test.jl constructs entries that way. The consumer
-        # get_vertex_joint_quality subtracts UInt8(33). A raw Q30 therefore
-        # wraps: UInt8(30) - UInt8(33) == 0xfd (253), the "essentially certain"
-        # band. A low-confidence symbol must not become near-maximum confidence.
+        # QualityEvidenceEntry stores Phred+33 bytes (Q0 is 33, Q30 is 63),
+        # matching FASTX.quality. Unsigned subtraction of the offset wraps a
+        # sub-33 byte: UInt8(30) - UInt8(33) == 0xfd (253), the "essentially
+        # certain" band. get_vertex_joint_quality rejects that byte instead of
+        # turning a low-confidence symbol into near-maximum confidence.
         Test.@test (UInt8(30) - UInt8(33)) == 0xfd
 
         kmer = Kmers.DNAKmer{3}("ATG")
@@ -302,6 +302,73 @@ Test.@testset "lightweight and ultralight paths reject sub-33 bytes" begin
         end
         Test.@test edge.from_joint_quality == kept_from
         Test.@test edge.to_joint_quality == kept_to
+    end
+
+    # A bad byte must not commit counts or earlier quality positions. The
+    # checks above use a sub-33 byte in the first slot, which throws before
+    # the in-place loop writes. These cases fail only when decode happens
+    # after mutation has already started.
+    function unchanged_after_reject(f, data, joint_fields)
+        before_total = data.total_count
+        before_counts = copy(data.dataset_counts)
+        before_joints = Dict(name => copy(getfield(data, name)) for name in joint_fields)
+        Test.@test rejects_sub33(f)
+        Test.@test data.total_count == before_total
+        Test.@test data.dataset_counts == before_counts
+        for name in joint_fields
+            Test.@test getfield(data, name) == before_joints[name]
+        end
+    end
+
+    Test.@testset "valid prefix plus a trailing sub-33 byte leaves state unchanged" begin
+        # Q30, Q35, then byte 32 (below the Phred+33 offset).
+        trailing_bad = Mycelia.Rhizomorph.QualityEvidenceEntry(
+            1, Mycelia.Rhizomorph.Forward, UInt8[63, 68, 32])
+        for ctor in (
+                Mycelia.Rhizomorph.UltralightQualityKmerVertexData,
+                Mycelia.Rhizomorph.LightweightQualityKmerVertexData,
+                )
+            empty_vertex = ctor(kmer)
+            unchanged_after_reject(empty_vertex, (:joint_quality,)) do
+                Mycelia.Rhizomorph.add_evidence!(empty_vertex, "ds", "obs", trailing_bad)
+            end
+
+            vertex = ctor(kmer)
+            Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obs1", good)
+            Test.@test vertex.total_count == 1
+            Test.@test vertex.joint_quality == UInt8[30, 35, 32]
+            unchanged_after_reject(vertex, (:joint_quality,)) do
+                Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obs2", trailing_bad)
+            end
+        end
+    end
+
+    Test.@testset "bad to_quality after a good from_quality leaves state unchanged" begin
+        good_pair = Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
+            1, 2, Mycelia.Rhizomorph.Forward, UInt8[63, 68], UInt8[65, 70])
+        # from is valid Phred+33; to has a valid prefix and a trailing sub-33 byte.
+        bad_to_after_from = Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
+            1, 2, Mycelia.Rhizomorph.Forward, UInt8[63, 68], UInt8[65, 32])
+        for ctor in (
+                Mycelia.Rhizomorph.UltralightQualityEdgeData,
+                Mycelia.Rhizomorph.LightweightQualityEdgeData,
+                )
+            empty_edge = ctor()
+            unchanged_after_reject(
+                empty_edge, (:from_joint_quality, :to_joint_quality)) do
+                Mycelia.Rhizomorph.add_evidence!(
+                    empty_edge, "ds", "obs", bad_to_after_from)
+            end
+
+            edge = ctor()
+            Mycelia.Rhizomorph.add_evidence!(edge, "ds", "obs1", good_pair)
+            Test.@test edge.total_count == 1
+            Test.@test edge.from_joint_quality == UInt8[30, 35]
+            Test.@test edge.to_joint_quality == UInt8[32, 37]
+            unchanged_after_reject(edge, (:from_joint_quality, :to_joint_quality)) do
+                Mycelia.Rhizomorph.add_evidence!(edge, "ds", "obs2", bad_to_after_from)
+            end
+        end
     end
 end
 
