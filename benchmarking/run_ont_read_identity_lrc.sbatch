@@ -32,9 +32,9 @@
 #   /bin/bash benchmarking/run_ont_read_identity_lrc.selftest.sh
 #
 # A green exit means: the conda preflight and the main julia run both exited 0,
-# all three TSVs exist and are non-empty, and every row of the summary records
-# a non-empty badread_version with no "unknown" field. Julia exiting 0 alone is
-# not treated as success.
+# all three TSVs exist and are non-empty, the summary has at least one data row,
+# and every row of the summary records a non-empty badread_version with no
+# "unknown" field. Julia exiting 0 alone is not treated as success.
 #
 # Provenance of the code and toolchain (git HEAD, uncommitted tracked changes,
 # Julia version) is echoed into the job log for a human to transcribe; it is
