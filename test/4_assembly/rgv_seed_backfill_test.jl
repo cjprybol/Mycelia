@@ -503,6 +503,16 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
             old = joinpath(dir, "old.log")
             write(old, "Seed           : 123\n")
             Test.@test recover_seed_from_log(old) == 123
+
+            # A banner of only commas or spaces matches `[\d,\s]+` but contains
+            # no seed. That is "no seed found", not an empty parse.
+            blank = joinpath(dir, "blank.log")
+            write(blank, "Seeds : ,\nSeeds          :   \n")
+            Test.@test recover_seed_from_log(blank) === nothing
+            _sbf_throws_with(
+                () -> resolve_backfill_seed(;
+                    explicit = nothing, run_log = blank, assume_default = false),
+                ["no seed found"])
         end
     end
 

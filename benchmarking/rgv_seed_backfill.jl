@@ -124,10 +124,13 @@ const SEED_PROVENANCE_OBSERVED = "observed"
 #                  "Seeds          : 42, 123, 456"
 # The banner is the string the sweep prints today, plural even for one seed.
 # `Seeds?` still accepts the older singular `Seed : <n>` form.
+# The banner capture must contain a digit. `[\d,\s]+` alone also matches a
+# banner of only commas or spaces (`Seeds : ,`), and parsing that capture is
+# an empty parse rather than "no seed found".
 const SEED_LOG_PATTERNS = (
     r"\bSEED=\"?([\d,]+)\"?"i,
     r"\bMYCELIA_RGV_SEED=\"?([\d,]+)\"?",
-    r"^\s*Seeds?\s*:\s*([\d,\s]+)$"
+    r"^\s*Seeds?\s*:\s*([\d,\s]*\d[\d,\s]*)$"
 )
 
 """
@@ -152,8 +155,11 @@ function recover_seed_from_log(log_path::AbstractString)
             # match would throw; taking only the first number would silently
             # attribute one seed to a multi-seed run.
             for piece in split(m.captures[1], ",")
-                isempty(strip(piece)) && continue
-                push!(found, parse(Int, strip(piece)))
+                # A comma-only or space-only capture has no integer. Skipping it
+                # leaves `found` empty, which is "no seed", not `parse(Int, "")`.
+                token = strip(piece)
+                occursin(r"^\d+$", token) || continue
+                push!(found, parse(Int, token))
             end
         end
     end

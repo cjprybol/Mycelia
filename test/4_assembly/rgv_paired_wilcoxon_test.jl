@@ -1159,6 +1159,22 @@ Test.@testset "RGV paired-Wilcoxon analysis" begin
         Test.@test occursin("Re-export every shard", msg)
     end
 
+    Test.@testset "a missing seed is an error, and integer widths promote" begin
+        # `skipmissing` used to drop the hole, so the replicate axis was shorter
+        # than the table. A missing seed is not a level.
+        missing_col = Union{Missing, Int64}[42, missing, 123]
+        _pwt_throws_with(() -> _sorted_seeds(missing_col),
+            ["missing", "seed", "must not be dropped"])
+
+        # Int32 and Int64 are the same seed written by two shards. Refusing the
+        # mix made a promotable integer column look like String-vs-Int.
+        mixed_ints = Any[Int32(123), Int64(42), Int32(42), Int64(7)]
+        sorted = _sorted_seeds(mixed_ints)
+        Test.@test sorted == [7, 42, 123]
+        Test.@test eltype(sorted) <: Integer
+        Test.@test eltype(sorted) == promote_type(Int32, Int64)
+    end
+
     Test.@testset "an assumed seed cannot earn an unqualified report" begin
         # td-dypu: `--assume-default-seed` used to look like a harness-observed
         # run. The provenance string the resolver writes has to reach report.md

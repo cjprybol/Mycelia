@@ -589,13 +589,30 @@ end
 """
     _sorted_seeds(col) -> Vector
 
-The replicate axis, sorted. Mixed element types are refused with an explanation
-instead of `MethodError: isless(::String, ::Int64)`, which is what
-`sort(unique(col))` throws when two shards disagree on the `seed` column type.
+The replicate axis, sorted.
+
+A `missing` seed is an error. Dropping it with `skipmissing` would remove a row
+from the replicate axis and make the same physical runs look like fewer
+replicates.
+
+Integer widths promote (`Int32` and `Int64` are the same seed). Any other mix,
+such as `String` and `Int64`, is refused with an explanation instead of
+`MethodError: isless(::String, ::Int64)`.
 """
 function _sorted_seeds(col)
-    vals = collect(skipmissing(col))
+    n_missing = count(ismissing, col)
+    if n_missing > 0
+        error("the `seed` column has $n_missing missing value(s) out of " *
+              "$(length(col)). A missing seed is not a replicate level and must " *
+              "not be dropped from the axis. Backfill it before analysis:\n" *
+              RGV_BACKFILL_HINT)
+    end
+    vals = collect(col)
     types = unique(typeof.(vals))
+    if length(types) > 1 && all(t -> t <: Integer, types)
+        T = promote_type(types...)
+        return sort(unique(T.(vals)))
+    end
     if length(types) > 1
         error("the `seed` column mixes types ($(join(string.(types), ", "))). " *
               "Shards disagree on the column type, so these values cannot be " *
