@@ -37,7 +37,9 @@
 #
 # Each cell: simulate reads -> assemble (k = --k, default 31) -> QUAST vs reference -> parse NGA50 /
 # misassemblies / genome fraction / duplication ratio. Per-cell JSON checkpoint enables
-# crash-safe resume. A final step computes NGA50 CV per (organism x tech x coverage x arm)
+# crash-safe resume. A checkpoint is reused only when the cell completed (`ok` or
+# `empty_assembly`). A cached `status=error` is not done: resume retries it. See
+# `resume_decision`. A final step computes NGA50 CV per (organism x tech x coverage x arm)
 # and writes a pass/fail power-analysis summary.
 #
 # Usage:
@@ -59,6 +61,13 @@
 #
 # Shard flags (--organisms/--technologies/--coverages/--seeds/--arms) take comma-separated
 # values and compose, so an HPC array job can split the matrix and share one results tree.
+#
+# Value flags are pairs (`--flag value` or `--flag=value`) and are validated together
+# with the shard group. A bare flag, a value that is itself a flag, a repeated flag,
+# an unknown token, or `--smoke` combined with a shard flag is a usage error and
+# exits 2 — the same contract as track_a_merge_hosts.jl. `--k` itself is parsed by
+# `parse_k` (positive odd integer). A partial `--k` must not fall back to 31: k is
+# part of the cell id, so defaulting would resume the k=31 tree.
 
 import Pkg
 if isinteractive()
@@ -98,27 +107,7 @@ const SEEDS = [42, 123, 456]
 const DECODER_ARMS = ["qualmer", "kmer"]
 # k is settable so an ONT k-sweep can probe whether ANY k assembles high-error long
 # reads usefully (at k=31 every ONT cell at 10x/30x yields NGA50 = 0). Default unchanged.
-#
-# A bare trailing `--k` must ERROR, not fall back to the default. Because k is part of
-# the cell id, a silent fallback to 31 would make a `--k` run resume and republish the
-# COMPLETED k=31 tree as if it were the requested k — the exact wrong-answer path the
-# k-in-cell-id change exists to close, reintroduced through the argument parser.
-const K = let v = findfirst(==("--k"), ARGS)
-    if v === nothing
-        31
-    elseif v == length(ARGS)
-        error("--k requires a value (got a bare trailing --k). Refusing to default to 31: " *
-              "k is part of the cell id, so defaulting would silently resume the k=31 tree.")
-    else
-        raw = ARGS[v + 1]
-        parsed = tryparse(Int, raw)
-        parsed === nothing && error("--k expects an integer, got $(repr(raw))")
-        parsed < 1 && error("--k must be >= 1, got $(parsed)")
-        iseven(parsed) &&
-            error("--k must be odd (canonical k-mers require it), got $(parsed)")
-        parsed
-    end
-end
+# The value is bound to `K` by `parse_track_a_invocation` / `parse_k` below.
 const CV_THRESHOLD = 0.15  # assumed NGA50 coefficient of variation in the power analysis
 
 # Traversal weighting, propagated to `Mycelia.Rhizomorph.assemble_genome`. Without this
@@ -130,22 +119,6 @@ const CV_THRESHOLD = 0.15  # assumed NGA50 coefficient of variation in the power
 # cell id, so a bare trailing `--traversal-weighting` silently falling back to `evidence`
 # would make a requested :quality run resume and republish the :evidence tree.
 const TRAVERSAL_WEIGHTINGS = ("evidence", "quality")
-const TRAVERSAL_WEIGHTING = let v = findfirst(==("--traversal-weighting"), ARGS)
-    if v === nothing
-        "evidence"
-    elseif v == length(ARGS)
-        error("--traversal-weighting requires a value (got a bare trailing flag). " *
-              "Refusing to default to evidence: the weighting is part of the cell id, " *
-              "so defaulting would silently resume the :evidence tree.")
-    else
-        raw = ARGS[v + 1]
-        if !(raw in TRAVERSAL_WEIGHTINGS)
-            allowed = join(TRAVERSAL_WEIGHTINGS, ", ")
-            error("--traversal-weighting expects one of $(allowed), got $(repr(raw))")
-        end
-        raw
-    end
-end
 
 # Resolve Mycelia checkout provenance stamped into every emitted row.
 # Same source as `benchmark_artifacts.jl` (`git rev-parse HEAD` + dirty via
@@ -202,50 +175,289 @@ const STR_KEYS = (
     :peak_rss_method, :benchmark_git_commit, :benchmark_git_dirty, :status)
 
 # === Argument parsing ===
+#
+# Flags that take a value are pairs, and the shard flags are a group. They are
+# parsed in one walk so a pair cannot steal the next flag as its value and a
+# group cannot be half-applied.
+#
+# Usage failures throw `UsageError`. `track_a_cli_or_usage` prints that and
+# returns `nothing`, which the script turns into exit 2 — the same contract as
+# `track_a_merge_hosts.jl` (`_parse_int_flag` / `_waiver_or_usage`). A stacktrace
+# is the wrong signal for an operator typo. `InterruptException` is never a
+# usage error.
 
-arg_value(flag) =
-    let i = findfirst(==(flag), ARGS)
-        (i !== nothing && i < length(ARGS)) ? ARGS[i + 1] : nothing
-    end
-arg_list(flag) =
-    let v = arg_value(flag)
-        v === nothing ? nothing : String.(split(v, ","))
-    end
+struct UsageError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::UsageError) = print(io, e.msg)
 
-const SMOKE = "--smoke" in ARGS
+const CLI_VALUE_FLAGS = (
+    "--k", "--traversal-weighting", "--organisms", "--technologies",
+    "--coverages", "--seeds", "--arms", "--output-dir")
+const CLI_SWITCHES = ("--smoke",)
+# `--smoke` replaces this whole group. Combining them used to parse the shard
+# flags and then ignore them, so the operator's matrix was not the one that ran.
+const CLI_SHARD_FLAGS = (
+    "--organisms", "--technologies", "--coverages", "--seeds", "--arms")
 
-organisms = ORGANISMS
-technologies = TECHNOLOGIES
-coverages = COVERAGES
-seeds = SEEDS
-arms = DECODER_ARMS
+"""
+    parse_k(raw) -> Int
 
-if SMOKE
-    organisms = ORGANISMS[1:1]      # Lambda (accession verified in-repo)
-    technologies = ["illumina"]
-    coverages = [30]
-    seeds = [42]
-    arms = ["qualmer"]
-else
-    # NOTE: assign directly (no `let`). A `let` block introduces a new scope, so
-    # `coverages = ...` inside it would create a local shadow and silently leave
-    # the global matrix at its default — i.e. the shard/filter flags would be
-    # ignored. `if/else` bodies do not introduce scope, so these reach the globals.
-    _f = arg_list("--organisms")
-    _f !== nothing && (organisms = filter(o -> o[1] in _f, ORGANISMS))
-    _f = arg_list("--technologies")
-    _f !== nothing && (technologies = _f)
-    _f = arg_list("--coverages")
-    _f !== nothing && (coverages = parse.(Int, _f))
-    _f = arg_list("--seeds")
-    _f !== nothing && (seeds = parse.(Int, _f))
-    _f = arg_list("--arms")
-    _f !== nothing && (arms = _f)
+The `--k` value: a positive odd integer.
+
+One helper, so the odd-k rule is not copied at each call site. A missing flag
+is the caller's default (31). This function never substitutes that default for
+a value that was actually supplied — a non-integer, a value `< 1`, or an even
+value is a `UsageError`. Canonical k-mers require odd k.
+"""
+function parse_k(raw::AbstractString)::Int
+    parsed = tryparse(Int, strip(raw))
+    parsed === nothing && throw(UsageError(
+        "--k expects an integer, got $(repr(raw))"))
+    parsed < 1 && throw(UsageError("--k must be >= 1, got $(parsed)"))
+    iseven(parsed) && throw(UsageError(
+        "--k must be odd (canonical k-mers require it), got $(parsed)"))
+    return parsed
 end
 
-const OUTPUT_DIR = let v = arg_value("--output-dir")
-    v === nothing ? joinpath(@__DIR__, "results", "track_a_baseline") : v
+function _cli_flag_name(token::AbstractString)
+    eq = findfirst('=', token)
+    return eq === nothing ? String(token) : String(token[1:prevind(token, eq)])
 end
+
+function _cli_equals_value(token::AbstractString)
+    eq = findfirst('=', token)
+    return eq === nothing ? nothing : String(token[nextind(token, eq):end])
+end
+
+function _split_csv(flag::AbstractString, raw::AbstractString)
+    parts = String[strip(s) for s in split(raw, ',')]
+    any(isempty, parts) && throw(UsageError(
+        "$flag has an empty entry in $(repr(raw))"))
+    return parts
+end
+
+function _reject_duplicates(flag::AbstractString, values)
+    length(unique(values)) == length(values) || throw(UsageError(
+        "$flag repeats a value ($(join(values, ", ")))"))
+    return values
+end
+
+function _resolve_organisms(raw)
+    raw === nothing && return ORGANISMS
+    names = _reject_duplicates("--organisms", _split_csv("--organisms", raw))
+    known = Set(o[1] for o in ORGANISMS)
+    unknown = [n for n in names if !(n in known)]
+    isempty(unknown) || throw(UsageError(
+        "--organisms has unknown name(s) $(join(repr.(unknown), ", ")); " *
+        "known: $(join((o[1] for o in ORGANISMS), ", ")). " *
+        "Unknown names used to be dropped, which ran a smaller matrix than " *
+        "the one requested."))
+    # Keep ORGANISMS order (the previous filter did). User order would change
+    # which cell a preempted job finishes first, which is not what a typo-fix
+    # should do.
+    selected = Set(names)
+    return filter(o -> o[1] in selected, ORGANISMS)
+end
+
+function _resolve_vocab(flag::AbstractString, raw, allowed)
+    raw === nothing && return collect(allowed)
+    vals = _reject_duplicates(flag, _split_csv(flag, raw))
+    for v in vals
+        v in allowed || throw(UsageError(
+            "$flag has unknown value $(repr(v)); known: $(join(allowed, ", "))"))
+    end
+    return vals
+end
+
+function _resolve_ints(flag::AbstractString, raw, default)
+    raw === nothing && return collect(Int, default)
+    vals = _split_csv(flag, raw)
+    out = Int[]
+    for s in vals
+        n = tryparse(Int, s)
+        n === nothing && throw(UsageError(
+            "$flag expects comma-separated integers, got $(repr(s))"))
+        push!(out, n)
+    end
+    return _reject_duplicates(flag, out)
+end
+
+"""
+    parse_track_a_invocation(args) -> NamedTuple
+
+Parse the harness CLI. Throws `UsageError` on a partial pair, a repeated flag,
+an unknown token, a shard value outside the matrix vocabulary, or `--smoke`
+combined with any shard flag.
+
+`--k` / `--traversal-weighting` / `--output-dir` stay legal next to `--smoke`:
+smoke fixes the organism × technology × coverage × seed × arm cell, and those
+three flags still change which tree that cell is.
+"""
+function parse_track_a_invocation(args::AbstractVector{<:AbstractString})
+    seen = Dict{String, String}()
+    i = 1
+    while i <= length(args)
+        token = args[i]
+        startswith(token, "--") || throw(UsageError(
+            "unexpected argument $(repr(token))"))
+        name = _cli_flag_name(token)
+        if name in CLI_SWITCHES
+            _cli_equals_value(token) === nothing || throw(UsageError(
+                "$(name) takes no value, got $(repr(token))"))
+            haskey(seen, name) && throw(UsageError("$(name) given more than once"))
+            seen[name] = ""
+            i += 1
+        elseif name in CLI_VALUE_FLAGS
+            haskey(seen, name) && throw(UsageError("$(name) given more than once"))
+            inline = _cli_equals_value(token)
+            value, step = if inline === nothing
+                i == length(args) && throw(UsageError(
+                    _bare_flag_message(name)))
+                args[i + 1], 2
+            else
+                inline, 1
+            end
+            # `--k --traversal-weighting` is a partial pair, not a k whose text
+            # is the next flag. The same hole made `--output-dir --smoke` a
+            # directory named `--smoke` and `--organisms --arms` an empty matrix.
+            if inline === nothing && startswith(value, "--")
+                throw(UsageError(
+                    "$(name) requires a value, but the next token is $(repr(value)). " *
+                    "A flag that takes a value cannot be paired with another flag."))
+            end
+            isempty(strip(value)) && throw(UsageError(
+                "$(name) requires a non-empty value"))
+            seen[name] = String(value)
+            i += step
+        else
+            throw(UsageError(
+                "unknown argument $(repr(token)); expected one of " *
+                join((CLI_VALUE_FLAGS..., CLI_SWITCHES...), ", ")))
+        end
+    end
+
+    smoke = haskey(seen, "--smoke")
+    if smoke
+        collided = [f for f in CLI_SHARD_FLAGS if haskey(seen, f)]
+        isempty(collided) || throw(UsageError(
+            "--smoke fixes the matrix at one cell " *
+            "(Lambda/illumina/30x/seed42/qualmer) and cannot be combined with " *
+            "$(join(collided, ", ")). Drop --smoke to shard, or drop the shard " *
+            "flags to smoke. Combining them used to ignore the shard flags."))
+    end
+
+    k = haskey(seen, "--k") ? parse_k(seen["--k"]) : 31
+    weighting = get(seen, "--traversal-weighting", "evidence")
+    if !(weighting in TRAVERSAL_WEIGHTINGS)
+        throw(UsageError(
+            "--traversal-weighting expects one of $(join(TRAVERSAL_WEIGHTINGS, ", ")), " *
+            "got $(repr(weighting))"))
+    end
+
+    organisms_sel = smoke ? ORGANISMS[1:1] :
+                    _resolve_organisms(get(seen, "--organisms", nothing))
+    technologies_sel = smoke ? ["illumina"] : _resolve_vocab(
+        "--technologies", get(seen, "--technologies", nothing), TECHNOLOGIES)
+    coverages_sel = smoke ? [30] : _resolve_ints(
+        "--coverages", get(seen, "--coverages", nothing), COVERAGES)
+    seeds_sel = smoke ? [42] : _resolve_ints(
+        "--seeds", get(seen, "--seeds", nothing), SEEDS)
+    arms_sel = smoke ? ["qualmer"] : _resolve_vocab(
+        "--arms", get(seen, "--arms", nothing), DECODER_ARMS)
+    output_dir = get(seen, "--output-dir", nothing)
+
+    return (;
+        k = k, traversal_weighting = weighting, smoke = smoke,
+        organisms = organisms_sel, technologies = technologies_sel,
+        coverages = coverages_sel, seeds = seeds_sel, arms = arms_sel,
+        output_dir = output_dir)
+end
+
+# A bare trailing flag must name WHY the default is refused when the default
+# would select a different checkpoint tree. The other value flags have no
+# silent-default tree to resume, but they are still partial pairs.
+function _bare_flag_message(name::AbstractString)
+    if name == "--k"
+        return "--k requires a value (got a bare trailing --k). Refusing to " *
+               "default to 31: k is part of the cell id, so defaulting would " *
+               "silently resume the k=31 tree."
+    elseif name == "--traversal-weighting"
+        return "--traversal-weighting requires a value (got a bare trailing flag). " *
+               "Refusing to default to evidence: the weighting is part of the " *
+               "cell id, so defaulting would silently resume the :evidence tree."
+    else
+        return "$(name) requires a value (got a bare trailing $(name))."
+    end
+end
+
+"""
+    track_a_cli_or_usage(args) -> Union{NamedTuple, Nothing}
+
+`parse_track_a_invocation`, or `nothing` after printing a usage error.
+`nothing` is the exit-2 signal. `InterruptException` propagates.
+"""
+function track_a_cli_or_usage(args::AbstractVector{<:AbstractString};
+        parse_args::Function = parse_track_a_invocation)
+    try
+        return parse_args(args)
+    catch e
+        e isa InterruptException && rethrow()
+        e isa UsageError || rethrow()
+        println(stderr, "ERROR: $(e.msg)")
+        return nothing
+    end
+end
+
+"""
+    track_a_usage_exit_code(args) -> Int
+
+`0` when `args` parse, `2` when they are a usage error. Does not exit and does
+not print. The script calls `exit(2)` on the `nothing` from
+`track_a_cli_or_usage`; this is the code a test can hold without killing the
+process.
+"""
+function track_a_usage_exit_code(args::AbstractVector{<:AbstractString})::Int
+    try
+        parse_track_a_invocation(args)
+        return 0
+    catch e
+        e isa InterruptException && rethrow()
+        e isa UsageError || rethrow()
+        return 2
+    end
+end
+
+# Bind once, from this process's ARGS. A test includes this file and must keep
+# a legal argv (the default, empty, is the full matrix). An illegal argv exits 2
+# only when this file is the program; an include rethrows so a suite does not
+# die inside `exit`.
+const _PARSED_ARGS = let parsed = track_a_cli_or_usage(ARGS)
+    if parsed === nothing
+        if abspath(PROGRAM_FILE) == @__FILE__
+            exit(2)
+        end
+        error("invalid Track A arguments while this file was included. " *
+              "Usage errors exit 2 when the harness is the program.")
+    end
+    parsed
+end
+const K = _PARSED_ARGS.k
+const TRAVERSAL_WEIGHTING = _PARSED_ARGS.traversal_weighting
+const SMOKE = _PARSED_ARGS.smoke
+
+# Assigned from the parser's return value, not inside a `let`. A `let` body
+# introduces a scope, so `coverages = ...` there would shadow the global and
+# the shard flags would be parsed and then ignored.
+organisms = _PARSED_ARGS.organisms
+technologies = _PARSED_ARGS.technologies
+coverages = _PARSED_ARGS.coverages
+seeds = _PARSED_ARGS.seeds
+arms = _PARSED_ARGS.arms
+
+const OUTPUT_DIR = _PARSED_ARGS.output_dir === nothing ?
+                   joinpath(@__DIR__, "results", "track_a_baseline") :
+                   _PARSED_ARGS.output_dir
 
 const N_CELLS = length(organisms) * length(technologies) * length(coverages) *
                 length(seeds) * length(arms)
@@ -495,38 +707,117 @@ end
 # Re-reading the store makes the aggregate monotone and idempotent by construction:
 # shards, sweeps and resumes all converge on the union rather than the last writer's
 # slice, and a no-op re-run repairs a previously truncated table.
+#
+# That union is not a license to skip a cell the store already knows about. A
+# directory with no `cell_result.json` (in progress, or a crash before the first
+# checkpoint) and a checkpoint that does not parse into the row schema used to be
+# omitted with at most a `@warn`, and the smaller table was what got published.
+# Downstream, including the power analysis, cannot tell that table from a finished
+# matrix. `write_aggregate` now refuses to publish while any such gap is still
+# unresolved, and leaves the previous TSV in place.
+#
+# A readable `status=error` checkpoint is NOT a gap. It is the catch path's record
+# that the cell threw. Dropping it would hide the failure and shrink the table.
+# Resume retries it (`resume_decision`); the power analysis already excludes it
+# from the CV. An in-memory row covers a gap only when its cell id is that
+# directory: the row is then in the table, so the cell was not omitted.
+#
 # Unique-temp rename lives in atomic_publish.jl so the merge script calls the same
 # function. This file cannot be included from there (it imports Mycelia and reads ARGS).
 include(joinpath(@__DIR__, "atomic_publish.jl"))
 
-function write_aggregate(root, rows)
+struct CellStoreGap
+    cell_id::String
+    kind::String
+    reason::String
+end
+
+struct AggregateIncomplete <: Exception
+    gaps::Vector{CellStoreGap}
+    msg::String
+end
+Base.showerror(io::IO, e::AggregateIncomplete) = print(io, e.msg)
+
+"""
+    scan_cell_store(root) -> (rows, gaps)
+
+Every cell directory under `root/cells`. `rows` maps the directory name (the cell
+id) to a canonical row. `gaps` lists directories with no checkpoint (`missing`)
+or a checkpoint that did not parse (`incomplete`). Non-directories are ignored.
+`InterruptException` from the reader is rethrown; it is not an incomplete cell.
+"""
+function scan_cell_store(root::AbstractString; read::Function = JSON.parsefile)
     cells_dir = joinpath(root, "cells")
-    all_rows = NamedTuple[]
-    if isdir(cells_dir)
-        skipped = String[]
-        for entry in sort(readdir(cells_dir))
-            ckpt = joinpath(cells_dir, entry, "cell_result.json")
-            isfile(ckpt) || continue
-            # Guard per checkpoint. canonical() now raises on a missing measurement
-            # (deliberately — a zero-filled corrupt cell is indistinguishable from a
-            # real ONT failure), and this loop touches every checkpoint in the tree, so
-            # ONE stale or truncated file would otherwise abort the aggregate and with
-            # it the whole run. Skip it loudly and keep the other cells.
-            try
-                push!(all_rows, canonical(JSON.parsefile(ckpt)))
-            catch e
-                push!(skipped, entry)
-                @warn "skipping unreadable checkpoint in aggregate" entry exception = e
-            end
+    rows = Dict{String, NamedTuple}()
+    gaps = CellStoreGap[]
+    isdir(cells_dir) || return rows, gaps
+    for entry in sort(readdir(cells_dir))
+        cell_dir = joinpath(cells_dir, entry)
+        isdir(cell_dir) || continue
+        ckpt = joinpath(cell_dir, "cell_result.json")
+        if !isfile(ckpt)
+            push!(gaps, CellStoreGap(String(entry), "missing", "no cell_result.json"))
+            continue
         end
-        isempty(skipped) ||
-            @warn "aggregate omits $(length(skipped)) unreadable checkpoint(s); " *
-                  "delete them to force recompute" skipped
+        try
+            rows[String(entry)] = canonical(read(ckpt))
+        catch e
+            e isa InterruptException && rethrow()
+            push!(gaps, CellStoreGap(String(entry), "incomplete",
+                "unreadable checkpoint: $(sprint(showerror, e))"))
+        end
     end
-    # Fall back to the in-memory rows only when the store is unreadable, so an aggregate
-    # is still produced rather than silently emptied.
-    isempty(all_rows) && (all_rows = collect(rows))
-    df = DataFrames.DataFrame(all_rows)
+    return rows, gaps
+end
+
+function row_cell_id(row)
+    return cell_id_for(row.organism, row.technology, row.coverage, row.seed,
+        row.decoder_arm; k = row.k, traversal_weighting = row.traversal_weighting)
+end
+
+function aggregate_incomplete_message(root, gaps::Vector{CellStoreGap})
+    lines = ["  - $(g.cell_id): $(g.kind) ($(g.reason))" for g in gaps]
+    target = joinpath(root, "track_a_results.tsv")
+    return "refusing to publish $(target): $(length(gaps)) missing or incomplete " *
+           "cell(s) would be omitted, and a smaller table is not a result.\n" *
+           join(lines, "\n") *
+           "\nThe previous table, if any, is unchanged. A missing cell_result.json " *
+           "is an in-progress or crashed cell; an incomplete checkpoint did not " *
+           "parse into the row schema. Delete that cell's checkpoint to recompute it."
+end
+
+"""
+    assemble_aggregate(root, rows) -> (ordered_rows, unresolved_gaps)
+
+Union of on-disk checkpoints and `rows`. Disk wins when both have the same cell
+id (the store is the source of truth). An in-memory row fills a cell the store
+does not have, which is also how a just-computed row covers a gap whose
+checkpoint is not readable yet. A gap whose directory name is already in the
+union is resolved: that cell will be in the table.
+"""
+function assemble_aggregate(root, rows)
+    disk, gaps = scan_cell_store(root)
+    merged = disk
+    for row in rows
+        id = row_cell_id(row)
+        haskey(merged, id) || (merged[id] = row)
+    end
+    unresolved = CellStoreGap[g for g in gaps if !haskey(merged, g.cell_id)]
+    ordered = NamedTuple[merged[id] for id in sort(collect(keys(merged)))]
+    return ordered, unresolved
+end
+
+function write_aggregate(root, rows)
+    ordered, unresolved = assemble_aggregate(root, rows)
+    if !isempty(unresolved)
+        throw(AggregateIncomplete(unresolved,
+            aggregate_incomplete_message(root, unresolved)))
+    end
+    # No store yet (a fresh tree, before the first checkpoint directory exists):
+    # the in-memory rows are the whole aggregate. `assemble_aggregate` already
+    # included them. This fallback only fires when both sides are empty.
+    isempty(ordered) && (ordered = collect(rows))
+    df = DataFrames.DataFrame(ordered)
     target = joinpath(root, "track_a_results.tsv")
     _publish_atomically(tmp -> CSV.write(tmp, df; delim = '\t'), target)
     return df
@@ -693,6 +984,66 @@ function error_row(org, acc, tech, cov, seed, arm)
         metrics = empty_metrics(), status = "error")
 end
 
+# Statuses resume will recompute instead of treating as done.
+#
+# The sbatch wrappers document the recovery as "just re-submit, completed cells
+# are skipped". An error row is the catch path's record that the cell threw. It
+# is not a completed measurement. Skipping it as cached success freezes the
+# failure: re-submit never fills the hole, and the final "N ok" line counts a
+# failure as progress. `empty_assembly` stays cached — zero contigs is a real
+# outcome (the most degenerate measurement), and re-running only reproduces it.
+# `ok` stays cached. There is no `quast_failed` status in this harness: a QUAST
+# exception is recorded as `ok` plus `empty_metrics()`, which the power analysis
+# excludes separately.
+const RETRYABLE_STATUSES = ("error",)
+
+"""
+    cached_checkpoint_action(status) -> Symbol
+
+`:retry` when a cached row must be run again, `:skip` when it is done.
+"""
+function cached_checkpoint_action(status::AbstractString)
+    return String(status) in RETRYABLE_STATUSES ? :retry : :skip
+end
+
+"""
+    resume_decision(ckpt) -> NamedTuple
+
+`:skip` plus the row when the checkpoint is a completed cell, `:retry` plus the
+row when it is `status=error`, `:run` with `row = nothing` when the file is
+absent or unreadable.
+
+An unreadable checkpoint is recomputed rather than aborting the matrix: one
+truncated JSON must not kill a multi-hour resume. The new row overwrites it at
+the end of the cell. `InterruptException` from the reader is rethrown.
+"""
+function resume_decision(ckpt::AbstractString; read::Function = JSON.parsefile)
+    isfile(ckpt) || return (action = :run, row = nothing)
+    local row
+    try
+        row = canonical(read(ckpt))
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "unreadable checkpoint; recomputing this cell" checkpoint = ckpt exception = (
+            e, catch_backtrace())
+        return (action = :run, row = nothing)
+    end
+    return (action = cached_checkpoint_action(row.status), row = row)
+end
+
+"""
+    prepare_cell_retry(cell_dir)
+
+Delete `reads/` before a retry. PacBio and ONT simulation reuse a non-empty
+outfile, so a truncated `.fq.gz` left by a killed run would make the retry fail
+the same way forever. The checkpoint stays until the new row is published: a
+crash during the retry must leave the previous error row, not a missing cell.
+"""
+function prepare_cell_retry(cell_dir::AbstractString)
+    rm(joinpath(cell_dir, "reads"); recursive = true, force = true)
+    return cell_dir
+end
+
 # === Main ===
 
 # Guard the driver so a test can `include()` this file for its pure helpers without
@@ -757,10 +1108,17 @@ if abspath(PROGRAM_FILE) == @__FILE__
         cell_dir = joinpath(cells_dir, cell_id)
         ckpt = joinpath(cell_dir, "cell_result.json")
 
-        if isfile(ckpt)
+        # Completed cells are skipped. `status=error` is retried; an unreadable
+        # checkpoint is recomputed. See `resume_decision`.
+        decision = resume_decision(ckpt)
+        if decision.action == :skip
             println("  [$cell_index/$N_CELLS] $cell_id — cached, skipping")
-            push!(rows, canonical(JSON.parsefile(ckpt)))
+            push!(rows, decision.row)
             continue
+        elseif decision.action == :retry
+            println("  [$cell_index/$N_CELLS] $cell_id — cached status=" *
+                    "$(decision.row.status); retrying")
+            prepare_cell_retry(cell_dir)
         end
 
         mkpath(cell_dir)
@@ -773,7 +1131,18 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
         save_cell_json(ckpt, row)
         push!(rows, row)
-        write_aggregate(OUTPUT_DIR, rows)  # rewrite aggregate each cell (cheap at this scale)
+        # A gap (a sibling's in-progress directory, or a truncated checkpoint)
+        # must not publish a smaller table. Leave the previous TSV and keep
+        # going; the final aggregate below still fails if the gap remains, so
+        # the power analysis never runs on a partial matrix.
+        try
+            write_aggregate(OUTPUT_DIR, rows)
+        catch e
+            e isa InterruptException && rethrow()
+            e isa AggregateIncomplete || rethrow()
+            @warn "aggregate not published; checkpoint store has gaps. " *
+                  "The previous table is unchanged." exception = e
+        end
         println("$(row.status): $(row.n_contigs) contigs, NGA50=$(row.NGA50), " *
                 "GF=$(row.genome_fraction)%, $(round(row.wall_seconds; digits = 1))s")
     end
