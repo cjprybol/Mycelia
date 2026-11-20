@@ -517,8 +517,30 @@ function linguistic_complexity(seq; kmax = nothing, alphabet = nothing, reducer 
     return prof, reducer(prof)
 end
 
+"""
+    kmer_type_for_sequence(seq, k) -> Type
+
+Return the `Kmers` k-mer type for biological sequence `seq` at length `k`:
+`DNAKmer{k}`, `RNAKmer{k}`, or `AAKmer{k}`.
+"""
+function kmer_type_for_sequence(seq::BioSequences.LongDNA, k::Int)
+    return Kmers.DNAKmer{k}
+end
+
+function kmer_type_for_sequence(seq::BioSequences.LongRNA, k::Int)
+    return Kmers.RNAKmer{k}
+end
+
+function kmer_type_for_sequence(seq::BioSequences.LongAA, k::Int)
+    return Kmers.AAKmer{k}
+end
+
+function kmer_type_for_sequence(seq::BioSequences.BioSequence, k::Int)
+    throw(ArgumentError("Unsupported sequence type for k-mers: $(typeof(seq))"))
+end
+
 function _count_sequence_complexity_kmers(seq::BioSequences.LongDNA, k::Int; canonical::Bool)
-    kmer_type = Kmers.DNAKmer{k}
+    kmer_type = kmer_type_for_sequence(seq, k)
     if canonical
         return count_canonical_kmers(kmer_type, seq)
     end
@@ -526,13 +548,11 @@ function _count_sequence_complexity_kmers(seq::BioSequences.LongDNA, k::Int; can
 end
 
 function _count_sequence_complexity_kmers(seq::BioSequences.LongRNA, k::Int; canonical::Bool)
-    kmer_type = Kmers.RNAKmer{k}
-    return count_kmers(kmer_type, seq)
+    return count_kmers(kmer_type_for_sequence(seq, k), seq)
 end
 
 function _count_sequence_complexity_kmers(seq::BioSequences.LongAA, k::Int; canonical::Bool)
-    kmer_type = Kmers.AAKmer{k}
-    return count_kmers(kmer_type, seq)
+    return count_kmers(kmer_type_for_sequence(seq, k), seq)
 end
 
 function _count_sequence_complexity_kmers(seq::BioSequences.BioSequence, k::Int; canonical::Bool)

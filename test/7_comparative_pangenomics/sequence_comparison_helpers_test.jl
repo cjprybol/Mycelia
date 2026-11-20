@@ -1,4 +1,6 @@
 import Test
+import BioSequences
+import Kmers
 import Mycelia
 
 if !isdefined(Main, :test_throws_message)
@@ -92,5 +94,23 @@ Test.@testset "Sequence Comparison Helpers" begin
                     [reference]; sample_reads = [joinpath(dir, "missing.fastq")])
             end
         end
+    end
+
+    Test.@testset "kmer_type_for_sequence maps alphabet to Kmers types (td-5si)" begin
+        dna = BioSequences.LongDNA{4}("ACGTACGT")
+        rna = BioSequences.LongRNA{4}("ACGUACGU")
+        aa = BioSequences.LongAA("ACDEFGHIK")
+        Test.@test Mycelia.kmer_type_for_sequence(dna, 3) === Kmers.DNAKmer{3}
+        Test.@test Mycelia.kmer_type_for_sequence(rna, 4) === Kmers.RNAKmer{4}
+        Test.@test Mycelia.kmer_type_for_sequence(aa, 2) === Kmers.AAKmer{2}
+        Test.@test Mycelia.kmer_type_for_sequence(dna, 5) === Kmers.DNAKmer{5}
+
+        # Behaviour-preserving: complexity helpers still accept all three alphabets.
+        Test.@test Mycelia.shannon_entropy(dna; k = 2) > 0.0
+        Test.@test Mycelia.shannon_entropy(rna; k = 2) > 0.0
+        Test.@test Mycelia.shannon_entropy(aa; k = 2) > 0.0
+        Test.@test Mycelia.kmer_richness(dna, 2; normalize = false) isa Integer
+        Test.@test Mycelia.kmer_richness(rna, 2; normalize = false) isa Integer
+        Test.@test Mycelia.kmer_richness(aa, 2; normalize = false) isa Integer
     end
 end
