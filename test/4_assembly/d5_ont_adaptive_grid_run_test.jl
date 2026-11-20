@@ -662,6 +662,40 @@ Test.@testset "D5 grid runner" begin
             Test.@test msg !== nothing && occursin("already held", msg) &&
                        occursin(D5OntAdaptiveGridDriver.cell_id(cell), msg)
             Test.@test isdir(lockdir)
+            # SIGKILL never runs finally. A dead pid on this host is reclaimed
+            # and the cell runs; our own pid is still live and is not stolen.
+            write(joinpath(lockdir, "holder"), "$(gethostname()) 2147483646 -")
+            Test.@test !local_pid_alive(2147483646)
+            calls[] = 0
+            Test.@test run_or_resume(
+                _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A) == "ok"
+            Test.@test calls[] == 1 && !isdir(lockdir)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "$(gethostname()) $(getpid()) -")
+            calls[] = 0
+            msg = error_message(() -> run_or_resume(
+                _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A))
+            Test.@test calls[] == 0 && isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg)
+            # Another host is reclaimed only when its SLURM job is finished.
+            rm(lockdir; recursive = true)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242")
+            ran = Ref(false)
+            with_directory_lock(lockdir; timeout_s = 0, job_running = _ -> false) do
+                ran[] = true
+            end
+            Test.@test ran[] && !isdir(lockdir)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242")
+            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0,
+                job_running = _ -> true) do
+                error("stole a live job")
+            end)
+            Test.@test isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin("4242", msg)
+            Test.@test slurm_job_running("not-a-job")
         end
 
         cell_cli = D5OntAdaptiveGridDriver.parse_cli(

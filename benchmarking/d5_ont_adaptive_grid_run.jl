@@ -221,16 +221,87 @@ function reference_fasta(organism::Symbol, refs_dir::AbstractString)
     return (; info, path = joinpath(refs_dir, info.accession * ".fna"))
 end
 
+"""hostname, pid, and SLURM job id (`-` when this process is not a SLURM job)."""
+function lock_holder_line()
+    return "$(gethostname()) $(getpid()) $(get(ENV, "SLURM_JOB_ID", "-"))"
+end
+
+"""True when `pid` exists on this machine. `EPERM` still means it exists."""
+function local_pid_alive(pid::Integer)
+    pid <= 0 && return false
+    rc = ccall(:kill, Cint, (Cint, Cint), Cint(pid), Cint(0))
+    rc == 0 && return true
+    return Base.Libc.errno() != Base.Libc.ESRCH
+end
+
+"""
+True when `squeue` still lists `jobid`. No `squeue`, or a non-numeric id, stays
+true: a lock is reclaimed only when the holder is proved gone.
+"""
+function slurm_job_running(jobid::AbstractString)
+    occursin(r"^[0-9]+$", jobid) || return true
+    squeue = Sys.which("squeue")
+    squeue === nothing && return true
+    try
+        return !isempty(strip(read(`$squeue -h -j $jobid`, String)))
+    catch
+        return true
+    end
+end
+
+"""
+True when the holder recorded in the lock may still be running. Missing or
+unreadable text stays live, so a lock that was just created is not stolen.
+Same host: the pid must exist. Another host: the recorded SLURM job must still
+be listed (`job_running`). A `-` job id cannot be proved finished.
+"""
+function lock_holder_alive(text::AbstractString; job_running::Function = slurm_job_running)
+    parts = split(strip(text))
+    length(parts) >= 2 || return true
+    pid = tryparse(Int, parts[2])
+    pid === nothing && return true
+    if parts[1] == gethostname()
+        return local_pid_alive(pid)
+    end
+    length(parts) >= 3 || return true
+    parts[3] == "-" && return true
+    return job_running(parts[3])
+end
+
+"""
+Remove `lockdir` when its holder file proves the holder is gone (SIGKILL does
+not run the holder's `finally`). Returns false when the holder may be live or
+the lock has no holder file yet.
+"""
+function reclaim_stale_lock(lockdir::AbstractString; job_running::Function = slurm_job_running)
+    isdir(lockdir) || return false
+    holder_path = joinpath(lockdir, "holder")
+    isfile(holder_path) || return false
+    text = try
+        read(holder_path, String)
+    catch
+        return false
+    end
+    lock_holder_alive(text; job_running) && return false
+    rm(lockdir; recursive = true, force = true)
+    return true
+end
+
 """
 Hold `lockdir` (an atomic `mkdir`) for `f`, then remove it. A second holder
-fails instead of waiting out a dead task: the message names the lock and, when
-the holder wrote one, who created it. `timeout_s == 0` fails on the first
-collision. The directory is removed only when this call created it.
+fails instead of waiting out a live task: the message names the lock and, when
+the holder wrote one, who created it. A holder that is proved gone — dead pid
+on this host, or a SLURM job id `job_running` says has finished — is reclaimed,
+so a resubmit after SIGKILL (which never runs `finally`) does not stick. A
+holder that cannot be proved gone is left for the operator to remove.
+`timeout_s == 0` fails on the first collision with a live holder. The directory
+is removed only when this call created it.
 """
 function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
-        purpose::AbstractString = "work")
+        purpose::AbstractString = "work", job_running::Function = slurm_job_running)
     mkpath(dirname(lockdir))
     t0 = time()
+    steals = 0
     while true
         try
             mkdir(lockdir)
@@ -239,6 +310,11 @@ function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
             isa(e, Base.IOError) || rethrow()
             collided = e.code == Base.UV_EEXIST || occursin("EEXIST", sprint(showerror, e))
             collided || rethrow()
+            isdir(lockdir) || continue
+            if steals < 1 && reclaim_stale_lock(lockdir; job_running)
+                steals += 1
+                continue
+            end
             if timeout_s == 0 || time() - t0 >= timeout_s
                 holder_path = joinpath(lockdir, "holder")
                 holder = isfile(holder_path) ?
@@ -251,7 +327,7 @@ function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
         end
     end
     try
-        write(joinpath(lockdir, "holder"), "$(gethostname()) $(getpid())")
+        write(joinpath(lockdir, "holder"), lock_holder_line())
         return f()
     finally
         rm(lockdir; recursive = true, force = true)
@@ -305,7 +381,8 @@ reader never sees a half-written FASTA. `download(accession, dest)` is
 injectable for tests.
 """
 function stage_reference(organism::Symbol, refs_dir::AbstractString;
-        download::Function = download_reference_file, timeout_s::Real = 120)
+        download::Function = download_reference_file, timeout_s::Real = 120,
+        job_running::Function = slurm_job_running)
     mkpath(refs_dir)
     staged = reference_fasta(organism, refs_dir)
     function checked(path)
@@ -315,7 +392,7 @@ function stage_reference(organism::Symbol, refs_dir::AbstractString;
     end
     isfile(staged.path) && return checked(staged.path)
     lockdir = joinpath(refs_dir, staged.info.accession * ".lock")
-    return with_directory_lock(lockdir; timeout_s,
+    return with_directory_lock(lockdir; timeout_s, job_running,
         purpose = "reference $(staged.info.accession)") do
         isfile(staged.path) && return checked(staged.path)
         staging = mktempdir(refs_dir)
