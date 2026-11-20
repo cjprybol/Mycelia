@@ -1,26 +1,156 @@
 # PARALLEL SOFT-EM BYTE-IDENTITY (opt1)
 # Corrected reads AND soft-EM weights must be identical between parallel and
-# serial decode. CI runs single-threaded, so this test relaunches itself under
-# `julia -t 4` to exercise genuine concurrency (otherwise @threads runs serially
-# and proves nothing). RED signal before the fix: the guard demotes
-# enable_parallel=true+soft-EM to serial and logs "ignoring enable_parallel".
+# serial decode. CI's default job is single-threaded, so this file relaunches
+# itself under `julia -t 4` when `Threads.nthreads() == 1`. The parent re-asserts
+# each child result line (`MYCELIA_PSI_RESULTS`) so a failure names the check
+# instead of collapsing every child assertion into one `success(pipeline(...))`.
 import Test
 import Mycelia
 import FASTX
 import Random
-import Logging
+
+# Parent-side contract: one name per child `_psi_assert`. Status is matched by
+# name, so a missing mid-file result does not relabel every later check.
+# Emit order is a separate assertion.
+const _PSI_EXPECTED_ASSERTIONS = [
+    "repr_collision_same_print",
+    "repr_collision_sort_keys_differ",
+    "nthreads",
+    "parallel_batches_taken",
+    "serial_batches_zero",
+    "weights_nonempty",
+    "seqs_equal",
+    "weights_equal",
+    "single_batch_count",
+    "single_batch_weights_nonempty",
+    "single_batch_seqs_equal",
+    "single_batch_weights_equal",
+    "windowed_nthreads",
+    "windowed_multi_reads",
+    "windowed_divergence_witness",
+    "windowed_fractional_shared_weight",
+    "windowed_weights_nonempty",
+    "windowed_seqs_equal",
+    "windowed_weights_equal",
+    "gc_weights_nonempty",
+    "gc_seqs_equal",
+    "gc_weights_equal",
+]
+
+# `lines` are `STATUS\tname` records from the child. Status is keyed by name.
+# Duplicates and malformed lines stay out of that map so they can be reported
+# on their own. `order` is the first-seen name sequence, checked separately.
+function _psi_child_result_map(lines)
+    by_name = Dict{String, String}()
+    order = String[]
+    duplicates = String[]
+    malformed = String[]
+    for line in lines
+        parts = split(line, '\t', limit = 2)
+        if length(parts) != 2 || isempty(parts[2])
+            push!(malformed, line)
+            continue
+        end
+        status = String(parts[1])
+        name = String(parts[2])
+        if haskey(by_name, name)
+            push!(duplicates, name)
+        else
+            by_name[name] = status
+            push!(order, name)
+        end
+    end
+    return by_name, order, duplicates, malformed
+end
 
 if Threads.nthreads() == 1 && get(ENV, "MYCELIA_PSI_CHILD", "0") != "1"
     # Self-hoist to real threads.
     proj = Base.active_project()
     thisfile = @__FILE__
-    cmd = `$(Base.julia_cmd()) --project=$(proj) --threads=4 -e "include(\"$(thisfile)\")"`
-    Test.@testset "parallel soft-EM byte-identity (hoisted to -t4)" begin
-        Test.@test success(pipeline(setenv(cmd, "MYCELIA_PSI_CHILD" => "1"; dir = pwd());
-            stdout = stdout, stderr = stderr))
+    results_file, results_io = mktemp()
+    close(results_io)
+    try
+        cmd = `$(Base.julia_cmd()) --project=$(proj) --threads=4 -e "include(\"$(thisfile)\")"`
+        child_env = copy(ENV)
+        child_env["MYCELIA_PSI_CHILD"] = "1"
+        child_env["MYCELIA_PSI_RESULTS"] = results_file
+        Test.@testset "parallel soft-EM byte-identity (hoisted to -t4)" begin
+            proc = run(pipeline(
+                setenv(cmd, child_env; dir = pwd());
+                stdout = stdout, stderr = stderr); wait = false)
+            wait(proc)
+            by_name, order, duplicates, malformed = _psi_child_result_map(
+                readlines(results_file))
+            for name in _PSI_EXPECTED_ASSERTIONS
+                Test.@test (name, get(by_name, name, "MISSING")) == (name, "PASS")
+            end
+            for name in duplicates
+                Test.@test (name, "DUPLICATE") == (name, "UNIQUE")
+            end
+            for line in malformed
+                Test.@test (line, "MALFORMED") == (line, "WELLFORMED")
+            end
+            extras = setdiff(keys(by_name), _PSI_EXPECTED_ASSERTIONS)
+            for name in sort!(collect(extras))
+                Test.@test (name, "EXTRA") == (name, "EXPECTED")
+            end
+            Test.@test order == _PSI_EXPECTED_ASSERTIONS
+            Test.@test success(proc)
+        end
+    finally
+        rm(results_file; force = true)
     end
 else
     const _PSI_BASES = ['A', 'C', 'G', 'T']
+    _psi_failed = Ref(false)
+
+    function _psi_assert(name::AbstractString, cond::Bool)
+        path = get(ENV, "MYCELIA_PSI_RESULTS", "")
+        if !isempty(path)
+            open(path, "a") do io
+                println(io, (cond ? "PASS" : "FAIL"), "\t", name)
+                flush(io)
+            end
+        end
+        cond || (_psi_failed[] = true)
+        Test.@test cond
+        return cond
+    end
+
+    # The hoisted child must keep going after a failed `@testset` so later
+    # result lines still reach the parent. In-process (the 4-thread CI job)
+    # rethrows, so a failure fails this file instead of `exit` aborting the
+    # rest of the suite.
+    function _psi_guarded(body::Function)
+        try
+            body()
+            return nothing
+        catch err
+            if err isa Test.TestSetException &&
+               !isempty(get(ENV, "MYCELIA_PSI_RESULTS", ""))
+                return nothing
+            end
+            rethrow()
+        end
+    end
+
+    # `repr` is not injective: two values can print the same and still be
+    # unequal. A sort `by = repr(key)` then keeps Dict iteration order for the
+    # tie, so equal accumulators can compare unequal. The sort key adds the
+    # concrete type and `hash` (equal keys hash equal) and refuses a non-unique
+    # key instead of falling through to iteration order.
+    function _psi_edge_sort_key(edge)
+        return (string(typeof(edge)), repr(edge), hash(edge))
+    end
+
+    struct _PsiReprCollideA
+        x::Int
+    end
+    struct _PsiReprCollideB
+        x::Int
+    end
+    Base.show(io::IO, a::_PsiReprCollideA) = print(io, "edge:", a.x)
+    Base.show(io::IO, b::_PsiReprCollideB) = print(io, "edge:", b.x)
 
     function _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
         reflen = length(ref)
@@ -39,46 +169,135 @@ else
     end
 
     _psi_seqs(records) = [FASTX.sequence(String, r) for r in records]
-    _psi_weight_pairs(acc) = sort!(collect(acc.weights); by = p -> repr(p[1]))
 
-    function _psi_run(reads, graph, k, hard; parallel::Bool, diagnostics = nothing)
+    function _psi_weight_pairs(acc)
+        pairs = collect(acc.weights)
+        sort!(pairs; by = p -> _psi_edge_sort_key(p[1]))
+        sort_keys = [_psi_edge_sort_key(p[1]) for p in pairs]
+        allunique(sort_keys) || error(
+            "soft-EM weight sort key is not injective " *
+            "($(length(sort_keys) - length(unique(sort_keys))) collision(s)); " *
+            "refusing to compare weights in Dict iteration order")
+        return pairs
+    end
+
+    function _psi_run(reads, graph, k, hard; parallel::Bool, diagnostics = nothing,
+            batch_size::Int = 50)
         acc = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         out, = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = true,
             cheap_correct = true, hard_vertices = hard, decode_enabled = true,
-            batch_size = 50, enable_parallel = parallel, soft_weights = acc,
+            batch_size = batch_size, enable_parallel = parallel, soft_weights = acc,
             diagnostics = diagnostics)
         return _psi_seqs(out), _psi_weight_pairs(acc)
     end
 
-    Test.@testset "parallel soft-EM byte-identity (opt1)" begin
-        Test.@test Threads.nthreads() > 1     # guard: real threads
-        rng = Random.MersenneTwister(2024)
-        ref = join(rand(rng, _PSI_BASES, 1500))
-        reads = _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
-        k = 13
-        graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
-        hard = Mycelia._hard_vertex_set(graph, k)
+    # Same edge from >= 2 windows of one read, with a fractional per-window
+    # responsibility, after an earlier read already put nonzero mass on it.
+    # That is the float-non-associativity case a per-read fold groups differently
+    # from the serial per-window fold. `multi_window_reads >= 1` does not imply
+    # this: integer responsibilities associate, and a single window cannot.
+    function _psi_windowed_divergence_witness(reads, graph, k, hard)
+        prior = Set{Any}()
+        for read in reads
+            Mycelia._windowed_decode_read_is_long(read, k) || continue
+            sink = Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}()
+            Mycelia.improve_read_likelihood_windowed(
+                read, graph, k, hard;
+                graph_mode = :canonical,
+                soft_weights_sink = sink)
+            hits = Dict{Any, Int}()
+            fractional = Dict{Any, Bool}()
+            for staged in sink
+                for (edge, weight) in staged.weights
+                    hits[edge] = get(hits, edge, 0) + 1
+                    if isfinite(weight) && !isinteger(weight)
+                        fractional[edge] = true
+                    end
+                end
+            end
+            for (edge, n_windows) in hits
+                if n_windows >= 2 && get(fractional, edge, false) && (edge in prior)
+                    return true
+                end
+            end
+            for staged in sink
+                for (edge, weight) in staged.weights
+                    weight == 0.0 && continue
+                    push!(prior, edge)
+                end
+            end
+        end
+        return false
+    end
 
-        # (a) parallel path ACTUALLY taken — assert via the opt1 actuation counter.
-        # The old "ignoring enable_parallel" warning was DELETED with the guard, so
-        # grepping the logs for it was vacuous. The counter increments once per
-        # parallel decode batch; a serial run leaves it at 0, so the counter
-        # DISCRIMINATES parallel from serial. A silent revert-to-serial regression
-        # makes the >0 assertion fail even though byte-identity still holds.
-        diag = Mycelia.CorrectorDiagnostics()
-        seqs_par, wts_par = _psi_run(reads, graph, k, hard; parallel = true,
-            diagnostics = diag)
-        Test.@test diag.parallel_decode_batches[] > 0
-        serial_diag = Mycelia.CorrectorDiagnostics()
-        _psi_run(reads, graph, k, hard; parallel = false, diagnostics = serial_diag)
-        Test.@test serial_diag.parallel_decode_batches[] == 0
+    _psi_guarded() do
+        Test.@testset "soft-EM weight sort key survives a repr collision" begin
+            a = _PsiReprCollideA(1)
+            b = _PsiReprCollideB(1)
+            _psi_assert("repr_collision_same_print", repr(a) == repr(b))
+            _psi_assert("repr_collision_sort_keys_differ",
+                _psi_edge_sort_key(a) != _psi_edge_sort_key(b))
+        end
+    end
 
-        # (b) byte-identity vs serial: reads AND soft-EM weights
-        seqs_ser, wts_ser = _psi_run(reads, graph, k, hard; parallel = false)
-        Test.@test !isempty(wts_par)
-        Test.@test seqs_par == seqs_ser
-        Test.@test wts_par == wts_ser
+    _psi_guarded() do
+        Test.@testset "parallel soft-EM byte-identity (opt1)" begin
+            _psi_assert("nthreads", Threads.nthreads() > 1)
+            rng = Random.MersenneTwister(2024)
+            ref = join(rand(rng, _PSI_BASES, 1500))
+            reads = _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
+            k = 13
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+            hard = Mycelia._hard_vertex_set(graph, k)
+
+            # (a) parallel path ACTUALLY taken — assert via the opt1 actuation counter.
+            # The old "ignoring enable_parallel" warning was DELETED with the guard, so
+            # grepping the logs for it was vacuous. The counter increments once per
+            # parallel decode batch; a serial run leaves it at 0, so the counter
+            # DISCRIMINATES parallel from serial. A silent revert-to-serial regression
+            # makes the >0 assertion fail even though byte-identity still holds.
+            diag = Mycelia.CorrectorDiagnostics()
+            seqs_par, wts_par = _psi_run(reads, graph, k, hard; parallel = true,
+                diagnostics = diag)
+            _psi_assert("parallel_batches_taken", diag.parallel_decode_batches[] > 0)
+            serial_diag = Mycelia.CorrectorDiagnostics()
+            _psi_run(reads, graph, k, hard; parallel = false, diagnostics = serial_diag)
+            _psi_assert("serial_batches_zero", serial_diag.parallel_decode_batches[] == 0)
+
+            # (b) byte-identity vs serial: reads AND soft-EM weights
+            seqs_ser, wts_ser = _psi_run(reads, graph, k, hard; parallel = false)
+            _psi_assert("weights_nonempty", !isempty(wts_par))
+            _psi_assert("seqs_equal", seqs_par == seqs_ser)
+            _psi_assert("weights_equal", wts_par == wts_ser)
+        end
+    end
+
+    # One batch (`batch_size >= n_reads`). The multi-batch cases above never take
+    # the `batch_end == total_reads` on the only iteration, so a fold bug that
+    # showed up only when every read is in the single parallel batch would pass.
+    _psi_guarded() do
+        Test.@testset "parallel soft-EM byte-identity — single batch (opt1)" begin
+            rng = Random.MersenneTwister(77)
+            ref = join(rand(rng, _PSI_BASES, 800))
+            n_reads = 40
+            reads = _psi_reads(rng, ref; n_reads = n_reads, readlen = 80, n_err = 10)
+            k = 13
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+            hard = Mycelia._hard_vertex_set(graph, k)
+            batch_size = length(reads)
+            diag = Mycelia.CorrectorDiagnostics()
+            seqs_par, wts_par = _psi_run(
+                reads, graph, k, hard; parallel = true, diagnostics = diag,
+                batch_size = batch_size)
+            _psi_assert("single_batch_count",
+                batch_size >= length(reads) && diag.parallel_decode_batches[] == 1)
+            seqs_ser, wts_ser = _psi_run(
+                reads, graph, k, hard; parallel = false, batch_size = batch_size)
+            _psi_assert("single_batch_weights_nonempty", !isempty(wts_par))
+            _psi_assert("single_batch_seqs_equal", seqs_par == seqs_ser)
+            _psi_assert("single_batch_weights_equal", wts_par == wts_ser)
+        end
     end
 
     # ---------------------------------------------------------------------------
@@ -105,6 +324,8 @@ else
     # This case DIVERGES under the old per-read fold (verified: the weight Dict
     # differs) and is byte-identical only under the per-window flat replay.
     # Reads must exceed the windowed long-read threshold (n_obs > 1024).
+    # The witness assertion below fails if this fixture stops producing that
+    # case, so byte-identity cannot pass vacuously on associative weights.
     function _psi_two_array_ref(rng; flank = 540, unit_len = 44, per_array = 5,
             spacer = 160)
         motif = "ACG"
@@ -152,58 +373,70 @@ else
         return _psi_seqs(out), _psi_weight_pairs(acc)
     end
 
-    Test.@testset "parallel soft-EM byte-identity — windowed decode (opt1)" begin
-        Test.@test Threads.nthreads() > 1     # guard: real threads
-        rng = Random.MersenneTwister(11)
-        ref, array1_start, array2_start, arr_len = _psi_two_array_ref(rng)
-        reads = _psi_two_array_reads(
-            rng, ref, array1_start, array2_start, arr_len;
-            n_reads = 120, readlen = 1180)
-        k = 13
+    _psi_guarded() do
+        Test.@testset "parallel soft-EM byte-identity — windowed decode (opt1)" begin
+            _psi_assert("windowed_nthreads", Threads.nthreads() > 1)
+            rng = Random.MersenneTwister(11)
+            ref, array1_start, array2_start, arr_len = _psi_two_array_ref(rng)
+            reads = _psi_two_array_reads(
+                rng, ref, array1_start, array2_start, arr_len;
+                n_reads = 120, readlen = 1180)
+            k = 13
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
-        hard = Mycelia._hard_vertex_set(graph, k)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+            hard = Mycelia._hard_vertex_set(graph, k)
 
-        # Windowed path must actually engage: >=1 read is "long" AND splits into
-        # >=2 hard windows (otherwise the divergence case is not exercised).
-        multi_window_reads = count(reads) do r
-            Mycelia._windowed_decode_read_is_long(r, k) || return false
-            length(Mycelia._hard_window_ranges(
-                r, k, hard; graph_mode = :canonical)) >= 2
+            # Windowed path must actually engage: >=1 read is "long" AND splits into
+            # >=2 hard windows (otherwise the divergence case is not exercised).
+            multi_window_reads = count(reads) do r
+                Mycelia._windowed_decode_read_is_long(r, k) || return false
+                length(Mycelia._hard_window_ranges(
+                    r, k, hard; graph_mode = :canonical)) >= 2
+            end
+            _psi_assert("windowed_multi_reads", multi_window_reads >= 1)
+            _psi_assert("windowed_divergence_witness",
+                _psi_windowed_divergence_witness(reads, graph, k, hard))
+
+            seqs_par, wts_par = _psi_run_windowed(reads, graph, k, hard; parallel = true)
+            seqs_ser, wts_ser = _psi_run_windowed(reads, graph, k, hard; parallel = false)
+            _psi_assert("windowed_fractional_shared_weight",
+                any(p -> isfinite(p[2]) && p[2] > 1 && !isinteger(p[2]), wts_ser))
+            _psi_assert("windowed_weights_nonempty", !isempty(wts_par))
+            _psi_assert("windowed_seqs_equal", seqs_par == seqs_ser)
+            _psi_assert("windowed_weights_equal", wts_par == wts_ser)
         end
-        Test.@test multi_window_reads >= 1
-
-        seqs_par, wts_par = _psi_run_windowed(reads, graph, k, hard; parallel = true)
-        seqs_ser, wts_ser = _psi_run_windowed(reads, graph, k, hard; parallel = false)
-        Test.@test !isempty(wts_par)
-        Test.@test seqs_par == seqs_ser
-        Test.@test wts_par == wts_ser
     end
 
-    Test.@testset "parallel x GC on/off byte-identity (opt1 + opt5)" begin
-        rng = Random.MersenneTwister(555)
-        ref = join(rand(rng, _PSI_BASES, 1500))
-        reads = _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
-        k = 13
-        graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
-        hard = Mycelia._hard_vertex_set(graph, k)
-        runit = gc -> begin
-            acc = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
-            out, = Mycelia.improve_read_set_likelihood(
-                reads, graph, k; graph_mode = :canonical, skip_solid = true,
-                cheap_correct = true, hard_vertices = hard, decode_enabled = true,
-                batch_size = 50, enable_parallel = true, gc_between_batches = gc,
-                soft_weights = acc)
-            (_psi_seqs(out), _psi_weight_pairs(acc))
+    _psi_guarded() do
+        Test.@testset "parallel x GC on/off byte-identity (opt1 + opt5)" begin
+            rng = Random.MersenneTwister(555)
+            ref = join(rand(rng, _PSI_BASES, 1500))
+            reads = _psi_reads(rng, ref; n_reads = 200, readlen = 80, n_err = 40)
+            k = 13
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :canonical)
+            hard = Mycelia._hard_vertex_set(graph, k)
+            runit = gc -> begin
+                acc = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+                out, = Mycelia.improve_read_set_likelihood(
+                    reads, graph, k; graph_mode = :canonical, skip_solid = true,
+                    cheap_correct = true, hard_vertices = hard, decode_enabled = true,
+                    batch_size = 50, enable_parallel = true, gc_between_batches = gc,
+                    soft_weights = acc)
+                (_psi_seqs(out), _psi_weight_pairs(acc))
+            end
+            off = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+                runit(false)
+            end
+            on = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
+                runit(true)
+            end
+            _psi_assert("gc_weights_nonempty", !isempty(off[2]))
+            _psi_assert("gc_seqs_equal", off[1] == on[1])
+            _psi_assert("gc_weights_equal", off[2] == on[2])
         end
-        off = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
-            runit(false)
-        end
-        on = Base.withenv("MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES" => nothing) do
-            runit(true)
-        end
-        Test.@test !isempty(off[2])
-        Test.@test off[1] == on[1]        # reads
-        Test.@test off[2] == on[2]        # weights
+    end
+
+    if !isempty(get(ENV, "MYCELIA_PSI_RESULTS", "")) && _psi_failed[]
+        exit(1)
     end
 end

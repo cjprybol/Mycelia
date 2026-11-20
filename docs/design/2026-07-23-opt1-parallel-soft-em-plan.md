@@ -556,14 +556,17 @@ done
 ```
 
 Extract `corrector_runtime_s` from the two newest CSVs in
-`benchmarking/results/` and confirm `recall`/`precision` are identical across
-thread counts (byte-identity sanity).
+`benchmarking/results/` and confirm `recall`/`precision` match across thread
+counts (aggregate-metric sanity only — this does not hash corrected reads or
+soft-EM weights).
 
 - [ ] **Step 2: Record honestly.** Write
       `benchmarking/results/opt1_parallel_scaling_<label>.md` with: thread
       counts, `corrector_runtime_s` each, speedup ratio, machine, rep count, and
-      the note that phix is small (limited parallel headroom; larger genomes
-      scale better). Report the number as measured — do not extrapolate.
+      the note that phix is small (limited parallel headroom). Larger-genome
+      scaling is untested: if it is mentioned, label it an unverified
+      hypothesis. Do not write that larger genomes scale better. Report only
+      measured numbers — do not extrapolate.
 
 - [ ] **Step 3: Commit.**
 
