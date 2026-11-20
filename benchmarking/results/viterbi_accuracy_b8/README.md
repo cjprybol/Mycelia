@@ -13,6 +13,7 @@ run, because the run id is unconditionally `_k`-suffixed.
 | `k` | **11** — recorded in `provenance/run.provenance.json` as `metadata.unit`, and derivable from the accuracy table as `editable_positions / (observation_count - 2)`. Not derivable from the null-control table, which carries neither column. |
 | `benchmark_run_id` | `b8_viterbi_accuracy_local_20260625` — no `_k` suffix |
 | `benchmark_git_commit` | `806f0748` |
+| `benchmark_git_dirty` | absent. Schema v2 (`benchmarking/benchmark_artifacts.jl`) adds this column immediately after `benchmark_git_commit`. These frozen v1 tables do not have it. |
 | `benchmark_k` column | absent |
 | `metadata.k` | absent |
 
