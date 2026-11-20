@@ -1635,24 +1635,47 @@ Downloads a genomic sequence from NCBI's nucleotide database by its accession nu
 - `accession::String`: NCBI nucleotide accession number (e.g. "NC_045512")
 - `outdir::String`: Output directory path. Defaults to current directory
 - `compressed::Bool`: If true, compresses output file with gzip. Defaults to true
+- `max_attempts::Int=3`: Maximum number of download attempts
+- `initial_retry_delay::Real=10.0`: Initial delay in seconds between retries
+- `record_fetcher::Function`: Zero-argument function returning FASTA records.
+  Defaults to `get_sequence(db="nuccore", accession=accession)`.
 
 # Returns
 - `String`: Path to the downloaded file (.fna or .fna.gz)
+
+# Notes
+- A non-empty output file is reused and the fetch is skipped
+- Transient NCBI failures are retried with exponential backoff via `with_retry`
+- The last exception is rethrown when every attempt fails
 """
-function download_genome_by_accession(; accession, outdir = pwd(), compressed = true)
+function download_genome_by_accession(;
+        accession,
+        outdir = pwd(),
+        compressed = true,
+        max_attempts::Int = 3,
+        initial_retry_delay::Real = 10.0,
+        record_fetcher::Function = () -> Mycelia.get_sequence(
+            db = "nuccore", accession = accession)
+)
     temp_fasta = joinpath(outdir, accession * ".fna")
-    if compressed
-        outfile = temp_fasta * ".gz"
-    else
-        outfile = temp_fasta
+    outfile = compressed ? temp_fasta * ".gz" : temp_fasta
+    if isfile(outfile) && filesize(outfile) > 0
+        return outfile
     end
-    if !isfile(outfile)
-        try
-            Mycelia.write_fasta(outfile = outfile,
-                records = Mycelia.get_sequence(db = "nuccore", accession = accession))
-        catch e
-            println("An error occurred: ", e)
+    mkpath(outdir)
+    with_retry(
+        max_attempts = max_attempts,
+        initial_delay = Float64(initial_retry_delay),
+        on_retry = (attempt, ex, delay) -> @warn "NCBI nucleotide download attempt $attempt/$max_attempts for $(accession) failed, retrying in $(delay)s..." exception=ex
+    ) do
+        isfile(outfile) && rm(outfile; force = true)
+        records = record_fetcher()
+        Mycelia.write_fasta(outfile = outfile, records = records)
+        if !isfile(outfile) || filesize(outfile) == 0
+            isfile(outfile) && rm(outfile; force = true)
+            error("NCBI nucleotide download for $(accession) produced an empty file at $(outfile)")
         end
+        return outfile
     end
     return outfile
 end
@@ -2459,13 +2482,18 @@ Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily ca
 
 Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
 Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
-from NCBI using `Downloads.download()`, caches the result (replacing any
-previous version for the *same day*), and then parses the cached file.
+from NCBI with `with_retry` around `Downloads.download()`, caches the result
+(replacing any previous version for the *same day*), and then parses the cached file.
 
 # Arguments
 - `db::String`: Database source ("genbank" or "refseq").
 - `date::Union{Dates.Date,Nothing}=nothing`: Specific date to load from cache. 
   If `nothing`, uses today's date. If specified, only uses cache (no download).
+- `max_attempts::Int=3`: Maximum number of download attempts when the cache is missing.
+- `initial_retry_delay::Real=10.0`: Initial delay in seconds between download retries.
+- `summary_url::AbstractString`: Assembly-summary URL. Defaults to the NCBI FTP file for `db`.
+- `downloader::Function`: Two-argument download function `(url, dest) -> dest`.
+  Defaults to `Downloads.download`.
 
 # Returns
 - `DataFrames.DataFrame`: Parsed metadata table.
@@ -2475,9 +2503,16 @@ previous version for the *same day*), and then parses the cached file.
 - Throws error if cache directory cannot be created.
 - Throws error if data cannot be obtained from cache or download.
 - Throws error if specific date is requested but not found in cache.
-- Rethrows errors from `Downloads.download` or CSV parsing.
+- Logs and then throws if every download attempt fails or CSV parsing fails.
 """
-function load_ncbi_metadata(db::String; date::Union{Dates.Date, Nothing} = nothing)
+function load_ncbi_metadata(
+        db::String;
+        date::Union{Dates.Date, Nothing} = nothing,
+        max_attempts::Int = 3,
+        initial_retry_delay::Real = 10.0,
+        summary_url::AbstractString = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt",
+        downloader::Function = Downloads.download
+)
     # Validate database input
     if !(db in ["genbank", "refseq"])
         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
@@ -2490,7 +2525,6 @@ function load_ncbi_metadata(db::String; date::Union{Dates.Date, Nothing} = nothi
     cache_dir = joinpath(homedir(), "workspace", ".ncbi")
     cached_filename = "$(date_str).$(original_filename)"
     cached_filepath = joinpath(cache_dir, cached_filename)
-    ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
 
     # Ensure cache directory exists
     try
@@ -2531,18 +2565,30 @@ function load_ncbi_metadata(db::String; date::Union{Dates.Date, Nothing} = nothi
 
         # 2. If cache is missing or empty, download
         if data_needs_download
-            @info "Downloading NCBI assembly summary from $ncbi_summary_url to $cached_filepath"
+            @info "Downloading NCBI assembly summary from $summary_url to $cached_filepath"
             try
-                Downloads.download(ncbi_summary_url, cached_filepath)
-                # Verify download success
-                if isfile(cached_filepath) && filesize(cached_filepath) > 0
-                    @info "Successfully downloaded and cached data to: $cached_filepath"
-                    source_description = "downloaded file: $cached_filepath (from $ncbi_summary_url)"
-                else
-                    @error "Download completed but resulted in an empty or missing file at $cached_filepath."
+                with_retry(
+                    max_attempts = max_attempts,
+                    initial_delay = Float64(initial_retry_delay),
+                    log_on_failure = false,
+                    on_retry = (attempt, ex, delay) -> @warn "NCBI metadata download attempt $attempt/$max_attempts for $(db) failed, retrying in $(delay)s..." exception=ex
+                ) do
+                    try
+                        downloader(summary_url, cached_filepath)
+                    catch
+                        isfile(cached_filepath) && rm(cached_filepath; force = true)
+                        rethrow()
+                    end
+                    if !(isfile(cached_filepath) && filesize(cached_filepath) > 0)
+                        isfile(cached_filepath) && rm(cached_filepath; force = true)
+                        error("Download completed but resulted in an empty or missing file at $cached_filepath.")
+                    end
+                    return cached_filepath
                 end
+                @info "Successfully downloaded and cached data to: $cached_filepath"
+                source_description = "downloaded file: $cached_filepath (from $summary_url)"
             catch e
-                @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(
+                @error "Failed to download NCBI metadata from $summary_url to $cached_filepath" exception=(
                     e, catch_backtrace())
             end
         end
@@ -2894,6 +2940,11 @@ function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol = :genom
     return code
 end
 
+# Sibling NCBI helpers that retry transient failures via `with_retry`:
+# `download_genome_by_accession`, `load_ncbi_metadata`, and
+# `taxids2ncbi_taxonomy_table`.
+# Out of scope here: `download_genome_by_ftp`, `get_genbank`,
+# `ncbi_taxon_summary`, and taxonkit wget setup.
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2925,11 +2976,6 @@ Downloads and extracts a genome from NCBI using the datasets command line tool.
 - If output folder already exists, download is skipped
 - Data is extracted to `outdir/accession/ncbi_dataset/data/accession`
 - Uses exponential backoff retry logic to handle transient NCBI API failures
-
-# TODO: Apply similar retry logic to other NCBI download functions:
-# - `download_genome_by_accession` in this file
-# - `load_ncbi_metadata` in this file  
-# - taxonomy functions in `taxonomy-and-trees.jl` that use ncbi-datasets-cli
 """
 function ncbi_genome_download_accession(;
         accession,

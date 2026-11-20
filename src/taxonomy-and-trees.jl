@@ -1350,6 +1350,11 @@ Convert a vector of NCBI taxonomy IDs into a detailed taxonomy table using NCBI 
 
 # Arguments
 - `taxids::AbstractVector{Int}`: Vector of NCBI taxonomy IDs to query
+- `max_attempts::Int=3`: Maximum number of datasets CLI attempts
+- `initial_retry_delay::Real=10.0`: Initial delay in seconds between retries
+- `conda_runner::AbstractString`: Conda executable used to launch `datasets` and
+  `dataformat`. Defaults to `Mycelia.CONDA_RUNNER`. A non-default runner skips
+  automatic Conda environment installation.
 
 # Returns
 - `DataFrame`: Table containing taxonomy information with columns including:
@@ -1364,20 +1369,18 @@ Convert a vector of NCBI taxonomy IDs into a detailed taxonomy table using NCBI 
 
 # Dependencies
 Requires ncbi-datasets-cli Conda package (automatically installed if missing)
+when `conda_runner` is the default. Transient CLI failures are retried with
+exponential backoff via `with_retry`.
 """
-function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
-    Mycelia.add_bioconda_env("ncbi-datasets-cli")
-    # joint_table = DataFrames.DataFrame()
-    # ProgressMeter.@showprogress for taxid in taxids
-    #     cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon $(taxid) --as-json-lines`
-    #     cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
-    #     io = open(pipeline(cmd1, cmd2))
-    #     try
-    #         append!(joint_table, CSV.read(io, DataFrames.DataFrame, delim='\t', header=1), promote=true)
-    #     catch e
-    #         error("unable to process taxid: $(taxid)\n$(e)")
-    #     end
-    # end
+function taxids2ncbi_taxonomy_table(
+        taxids::AbstractVector{Int};
+        max_attempts::Int = 3,
+        initial_retry_delay::Real = 10.0,
+        conda_runner::AbstractString = Mycelia.CONDA_RUNNER
+)
+    if conda_runner == Mycelia.CONDA_RUNNER
+        Mycelia.add_bioconda_env("ncbi-datasets-cli")
+    end
     temp_file = tempname() * ".taxonids.txt"
     unique_taxids = sort(unique(taxids))
     open(temp_file, "w") do io
@@ -1385,12 +1388,33 @@ function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
             println(io, taxid)
         end
     end
-    cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon --inputfile $(temp_file) --as-json-lines`
-    cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
-    io = open(pipeline(cmd1, cmd2))
-    joint_table = CSV.read(io, DataFrames.DataFrame, delim = '\t', header = 1)
-    rm(temp_file)
-    return joint_table
+    try
+        return with_retry(
+            max_attempts = max_attempts,
+            initial_delay = Float64(initial_retry_delay),
+            on_retry = (attempt, ex, delay) -> @warn "NCBI taxonomy summary attempt $attempt/$max_attempts failed, retrying in $(delay)s..." exception=ex
+        ) do
+            jsonl_file = tempname() * ".taxonomy.jsonl"
+            try
+                cmd1 = `$(conda_runner) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon --inputfile $(temp_file) --as-json-lines`
+                run(pipeline(cmd1, jsonl_file))
+                if !isfile(jsonl_file) || filesize(jsonl_file) == 0
+                    error("NCBI taxonomy summary returned empty output for taxids $(join(unique_taxids, ", "))")
+                end
+                cmd2 = `$(conda_runner) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
+                output = read(pipeline(cmd2; stdin = jsonl_file), String)
+                if isempty(strip(output))
+                    error("NCBI taxonomy dataformat returned empty output for taxids $(join(unique_taxids, ", "))")
+                end
+                return CSV.read(
+                    IOBuffer(output), DataFrames.DataFrame, delim = '\t', header = 1)
+            finally
+                isfile(jsonl_file) && rm(jsonl_file; force = true)
+            end
+        end
+    finally
+        isfile(temp_file) && rm(temp_file; force = true)
+    end
 end
 
 # more complete
