@@ -15,9 +15,13 @@
 # memory.peak includes tmpfs (the node-local temp root) and page cache, which
 # peak_rss_bytes does not, so it is an upper bound to size --mem from.
 # D5_CGROUP_ROOT and D5_PROC_CGROUP exist for tests.
+# dir is stripped of a trailing slash below; base must be too, or the walk's
+# `${dir} != ${base}/*` stop test fails closed on the first level when
+# D5_CGROUP_ROOT is given with a trailing slash.
 d5_log_memory_peak() {
   local base="${D5_CGROUP_ROOT:-/sys/fs/cgroup}" rel dir max peak oom
   local by_hand="sacct MaxRSS excludes tmpfs, so add the temp root's peak size by hand before sizing --mem"
+  base="${base%/}"
   rel="$(cut --delimiter=: --fields=3 "${D5_PROC_CGROUP:-/proc/self/cgroup}" 2>/dev/null | head --lines=1)"
   dir="${base}${rel}"
   dir="${dir%/}"
@@ -66,7 +70,9 @@ d5_log_memory_peak() {
 # Further TERM/INT/HUP are ignored here: a second scancel during the copy would
 # otherwise exit mid-cleanup, leaving a whole copy named .partial and the temp
 # root on tmpfs. SLURM's SIGKILL after KillWait (30 s on Perlmutter and Lawrencium) still
-# bounds the cleanup; the "copying" line marks where a killed copy stopped.
+# bounds the cleanup. A hand run outside SLURM has no KillWait, so a copy stuck
+# on a hung filesystem can then only be stopped with kill -9.
+# The "copying" line marks where a killed copy stopped.
 d5_temp_root_cleanup() {
   trap '' TERM INT HUP
   local rc="$1" root="$2" keep="$3" entries resolved size total

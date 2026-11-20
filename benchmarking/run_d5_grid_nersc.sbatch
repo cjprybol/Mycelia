@@ -56,11 +56,11 @@
 #   julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
-#   # references: --list does not download; Phase A downloads into <root>/refs on
-#   # first use, so run one toy read-set task interactively with
-#   # --skip-iterative (without it the read set's :iterative cells run on the
-#   # login node, up to 8.9 h each), adding --tmp-dir "$(mktemp --directory)"
-#   # (the default <root>/tmp is on Lustre and is refused), or pre-copy refs/.
+#   # references: compute nodes have no outbound internet, and Phase A refuses
+#   # to download. Stage once on a login node (per-accession lock, then rename):
+#   #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --stage-refs \
+#   #       --toy --output-dir "$SCRATCH/d5_grid_toy"
+#   # or copy an existing refs/ into the output root. Array tasks only read it.
 #
 # USAGE (submit from benchmarking/):
 #   The default array is indices 0-2; only D5_ARGS="--toy" makes them the toy

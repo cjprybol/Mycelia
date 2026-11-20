@@ -10,6 +10,9 @@
 #       --cell-index <0..719> --output-dir <root>
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase merge \
 #       --output-dir <root>
+#   # Login node only, before any array task (compute nodes have no internet):
+#   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --stage-refs \
+#       [--toy] --output-dir <root>
 #   # Only after a human has set tau and tau_hat (lock step 2):
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase B \
 #       --tau <x> --tau-hat <y> [--read-set-index i] --output-dir <root>
@@ -25,7 +28,8 @@
 #
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
-#   <root>/refs/                              reference FASTA per organism
+#   <root>/refs/                              reference FASTA per organism, staged
+#                                             before the array (--stage-refs)
 #   <root>/readsets/<read_set_id>/readset.json reads, measured identity, provenance
 #   <root>/readsets/<read_set_id>/survival.json 23-rung S / S_hat on RAW reads
 #   <root>/readsets/<read_set_id>/badread.log   Badread stderr (ONT read sets)
@@ -95,12 +99,26 @@ function tool_versions()
     )
 end
 
+"""Unset environment variables are `missing`; a set empty string is kept."""
+function env_or_missing(key::AbstractString)
+    return something(get(ENV, key, nothing), missing)
+end
+
 function run_context_base()
     git = git_provenance()
     return (; mycelia_git_sha = git.sha, git_dirty = git.dirty,
         host = gethostname(),
         slurm_job_id = something(get(ENV, "SLURM_ARRAY_JOB_ID", nothing),
-            get(ENV, "SLURM_JOB_ID", nothing), missing))
+            get(ENV, "SLURM_JOB_ID", nothing), missing),
+        julia_depot_path = env_or_missing("JULIA_DEPOT_PATH"),
+        julia_load_path = env_or_missing("JULIA_LOAD_PATH"))
+end
+
+"""One line per task: the depot and load path this process actually used."""
+function log_julia_env(base)
+    println("julia $(VERSION); JULIA_DEPOT_PATH=$(base.julia_depot_path); " *
+            "JULIA_LOAD_PATH=$(base.julia_load_path)")
+    return nothing
 end
 
 """The registered simulation pins, as stored in (and compared against) the manifest."""
@@ -180,19 +198,145 @@ function check_read_count(records, meta, rs_dir::AbstractString)
     return records
 end
 
+"""
+Read every path in a prepared read set. `readset.json` present with a reads
+file missing is not a complete read set: say which file, and name the directory
+to delete. An opaque open error would look like a cell failure.
+"""
+function read_prepared_records(meta, rs_dir::AbstractString)
+    paths = meta["reads_paths"]
+    for path in paths
+        isfile(path) ||
+            error("read set $(meta["read_set_id"]) has readset.json but is missing " *
+                  "reads file $(path); delete $(rs_dir) to regenerate it")
+    end
+    return check_read_count(reduce(vcat, read_records.(paths)), meta, rs_dir)
+end
+
 # === Reference ===
 
-function prepare_reference(organism::Symbol, refs_dir::AbstractString)
+"""`<refs>/<accession>.fna` for one organism."""
+function reference_fasta(organism::Symbol, refs_dir::AbstractString)
     info = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[organism]
-    mkpath(refs_dir)
-    path = Mycelia.download_genome_by_accession(accession = info.accession,
-        outdir = refs_dir, compressed = false)
-    (isfile(path) && filesize(path) > 0) ||
-        error("reference download failed for $(organism) ($(info.accession)): $(path)")
-    seqs = read_sequences(path)
+    return (; info, path = joinpath(refs_dir, info.accession * ".fna"))
+end
+
+"""
+Hold `lockdir` (an atomic `mkdir`) for `f`, then remove it. A second holder
+fails instead of waiting out a dead task: the message names the lock and, when
+the holder wrote one, who created it. `timeout_s == 0` fails on the first
+collision. The directory is removed only when this call created it.
+"""
+function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
+        purpose::AbstractString = "work")
+    mkpath(dirname(lockdir))
+    t0 = time()
+    while true
+        try
+            mkdir(lockdir)
+            break
+        catch e
+            isa(e, Base.IOError) || rethrow()
+            collided = e.code == Base.UV_EEXIST || occursin("EEXIST", sprint(showerror, e))
+            collided || rethrow()
+            if timeout_s == 0 || time() - t0 >= timeout_s
+                holder_path = joinpath(lockdir, "holder")
+                holder = isfile(holder_path) ?
+                         " Holder: $(strip(read(holder_path, String)))." : ""
+                error("$(purpose) lock $(lockdir) is already held.$(holder) " *
+                      "Do not run two tasks on the same work. If that holder is " *
+                      "gone, remove the lock directory and retry.")
+            end
+            sleep(0.05)
+        end
+    end
+    try
+        write(joinpath(lockdir, "holder"), "$(gethostname()) $(getpid())")
+        return f()
+    finally
+        rm(lockdir; recursive = true, force = true)
+    end
+end
+
+"""
+Read a reference that is already on disk. Array tasks call this and never
+download: compute nodes have no outbound internet, and several tasks would
+otherwise race on one `<refs>/<accession>.fna`.
+"""
+function prepare_reference(organism::Symbol, refs_dir::AbstractString)
+    staged = reference_fasta(organism, refs_dir)
+    isfile(staged.path) ||
+        error("reference $(staged.info.accession) is not staged at $(staged.path). " *
+              "Compute nodes have no outbound internet, and concurrent array tasks " *
+              "must not download the shared file. On a login node run --stage-refs " *
+              "(or copy refs/) before the array.")
+    seqs = read_sequences(staged.path)
     genome_size = sum(length, seqs)
-    check_reference_length(genome_size, info, path)
-    return (; path, seqs, genome_size, accession = info.accession)
+    check_reference_length(genome_size, staged.info, staged.path)
+    return (; path = staged.path, seqs, genome_size, accession = staged.info.accession)
+end
+
+"""
+Download one accession into `dest` (a partial path, not the shared final name).
+`download_genome_by_accession` writes `<accession>.fna` in its outdir, so the
+download goes to a private directory and is moved onto `dest`.
+"""
+function download_reference_file(accession::AbstractString, dest::AbstractString)
+    parent = dirname(dest)
+    mkpath(parent)
+    scratch = mktempdir(parent)
+    try
+        path = Mycelia.download_genome_by_accession(; accession, outdir = scratch,
+            compressed = false)
+        (isfile(path) && filesize(path) > 0) ||
+            error("reference download failed for $(accession): $(path)")
+        mv(path, dest; force = true)
+    finally
+        rm(scratch; recursive = true, force = true)
+    end
+    return dest
+end
+
+"""
+Stage one organism's reference under a per-accession lock. A complete file is
+reused. A missing file is downloaded into a private directory (a name ending in
+`.fna`, so the FASTA reader accepts it) and renamed into place, so a concurrent
+reader never sees a half-written FASTA. `download(accession, dest)` is
+injectable for tests.
+"""
+function stage_reference(organism::Symbol, refs_dir::AbstractString;
+        download::Function = download_reference_file, timeout_s::Real = 120)
+    mkpath(refs_dir)
+    staged = reference_fasta(organism, refs_dir)
+    function checked(path)
+        seqs = read_sequences(path)
+        check_reference_length(sum(length, seqs), staged.info, path)
+        return (; path, accession = staged.info.accession)
+    end
+    isfile(staged.path) && return checked(staged.path)
+    lockdir = joinpath(refs_dir, staged.info.accession * ".lock")
+    return with_directory_lock(lockdir; timeout_s,
+        purpose = "reference $(staged.info.accession)") do
+        isfile(staged.path) && return checked(staged.path)
+        staging = mktempdir(refs_dir)
+        try
+            partial = joinpath(staging, staged.info.accession * ".fna")
+            download(staged.info.accession, partial)
+            isfile(partial) ||
+                error("reference download for $(staged.info.accession) did not write $(partial)")
+            checked(partial)
+            mv(partial, staged.path; force = false)
+            return (; path = staged.path, accession = staged.info.accession)
+        finally
+            rm(staging; recursive = true, force = true)
+        end
+    end
+end
+
+"""Stage every organism in this run (toy or full). One file per accession."""
+function stage_references(refs_dir::AbstractString, toy::Bool; kwargs...)
+    organisms = unique(rs.organism for rs in selected_read_sets(toy))
+    return [stage_reference(organism, refs_dir; kwargs...) for organism in organisms]
 end
 
 function read_records(path::AbstractString)
@@ -313,8 +457,7 @@ function load_prepared_read_set(rs, root::AbstractString)
     marker = joinpath(rs_dir, "readset.json")
     isfile(marker) || return nothing
     meta = JSON.parsefile(marker)
-    records = check_read_count(reduce(vcat, read_records.(meta["reads_paths"])),
-        meta, rs_dir)
+    records = read_prepared_records(meta, rs_dir)
     return (; meta, records)
 end
 
@@ -404,7 +547,8 @@ function cell_context(meta, base)
         qscore_model = meta["qscore_model"], n_reads = meta["n_reads"],
         read_bases = meta["read_bases"],
         error_rate_estimate_diagnostic = meta["error_rate_estimate_diagnostic"],
-        base.mycelia_git_sha, base.git_dirty, base.host, base.slurm_job_id)
+        base.mycelia_git_sha, base.git_dirty, base.host, base.slurm_job_id,
+        base.julia_depot_path, base.julia_load_path)
 end
 
 # === Cells ===
@@ -535,6 +679,18 @@ need debugging keep their plan. Returns the row's status.
 """
 function run_or_resume(f, root, cell, context; phase::Symbol,
         stale = prior -> nothing, replan::Bool = false, error_kwargs = (;))
+    cell_id = D5OntAdaptiveGridDriver.cell_id(cell)
+    lockdir = joinpath(root, "cells", cell_id * ".lock")
+    # The cache check and the write share the lock, so two submits of one index
+    # cannot both decide the checkpoint is missing and both assemble.
+    return with_directory_lock(lockdir; timeout_s = 0,
+        purpose = "cell $(cell_id)") do
+        _run_or_resume_locked(f, root, cell, context; phase, stale, replan, error_kwargs)
+    end
+end
+
+function _run_or_resume_locked(f, root, cell, context; phase::Symbol,
+        stale, replan::Bool, error_kwargs)
     ckpt = checkpoint_path(root, cell)
     if isfile(ckpt)
         prior = try
@@ -607,6 +763,30 @@ function read_sets_for(cli)
 end
 
 """
+How many array indices this phase registers. A submitted array that does not
+cover them leaves the rest `absent` in the merge; warn when SLURM says so.
+"""
+function warn_task_span(cli)
+    get(ENV, "SLURM_JOB_ID", nothing) === nothing && return nothing
+    n = cli.cell_index !== nothing ?
+        length(D5OntAdaptiveGridDriver.cells_run_alone(; toy = cli.toy)) :
+        length(selected_read_sets(cli.toy))
+    job = ENV["SLURM_JOB_ID"]
+    raw = get(ENV, "SLURM_ARRAY_TASK_MAX", nothing)
+    if raw === nothing
+        n > 1 &&
+            @warn "SLURM job $(job) is not an array, so it runs one index only; the other $(n - 1) registered tasks stay absent in the merge"
+        return nothing
+    end
+    max_index = tryparse(Int, raw)
+    max_index === nothing && return nothing
+    span = max_index + 1
+    span == n ||
+        @warn "SLURM array 0-$(max_index) (job $(job)) covers $(span) of $(n) registered tasks; the merge reports the rest absent"
+    return nothing
+end
+
+"""
 Phase A runs as two kinds of array task:
 
   * read-set task (`--read-set-index i`): prepare the read set (simulate, measure
@@ -620,6 +800,8 @@ function run_phase_a(cli, root)
     cli.read_set_index === nothing && cli.cell_index === nothing &&
         error("--phase A requires --read-set-index or --cell-index (one task each)")
     base = run_context_base()
+    log_julia_env(base)
+    warn_task_span(cli)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     cli.cell_index === nothing || return [run_cell_task(cli, root, base)]
@@ -700,6 +882,8 @@ end
 
 function run_phase_b(cli, root)
     base = run_context_base()
+    log_julia_env(base)
+    warn_task_span(cli)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     statuses = String[]
@@ -723,9 +907,7 @@ function run_phase_b(cli, root)
             # set must fail the task once (exit 1, "fix the read set"), not become
             # one retryable error row per cell that a resubmit cannot fix.
             if action === :assemble && records === nothing
-                records = check_read_count(
-                    reduce(vcat, read_records.(meta["reads_paths"])), meta,
-                    dirname(marker))
+                records = read_prepared_records(meta, dirname(marker))
             end
             push!(statuses,
                 run_or_resume(root, cell, context; phase = :B,
@@ -956,6 +1138,7 @@ end
 
 function run_merge(cli, root)
     base = run_context_base()
+    log_julia_env(base)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     collected = collect_merge_rows(root, cli.toy)
@@ -1234,6 +1417,15 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("=== D5 grid runner: phase $(cli.phase)$(cli.toy ? " (toy)" : "")  $(Dates.now()) ===")
     if cli.phase === :list
         print_counts(cli.toy)
+    elseif cli.phase === :stage_refs
+        cli.output_dir === nothing &&
+            error("--output-dir is required for --stage-refs")
+        mkpath(abspath(cli.output_dir))
+        root = realpath(abspath(cli.output_dir))
+        log_julia_env(run_context_base())
+        for staged in stage_references(joinpath(root, "refs"), cli.toy)
+            println("staged $(staged.accession) at $(staged.path)")
+        end
     else
         cli.output_dir === nothing &&
             error("--output-dir is required for --phase $(cli.phase)")
