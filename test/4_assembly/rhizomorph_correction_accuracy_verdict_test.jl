@@ -7,6 +7,9 @@
 #   (a) an unhealthy null arm (crash, mis-join, or mass drop) cannot emit VERDICT
 #   (b) a healthy null arm whose scale and scored checks pass still emits VERDICT
 #   (c) the existing local smoke scale (synthetic ~2 kb at 10x) stays SMOKE-ONLY
+#   The harness source is pinned too: run_accuracy_benchmark must call
+#   correction_accuracy_verdict and record null_scored_fraction. Restoring
+#   `verdict_allowed = scale_ok && scored_ok` fails that contract.
 #
 # Run:
 #   julia --project=. test/4_assembly/rhizomorph_correction_accuracy_verdict_test.jl
@@ -186,6 +189,28 @@ Test.@testset "correction-accuracy VERDICT requires null-arm health" begin
         Test.@test correction_accuracy_verdict_allowed(true, true, true, NaN)
         Test.@test null_scored_fraction_ok(0.5, 0.5)
         Test.@test !null_scored_fraction_ok(0.5 - eps(0.5), 0.5)
+    end
+
+    # The fixtures above include only the pure helper. This pins the harness
+    # call site, so reverting run_accuracy_benchmark to `scale_ok && scored_ok`
+    # fails in the default suite without loading Mycelia.
+    Test.@testset "harness source uses the verdict helper" begin
+        src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "rhizomorph_correction_accuracy_benchmark.jl"), String)
+        call_at = findfirst("decision = correction_accuracy_verdict(", src)
+        use_at = findfirst("verdict_allowed = decision.verdict_allowed", src)
+        Test.@test call_at !== nothing
+        Test.@test use_at !== nothing
+        Test.@test first(call_at) < first(use_at)
+        Test.@test !occursin("verdict_allowed = scale_ok && scored_ok", src)
+        Test.@test occursin("null_scored_fraction = Float64[]", src)
+        Test.@test occursin("null_scored_fraction = mn.scored_fraction", src)
+        Test.@test occursin("rows[!, :agg_null_scored_fraction]", src)
+        Test.@test occursin("round(decision.null_scored_fraction; digits = 4)", src)
+        Test.@test occursin("null_scored_fraction = decision.null_scored_fraction", src)
+        summary_prints = count(l -> occursin("println(\"\\n\$(decision.line)\")", l),
+            eachline(IOBuffer(src)))
+        Test.@test summary_prints == 2
     end
 end
 
