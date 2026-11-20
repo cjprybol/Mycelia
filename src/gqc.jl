@@ -1449,72 +1449,126 @@ end
 # Plots
 # =============================================================================
 
-function _gqc_save_plot(p, plots_dir, metric, graph_id, k)
+function _gqc_save_plot(fig, plots_dir, metric, graph_id, k)
     mkpath(joinpath(plots_dir, metric))
     base = joinpath(plots_dir, metric, "$(graph_id)__k$(k)")
     try
-        Plots.savefig(p, base * ".png")
-        Plots.savefig(p, base * ".svg")
+        CairoMakie.save(base * ".png", fig)
+        CairoMakie.save(base * ".svg", fig)
     catch e
         @warn "gqc plot save failed" metric exception=e
     end
     return base
 end
 
+"""
+Blank CairoMakie figure used by gqc packet plots.
+
+File output does not need a display server (`GKSwstype` is a Plots.jl/GR setting).
+"""
+function _gqc_plot_figure(; title::AbstractString="", xlabel::AbstractString="",
+                          ylabel::AbstractString="", kwargs...)
+    fig = CairoMakie.Figure(; size=(600, 400))
+    ax = CairoMakie.Axis(fig[1, 1]; title=title, xlabel=xlabel, ylabel=ylabel, kwargs...)
+    return fig, ax
+end
+
+"""
+Line series, plus a marker when there is a single point (a one-point line is invisible).
+"""
+function _gqc_lines!(ax, xs, ys; label=nothing)
+    CairoMakie.lines!(ax, xs, ys; label=label)
+    if length(xs) == 1
+        CairoMakie.scatter!(ax, xs, ys)
+    end
+    return ax
+end
+
 function gqc_make_plots(summary_row::Dict, degree_hist, unitig_lengths, coverages,
                         null_ratio_ci, plots_dir::AbstractString, graph_id::String, k::Int;
                         adj=nothing, ids=nothing, g::Union{Nothing,GFAGraph}=nothing)
-    ## Safe on HPC headless: callers should set ENV["GKSwstype"]="100" (see PR docs).
-    ## Catch plot *creation* errors as well as savefig failures.
-    try
-        if !isempty(degree_hist)
+    ## CairoMakie writes PNG/SVG headless. One failure must not skip the other panels.
+    if !isempty(degree_hist)
+        try
             degs = collect(keys(degree_hist))
             counts = [degree_hist[d] for d in degs]
             ## Isolates have degree 0 — log10(0) aborts; use linear axes then.
-            if any(<=(0), degs) || any(<=(0), counts)
-                p = Plots.plot(degs, counts; seriestype=:scatter,
-                               xlabel="degree", ylabel="count", title="Degree distribution", legend=false)
+            fig, ax = if any(<=(0), degs) || any(<=(0), counts)
+                _gqc_plot_figure(; title="Degree distribution", xlabel="degree", ylabel="count")
             else
-                p = Plots.plot(degs, counts; seriestype=:scatter, xscale=:log10, yscale=:log10,
-                               xlabel="degree", ylabel="count", title="Degree distribution", legend=false)
+                _gqc_plot_figure(; title="Degree distribution", xlabel="degree", ylabel="count",
+                                 xscale=log10, yscale=log10)
             end
-            _gqc_save_plot(p, plots_dir, "degree", graph_id, k)
+            CairoMakie.scatter!(ax, degs, counts)
+            _gqc_save_plot(fig, plots_dir, "degree", graph_id, k)
+        catch e
+            @warn "gqc degree plot failed" graph_id k exception=e
         end
-        if !isempty(unitig_lengths)
+    end
+    if !isempty(unitig_lengths)
+        try
             sorted = sort(unitig_lengths; rev=true)
             cum = cumsum(sorted)
-            p = Plots.plot(1:length(cum), cum; xlabel="unitig rank", ylabel="cumulative bp",
-                           title="Cumulative unitig length", legend=false)
-            Plots.hline!(p, [sum(sorted) / 2]; label="half total", linestyle=:dash)
-            _gqc_save_plot(p, plots_dir, "unitig_n50", graph_id, k)
+            fig, ax = _gqc_plot_figure(; title="Cumulative unitig length",
+                                       xlabel="unitig rank", ylabel="cumulative bp")
+            _gqc_lines!(ax, 1:length(cum), cum)
+            CairoMakie.hlines!(ax, [sum(sorted) / 2]; linestyle=:dash)
+            _gqc_save_plot(fig, plots_dir, "unitig_n50", graph_id, k)
+        catch e
+            @warn "gqc unitig plot failed" graph_id k exception=e
         end
-        if !isempty(coverages)
-            p = Plots.histogram(coverages; xlabel="depth", ylabel="count", title="Coverage", legend=false)
-            _gqc_save_plot(p, plots_dir, "coverage", graph_id, k)
+    end
+    if !isempty(coverages)
+        try
+            fig, ax = _gqc_plot_figure(; title="Coverage", xlabel="depth", ylabel="count")
+            CairoMakie.hist!(ax, coverages)
+            _gqc_save_plot(fig, plots_dir, "coverage", graph_id, k)
+        catch e
+            @warn "gqc coverage plot failed" graph_id k exception=e
         end
+    end
+    try
         bars = ["tips", "bubbles", "branch", "self_loops", "tangles"]
         vals = [summary_row[k_] for k_ in ("n_tips", "n_bubbles", "n_branch", "n_self_loops", "n_tangles")]
-        p = Plots.bar(bars, vals; legend=false, title="Structural counts", xrotation=30)
-        _gqc_save_plot(p, plots_dir, "structure", graph_id, k)
-        if null_ratio_ci !== nothing
+        fig, ax = _gqc_plot_figure(; title="Structural counts",
+                                   xticks=(1:length(bars), bars),
+                                   xticklabelrotation=π / 6)
+        CairoMakie.barplot!(ax, 1:length(bars), Float64.(vals))
+        _gqc_save_plot(fig, plots_dir, "structure", graph_id, k)
+    catch e
+        @warn "gqc structure plot failed" graph_id k exception=e
+    end
+    if null_ratio_ci !== nothing
+        try
             ratio, lo, hi = null_ratio_ci
             if ratio isa Number && lo isa Number && hi isa Number
-                p = Plots.scatter([1], [ratio]; yerror=[(ratio - lo, hi - ratio)],
-                                  xlabel="", ylabel="repeat ratio", title="Repeat vs null",
-                                  xticks=([], []), legend=false, xlim=(0.5, 1.5))
-                Plots.hline!(p, [1.0]; linestyle=:dash)
-                _gqc_save_plot(p, plots_dir, "repeat_null", graph_id, k)
+                fig, ax = _gqc_plot_figure(; title="Repeat vs null", xlabel="", ylabel="repeat ratio")
+                CairoMakie.xlims!(ax, 0.5, 1.5)
+                ax.xticksvisible = false
+                ax.xticklabelsvisible = false
+                y = Float64(ratio)
+                CairoMakie.scatter!(ax, [1.0], [y])
+                ylo = max(0.0, y - Float64(lo))
+                yhi = max(0.0, Float64(hi) - y)
+                CairoMakie.errorbars!(ax, [1.0], [y], [ylo], [yhi])
+                CairoMakie.hlines!(ax, [1.0]; linestyle=:dash)
+                _gqc_save_plot(fig, plots_dir, "repeat_null", graph_id, k)
             end
+        catch e
+            @warn "gqc repeat-null plot failed" graph_id k exception=e
         end
-        if g !== nothing && length(g.segments) <= 5000 && adj !== nothing
+    end
+    if g !== nothing && length(g.segments) <= 5000 && adj !== nothing
+        try
             comps = _gqc_connected_components(adj)
             sizes = sort([length(c) for c in comps]; rev=true)
-            p = Plots.plot(1:length(sizes), sizes; xlabel="component rank", ylabel="nodes",
-                           title="Component sizes", legend=false)
-            _gqc_save_plot(p, plots_dir, "components", graph_id, k)
+            fig, ax = _gqc_plot_figure(; title="Component sizes",
+                                       xlabel="component rank", ylabel="nodes")
+            _gqc_lines!(ax, 1:length(sizes), sizes)
+            _gqc_save_plot(fig, plots_dir, "components", graph_id, k)
+        catch e
+            @warn "gqc component plot failed" graph_id k exception=e
         end
-    catch e
-        @warn "gqc_make_plots failed" graph_id k exception=e
     end
     return nothing
 end
@@ -1841,8 +1895,8 @@ Run gqc v0.1 and write QC packet(s) under `output_root/<graph_set>/`.
 - `strand_mode`: `nothing` (default) → `metadata["strand_mode"]` → `:single`;
   or `:single` / `:canonical` / `:double`
 - `write_node_link_json`: include `formats/node_link.json` (default: `true`)
-- `make_plots`: write plots under `plots/` (default: `true`; set
-  `ENV["GKSwstype"]="100"` on HPC)
+- `make_plots`: write CairoMakie PNG and SVG figures under `plots/`
+  (default: `true`). File output does not need a display server.
 - `null_kinds`: `(:dinucleotide, :codon)` by default
 - `null_source`: `:auto` (default; use reference records when present),
   `:reference`, or `:segments`. Uniform-length k-mer-node graphs with a segment
@@ -2240,9 +2294,11 @@ function _run_gqc_one(input_dir::AbstractString,
             ks_plot = [r["k"] for r in summary_rows]
             b0 = [r["beta0"] for r in summary_rows]
             b1 = [r["beta1"] for r in summary_rows]
-            p = Plots.plot(ks_plot, b0; label="β0", xlabel="k", ylabel="Betti", title="Betti vs k")
-            Plots.plot!(p, ks_plot, b1; label="β1")
-            _gqc_save_plot(p, joinpath(out_dir, "plots"), "betti_vs_k", slug, first(ks_plot))
+            fig, ax = _gqc_plot_figure(; title="Betti vs k", xlabel="k", ylabel="Betti")
+            _gqc_lines!(ax, ks_plot, b0; label="β0")
+            _gqc_lines!(ax, ks_plot, b1; label="β1")
+            CairoMakie.axislegend(ax)
+            _gqc_save_plot(fig, joinpath(out_dir, "plots"), "betti_vs_k", slug, first(ks_plot))
         catch e
             @warn "gqc betti_vs_k plot failed" exception=e
         end
