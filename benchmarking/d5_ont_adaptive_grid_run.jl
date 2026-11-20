@@ -247,19 +247,39 @@ function local_pid_alive(pid::Integer)
 end
 
 """
-True when `squeue -h -j jobid` still lists the job. No `squeue`, a failed
-`squeue`, or a non-numeric id stays true: absence of the tool is not proof
-the job finished.
+`(exitcode, stdout, stderr)` from `squeue -h -j jobid`, or `nothing` when
+`squeue` is not on `PATH`.
 """
-function slurm_job_running(jobid::AbstractString)
-    occursin(r"^[0-9]+$", jobid) || return true
+function squeue_inquire(jobid::AbstractString)
     squeue = Sys.which("squeue")
-    squeue === nothing && return true
-    try
-        return !isempty(strip(read(`$squeue -h -j $jobid`, String)))
+    squeue === nothing && return nothing
+    out = IOBuffer()
+    err = IOBuffer()
+    proc = run(pipeline(ignorestatus(`$squeue -h -j $jobid`); stdout = out, stderr = err))
+    return (proc.exitcode, String(take!(out)), String(take!(err)))
+end
+
+"""
+True when the job is still queued or running. `squeue -h -j` exits 0 with a
+line when it is, and exits 1 with `Invalid job id specified` when SLURM no
+longer knows the id (the job finished). Any other failure — no `squeue`, a
+controller error, a non-numeric id — stays true, so a broken `squeue` does not
+break a live lock.
+"""
+function slurm_job_running(jobid::AbstractString; inquire::Function = squeue_inquire)
+    occursin(r"^[0-9]+$", jobid) || return true
+    result = try
+        inquire(jobid)
     catch
         return true
     end
+    result === nothing && return true
+    code, stdout_s, stderr_s = result
+    code == 0 && return !isempty(strip(stdout_s))
+    if code == 1 && occursin("Invalid job id specified", stderr_s)
+        return false
+    end
+    return true
 end
 
 """

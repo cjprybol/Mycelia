@@ -732,6 +732,15 @@ Test.@testset "D5 grid runner" begin
             Test.@test msg !== nothing && occursin("already held", msg) &&
                        occursin("4242", msg)
             Test.@test slurm_job_running("not-a-job")
+            # SLURM exits 1 with "Invalid job id specified" for a finished job.
+            # That is "not listed". A controller error stays "still running".
+            gone = (1, "", "slurm_load_jobs error: Invalid job id specified\n")
+            Test.@test !slurm_job_running("4242"; inquire = _ -> gone)
+            Test.@test !slurm_job_running("4242"; inquire = _ -> (0, "", ""))
+            Test.@test slurm_job_running("4242"; inquire = _ -> (0, "4242 R\n", ""))
+            Test.@test slurm_job_running("4242";
+                inquire = _ -> (1, "", "Unable to contact slurm controller\n"))
+            Test.@test slurm_job_running("4242"; inquire = _ -> error("squeue failed to spawn"))
         end
 
         cell_cli = D5OntAdaptiveGridDriver.parse_cli(
