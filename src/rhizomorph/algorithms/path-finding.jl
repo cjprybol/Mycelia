@@ -1320,7 +1320,9 @@ end
 # `beam_log_threshold` drops states more than that many nats below the best
 # score, and equal scores rank by `_viterbi_state_sort_key` (vertex string, then
 # strand). The correction helper is generic over state, width-only, and ranks
-# ties by `hash(state)`.
+# ties by `hash(state)`. Callers guarantee a non-empty frontier and a positive
+# `beam_width`; an empty frontier throws `BoundsError` from `first`, and
+# `beam_width <= 0` returns empty dicts.
 function _prune_viterbi_beam(
         scores::Dict{Tuple{T, StrandOrientation}, Float64},
         predecessors::Dict{

@@ -4,11 +4,7 @@
 # julia --project=. -e 'include("test/4_assembly/viterbi_path_beam_prune_test.jl")'
 # ```
 #
-# Direct coverage of `Rhizomorph._prune_viterbi_beam` (td-63vh). The correction
-# beam helper `_prune_correction_beam` is covered in `viterbi_beam_pruning_test.jl`.
-# The two stay separate: this helper is typed to `(vertex, StrandOrientation)`,
-# applies `beam_log_threshold`, stores `(predecessor, transition_prob)`
-# backpointers, and ranks equal scores by vertex string then strand.
+# Direct coverage of `Rhizomorph._prune_viterbi_beam` (td-63vh).
 
 import Mycelia
 import Test
@@ -218,5 +214,30 @@ Test.@testset "_prune_viterbi_beam (td-63vh)" begin
         )
         Test.@test !haskey(kept_margin, ("Z", Reverse))
         Test.@test !haskey(kept_margin_pred, ("M", Reverse))
+    end
+
+    # Callers pass a non-empty frontier and a positive width. These two cases
+    # pin the helper's current behaviour when that guarantee is not met.
+    Test.@testset "empty frontier throws and a non-positive width returns empty dicts" begin
+        empty_scores, empty_predecessors = frontier([])
+        local threw = false
+        local message = ""
+        try
+            prune(empty_scores, empty_predecessors, 2, Inf)
+        catch err
+            threw = true
+            Test.@test err isa BoundsError
+            message = sprint(showerror, err)
+        end
+        Test.@test threw
+        Test.@test occursin("attempt to access 0-element", message)
+        Test.@test occursin("at index [1]", message)
+
+        scores, predecessors = frontier(ranked_rows)
+        for width in (0, -1)
+            kept_scores, kept_predecessors = prune(scores, predecessors, width, Inf)
+            Test.@test isempty(kept_scores)
+            Test.@test isempty(kept_predecessors)
+        end
     end
 end
