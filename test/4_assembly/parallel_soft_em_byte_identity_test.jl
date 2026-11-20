@@ -9,9 +9,9 @@ import Mycelia
 import FASTX
 import Random
 
-# Parent-side contract: one name per child `_psi_assert`, in emit order.
-# A renamed or reordered child check fails here instead of disappearing into
-# a single process-success boolean.
+# Parent-side contract: one name per child `_psi_assert`. Status is matched by
+# name, so a missing mid-file result does not relabel every later check.
+# Emit order is a separate assertion.
 const _PSI_EXPECTED_ASSERTIONS = [
     "repr_collision_same_print",
     "repr_collision_sort_keys_differ",
@@ -37,47 +37,68 @@ const _PSI_EXPECTED_ASSERTIONS = [
     "gc_weights_equal",
 ]
 
+# `lines` are `STATUS\tname` records from the child. Status is keyed by name.
+# Duplicates and malformed lines stay out of that map so they can be reported
+# on their own. `order` is the first-seen name sequence, checked separately.
+function _psi_child_result_map(lines)
+    by_name = Dict{String, String}()
+    order = String[]
+    duplicates = String[]
+    malformed = String[]
+    for line in lines
+        parts = split(line, '\t', limit = 2)
+        if length(parts) != 2 || isempty(parts[2])
+            push!(malformed, line)
+            continue
+        end
+        status = String(parts[1])
+        name = String(parts[2])
+        if haskey(by_name, name)
+            push!(duplicates, name)
+        else
+            by_name[name] = status
+            push!(order, name)
+        end
+    end
+    return by_name, order, duplicates, malformed
+end
+
 if Threads.nthreads() == 1 && get(ENV, "MYCELIA_PSI_CHILD", "0") != "1"
     # Self-hoist to real threads.
     proj = Base.active_project()
     thisfile = @__FILE__
     results_file, results_io = mktemp()
     close(results_io)
-    cmd = `$(Base.julia_cmd()) --project=$(proj) --threads=4 -e "include(\"$(thisfile)\")"`
-    child_env = copy(ENV)
-    child_env["MYCELIA_PSI_CHILD"] = "1"
-    child_env["MYCELIA_PSI_RESULTS"] = results_file
-    Test.@testset "parallel soft-EM byte-identity (hoisted to -t4)" begin
-        proc = run(pipeline(
-            setenv(cmd, child_env; dir = pwd());
-            stdout = stdout, stderr = stderr); wait = false)
-        wait(proc)
-        lines = readlines(results_file)
-        parsed = Tuple{String, String}[]
-        for line in lines
-            parts = split(line, '\t', limit = 2)
-            if length(parts) == 2
-                push!(parsed, (String(parts[2]), String(parts[1])))
-            else
-                push!(parsed, (line, "MALFORMED"))
+    try
+        cmd = `$(Base.julia_cmd()) --project=$(proj) --threads=4 -e "include(\"$(thisfile)\")"`
+        child_env = copy(ENV)
+        child_env["MYCELIA_PSI_CHILD"] = "1"
+        child_env["MYCELIA_PSI_RESULTS"] = results_file
+        Test.@testset "parallel soft-EM byte-identity (hoisted to -t4)" begin
+            proc = run(pipeline(
+                setenv(cmd, child_env; dir = pwd());
+                stdout = stdout, stderr = stderr); wait = false)
+            wait(proc)
+            by_name, order, duplicates, malformed = _psi_child_result_map(
+                readlines(results_file))
+            for name in _PSI_EXPECTED_ASSERTIONS
+                Test.@test (name, get(by_name, name, "MISSING")) == (name, "PASS")
             end
-        end
-        for i in eachindex(_PSI_EXPECTED_ASSERTIONS)
-            expected = _PSI_EXPECTED_ASSERTIONS[i]
-            if i <= length(parsed)
-                name, status = parsed[i]
-                Test.@test (name, status) == (expected, "PASS")
-            else
-                Test.@test (expected, "MISSING") == (expected, "PASS")
+            for name in duplicates
+                Test.@test (name, "DUPLICATE") == (name, "UNIQUE")
             end
-        end
-        if length(parsed) > length(_PSI_EXPECTED_ASSERTIONS)
-            for i in (length(_PSI_EXPECTED_ASSERTIONS) + 1):length(parsed)
-                name, status = parsed[i]
-                Test.@test (name, status) == ("", "ABSENT")
+            for line in malformed
+                Test.@test (line, "MALFORMED") == (line, "WELLFORMED")
             end
+            extras = setdiff(keys(by_name), _PSI_EXPECTED_ASSERTIONS)
+            for name in sort!(collect(extras))
+                Test.@test (name, "EXTRA") == (name, "EXPECTED")
+            end
+            Test.@test order == _PSI_EXPECTED_ASSERTIONS
+            Test.@test success(proc)
         end
-        Test.@test success(proc)
+    finally
+        rm(results_file; force = true)
     end
 else
     const _PSI_BASES = ['A', 'C', 'G', 'T']
