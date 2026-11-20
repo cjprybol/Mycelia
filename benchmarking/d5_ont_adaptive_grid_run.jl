@@ -28,6 +28,8 @@
 #   <root>/refs/                              reference FASTA per organism
 #   <root>/readsets/<read_set_id>/readset.json reads, measured identity, provenance
 #   <root>/readsets/<read_set_id>/survival.json 23-rung S / S_hat on RAW reads
+#   <root>/readsets/<read_set_id>/badread.log   Badread stderr (ONT read sets)
+#   <root>/readsets/<read_set_id>/minimap2.log  minimap2 stderr (ONT read sets)
 #   <root>/cells/<cell_id>/cell_result.json   one checkpoint per cell (atomic)
 #   <root>/cells/<cell_id>/corrected_survival.json  diagnostic, :iterative only
 #   <root>/tmp_evidence/<jobid>.r<restart>/ sbatch: temp root kept on a failed exit
@@ -219,14 +221,59 @@ function survival_json(rows)
             for r in rows]
 end
 
-"""Realized ONT identity by minimap2 alignment (ont_read_identity.jl's scorer)."""
-function measure_identity(reads_path::AbstractString, ref_path::AbstractString,
-        work_dir::AbstractString)
-    Mycelia.add_bioconda_env("minimap2")
-    sam = joinpath(work_dir, "reads.sam")
-    run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2
-                  -ax map-ont --secondary=no $(ref_path) $(reads_path)`,
-        stdout = sam, stderr = devnull))
+"""
+Log path for one tool, beside the read set rather than inside `work_dir`.
+`prepare_read_set` deletes the work directory after the reads are in place, so a
+log written there would not survive.
+"""
+function read_set_tool_log(work_dir::AbstractString, tool::AbstractString)
+    tool in ("minimap2", "badread") ||
+        error("no read-set log for tool $(tool)")
+    return joinpath(dirname(work_dir), tool * ".log")
+end
+
+"""
+Run `producer`, writing its stdout to `stdout_path` and its stderr to
+`log_path`. `downstream` reads the producer's stdout (Badread's FASTQ is
+gzipped) while stderr stays on the producer, so the log is the tool's own
+stream.
+"""
+function run_with_log(producer::Cmd, stdout_path::AbstractString,
+        log_path::AbstractString; downstream::Union{Nothing, Cmd} = nothing)
+    log_dir = dirname(log_path)
+    isempty(log_dir) || mkpath(log_dir)
+    out_dir = dirname(stdout_path)
+    isempty(out_dir) || mkpath(out_dir)
+    open(log_path, "w") do log
+        logged = pipeline(producer, stderr = log)
+        cmd = downstream === nothing ? logged : pipeline(logged, downstream)
+        run(pipeline(cmd, stdout = stdout_path))
+    end
+    return log_path
+end
+
+function minimap2_producer(ref_path, reads_path)
+    `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2
+     -ax map-ont --secondary=no $(ref_path) $(reads_path)`
+end
+
+function badread_producer(cmd_args)
+    `$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`
+end
+
+"""
+Write one Badread FASTQ. Stderr goes to `log_path`; it is not discarded.
+`kwargs` is the single source `badread_kwargs` already built for the recorded
+argv.
+"""
+function write_badread_reads(kwargs, outfile::AbstractString, log_path::AbstractString;
+        runner::Function = run_with_log)
+    cmd_args = Mycelia._badread_nanopore_args(; kwargs...)
+    runner(badread_producer(cmd_args), outfile, log_path; downstream = `gzip`)
+    return outfile
+end
+
+function score_identity_sam(sam::AbstractString)
     alignment = D5OntAdaptiveGridDriver.ReadIdentity.identities_from_sam(sam)
     rm(sam; force = true)
     blast = [r.blast_identity for r in alignment.rows if r.mapped]
@@ -237,6 +284,24 @@ function measure_identity(reads_path::AbstractString, ref_path::AbstractString,
         "identity_n_unmapped" => alignment.n_unmapped,
         "identity_n_skipped" => alignment.n_skipped,
         "identity_method" => "minimap2 -ax map-ont --secondary=no; BLAST identity")
+end
+
+"""
+Realized ONT identity by minimap2 alignment (ont_read_identity.jl's scorer).
+minimap2's stderr is written to the read-set log next to `work_dir`.
+"""
+function align_and_score_identity(reads_path::AbstractString, ref_path::AbstractString,
+        work_dir::AbstractString; runner::Function = run_with_log)
+    sam = joinpath(work_dir, "reads.sam")
+    log_path = read_set_tool_log(work_dir, "minimap2")
+    runner(minimap2_producer(ref_path, reads_path), sam, log_path)
+    return score_identity_sam(sam)
+end
+
+function measure_identity(reads_path::AbstractString, ref_path::AbstractString,
+        work_dir::AbstractString)
+    Mycelia.add_bioconda_env("minimap2")
+    return align_and_score_identity(reads_path, ref_path, work_dir)
 end
 
 """
@@ -278,7 +343,10 @@ function prepare_read_set(rs, ref, root::AbstractString)
         badread = D5OntAdaptiveGridDriver.badread_kwargs(rs, ref.path)
         argv = Mycelia._badread_nanopore_args(; badread...)
         tmp = joinpath(work, "reads.fq.gz")
-        Mycelia.simulate_nanopore_reads(; badread..., outfile = tmp, quiet = true)
+        # Badread's stderr is the read-set log. The work directory is removed
+        # once the reads are in place, so the log lives beside it.
+        Mycelia.add_bioconda_env("badread")
+        write_badread_reads(badread, tmp, read_set_tool_log(work, "badread"))
         final = joinpath(rs_dir, "reads.fq.gz")
         mv(tmp, final; force = true)
         meta["reads_paths"] = [final]
@@ -731,9 +799,20 @@ function publish_tsv(path, df)
     return path
 end
 
+"""
+One column per name in `columns`, in that order. Every row must contain every
+key. A missing key is a bug (a typo, or a symbol key against a string column),
+not a censored metric: `get` would have filled the whole column with `missing`
+and the merge would still publish. A present value of `missing` is kept.
+"""
 function frame(dicts, columns)
-    return DataFrames.DataFrame([Symbol(c) => [get(d, c, missing) for d in dicts]
-                                 for c in columns])
+    for (i, d) in enumerate(dicts)
+        for c in columns
+            haskey(d, c) ||
+                error("frame: row $(i) is missing key $(repr(c))")
+        end
+    end
+    return DataFrames.DataFrame([Symbol(c) => [d[c] for d in dicts] for c in columns])
 end
 
 nonmissing(xs) = collect(skipmissing(xs))

@@ -116,6 +116,142 @@ Test.@testset "D5 grid runner" begin
         end
     end
 
+    Test.@testset "frame requires every column key" begin
+        cols = ["cell_id", "NGA50"]
+        row = Dict{String, Any}("cell_id" => "c1", "NGA50" => missing)
+        df = frame([row], cols)
+        Test.@test df.cell_id[1] == "c1" && ismissing(df.NGA50[1])
+        msg = error_message(() -> frame([row, Dict("cell_id" => "c2")], cols))
+        Test.@test msg !== nothing && occursin("row 2", msg) && occursin("\"NGA50\"", msg)
+        symbols = Dict{Symbol, Any}(:cell_id => "c1", :NGA50 => 1)
+        msg = error_message(() -> frame([symbols], cols))
+        Test.@test msg !== nothing && occursin("missing key", msg) && occursin("\"cell_id\"", msg)
+        full = as_dict(row_for(cell))
+        framed = frame([full], D5OntAdaptiveGridDriver.cell_row_columns())
+        Test.@test framed.cell_id[1] == D5OntAdaptiveGridDriver.cell_id(cell)
+    end
+
+    Test.@testset "validation-cell reuse copies that Phase A checkpoint" begin
+        mktempdir() do root
+            iter99 = first(filter(c -> c.technology === :ont && c.identity == 99 &&
+                                        c.coverage == 100 && c.corrector === :iterative &&
+                                        c.k_policy === :adaptive && c.organism === :Lambda &&
+                                        c.seed == 42,
+                D5OntAdaptiveGridDriver.ont_cells()))
+            ladder = collect(D5OntAdaptiveGridDriver.D5OntAdaptiveGridAxes.D5_CANDIDATE_LADDER)
+            rows_for(S) = [Dict{String, Any}("k" => k, "S" => s, "S_hat" => s)
+                           for (k, s) in zip(ladder, S)]
+            S29 = [k <= 29 ? 0.9 : 0.1 for k in ladder]
+            plan = D5OntAdaptiveGridDriver.phase_b_plan(iter99, rows_for(S29), 0.5, 0.5;
+                genome_size = 48_502)
+            source = first(filter(c -> D5OntAdaptiveGridDriver.cell_id(c) == plan.reuse_cell_id,
+                D5OntAdaptiveGridDriver.ont_cells()))
+            Test.@test source.stratum === :validation && source.k_policy == 29
+            save_row(root, row_for(source; nga50 = 1500.0, n_contigs = 4))
+            reused = reuse_row(root, iter99, plan, CTX, (; tau = 0.5, tau_hat = 0.5))
+            Test.@test reused.status == "ok" && reused.phase == "B"
+            Test.@test reused.policy_level == "adaptive"
+            Test.@test reused.k_selected == 29 && reused.NGA50 == 1500.0
+            Test.@test reused.reused_from_cell_id == plan.reuse_cell_id
+            # The toy runs the k=29 validation cell, so a reuse of it stays a
+            # reuse. k=37 is a validation rung the toy did not run: the toy
+            # assembles it, and the full grid still reuses the checkpoint.
+            rs99 = D5OntAdaptiveGridDriver.read_set_of(iter99)
+            Test.@test phase_b_action(plan, rs99, true) === :reuse
+            Test.@test phase_b_action(plan, rs99, false) === :reuse
+            S37 = [k <= 37 ? 0.9 : 0.1 for k in ladder]
+            plan37 = D5OntAdaptiveGridDriver.phase_b_plan(iter99, rows_for(S37), 0.5, 0.5;
+                genome_size = 48_502)
+            Test.@test plan37.action === :reuse && occursin("__k37__", plan37.reuse_cell_id)
+            Test.@test phase_b_action(plan37, rs99, true) === :assemble
+            Test.@test phase_b_action(plan37, rs99, false) === :reuse
+        end
+    end
+
+    Test.@testset "minimap2 and Badread logs are files, not discarded streams" begin
+        mktempdir() do dir
+            work = joinpath(dir, "readsets", "rs", "work")
+            mkpath(work)
+            log = read_set_tool_log(work, "minimap2")
+            Test.@test log == joinpath(dir, "readsets", "rs", "minimap2.log")
+            Test.@test read_set_tool_log(work, "badread") ==
+                       joinpath(dir, "readsets", "rs", "badread.log")
+            msg = error_message(() -> read_set_tool_log(work, "quast"))
+            Test.@test msg !== nothing && occursin("quast", msg)
+
+            sam = joinpath(work, "reads.sam")
+            run_with_log(`bash -c 'echo SAM-LINE; echo mm2-progress >&2'`, sam, log)
+            Test.@test read(sam, String) == "SAM-LINE\n"
+            Test.@test read(log, String) == "mm2-progress\n"
+            rm(work; recursive = true)
+            Test.@test isfile(log) && read(log, String) == "mm2-progress\n"
+
+            mkpath(work)
+            out = joinpath(work, "reads.fq.gz")
+            blog = read_set_tool_log(work, "badread")
+            run_with_log(`bash -c 'echo FASTQ-LINE; echo badread-progress >&2'`,
+                out, blog; downstream = `gzip`)
+            Test.@test read(blog, String) == "badread-progress\n"
+            Test.@test String(read(`gzip -dc $(out)`)) == "FASTQ-LINE\n"
+            rm(work; recursive = true)
+            Test.@test isfile(blog)
+
+            # A nonzero producer still fails the call. Capturing stderr does not
+            # hide the exit status, and the log keeps what the producer wrote.
+            mkpath(work)
+            fail_log = read_set_tool_log(work, "minimap2")
+            msg = error_message(() -> run_with_log(
+                `sh -c 'echo boom >&2; exit 3'`,
+                joinpath(work, "failed.out"), fail_log))
+            Test.@test msg !== nothing && occursin("failed process", msg) &&
+                       occursin("[3]", msg)
+            Test.@test read(fail_log, String) == "boom\n"
+
+            mkpath(work)
+            calls = []
+            fake = function (cmd, stdout_path, log_path; downstream = nothing)
+                push!(calls, (; cmd = string(cmd), stdout_path, log_path,
+                    downstream = downstream === nothing ? nothing : string(downstream)))
+                write(stdout_path,
+                    "r1\t0\tref\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\tNM:i:0\n")
+                write(log_path, "minimap2 stderr\n")
+                return log_path
+            end
+            scored = align_and_score_identity("/reads.fq.gz", "/ref.fna", work;
+                runner = fake)
+            Test.@test length(calls) == 1
+            Test.@test occursin("minimap2", calls[1].cmd)
+            Test.@test occursin("-ax map-ont", calls[1].cmd)
+            Test.@test calls[1].downstream === nothing
+            Test.@test calls[1].log_path == read_set_tool_log(work, "minimap2")
+            Test.@test read(calls[1].log_path, String) == "minimap2 stderr\n"
+            Test.@test scored["identity_measured_mean"] == 1.0
+            Test.@test scored["identity_n_primary_scored"] == 1
+            Test.@test !isfile(joinpath(work, "reads.sam"))
+
+            bad_calls = []
+            fake_bad = function (cmd, stdout_path, log_path; downstream = nothing)
+                push!(bad_calls, (; cmd = string(cmd), log_path,
+                    downstream = downstream === nothing ? nothing : string(downstream)))
+                write(log_path, "badread stderr\n")
+                return log_path
+            end
+            rs = first(filter(r -> r.technology === :ont && r.identity == 95,
+                D5OntAdaptiveGridDriver.read_sets()))
+            kwargs = D5OntAdaptiveGridDriver.badread_kwargs(rs, "/ref.fna")
+            write_badread_reads(kwargs, joinpath(dir, "reads.fq.gz"),
+                read_set_tool_log(work, "badread"); runner = fake_bad)
+            Test.@test length(bad_calls) == 1
+            Test.@test occursin("badread", bad_calls[1].cmd)
+            Test.@test occursin("simulate", bad_calls[1].cmd)
+            Test.@test occursin(
+                D5OntAdaptiveGridDriver.D5_BADREAD_IDENTITY_PARAMS[95], bad_calls[1].cmd)
+            Test.@test occursin("gzip", something(bad_calls[1].downstream, ""))
+            Test.@test bad_calls[1].log_path == read_set_tool_log(work, "badread")
+            Test.@test read(bad_calls[1].log_path, String) == "badread stderr\n"
+        end
+    end
+
     Test.@testset "run manifest: one SHA, clean tree, same pins, toy kept apart" begin
         mktempdir() do root
             git = (; sha = "a" ^ 40, dirty = false)

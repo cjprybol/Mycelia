@@ -16,6 +16,8 @@
 #     control's fixed-rung cells, and every survival vector.
 #   * Phase B (after a human sets tau / tau_hat): the :adaptive cells, assembled
 #     at k* = the largest rung with S(k) >= tau. NoFeasibleK, never a fallback.
+#     A k* Phase A already assembled is reused: a comparator rung, or a dropped
+#     rung on the validation stratum (99% / 100x / :iterative).
 #   * estimate_residual_error is recorded as a DIAGNOSTIC and never reaches k.
 #   * k > 64 is rejected by assemble_genome; such cells record
 #     STATUS_INFEASIBLE_K with null metrics (user decision 2026-11-16).
@@ -425,6 +427,27 @@ end
 _usable(x) = x !== nothing && x !== missing && !isnan(x)
 
 """
+    phase_a_assembly_at(cell, k_star) -> Union{NamedTuple, Nothing}
+
+The Phase A cell that already assembles this read set and corrector at
+`k_star`, or `nothing`. Comparator rungs are the grid or the Illumina control.
+Dropped rungs exist only as validation cells, and only on the 99% / 100x /
+`:iterative` read sets. Those rung sets are disjoint, so more than one match
+is an error.
+"""
+function phase_a_assembly_at(cell, k_star)
+    rs = read_set_of(cell)
+    matches = filter(phase_a_cells()) do c
+        c.corrector === cell.corrector && c.k_policy == k_star &&
+            read_set_of(c) == rs
+    end
+    length(matches) <= 1 ||
+        error("more than one Phase A cell assembles $(read_set_id(rs)) " *
+              "$(cell.corrector) at k=$(k_star)")
+    return isempty(matches) ? nothing : first(matches)
+end
+
+"""
     phase_b_plan(cell, survival_rows, tau, tau_hat; genome_size) -> NamedTuple
 
 What Phase B does for one `:adaptive` cell, decided before any assembly runs.
@@ -433,10 +456,12 @@ What Phase B does for one `:adaptive` cell, decided before any assembly runs.
 
   * `:no_feasible_k` — no rung meets tau (or clears the collision floor).
   * `:infeasible`    — k* exists but the assembler cannot take it (k > 64 today).
-  * `:reuse`         — k* is a comparator rung, so the Phase A fixed-rung cell on
-                       the same read set and corrector IS this assembly;
-                       `reuse_cell_id` names it.
-  * `:assemble`      — k* needs a new assembly.
+  * `:reuse`         — Phase A already assembled this k* on the same read set and
+                       corrector. That is a comparator rung (grid or Illumina),
+                       or a dropped rung on the validation stratum (only the
+                       99% / 100x / :iterative read sets). `reuse_cell_id` is
+                       that cell's id, including its stratum.
+  * `:assemble`      — k* has no Phase A cell to copy.
 
 `k_star_hat` (from S_hat at tau_hat) is recorded for criterion 5; it never
 drives the assembly.
@@ -455,10 +480,9 @@ function phase_b_plan(cell, survival_rows::AbstractVector, tau::Real, tau_hat::R
         (:no_feasible_k, nothing)
     elseif !assembler_accepts_k(k_star)
         (:infeasible, nothing)
-    elseif k_star in D5OntAdaptiveGridAxes.D5_COMPARATOR_RUNGS
-        (:reuse, cell_id(merge(cell, (; k_policy = k_star))))
     else
-        (:assemble, nothing)
+        source = phase_a_assembly_at(cell, k_star)
+        source === nothing ? (:assemble, nothing) : (:reuse, cell_id(source))
     end
     return (; action, k_star, reason = pick.reason, floor_k = pick.floor_k,
         k_star_hat = pick_hat.k_star, reason_hat = pick_hat.reason, reuse_cell_id)

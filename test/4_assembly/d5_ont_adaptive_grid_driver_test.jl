@@ -303,10 +303,45 @@ Test.@testset "D5 grid driver" begin
         Test.@test plan.reuse_cell_id ==
                    D5OntAdaptiveGridDriver.cell_id(merge(adaptive, (; k_policy = 21)))
         Test.@test plan.reuse_cell_id in D5OntAdaptiveGridDriver.cell_id.(D5OntAdaptiveGridDriver.phase_a_cells())
-        # k* = 29 is not a comparator rung -> a new assembly.
+        # k* = 29 is not a comparator rung. This read set (90%/10x/:none) has no
+        # validation cell, so Phase A never assembled 29 and Phase B must not
+        # pretend a grid cell at that k exists.
         S29 = [k <= 29 ? 0.9 : 0.1 for k in ladder]
         Test.@test D5OntAdaptiveGridDriver.phase_b_plan(adaptive, rows_for(S29), 0.5, 0.5;
             genome_size = 48_502).action === :assemble
+        # The 99%/100x/:iterative read set DID assemble every dropped rung as a
+        # validation cell. k* = 29 reuses that cell; k* = 21 still reuses the
+        # grid comparator, whose stratum is :grid. :none on the same read set
+        # has no validation cell. k* above the assembler cap stays infeasible.
+        iter99 = first(filter(c -> c.technology === :ont && c.identity == 99 &&
+                                    c.coverage == 100 && c.corrector === :iterative &&
+                                    c.k_policy === :adaptive && c.organism === :Lambda &&
+                                    c.seed == 42,
+            D5OntAdaptiveGridDriver.ont_cells()))
+        plan_val = D5OntAdaptiveGridDriver.phase_b_plan(iter99, rows_for(S29), 0.5, 0.5;
+            genome_size = 48_502)
+        val29 = first(filter(c -> c.stratum === :validation && c.k_policy == 29 &&
+                                   c.organism === :Lambda && c.seed == 42,
+            D5OntAdaptiveGridDriver.ont_cells()))
+        Test.@test plan_val.action === :reuse
+        Test.@test plan_val.reuse_cell_id == D5OntAdaptiveGridDriver.cell_id(val29)
+        Test.@test occursin("__validation__", plan_val.reuse_cell_id)
+        plan_grid = D5OntAdaptiveGridDriver.phase_b_plan(iter99, rows_for(S), 0.5, 0.5;
+            genome_size = 48_502)
+        Test.@test plan_grid.action === :reuse
+        Test.@test plan_grid.reuse_cell_id ==
+                   D5OntAdaptiveGridDriver.cell_id(merge(iter99, (; k_policy = 21)))
+        Test.@test occursin("__grid__", plan_grid.reuse_cell_id)
+        none99 = first(filter(c -> c.technology === :ont && c.identity == 99 &&
+                                    c.coverage == 100 && c.corrector === :none &&
+                                    c.k_policy === :adaptive && c.organism === :Lambda &&
+                                    c.seed == 42,
+            D5OntAdaptiveGridDriver.ont_cells()))
+        Test.@test D5OntAdaptiveGridDriver.phase_b_plan(none99, rows_for(S29), 0.5, 0.5;
+            genome_size = 48_502).action === :assemble
+        high_val = D5OntAdaptiveGridDriver.phase_b_plan(iter99, rows_for(fill(0.9, 23)),
+            0.5, 0.5; genome_size = 48_502)
+        Test.@test high_val.action === :infeasible && high_val.k_star == 101
         # k* = 101 is beyond the assembler's cap -> infeasible, not a fallback.
         high = D5OntAdaptiveGridDriver.phase_b_plan(adaptive, rows_for(fill(0.9, 23)),
             0.5, 0.5; genome_size = 48_502)
