@@ -18,6 +18,10 @@ import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "track_a_baseline_benchmark.jl"))
 
+function _read_stale(root)
+    return JSON.parsefile(aggregate_stale_path(root))
+end
+
 function _usage(args)
     try
         parse_track_a_invocation(args)
@@ -324,12 +328,17 @@ Test.@testset "track A harness residuals" begin
             mkpath(broken_dir)
             write(joinpath(broken_dir, "cell_result.json"), "{not json")
 
-            thrown = try
-                write_aggregate(dir, NamedTuple[])
-                nothing
-            catch e
-                e
+            warn_pipe = Pipe()
+            thrown = redirect_stderr(warn_pipe) do
+                try
+                    write_aggregate(dir, NamedTuple[]; run_id = "residual-test-run")
+                    nothing
+                catch e
+                    e
+                end
             end
+            close(warn_pipe.in)
+            warning = read(warn_pipe.out, String)
             Test.@test thrown isa AggregateIncomplete
             Test.@test occursin("refusing to publish", thrown.msg)
             Test.@test occursin("smaller table", thrown.msg)
@@ -342,40 +351,57 @@ Test.@testset "track A harness residuals" begin
             # that a skip-and-publish path would have written without the holes.
             Test.@test read(sentinel, String) == "SENTINEL\n"
             Test.@test !any(n -> startswith(n, "jl_"), readdir(dir))
-            # The kept table is stamped in the results directory, not only in
-            # the exception the job log scrolls past.
-            refusal = aggregate_refusal_path(dir)
-            Test.@test isfile(refusal)
-            refusal_text = read(refusal, String)
-            Test.@test occursin("NOT replaced", refusal_text)
-            Test.@test occursin(missing_id, refusal_text)
-            Test.@test occursin(broken_id, refusal_text)
-            Test.@test basename(refusal) == AGGREGATE_REFUSAL_NAME
+            # Stderr names the kept table. The sidecar is what a later reader
+            # of the results directory sees.
+            Test.@test occursin("WARNING:", warning)
+            Test.@test occursin(sentinel, warning)
+            Test.@test occursin("STALE", warning)
+            stale_path = aggregate_stale_path(dir)
+            Test.@test isfile(stale_path)
+            Test.@test basename(stale_path) == AGGREGATE_STALE_NAME
+            stale = _read_stale(dir)
+            Test.@test stale["stale_table"] == sentinel
+            Test.@test stale["run_id"] == "residual-test-run"
+            Test.@test occursin(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$",
+                stale["timestamp"])
+            Test.@test occursin("refusing to publish", stale["reason"])
+            Test.@test occursin(missing_id, stale["reason"])
+            Test.@test occursin(broken_id, stale["reason"])
+            kinds = Dict(c["cell_id"] => c["kind"] for c in stale["cells"])
+            Test.@test kinds[missing_id] == "missing"
+            Test.@test kinds[broken_id] == "incomplete"
+            Test.@test occursin("no cell_result.json",
+                only(c["reason"] for c in stale["cells"] if c["cell_id"] == missing_id))
 
             # An in-memory row whose id is the missing directory covers that
             # gap. The unreadable checkpoint is still unresolved, so the table
             # still does not publish.
             covering = _sample(; tech = "illumina", cov = 50, seed = 456, arm = "qualmer")
             Test.@test row_cell_id(covering) == missing_id
-            still = try
-                write_aggregate(dir, [covering])
-                nothing
-            catch e
-                e
+            still = redirect_stderr(devnull) do
+                try
+                    write_aggregate(dir, [covering]; run_id = "residual-test-run")
+                    nothing
+                catch e
+                    e
+                end
             end
             Test.@test still isa AggregateIncomplete
             Test.@test occursin(broken_id, still.msg)
             Test.@test !occursin(missing_id, still.msg)
             Test.@test read(sentinel, String) == "SENTINEL\n"
-            # The note is rewritten for the gaps that are still unresolved.
-            rewritten = read(aggregate_refusal_path(dir), String)
-            Test.@test occursin(broken_id, rewritten)
-            Test.@test occursin("NOT replaced", rewritten)
-            Test.@test !occursin(missing_id, rewritten)
+            # The sidecar is rewritten for the gaps that are still unresolved.
+            rewritten = _read_stale(dir)
+            Test.@test only(rewritten["cells"])["cell_id"] == broken_id
+            Test.@test only(rewritten["cells"])["kind"] == "incomplete"
+            Test.@test rewritten["run_id"] == "residual-test-run"
+            Test.@test !occursin(missing_id, rewritten["reason"])
 
             rm(broken_dir; recursive = true)
-            covered = write_aggregate(dir, [covering])
-            Test.@test !isfile(aggregate_refusal_path(dir))
+            covered = write_aggregate(dir, [covering]; run_id = "residual-test-run")
+            Test.@test !isfile(aggregate_stale_path(dir))
+            Test.@test read(sentinel, String) != "SENTINEL\n"
+            Test.@test occursin("organism", read(sentinel, String))
             Test.@test DataFrames.nrow(covered) == 4
             Test.@test any(i -> i == missing_id,
                 (row_cell_id((;
@@ -392,20 +418,26 @@ Test.@testset "track A harness residuals" begin
             mkpath(cell)
             write(joinpath(cell, "cell_result.json"), "{\"organism\":\"Lambda\"}")
             write(joinpath(dir, "track_a_results.tsv"), "SENTINEL\n")
-            thrown = try
-                write_aggregate(dir, NamedTuple[])
-                nothing
-            catch e
-                e
+            thrown = redirect_stderr(devnull) do
+                try
+                    write_aggregate(dir, NamedTuple[]; run_id = "schema-gap-run")
+                    nothing
+                catch e
+                    e
+                end
             end
             Test.@test thrown isa AggregateIncomplete
             Test.@test occursin("incomplete", thrown.msg)
             Test.@test occursin("missing required key", thrown.msg)
             Test.@test read(joinpath(dir, "track_a_results.tsv"), String) == "SENTINEL\n"
-            schema_note = read(aggregate_refusal_path(dir), String)
-            Test.@test occursin("NOT replaced", schema_note)
-            Test.@test occursin("Lambda__ont__10x__seed42__kmer", schema_note)
-            Test.@test occursin("missing required key", schema_note)
+            schema_stale = _read_stale(dir)
+            Test.@test schema_stale["run_id"] == "schema-gap-run"
+            Test.@test schema_stale["stale_table"] == joinpath(dir, "track_a_results.tsv")
+            cell = only(schema_stale["cells"])
+            Test.@test cell["cell_id"] == "Lambda__ont__10x__seed42__kmer"
+            Test.@test cell["kind"] == "incomplete"
+            Test.@test occursin("missing required key", cell["reason"])
+            Test.@test occursin("missing required key", schema_stale["reason"])
         end
 
         # Interrupt during the scan is not an incomplete cell.

@@ -715,10 +715,11 @@ end
 # Downstream, including the power analysis, cannot tell that table from a finished
 # matrix. `write_aggregate` now refuses to publish while any such gap is still
 # unresolved, and leaves the previous TSV in place. The refusal also writes
-# `track_a_aggregate_refusal.txt` beside that TSV. The job log is not what a
-# later reader of the results directory opens, and a complete-looking older table
-# with no stamp would be taken as current. A later successful aggregate deletes
-# the note.
+# `track_a_results.STALE.json` beside that TSV (reason, cells, timestamp, run
+# id) and prints a stderr warning that names the kept table. The job log is not
+# what a later reader of the results directory opens, and a complete-looking
+# older table with no sidecar would be taken as current. A later successful
+# aggregate deletes the sidecar.
 #
 # A readable `status=error` checkpoint is NOT a gap. It is the catch path's record
 # that the cell threw. Dropping it would hide the failure and shrink the table.
@@ -779,15 +780,26 @@ function row_cell_id(row)
         row.decoder_arm; k = row.k, traversal_weighting = row.traversal_weighting)
 end
 
-const AGGREGATE_REFUSAL_NAME = "track_a_aggregate_refusal.txt"
+# Beside track_a_results.tsv. A reader who opens the results directory after a
+# refused publish sees this file, not only a complete-looking older table.
+const AGGREGATE_STALE_NAME = "track_a_results.STALE.json"
 
-function aggregate_refusal_path(root::AbstractString)
-    return joinpath(root, AGGREGATE_REFUSAL_NAME)
+# One id for the process, shared by the stale sidecar and the artifact bundle.
+# Computed at load so a refusal during the matrix and the bundle written at the
+# end name the same run.
+const TRACK_A_RUN_ID = "track_a_baseline_" * Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+
+function aggregate_stale_path(root::AbstractString)
+    return joinpath(root, AGGREGATE_STALE_NAME)
+end
+
+function aggregate_results_path(root::AbstractString)
+    return joinpath(root, "track_a_results.tsv")
 end
 
 function aggregate_incomplete_message(root, gaps::Vector{CellStoreGap})
     lines = ["  - $(g.cell_id): $(g.kind) ($(g.reason))" for g in gaps]
-    target = joinpath(root, "track_a_results.tsv")
+    target = aggregate_results_path(root)
     return "refusing to publish $(target): $(length(gaps)) missing or incomplete " *
            "cell(s) would be omitted, and a smaller table is not a result.\n" *
            join(lines, "\n") *
@@ -797,29 +809,53 @@ function aggregate_incomplete_message(root, gaps::Vector{CellStoreGap})
 end
 
 """
-    write_aggregate_refusal(root, gaps)
+    aggregate_stale_report(root, gaps; run_id, timestamp) -> Dict
 
-Write `track_a_aggregate_refusal.txt` next to the kept `track_a_results.tsv`.
-
-The note is the directory-level stamp that this attempt did not replace the
-table. It is published atomically so a crash cannot leave a half-written note
-in its place. A later successful `write_aggregate` deletes it.
+The sidecar body. `cells` lists every unresolved gap (`missing` or
+`incomplete`). `timestamp` defaults to local now, `yyyy-mm-ddTHH:MM:SS`.
 """
-function write_aggregate_refusal(root::AbstractString, gaps::Vector{CellStoreGap})
-    path = aggregate_refusal_path(root)
-    body = aggregate_incomplete_message(root, gaps) *
-           "\n\nThis file is the stamp that $(joinpath(root, "track_a_results.tsv")) " *
-           "was NOT replaced by the run that wrote this note. A complete-looking " *
-           "table beside this file is the previous publish, not the result of that " *
-           "run. A later successful aggregate deletes this file.\n"
-    _publish_atomically(path) do tmp
-        write(tmp, body)
+function aggregate_stale_report(root::AbstractString, gaps::Vector{CellStoreGap};
+        run_id::AbstractString, timestamp::Union{Nothing, AbstractString} = nothing)
+    stamp = timestamp === nothing ?
+            Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SS") : String(timestamp)
+    return Dict{String, Any}(
+        "stale_table" => aggregate_results_path(root),
+        "reason" => aggregate_incomplete_message(root, gaps),
+        "cells" => [Dict{String, String}(
+            "cell_id" => g.cell_id, "kind" => g.kind, "reason" => g.reason)
+                    for g in gaps],
+        "timestamp" => stamp,
+        "run_id" => String(run_id),
+    )
+end
+
+"""
+    write_aggregate_stale(root, gaps; run_id) -> String
+
+Atomically write `track_a_results.STALE.json` next to the kept results table
+and print a stderr warning that names that table.
+
+The write goes through `_atomic_write` in `atomic_publish.jl` (unique temp in
+the same directory, then rename). A crash cannot leave a half-written sidecar.
+A later successful `write_aggregate` deletes the file.
+"""
+function write_aggregate_stale(root::AbstractString, gaps::Vector{CellStoreGap};
+        run_id::AbstractString)
+    path = aggregate_stale_path(root)
+    report = aggregate_stale_report(root, gaps; run_id)
+    _atomic_write(path) do io
+        JSON.print(io, report, 2)
+        println(io)
     end
+    table = aggregate_results_path(root)
+    println(stderr,
+        "WARNING: $(table) is STALE and was not replaced " *
+        "($(length(gaps)) missing or unparseable cell(s)). See $(path)")
     return path
 end
 
-function clear_aggregate_refusal(root::AbstractString)
-    path = aggregate_refusal_path(root)
+function clear_aggregate_stale(root::AbstractString)
+    path = aggregate_stale_path(root)
     isfile(path) && rm(path; force = true)
     return path
 end
@@ -845,20 +881,20 @@ function assemble_aggregate(root, rows)
     return ordered, unresolved
 end
 
-function write_aggregate(root, rows)
+function write_aggregate(root, rows; run_id::AbstractString = TRACK_A_RUN_ID)
     ordered, unresolved = assemble_aggregate(root, rows)
     if !isempty(unresolved)
         msg = aggregate_incomplete_message(root, unresolved)
         # Stamp the kept table before throwing. Phase 3 calls this uncaught, so
-        # the note is what remains in the results directory after a non-zero
-        # exit. A mid-loop refusal writes the same note; the next successful
+        # the sidecar is what remains in the results directory after a non-zero
+        # exit. A mid-loop refusal writes the same sidecar; the next successful
         # publish deletes it, so a transient sibling gap does not leave a
-        # permanent "stale" mark on a table that was later replaced.
+        # permanent stale mark on a table that was later replaced.
         try
-            write_aggregate_refusal(root, unresolved)
+            write_aggregate_stale(root, unresolved; run_id)
         catch e
             e isa InterruptException && rethrow()
-            msg *= "\nAlso failed to write $(aggregate_refusal_path(root)): " *
+            msg *= "\nAlso failed to write $(aggregate_stale_path(root)): " *
                    sprint(showerror, e)
         end
         throw(AggregateIncomplete(unresolved, msg))
@@ -868,12 +904,12 @@ function write_aggregate(root, rows)
     # included them. This fallback only fires when both sides are empty.
     isempty(ordered) && (ordered = collect(rows))
     df = DataFrames.DataFrame(ordered)
-    target = joinpath(root, "track_a_results.tsv")
+    target = aggregate_results_path(root)
     _publish_atomically(tmp -> CSV.write(tmp, df; delim = '\t'), target)
     # After the new table is in place. Clearing first would let a crash during
-    # the publish remove the stamp while the previous TSV was still the file on
-    # disk — the state this note exists to mark.
-    clear_aggregate_refusal(root)
+    # the publish remove the sidecar while the previous TSV was still the file
+    # on disk — the state this sidecar exists to mark.
+    clear_aggregate_stale(root)
     return df
 end
 
@@ -1205,7 +1241,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     results_df = write_aggregate(OUTPUT_DIR, rows)
     cv_df = write_power_analysis(OUTPUT_DIR, results_df)
 
-    const ARTIFACT_RUN_ID = "track_a_baseline_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))"
+    const ARTIFACT_RUN_ID = TRACK_A_RUN_ID
     if HAVE_ARTIFACT_WRITER
         try
             write_benchmark_artifacts(
