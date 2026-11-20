@@ -55,3 +55,36 @@ Test.@testset "merge_and_map_single_end_samples default outbase (td-s9ig)" begin
         Test.@test out_a_rewritten != out_a
     end
 end
+
+Test.@testset "merge_and_map docstring and required reference paths" begin
+    doc = string(Base.Docs.doc(Mycelia.merge_and_map_single_end_samples))
+    Test.@test occursin("outbase::Union{Nothing, AbstractString} = nothing", doc)
+    Test.@test occursin("Touching an input file (mtime change) busts the cache", doc)
+
+    # Omitted path kwargs must name the argument. `abspath("")` used to become
+    # the working directory, so the error said `got <cwd>` and never named
+    # `fasta_reference` or `minimap_index`.
+    cwd = pwd()
+    fastq = String["reads.fq"]
+    cases = (
+        ("fasta_reference", () -> Mycelia.merge_and_map_default_outbase(fastq;
+            minimap_index = "ref.mmi", mapping_type = "map-ont")),
+        ("minimap_index", () -> Mycelia.merge_and_map_default_outbase(fastq;
+            fasta_reference = "ref.fa", mapping_type = "map-ont")),
+        ("fasta_reference", () -> Mycelia.resolve_merge_and_map_outbase(nothing, fastq;
+            minimap_index = "ref.mmi", mapping_type = "map-ont")),
+        ("minimap_index", () -> Mycelia.resolve_merge_and_map_outbase(nothing, fastq;
+            fasta_reference = "ref.fa", mapping_type = "map-ont")),
+    )
+    for (argname, thunk) in cases
+        message = ""
+        try
+            thunk()
+            Test.@test false
+        catch err
+            message = sprint(showerror, err)
+            Test.@test occursin(argname, message)
+            Test.@test !occursin(cwd, message)
+        end
+    end
+end
