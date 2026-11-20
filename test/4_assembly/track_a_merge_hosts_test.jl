@@ -803,8 +803,22 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
             Test.@test occursin("atomic_publish.jl", merge_src)
             Test.@test length(collect(eachmatch(r"function _publish_atomically", harness))) == 0
             Test.@test length(collect(eachmatch(r"function _publish_atomically", shared))) == 1
-            Test.@test occursin("tempname(dir)", shared)
+            # mktemp creates the inode. A name-only temp path does not, so two
+            # writers can still pick it before either creates the file.
+            Test.@test occursin("mktemp(dir)", shared)
+            Test.@test !occursin("tempname(dir)", shared)
             Test.@test !occursin("basename(path) * \".tmp\"", merge_src)
+
+            # The file exists before write! runs: the inode was allocated by
+            # mktemp, not by the writer opening a path that might not exist yet.
+            allocated = Ref(false)
+            _publish_atomically(target) do tmp
+                allocated[] = isfile(tmp) && filesize(tmp) == 0
+                write(tmp, "allocated\n")
+            end
+            Test.@test allocated[]
+            Test.@test read(target, String) == "allocated\n"
+            Test.@test readdir(dir) == ["track_a_results.tsv"]
 
             threw = try
                 _atomic_write(target) do io
@@ -816,7 +830,7 @@ Test.@testset "Track A cross-host merge (td-bblmi)" begin
                 e
             end
             Test.@test threw isa InterruptException
-            Test.@test read(target, String) == "payload-4\n"
+            Test.@test read(target, String) == "allocated\n"
             Test.@test readdir(dir) == ["track_a_results.tsv"]
         end
     end
