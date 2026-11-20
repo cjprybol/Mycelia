@@ -211,6 +211,65 @@ Test.@testset "ONT read-identity helpers" begin
         end
     end
 
+    Test.@testset "--reads provenance round-trips and refreshes" begin
+        # td-jwpl nit: under --reads, run_coverage and run_seed are missing.
+        # An empty cell that reads back as a different sentinel makes
+        # isequal fail, so every same-provenance refresh is refused.
+        reads_provenance = (
+            run_coverage = missing,
+            run_seed = missing,
+            badread_version = "Badread v0.4.1",
+            read_source = "override",
+            reads_file = "supplied_reads.fq.gz",
+        )
+        other_reads = (
+            run_coverage = missing,
+            run_seed = missing,
+            badread_version = "Badread v0.4.1",
+            read_source = "override",
+            reads_file = "other_reads.fq.gz",
+        )
+        rows = DataFrames.DataFrame(k = [11], coverage = [30], value = [1.0])
+
+        mktempdir() do dir
+            path = joinpath(dir, "per_read_identity.tsv")
+            write_identity_table(path, rows, reads_provenance)
+            reread = CSV.read(path, DataFrames.DataFrame; delim = '\t')
+            round_tripped = identity_table_provenance(reread)
+            Test.@test round_tripped !== nothing
+            if round_tripped !== nothing
+                Test.@test round_tripped.run_coverage === missing
+                Test.@test round_tripped.run_seed === missing
+                Test.@test isequal(round_tripped, reads_provenance)
+            end
+
+            # Same provenance may refresh the file.
+            refresh_err = try
+                write_identity_table(path, rows, reads_provenance)
+                nothing
+            catch e
+                e
+            end
+            Test.@test refresh_err === nothing
+            before = read(path)
+
+            err = try
+                write_identity_table(path, rows, other_reads)
+                nothing
+            catch e
+                e
+            end
+            Test.@test err isa ArgumentError
+            Test.@test occursin("refusing to overwrite", err.msg)
+            Test.@test occursin("--overwrite", err.msg)
+            Test.@test occursin("overwrite=true", err.msg)
+            Test.@test read(path) == before
+            Test.@test isequal(
+                identity_table_provenance(CSV.read(path, DataFrames.DataFrame; delim = '\t')),
+                reads_provenance)
+        end
+    end
+
     Test.@testset "provenance is preflighted for every table before any write" begin
         # td-jwpl review: checking one file at persist time can replace the
         # ladder and then refuse the summary, leaving mixed provenance after
