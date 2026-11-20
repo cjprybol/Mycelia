@@ -61,11 +61,14 @@
 #   # QUAST 5.3.0 imports distutils; the env resolved on 2026-11-19 (python
 #   # 3.13.18) had no setuptools, so every QUAST call failed. Perlmutter's
 #   # working env has setuptools 82.0.1; install the same:
-#   "${JULIA_DEPOT_PATH}/conda/3/x86_64/bin/conda" install -y -n quast \
-#       -c conda-forge setuptools=82.0.1
+#   "${JULIA_DEPOT_PATH}/conda/3/x86_64/bin/conda" install -y --freeze-installed \
+#       -n quast -c conda-forge setuptools=82.0.1
 #   "${JULIA_DEPOT_PATH}/conda/3/x86_64/bin/conda" run -n quast quast.py --version
-#   # references: copy <toy root>/refs/ into a new full root before its read-set
-#   # array starts, so 96 tasks do not download the same files at once.
+#   # references: array tasks refuse to download (no internet, and a shared
+#   # refs/ would race). Copy <toy root>/refs/ into a new full root, or stage
+#   # on a login node:
+#   #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --stage-refs \
+#   #       --output-dir /global/scratch/users/$USER/d5_grid
 #
 # USAGE (submit from benchmarking/; output roots under /global/scratch/users/$USER):
 #   Toy: 3 read sets (the default array), then its 4 :iterative cells:
@@ -75,6 +78,11 @@
 #       D5_OUTDIR=/global/scratch/users/$USER/d5_grid_toy \
 #       sbatch --array=0-3 --time=24:00:00 \
 #       --dependency=afterany:<read_set_job_id> run_d5_grid_lrc.sbatch
+#   A SIGKILL (the time limit) leaves cells/<id>.lock or refs/<accession>.lock
+#   behind. The next task breaks it when `squeue -h -j <id>` shows the job is
+#   gone, the pid is dead on this host, or the lock is older than the 72 h
+#   walltime. If a resubmit still says the lock is held, remove that directory
+#   by hand and resubmit.
 #   Full Phase A, only after the user approves the launch (D5_FULL=1 and the
 #   array override together, as on Perlmutter). Read-set task time and memory
 #   are unmeasured above Lambda 100x; keep the 200G envelope until measured:

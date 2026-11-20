@@ -10,6 +10,7 @@ module D5OntAdaptiveGridRunTest
 import Test
 import DataFrames
 import JSON
+import Logging
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "d5_ont_adaptive_grid_run.jl"))
 
@@ -569,6 +570,227 @@ Test.@testset "D5 grid runner" begin
         both = D5OntAdaptiveGridDriver.parse_cli(["--phase", "B", "--tau", "0.8",
             "--tau-hat", "0.6", "--list"])
         Test.@test both.tau == 0.8 && both.tau_hat == 0.6
+        staged_cli = D5OntAdaptiveGridDriver.parse_cli(
+            ["--stage-refs", "--toy", "--output-dir", "/x"])
+        Test.@test staged_cli.phase === :stage_refs && staged_cli.toy &&
+                   staged_cli.output_dir == "/x"
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(
+            ["--stage-refs", "--phase", "A"]))
+        Test.@test msg !== nothing && occursin("do not pass --phase", msg)
+        msg = error_message(() -> D5OntAdaptiveGridDriver.parse_cli(
+            ["--stage-refs", "--list"]))
+        Test.@test msg !== nothing && occursin("different commands", msg)
+    end
+
+    Test.@testset "staged references, missing reads, cell lock, array span" begin
+        function write_fasta(path, n::Integer)
+            write(path, ">x\n" * "ACGT"^(n ÷ 4) * "A"^(n % 4) * "\n")
+            return path
+        end
+        lambda = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[:Lambda]
+        t4 = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[:T4]
+
+        mktempdir() do refs
+            msg = error_message(() -> prepare_reference(:Lambda, refs))
+            Test.@test msg !== nothing && occursin("not staged", msg) &&
+                       occursin("--stage-refs", msg) && occursin(lambda.accession, msg)
+            calls = Ref(0)
+            download = function (accession, dest)
+                calls[] += 1
+                n = accession == lambda.accession ? lambda.expected_bp : t4.expected_bp
+                write_fasta(dest, n)
+                return dest
+            end
+            staged = stage_reference(:Lambda, refs; download, timeout_s = 0)
+            Test.@test calls[] == 1
+            Test.@test staged.path == joinpath(refs, lambda.accession * ".fna")
+            Test.@test readdir(refs) == [lambda.accession * ".fna"]
+            again = stage_reference(:Lambda, refs;
+                download = (_, _) -> error("staged reference was downloaded again"),
+                timeout_s = 0)
+            Test.@test again.path == staged.path
+            prepared = prepare_reference(:Lambda, refs)
+            Test.@test prepared.genome_size == lambda.expected_bp &&
+                       prepared.accession == lambda.accession
+            # A short file at the accession path is not a reference to assemble.
+            write_fasta(staged.path, 4)
+            msg = error_message(() -> prepare_reference(:Lambda, refs))
+            Test.@test msg !== nothing && occursin("the RefSeq record is 48502 bp", msg)
+            rm(staged.path)
+            # A download that fails the length check leaves no partial and no final.
+            msg = error_message(() -> stage_reference(:Lambda, refs; timeout_s = 0,
+                download = (_, dest) -> write_fasta(dest, 4)))
+            Test.@test msg !== nothing && occursin("the RefSeq record is 48502 bp", msg)
+            Test.@test readdir(refs) == String[]
+            # A held lock refuses before downloading, and is left for the holder.
+            lockdir = joinpath(refs, t4.accession * ".lock")
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 9")
+            calls[] = 0
+            msg = error_message(() -> stage_reference(:T4, refs; download, timeout_s = 0))
+            Test.@test calls[] == 0
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin("otherhost 9", msg)
+            Test.@test isdir(lockdir)
+        end
+
+        mktempdir() do root
+            rs = first(D5OntAdaptiveGridDriver.toy_read_sets())
+            rs_dir = mkpath(joinpath(root, "readsets",
+                D5OntAdaptiveGridDriver.read_set_id(rs)))
+            reads = joinpath(rs_dir, "reads.fq")
+            write(reads, "@r1\nACGT\n+\nIIII\n")
+            meta = Dict("read_set_id" => D5OntAdaptiveGridDriver.read_set_id(rs),
+                "reads_paths" => [reads], "n_reads" => 1)
+            D5OntAdaptiveGridDriver.save_json_atomically(
+                joinpath(rs_dir, "readset.json"), meta)
+            rm(reads)
+            msg = error_message(() -> load_prepared_read_set(rs, root))
+            Test.@test msg !== nothing && occursin("missing reads file", msg) &&
+                       occursin(reads, msg) && occursin("delete $(rs_dir)", msg)
+        end
+
+        mktempdir() do root
+            cell = first(D5OntAdaptiveGridDriver.phase_a_cells())
+            lockdir = joinpath(root, "cells",
+                D5OntAdaptiveGridDriver.cell_id(cell) * ".lock")
+            mkpath(lockdir)
+            calls = Ref(0)
+            msg = error_message(() -> run_or_resume(
+                _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A))
+            Test.@test calls[] == 0
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin(D5OntAdaptiveGridDriver.cell_id(cell), msg)
+            Test.@test isdir(lockdir)
+            # SIGKILL never runs finally. A dead pid on this host is broken
+            # and logged, and the cell runs. Our own pid, with a fresh timestamp,
+            # is still live and is not broken.
+            now = floor(Int, time())
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) 2147483646 - $(now)")
+            Test.@test !local_pid_alive(2147483646)
+            calls[] = 0
+            dead_logs = Test.TestLogger()
+            Logging.with_logger(dead_logs) do
+                Test.@test run_or_resume(
+                    _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A) ==
+                           "ok"
+            end
+            Test.@test calls[] == 1 && !isdir(lockdir)
+            Test.@test any(l -> occursin("breaking stale lock", l.message), dead_logs.logs)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) $(getpid()) - $(now)")
+            calls[] = 0
+            msg = error_message(() -> run_or_resume(
+                _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A))
+            Test.@test calls[] == 0 && isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin("remove the lock directory by hand", msg)
+            # Older than the walltime is stale even when the pid is still ours
+            # (pid reuse) and squeue is not available.
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) $(getpid()) - $(now - 100)")
+            aged = Ref(false)
+            age_logs = Test.TestLogger()
+            Logging.with_logger(age_logs) do
+                with_directory_lock(lockdir; timeout_s = 0, now, max_age_s = 10,
+                    squeue_available = false) do
+                    aged[] = true
+                end
+            end
+            Test.@test aged[] && !isdir(lockdir)
+            Test.@test any(l -> occursin("older than the 10 s walltime", l.message),
+                age_logs.logs)
+            # Another host is broken only when squeue is available and the job
+            # is gone. Without squeue, a young lock stays (age-only fallback).
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
+            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0,
+                now, max_age_s = D5_LOCK_MAX_AGE_S, squeue_available = false,
+                job_running = _ -> false) do
+                error("broke a young lock without squeue")
+            end)
+            Test.@test isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg)
+            rm(lockdir; recursive = true)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
+            ran = Ref(false)
+            with_directory_lock(lockdir; timeout_s = 0, now, squeue_available = true,
+                job_running = _ -> false) do
+                ran[] = true
+            end
+            Test.@test ran[] && !isdir(lockdir)
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
+            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0, now,
+                squeue_available = true, job_running = _ -> true) do
+                error("stole a live job")
+            end)
+            Test.@test isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin("4242", msg)
+            Test.@test slurm_job_running("not-a-job")
+            # SLURM exits 1 with "Invalid job id specified" for a finished job.
+            # That is "not listed". A controller error stays "still running".
+            gone = (1, "", "slurm_load_jobs error: Invalid job id specified\n")
+            Test.@test !slurm_job_running("4242"; inquire = _ -> gone)
+            Test.@test !slurm_job_running("4242"; inquire = _ -> (0, "", ""))
+            Test.@test slurm_job_running("4242"; inquire = _ -> (0, "4242 R\n", ""))
+            Test.@test slurm_job_running("4242";
+                inquire = _ -> (1, "", "Unable to contact slurm controller\n"))
+            Test.@test slurm_job_running("4242"; inquire = _ -> error("squeue failed to spawn"))
+        end
+
+        cell_cli = D5OntAdaptiveGridDriver.parse_cli(
+            ["--phase", "A", "--cell-index", "0", "--toy"])
+        read_cli = D5OntAdaptiveGridDriver.parse_cli(
+            ["--phase", "A", "--read-set-index", "0", "--toy"])
+        function logged(cli, env::Pair...)
+            logger = Test.TestLogger()
+            Logging.with_logger(logger) do
+                withenv(env...) do
+                    warn_task_span(cli)
+                end
+            end
+            return logger.logs
+        end
+        short = logged(cell_cli, "SLURM_JOB_ID" => "9", "SLURM_ARRAY_TASK_MAX" => "2")
+        Test.@test length(short) == 1 && occursin("covers 3 of 4", short[1].message)
+        fit = logged(cell_cli, "SLURM_JOB_ID" => "9", "SLURM_ARRAY_TASK_MAX" => "3")
+        Test.@test isempty(fit)
+        bare = logged(read_cli, "SLURM_JOB_ID" => "9", "SLURM_ARRAY_TASK_MAX" => nothing)
+        Test.@test length(bare) == 1 && occursin("not an array", bare[1].message)
+        quiet = logged(cell_cli, "SLURM_JOB_ID" => nothing, "SLURM_ARRAY_TASK_MAX" => "2")
+        Test.@test isempty(quiet)
+
+        withenv("JULIA_DEPOT_PATH" => "/d5/depot", "JULIA_LOAD_PATH" => "@:@stdlib") do
+            base = run_context_base()
+            Test.@test base.julia_depot_path == "/d5/depot"
+            Test.@test base.julia_load_path == "@:@stdlib"
+        end
+    end
+
+    Test.@testset "shell notes for the hand-run backstop and the QUAST pin" begin
+        temp_root = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "d5_temp_root.sh"), String)
+        Test.@test occursin("kill -9", temp_root)
+        Test.@test occursin("hand run outside SLURM", temp_root)
+        lrc = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "run_d5_grid_lrc.sbatch"), String)
+        Test.@test occursin("conda\" install -y --freeze-installed", lrc)
+        nersc = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "run_d5_grid_nersc.sbatch"), String)
+        Test.@test occursin("--stage-refs", nersc)
+        Test.@test occursin("Phase A refuses", nersc)
+        for text in (lrc, nersc)
+            Test.@test occursin("squeue -h -j", text)
+            Test.@test occursin("remove that directory", text)
+        end
+        runner = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "d5_ont_adaptive_grid_run.jl"), String)
+        Test.@test occursin("remove that directory by hand and resubmit", runner)
     end
 
     Test.@testset "temp root: resolved, pinned to TMPDIR, refused when rename fails" begin
@@ -800,12 +1022,12 @@ Test.@testset "D5 grid runner" begin
             write(joinpath(job, "memory.events"), "low 0\nhigh 0\nmax 3\noom 2\noom_kill 1\n")
             in_job = joinpath(cg, "proc_self_cgroup")
             write(in_job, "0::/slurmstepd.scope/job_1/step_batch/user/task_0\n")
-            function memory_log(proc_cgroup = in_job)
+            function memory_log(proc_cgroup = in_job, cgroup_root = cg)
                 err = IOBuffer()
                 script = raw"""source "$1" &&
                     D5_CGROUP_ROOT="$2" D5_PROC_CGROUP="$3" d5_log_memory_peak"""
-                run(pipeline(Cmd(["bash", "-c", script, "_", helper, cg, proc_cgroup]);
-                    stderr = err))
+                run(pipeline(Cmd(["bash", "-c", script, "_", helper, cgroup_root,
+                    proc_cgroup]); stderr = err))
                 return String(take!(err))
             end
             mlog = memory_log()
@@ -813,6 +1035,12 @@ Test.@testset "D5 grid runner" begin
             Test.@test occursin("memory.max 1000 bytes", mlog)
             Test.@test occursin("memory.peak (RSS + tmpfs + page cache) 900 bytes", mlog)
             Test.@test occursin("oom_kill 1", mlog)
+            # A trailing slash on D5_CGROUP_ROOT must not stop the walk at the
+            # first level (that level is the node-wide scope, 99999).
+            slash = memory_log(in_job, cg * "/")
+            Test.@test occursin("limiting level $(job):", slash)
+            Test.@test occursin("memory.max 1000 bytes", slash)
+            Test.@test !occursin("99999", slash)
             # No memory.peak at the limiting level (kernel < 5.19): memory.current,
             # labelled as not a peak, and the by-hand advice.
             mv(joinpath(job, "memory.peak"), joinpath(job, "memory.peak.off"))
@@ -857,8 +1085,8 @@ Test.@testset "D5 grid runner" begin
 
     Test.@testset "cell task: needs a prepared read set, never simulates" begin
         # A read set as its read-set task leaves it: readset.json written last,
-        # reads on disk, and the reference staged where prepare_reference looks
-        # (download_genome_by_accession reuses an existing <refs>/<accession>.fna).
+        # reads on disk, and the reference FASTA staged where prepare_reference
+        # reads it (<refs>/<accession>.fna). Array tasks do not download.
         function plant_read_set(root, rs)
             refs = mkpath(joinpath(root, "refs"))
             info = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[rs.organism]
@@ -1315,6 +1543,27 @@ Test.@testset "D5 grid runner" begin
                             extra = Dict("D5_FAKE_MODULE_EXIT" => "1"))
                         Test.@test nomod.code == 1 && isempty(nomod.argv)
                         Test.@test occursin("d5_load_julia failed", nomod.log)
+                    else
+                        # Lawrencium: julia not on PATH falls through to juliaup's
+                        # bindir under $HOME. The fake julia lives only there.
+                        juliaup_home = joinpath(dir, "juliaup-home")
+                        juliaup_bin = mkpath(joinpath(juliaup_home, ".juliaup", "bin"))
+                        cp(joinpath(bin, "julia"), joinpath(juliaup_bin, "julia");
+                            force = true)
+                        chmod(joinpath(juliaup_bin, "julia"), 0o755)
+                        parts = split(get(ENV, "PATH", "/usr/bin:/bin"), ':')
+                        stripped = join(
+                            filter(p -> !isfile(joinpath(p, "julia")), parts), ':')
+                        probe = strip(read(setenv(`bash -c "command -v julia || true"`,
+                            "PATH" => stripped), String))
+                        if isempty(stripped) || !isempty(probe)
+                            Test.@test_skip "PATH still contains a julia; juliaup fallback not isolated"
+                        else
+                            fallback = runner_argv("A", 0; tag = "_juliaup",
+                                extra = Dict("PATH" => stripped, "HOME" => juliaup_home))
+                            Test.@test fallback.code == 0
+                            Test.@test occursin(".juliaup/bin/julia", fallback.log)
+                        end
                     end
 
                     # sbatch runs a spooled copy of the wrapper, so the body is

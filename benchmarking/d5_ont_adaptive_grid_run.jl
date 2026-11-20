@@ -10,6 +10,9 @@
 #       --cell-index <0..719> --output-dir <root>
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase merge \
 #       --output-dir <root>
+#   # Login node only, before any array task (compute nodes have no internet):
+#   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --stage-refs \
+#       [--toy] --output-dir <root>
 #   # Only after a human has set tau and tau_hat (lock step 2):
 #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --phase B \
 #       --tau <x> --tau-hat <y> [--read-set-index i] --output-dir <root>
@@ -23,9 +26,17 @@
 # renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
 # Run by hand on Perlmutter with --tmp-dir "$(mktemp --directory)".
 #
+# A SIGKILL (SLURM time limit, or kill -9) does not run the lock's finally, so
+# cells/<id>.lock or refs/<accession>.lock can be left behind. The next task
+# breaks that lock when `squeue -h -j <id>` shows the job is gone, when the
+# pid is dead on this host, or when the lock is older than the 72 h walltime
+# (the age-only rule when squeue is not available). If a resubmit still says
+# the lock is held, remove that directory by hand and resubmit.
+#
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
-#   <root>/refs/                              reference FASTA per organism
+#   <root>/refs/                              reference FASTA per organism, staged
+#                                             before the array (--stage-refs)
 #   <root>/readsets/<read_set_id>/readset.json reads, measured identity, provenance
 #   <root>/readsets/<read_set_id>/survival.json 23-rung S / S_hat on RAW reads
 #   <root>/readsets/<read_set_id>/badread.log   Badread stderr (ONT read sets)
@@ -95,12 +106,26 @@ function tool_versions()
     )
 end
 
+"""Unset environment variables are `missing`; a set empty string is kept."""
+function env_or_missing(key::AbstractString)
+    return something(get(ENV, key, nothing), missing)
+end
+
 function run_context_base()
     git = git_provenance()
     return (; mycelia_git_sha = git.sha, git_dirty = git.dirty,
         host = gethostname(),
         slurm_job_id = something(get(ENV, "SLURM_ARRAY_JOB_ID", nothing),
-            get(ENV, "SLURM_JOB_ID", nothing), missing))
+            get(ENV, "SLURM_JOB_ID", nothing), missing),
+        julia_depot_path = env_or_missing("JULIA_DEPOT_PATH"),
+        julia_load_path = env_or_missing("JULIA_LOAD_PATH"))
+end
+
+"""One line per task: the depot and load path this process actually used."""
+function log_julia_env(base)
+    println("julia $(VERSION); JULIA_DEPOT_PATH=$(base.julia_depot_path); " *
+            "JULIA_LOAD_PATH=$(base.julia_load_path)")
+    return nothing
 end
 
 """The registered simulation pins, as stored in (and compared against) the manifest."""
@@ -180,19 +205,277 @@ function check_read_count(records, meta, rs_dir::AbstractString)
     return records
 end
 
+"""
+Read every path in a prepared read set. `readset.json` present with a reads
+file missing is not a complete read set: say which file, and name the directory
+to delete. An opaque open error would look like a cell failure.
+"""
+function read_prepared_records(meta, rs_dir::AbstractString)
+    paths = meta["reads_paths"]
+    for path in paths
+        isfile(path) ||
+            error("read set $(meta["read_set_id"]) has readset.json but is missing " *
+                  "reads file $(path); delete $(rs_dir) to regenerate it")
+    end
+    return check_read_count(reduce(vcat, read_records.(paths)), meta, rs_dir)
+end
+
 # === Reference ===
 
-function prepare_reference(organism::Symbol, refs_dir::AbstractString)
+"""`<refs>/<accession>.fna` for one organism."""
+function reference_fasta(organism::Symbol, refs_dir::AbstractString)
     info = D5OntAdaptiveGridDriver.D5_ORGANISM_REFERENCES[organism]
-    mkpath(refs_dir)
-    path = Mycelia.download_genome_by_accession(accession = info.accession,
-        outdir = refs_dir, compressed = false)
-    (isfile(path) && filesize(path) > 0) ||
-        error("reference download failed for $(organism) ($(info.accession)): $(path)")
-    seqs = read_sequences(path)
+    return (; info, path = joinpath(refs_dir, info.accession * ".fna"))
+end
+
+# Longest `#SBATCH --time` on the D5 wrappers (Lawrencium, 72 h). A lock older
+# than this cannot belong to a job SLURM has not already killed. Perlmutter's
+# 48 h limit is shorter, so this ceiling does not break a live allocation.
+const D5_LOCK_MAX_AGE_S = 72 * 60 * 60
+
+"""hostname, pid, SLURM job id (`-` outside SLURM), and creation time (unix seconds)."""
+function lock_holder_line(; now::Real = time())
+    return "$(gethostname()) $(getpid()) $(get(ENV, "SLURM_JOB_ID", "-")) $(floor(Int, now))"
+end
+
+"""True when `pid` exists on this machine. `EPERM` still means it exists."""
+function local_pid_alive(pid::Integer)
+    pid <= 0 && return false
+    rc = ccall(:kill, Cint, (Cint, Cint), Cint(pid), Cint(0))
+    rc == 0 && return true
+    return Base.Libc.errno() != Base.Libc.ESRCH
+end
+
+"""
+`(exitcode, stdout, stderr)` from `squeue -h -j jobid`, or `nothing` when
+`squeue` is not on `PATH`.
+"""
+function squeue_inquire(jobid::AbstractString)
+    squeue = Sys.which("squeue")
+    squeue === nothing && return nothing
+    out = IOBuffer()
+    err = IOBuffer()
+    proc = run(pipeline(ignorestatus(`$squeue -h -j $jobid`); stdout = out, stderr = err))
+    return (proc.exitcode, String(take!(out)), String(take!(err)))
+end
+
+"""
+True when the job is still queued or running. `squeue -h -j` exits 0 with a
+line when it is, and exits 1 with `Invalid job id specified` when SLURM no
+longer knows the id (the job finished). Any other failure — no `squeue`, a
+controller error, a non-numeric id — stays true, so a broken `squeue` does not
+break a live lock.
+"""
+function slurm_job_running(jobid::AbstractString; inquire::Function = squeue_inquire)
+    occursin(r"^[0-9]+$", jobid) || return true
+    result = try
+        inquire(jobid)
+    catch
+        return true
+    end
+    result === nothing && return true
+    code, stdout_s, stderr_s = result
+    code == 0 && return !isempty(strip(stdout_s))
+    if code == 1 && occursin("Invalid job id specified", stderr_s)
+        return false
+    end
+    return true
+end
+
+"""
+`(; host, pid, job, created)` from a holder line, or `nothing` when the line
+cannot be trusted. `created` is `nothing` when the line has no timestamp.
+"""
+function parse_lock_holder(text::AbstractString)
+    parts = split(strip(text))
+    length(parts) < 2 && return nothing
+    pid = tryparse(Int, parts[2])
+    pid === nothing && return nothing
+    job = length(parts) >= 3 ? parts[3] : "-"
+    created = length(parts) >= 4 ? tryparse(Int, parts[4]) : nothing
+    return (; host = String(parts[1]), pid, job = String(job), created)
+end
+
+"""
+Why `text` is a stale lock, or `nothing` when it may still be live. A lock is
+stale when it is older than `max_age_s` (the walltime), when `squeue` is
+available and the recorded job is not listed, or, on this host, when the pid
+is dead. Without `squeue`, a job that merely looks finished is not enough:
+the age rule is the fallback. Unreadable text is not stale.
+"""
+function lock_stale_reason(text::AbstractString; job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
+    holder = parse_lock_holder(text)
+    holder === nothing && return nothing
+    if holder.created !== nothing && now - holder.created > max_age_s
+        return "older than the $(max_age_s) s walltime"
+    end
+    if holder.host == gethostname() && !local_pid_alive(holder.pid)
+        return "pid $(holder.pid) is not running on $(holder.host)"
+    end
+    if squeue_available && holder.job != "-" && occursin(r"^[0-9]+$", holder.job) &&
+       !job_running(holder.job)
+        return "SLURM job $(holder.job) is not listed by squeue -h -j $(holder.job)"
+    end
+    return nothing
+end
+
+"""
+Remove `lockdir` when its holder is stale, and log that. Returns false when
+the holder may be live or the lock has no holder file yet (a task that has
+just created the directory). Manual recovery, if a resubmit still refuses:
+delete the lock directory and resubmit.
+"""
+function reclaim_stale_lock(lockdir::AbstractString; job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
+    isdir(lockdir) || return false
+    holder_path = joinpath(lockdir, "holder")
+    isfile(holder_path) || return false
+    text = try
+        read(holder_path, String)
+    catch
+        return false
+    end
+    reason = lock_stale_reason(text; job_running, now, max_age_s, squeue_available)
+    reason === nothing && return false
+    @warn "breaking stale lock $(lockdir) ($(reason)); holder $(strip(text)). " *
+          "SIGKILL does not run finally. If a resubmit still reports this lock " *
+          "held, remove the directory by hand and resubmit."
+    rm(lockdir; recursive = true, force = true)
+    return true
+end
+
+"""
+Hold `lockdir` (an atomic `mkdir`) for `f`, then remove it. A live holder is
+refused: the message names the lock and who created it, and says to remove the
+directory by hand if that holder is actually gone. A stale holder (dead pid on
+this host, job gone from `squeue`, or older than the walltime) is broken and
+logged, so a resubmit after SIGKILL does not stick. `timeout_s == 0` fails on
+the first collision with a live holder. The directory is removed only when
+this call created it.
+"""
+function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
+        purpose::AbstractString = "work", job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
+    mkpath(dirname(lockdir))
+    t0 = time()
+    steals = 0
+    while true
+        try
+            mkdir(lockdir)
+            break
+        catch e
+            isa(e, Base.IOError) || rethrow()
+            collided = e.code == Base.UV_EEXIST || occursin("EEXIST", sprint(showerror, e))
+            collided || rethrow()
+            isdir(lockdir) || continue
+            if steals < 1 && reclaim_stale_lock(lockdir; job_running, now, max_age_s,
+                squeue_available)
+                steals += 1
+                continue
+            end
+            if timeout_s == 0 || time() - t0 >= timeout_s
+                holder_path = joinpath(lockdir, "holder")
+                holder = isfile(holder_path) ?
+                         " Holder: $(strip(read(holder_path, String)))." : ""
+                error("$(purpose) lock $(lockdir) is already held.$(holder) " *
+                      "Do not run two tasks on the same work. If that holder is " *
+                      "gone, remove the lock directory by hand and resubmit.")
+            end
+            sleep(0.05)
+        end
+    end
+    try
+        write(joinpath(lockdir, "holder"), lock_holder_line(; now))
+        return f()
+    finally
+        rm(lockdir; recursive = true, force = true)
+    end
+end
+
+"""
+Read a reference that is already on disk. Array tasks call this and never
+download: compute nodes have no outbound internet, and several tasks would
+otherwise race on one `<refs>/<accession>.fna`.
+"""
+function prepare_reference(organism::Symbol, refs_dir::AbstractString)
+    staged = reference_fasta(organism, refs_dir)
+    isfile(staged.path) ||
+        error("reference $(staged.info.accession) is not staged at $(staged.path). " *
+              "Compute nodes have no outbound internet, and concurrent array tasks " *
+              "must not download the shared file. On a login node run --stage-refs " *
+              "(or copy refs/) before the array.")
+    seqs = read_sequences(staged.path)
     genome_size = sum(length, seqs)
-    check_reference_length(genome_size, info, path)
-    return (; path, seqs, genome_size, accession = info.accession)
+    check_reference_length(genome_size, staged.info, staged.path)
+    return (; path = staged.path, seqs, genome_size, accession = staged.info.accession)
+end
+
+"""
+Download one accession into `dest` (a partial path, not the shared final name).
+`download_genome_by_accession` writes `<accession>.fna` in its outdir, so the
+download goes to a private directory and is moved onto `dest`.
+"""
+function download_reference_file(accession::AbstractString, dest::AbstractString)
+    parent = dirname(dest)
+    mkpath(parent)
+    scratch = mktempdir(parent)
+    try
+        path = Mycelia.download_genome_by_accession(; accession, outdir = scratch,
+            compressed = false)
+        (isfile(path) && filesize(path) > 0) ||
+            error("reference download failed for $(accession): $(path)")
+        mv(path, dest; force = true)
+    finally
+        rm(scratch; recursive = true, force = true)
+    end
+    return dest
+end
+
+"""
+Stage one organism's reference under a per-accession lock. A complete file is
+reused. A missing file is downloaded into a private directory (a name ending in
+`.fna`, so the FASTA reader accepts it) and renamed into place, so a concurrent
+reader never sees a half-written FASTA. `download(accession, dest)` is
+injectable for tests.
+"""
+function stage_reference(organism::Symbol, refs_dir::AbstractString;
+        download::Function = download_reference_file, timeout_s::Real = 120,
+        job_running::Function = slurm_job_running)
+    mkpath(refs_dir)
+    staged = reference_fasta(organism, refs_dir)
+    function checked(path)
+        seqs = read_sequences(path)
+        check_reference_length(sum(length, seqs), staged.info, path)
+        return (; path, accession = staged.info.accession)
+    end
+    isfile(staged.path) && return checked(staged.path)
+    lockdir = joinpath(refs_dir, staged.info.accession * ".lock")
+    return with_directory_lock(lockdir; timeout_s, job_running,
+        purpose = "reference $(staged.info.accession)") do
+        isfile(staged.path) && return checked(staged.path)
+        staging = mktempdir(refs_dir)
+        try
+            partial = joinpath(staging, staged.info.accession * ".fna")
+            download(staged.info.accession, partial)
+            isfile(partial) ||
+                error("reference download for $(staged.info.accession) did not write $(partial)")
+            checked(partial)
+            mv(partial, staged.path; force = false)
+            return (; path = staged.path, accession = staged.info.accession)
+        finally
+            rm(staging; recursive = true, force = true)
+        end
+    end
+end
+
+"""Stage every organism in this run (toy or full). One file per accession."""
+function stage_references(refs_dir::AbstractString, toy::Bool; kwargs...)
+    organisms = unique(rs.organism for rs in selected_read_sets(toy))
+    return [stage_reference(organism, refs_dir; kwargs...) for organism in organisms]
 end
 
 function read_records(path::AbstractString)
@@ -313,8 +596,7 @@ function load_prepared_read_set(rs, root::AbstractString)
     marker = joinpath(rs_dir, "readset.json")
     isfile(marker) || return nothing
     meta = JSON.parsefile(marker)
-    records = check_read_count(reduce(vcat, read_records.(meta["reads_paths"])),
-        meta, rs_dir)
+    records = read_prepared_records(meta, rs_dir)
     return (; meta, records)
 end
 
@@ -404,7 +686,8 @@ function cell_context(meta, base)
         qscore_model = meta["qscore_model"], n_reads = meta["n_reads"],
         read_bases = meta["read_bases"],
         error_rate_estimate_diagnostic = meta["error_rate_estimate_diagnostic"],
-        base.mycelia_git_sha, base.git_dirty, base.host, base.slurm_job_id)
+        base.mycelia_git_sha, base.git_dirty, base.host, base.slurm_job_id,
+        base.julia_depot_path, base.julia_load_path)
 end
 
 # === Cells ===
@@ -535,6 +818,18 @@ need debugging keep their plan. Returns the row's status.
 """
 function run_or_resume(f, root, cell, context; phase::Symbol,
         stale = prior -> nothing, replan::Bool = false, error_kwargs = (;))
+    cell_id = D5OntAdaptiveGridDriver.cell_id(cell)
+    lockdir = joinpath(root, "cells", cell_id * ".lock")
+    # The cache check and the write share the lock, so two submits of one index
+    # cannot both decide the checkpoint is missing and both assemble.
+    return with_directory_lock(lockdir; timeout_s = 0,
+        purpose = "cell $(cell_id)") do
+        _run_or_resume_locked(f, root, cell, context; phase, stale, replan, error_kwargs)
+    end
+end
+
+function _run_or_resume_locked(f, root, cell, context; phase::Symbol,
+        stale, replan::Bool, error_kwargs)
     ckpt = checkpoint_path(root, cell)
     if isfile(ckpt)
         prior = try
@@ -607,6 +902,30 @@ function read_sets_for(cli)
 end
 
 """
+How many array indices this phase registers. A submitted array that does not
+cover them leaves the rest `absent` in the merge; warn when SLURM says so.
+"""
+function warn_task_span(cli)
+    get(ENV, "SLURM_JOB_ID", nothing) === nothing && return nothing
+    n = cli.cell_index !== nothing ?
+        length(D5OntAdaptiveGridDriver.cells_run_alone(; toy = cli.toy)) :
+        length(selected_read_sets(cli.toy))
+    job = ENV["SLURM_JOB_ID"]
+    raw = get(ENV, "SLURM_ARRAY_TASK_MAX", nothing)
+    if raw === nothing
+        n > 1 &&
+            @warn "SLURM job $(job) is not an array, so it runs one index only; the other $(n - 1) registered tasks stay absent in the merge"
+        return nothing
+    end
+    max_index = tryparse(Int, raw)
+    max_index === nothing && return nothing
+    span = max_index + 1
+    span == n ||
+        @warn "SLURM array 0-$(max_index) (job $(job)) covers $(span) of $(n) registered tasks; the merge reports the rest absent"
+    return nothing
+end
+
+"""
 Phase A runs as two kinds of array task:
 
   * read-set task (`--read-set-index i`): prepare the read set (simulate, measure
@@ -620,6 +939,8 @@ function run_phase_a(cli, root)
     cli.read_set_index === nothing && cli.cell_index === nothing &&
         error("--phase A requires --read-set-index or --cell-index (one task each)")
     base = run_context_base()
+    log_julia_env(base)
+    warn_task_span(cli)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     cli.cell_index === nothing || return [run_cell_task(cli, root, base)]
@@ -700,6 +1021,8 @@ end
 
 function run_phase_b(cli, root)
     base = run_context_base()
+    log_julia_env(base)
+    warn_task_span(cli)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     statuses = String[]
@@ -723,9 +1046,7 @@ function run_phase_b(cli, root)
             # set must fail the task once (exit 1, "fix the read set"), not become
             # one retryable error row per cell that a resubmit cannot fix.
             if action === :assemble && records === nothing
-                records = check_read_count(
-                    reduce(vcat, read_records.(meta["reads_paths"])), meta,
-                    dirname(marker))
+                records = read_prepared_records(meta, dirname(marker))
             end
             push!(statuses,
                 run_or_resume(root, cell, context; phase = :B,
@@ -956,6 +1277,7 @@ end
 
 function run_merge(cli, root)
     base = run_context_base()
+    log_julia_env(base)
     check_run_manifest!(root, git_state(base);
         allow_mismatch = cli.allow_sha_mismatch, toy = cli.toy)
     collected = collect_merge_rows(root, cli.toy)
@@ -1234,6 +1556,15 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println("=== D5 grid runner: phase $(cli.phase)$(cli.toy ? " (toy)" : "")  $(Dates.now()) ===")
     if cli.phase === :list
         print_counts(cli.toy)
+    elseif cli.phase === :stage_refs
+        cli.output_dir === nothing &&
+            error("--output-dir is required for --stage-refs")
+        mkpath(abspath(cli.output_dir))
+        root = realpath(abspath(cli.output_dir))
+        log_julia_env(run_context_base())
+        for staged in stage_references(joinpath(root, "refs"), cli.toy)
+            println("staged $(staged.accession) at $(staged.path)")
+        end
     else
         cli.output_dir === nothing &&
             error("--output-dir is required for --phase $(cli.phase)")

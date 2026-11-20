@@ -609,6 +609,8 @@ function cell_row(cell, context; phase::Symbol, status::AbstractString,
         wall_seconds, peak_rss_bytes, peak_rss_method, error_message,
         mycelia_git_sha = context.mycelia_git_sha, git_dirty = context.git_dirty,
         host = context.host, slurm_job_id = context.slurm_job_id,
+        julia_depot_path = context.julia_depot_path,
+        julia_load_path = context.julia_load_path,
         julia_version = string(VERSION))
 end
 
@@ -617,7 +619,7 @@ const EMPTY_CONTEXT = (; identity_params = missing, simulator_argv = missing,
     error_model = missing, qscore_model = missing, n_reads = missing,
     read_bases = missing, error_rate_estimate_diagnostic = missing,
     mycelia_git_sha = missing, git_dirty = missing, host = missing,
-    slurm_job_id = missing)
+    slurm_job_id = missing, julia_depot_path = missing, julia_load_path = missing)
 
 """
 Column order of the per-cell table, read off `cell_row` itself so the merge step
@@ -646,7 +648,7 @@ end
 const CLI_VALUE_FLAGS = ("--phase", "--read-set-index", "--cell-index", "--tau",
     "--tau-hat", "--output-dir", "--tmp-dir")
 const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
-    "--allow-incomplete", "--allow-mixed-code", "--skip-iterative")
+    "--allow-incomplete", "--allow-mixed-code", "--skip-iterative", "--stage-refs")
 
 """
     parse_cli(args) -> NamedTuple
@@ -654,7 +656,9 @@ const CLI_SWITCHES = ("--list", "--toy", "--allow-sha-mismatch", "--replan",
 `--phase A --read-set-index i [--skip-iterative]` | `--phase A --cell-index j`
 (one `cells_run_alone` cell; its read set must already be prepared) |
 `--phase B --tau x --tau-hat y` |
-`--phase merge` | `--list`; plus `--output-dir` (non-empty), `--tmp-dir`
+`--phase merge` | `--list` | `--stage-refs` (login node: download each
+reference once, under a per-accession lock; array tasks never download); plus
+`--output-dir` (non-empty), `--tmp-dir`
 (phases A/B: the corrector's temp root, absolute, default `<output-dir>/tmp`),
 `--toy`,
 `--allow-sha-mismatch` (waive THIS checkout's code-version refusals: SHA differs
@@ -697,10 +701,16 @@ function parse_cli(args::AbstractVector{<:AbstractString})
             d
         end
     list = "--list" in args
+    stage_refs = "--stage-refs" in args
     phase_raw = value("--phase")
-    phase = phase_raw === nothing ? (list ? :list : error("--phase is required")) :
+    list && stage_refs &&
+        error("--list and --stage-refs are different commands; give one")
+    stage_refs && phase_raw !== nothing &&
+        error("--stage-refs only downloads references; do not pass --phase")
+    phase = phase_raw === nothing ?
+            (list ? :list : stage_refs ? :stage_refs : error("--phase is required")) :
             Symbol(phase_raw)
-    phase in (:A, :B, :merge, :list) ||
+    phase in (:A, :B, :merge, :list, :stage_refs) ||
         error("--phase must be A, B or merge, got $(repr(phase_raw))")
     index_raw = value("--read-set-index")
     read_set_index = index_raw === nothing ? nothing : parse(Int, index_raw)
