@@ -3054,92 +3054,234 @@ end
 
 # https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/
 
+function _taxonkit_update_reason(
+        taxonkit_dir::AbstractString;
+        force_update::Bool = false,
+        max_age_days::Int = 30,
+        now::Dates.DateTime = Dates.now()
+)::Symbol
+    max_age_days >= 0 || throw(ArgumentError("max_age_days must be non-negative, got $(max_age_days)"))
+    force_update && return :forced
+    isdir(taxonkit_dir) || return :missing
+    isempty(readdir(taxonkit_dir)) && return :empty
+
+    timestamp_file = joinpath(taxonkit_dir, ".last_updated")
+    isfile(timestamp_file) || return :no_timestamp
+
+    last_updated = try
+        Dates.DateTime(strip(read(timestamp_file, String)))
+    catch
+        return :unreadable_timestamp
+    end
+
+    age_days = Dates.value(now - last_updated) / (1000 * 60 * 60 * 24)
+    return age_days > max_age_days ? :stale : :fresh
+end
+
+function _taxonkit_update_message(
+        reason::Symbol,
+        taxonkit_dir::AbstractString;
+        max_age_days::Int = 30
+)::String
+    if reason === :forced
+        return "Updating NCBI taxonomy database in $(taxonkit_dir) (reason: force_update=true)..."
+    elseif reason === :missing
+        return "Downloading NCBI taxonomy database to $(taxonkit_dir) (reason: directory does not exist)..."
+    elseif reason === :empty
+        return "Downloading NCBI taxonomy database to $(taxonkit_dir) (reason: directory is empty)..."
+    elseif reason === :no_timestamp
+        return "Updating NCBI taxonomy database in $(taxonkit_dir) (reason: missing .last_updated timestamp; treating as stale)..."
+    elseif reason === :unreadable_timestamp
+        return "Updating NCBI taxonomy database in $(taxonkit_dir) (reason: unreadable .last_updated timestamp; treating as stale)..."
+    elseif reason === :stale
+        return "Updating NCBI taxonomy database in $(taxonkit_dir) (reason: cached data exceeds max_age_days=$(max_age_days))..."
+    else
+        throw(ArgumentError("Unexpected taxonkit update reason: $(reason)"))
+    end
+end
+
+function _download_taxonkit_taxdump(staging_dir::AbstractString)
+    temp_file = tempname() * ".tar.gz"
+    try
+        run(`wget -q -O $temp_file ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
+        Mycelia.tar_extract(tarchive = temp_file, directory = staging_dir)
+    finally
+        isfile(temp_file) && rm(temp_file)
+    end
+    return nothing
+end
+
+function _stage_and_swap_taxonkit_dir(
+        populate_fn::Function,
+        taxonkit_dir::AbstractString;
+        now::Dates.DateTime = Dates.now()
+)
+    stripped = rstrip(abspath(String(taxonkit_dir)), ('/', '\\'))
+    target_dir = isempty(stripped) ? abspath(String(taxonkit_dir)) : String(stripped)
+    parent_dir = dirname(target_dir)
+    mkpath(parent_dir)
+
+    staging_dir = mktempdir(parent_dir; prefix = ".taxonkit.staging.", cleanup = false)
+    backup_holder = nothing
+    try
+        populate_fn(staging_dir)
+        if isempty(readdir(staging_dir))
+            error("Extracted taxonkit taxonomy archive produced an empty directory: $(staging_dir)")
+        end
+        write(joinpath(staging_dir, ".last_updated"), string(now))
+
+        if ispath(target_dir) || islink(target_dir)
+            backup_holder = mktempdir(parent_dir; prefix = ".taxonkit.backup.", cleanup = false)
+            backup_path = joinpath(backup_holder, "previous")
+            mv(target_dir, backup_path)
+            try
+                mv(staging_dir, target_dir)
+            catch
+                if !ispath(target_dir) && (ispath(backup_path) || islink(backup_path))
+                    mv(backup_path, target_dir)
+                end
+                rethrow()
+            end
+            rm(backup_holder; recursive = true, force = true)
+            backup_holder = nothing
+        else
+            mv(staging_dir, target_dir)
+        end
+    finally
+        isdir(staging_dir) && rm(staging_dir; recursive = true, force = true)
+        if backup_holder !== nothing && isdir(backup_holder) && isempty(readdir(backup_holder))
+            rm(backup_holder; recursive = true, force = true)
+        end
+    end
+    return nothing
+end
+
+# `offline=nothing` follows MYCELIA_TAXONKIT_OFFLINE. Only the value "1" enables
+# the hatch; anything else (including "true") leaves the network refresh on.
+function _taxonkit_offline_enabled(offline::Union{Nothing, Bool})::Bool
+    if offline !== nothing
+        return offline
+    end
+    return get(ENV, "MYCELIA_TAXONKIT_OFFLINE", "") == "1"
+end
+
+function _taxonkit_target_dir(taxonkit_dir::AbstractString)::String
+    stripped = rstrip(abspath(String(taxonkit_dir)), ('/', '\\'))
+    return isempty(stripped) ? abspath(String(taxonkit_dir)) : String(stripped)
+end
+
+# A directory that already holds a taxdump, even when the timestamp is missing,
+# unreadable, or older than max_age_days. :missing and :empty have nothing to use.
+const _TAXONKIT_USABLE_OFFLINE_REASONS = (
+    :fresh, :stale, :no_timestamp, :unreadable_timestamp)
+
+function _setup_taxonkit_taxonomy(
+        populate_fn::Function;
+        force_update::Bool = false,
+        max_age_days::Int = 30,
+        taxonkit_dir::AbstractString = joinpath(homedir(), ".taxonkit"),
+        now::Dates.DateTime = Dates.now(),
+        offline::Union{Nothing, Bool} = nothing
+)
+    offline_enabled = _taxonkit_offline_enabled(offline)
+    if offline_enabled && force_update
+        error("offline taxdump use cannot be combined with force_update=true. " *
+              "MYCELIA_TAXONKIT_OFFLINE=1 and offline=true skip the network refresh.")
+    end
+    # One lock per parent directory, shared by every caller of this taxonkit_dir
+    # (array tasks share $HOME). The freshness check runs again after the lock is
+    # acquired, so a waiter does not download once the holder has swapped in a
+    # new dump. stale_age lets a dead holder's pidfile be replaced; a live holder
+    # refreshes the file's mtime.
+    target_dir = _taxonkit_target_dir(taxonkit_dir)
+    parent_dir = dirname(target_dir)
+    mkpath(parent_dir)
+    lock_path = joinpath(parent_dir, ".taxonkit.lock")
+    return FileWatching.Pidfile.mkpidlock(
+            lock_path; stale_age = 120, poll_interval = 0.5) do
+        reason = _taxonkit_update_reason(
+            taxonkit_dir;
+            force_update = force_update,
+            max_age_days = max_age_days,
+            now = now
+        )
+        if offline_enabled
+            if !(reason in _TAXONKIT_USABLE_OFFLINE_REASONS)
+                error("MYCELIA_TAXONKIT_OFFLINE=1 skips the network refresh, but " *
+                      "$(taxonkit_dir) has no usable taxdump (reason=$(reason)). " *
+                      "Refresh it on a connected host, or unset MYCELIA_TAXONKIT_OFFLINE.")
+            end
+            if reason !== :fresh
+                @warn "MYCELIA_TAXONKIT_OFFLINE=1: using the existing taxdump at $(taxonkit_dir) without a network refresh" reason
+            end
+            return nothing
+        end
+        reason === :fresh && return nothing
+
+        @info _taxonkit_update_message(reason, taxonkit_dir; max_age_days = max_age_days)
+        _stage_and_swap_taxonkit_dir(populate_fn, taxonkit_dir; now = now)
+        @info "Taxonkit taxonomy database updated successfully"
+        return nothing
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Downloads and extracts the NCBI taxonomy database required for taxonkit operations.
 
-Downloads `taxdump.tar.gz` from NCBI FTP server and extracts it to `~/.taxonkit/`.
-This is a prerequisite for using taxonkit-based taxonomy functions.
+Downloads `taxdump.tar.gz` from the NCBI FTP server and extracts it to `taxonkit_dir`
+(defaults to `~/.taxonkit/`). When `taxonkit_dir` is missing, empty, older than
+`max_age_days`, or has a missing or unreadable `.last_updated` timestamp, a fresh
+archive is downloaded and extracted into a sibling staging directory before replacing
+`taxonkit_dir` on success. If the download or extraction fails, any existing data in
+`taxonkit_dir` is preserved and the error is rethrown.
+
+Set `offline=true` or `MYCELIA_TAXONKIT_OFFLINE=1` to skip the network refresh and
+use the taxdump already in `taxonkit_dir`. A missing or empty directory still
+raises, because there is no dump to use. Concurrent callers take a pidfile lock
+at `joinpath(dirname(taxonkit_dir), ".taxonkit.lock")` and re-check freshness
+after acquiring it, so two refreshes do not swap the directory over each other.
 
 # Arguments
-- `force_update::Bool=false`: Force download even if taxdump already exists
-- `max_age_days::Int=30`: Maximum age in days before warning about stale data
+- `force_update::Bool=false`: Force re-download even if a fresh taxdump already exists.
+- `max_age_days::Int=30`: Maximum age in days before the cached taxdump is treated as stale
+  and re-downloaded. Missing or unreadable `.last_updated` timestamps are treated as stale.
+- `taxonkit_dir::AbstractString=joinpath(homedir(), ".taxonkit")`: Target directory for the
+  extracted taxonomy files and `.last_updated` timestamp.
+- `offline::Union{Nothing,Bool}=nothing`: When `true`, skip the download and use the
+  existing taxdump. When `nothing`, follow `MYCELIA_TAXONKIT_OFFLINE` (`"1"` enables it).
+  `false` forces the network check even if that variable is set.
 
 # Requirements
-- Working internet connection
-- Sufficient disk space (~100MB)
+- Working internet connection when an update is needed and offline mode is off
+- Sufficient disk space (~100MB, plus temporary space during updates)
 - `taxonkit` must be installed separately
 
 # Returns
-- Nothing
+- `nothing`
 
 # Throws
-- `SystemError` if download fails or if unable to create directory
-- `ErrorException` if tar extraction fails
+- `ProcessFailedException` or `Base.IOError` if `wget` download or `tar` extraction fails.
+  With no network, wget typically exits 4 (ProcessExited(4)).
+- `SystemError` if directory creation or file replacement fails
+- `ErrorException` if extraction produces an empty staging directory, if offline mode
+  is combined with `force_update=true`, or if offline mode is set and `taxonkit_dir`
+  is missing or empty
 """
-function setup_taxonkit_taxonomy(; force_update::Bool = false, max_age_days::Int = 30)
-    taxonkit_dir = joinpath(homedir(), ".taxonkit")
-    timestamp_file = joinpath(taxonkit_dir, ".last_updated")
-
-    # Check if we need to download/update
-    needs_update = force_update
-
-    if !needs_update
-        # Check if directory exists and has files
-        if !isdir(taxonkit_dir) || isempty(readdir(taxonkit_dir))
-            needs_update = true
-        else
-            # Check age of installation
-            if isfile(timestamp_file)
-                try
-                    last_updated = Dates.DateTime(read(timestamp_file, String))
-                    age_days = Dates.value(Dates.now() - last_updated) /
-                               (1000 * 60 * 60 * 24)
-
-                    if age_days > max_age_days
-                        @warn "Taxonkit taxonomy data is $(round(age_days, digits=1)) days old (> $max_age_days days). Consider updating with force_update=true."
-                    end
-                catch
-                    @warn "Could not read timestamp file. Taxonkit data age unknown."
-                end
-            else
-                @warn "No timestamp found for taxonkit data. Age unknown. Consider updating with force_update=true."
-            end
-        end
-    end
-
-    # Download and extract if needed
-    if needs_update
-        @info "Downloading NCBI taxonomy database..."
-
-        # Clean up existing directory if it exists
-        if isdir(taxonkit_dir)
-            @info "Removing existing taxonkit directory..."
-            rm(taxonkit_dir, recursive = true)
-        end
-
-        # Create fresh directory
-        mkpath(taxonkit_dir)
-
-        # Download in a temporary location first
-        temp_file = tempname() * ".tar.gz"
-        try
-            run(`wget -q -O $temp_file ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
-
-            # Extract to taxonkit directory
-            Mycelia.tar_extract(tarchive = temp_file, directory = taxonkit_dir)
-
-            # Write timestamp
-            write(timestamp_file, string(Dates.now()))
-
-            @info "Taxonkit taxonomy database updated successfully"
-
-        finally
-            # Clean up temporary file
-            isfile(temp_file) && rm(temp_file)
-        end
-    end
+function setup_taxonkit_taxonomy(;
+        force_update::Bool = false,
+        max_age_days::Int = 30,
+        taxonkit_dir::AbstractString = joinpath(homedir(), ".taxonkit"),
+        offline::Union{Nothing, Bool} = nothing
+)
+    return _setup_taxonkit_taxonomy(
+        _download_taxonkit_taxdump;
+        force_update = force_update,
+        max_age_days = max_age_days,
+        taxonkit_dir = taxonkit_dir,
+        offline = offline
+    )
 end
 
 """
