@@ -48,6 +48,14 @@ echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK
 JULIA="${HOME}/.juliaup/bin/julia"
 JULIA_ARGS=(+lts)
 
+# Reuse the group depot where hpc-setup.sh precompiled the deps (SLURM does not
+# reliably inherit interactive-shell exports). `:-` keeps any pre-exported value.
+# Exported before the version guard so the probe runs in the job's environment
+# (td-67fj). A stale LD_LIBRARY_PATH can fail --version on a julia that runs
+# once the path is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
+# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
+export LD_LIBRARY_PATH=""
 # Fail LOUDLY if the pinned channel is not runnable — otherwise an empty
 # ${JULIA} would run the sweep args as a command, fail, and still exit green.
 if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
@@ -57,11 +65,6 @@ fi
 echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-# Reuse the group depot where hpc-setup.sh precompiled the deps (SLURM does not
-# reliably inherit interactive-shell exports). `:-` keeps any pre-exported value.
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
-# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
-export LD_LIBRARY_PATH=""
 
 # === Sweep configuration (real Lambda-phage validation scale) =============
 # Override any of these on the sbatch line with `--export=ALL,VAR=val,...`.
