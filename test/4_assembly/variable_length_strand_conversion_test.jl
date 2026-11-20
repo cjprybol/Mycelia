@@ -242,6 +242,111 @@ Test.@testset "Variable-length strand conversions" begin
             merged_edge, "dataset", "mixed_edge", Mycelia.Rhizomorph.Reverse)
     end
 
+    # `canon_graph[canon_src, canon_dst] = graph[src, dst]` stores the caller's
+    # edge object. The merge then `add_evidence!`s into that object, so a
+    # non-canonical edge (or a second edge that collapses onto it) used to
+    # append flipped evidence onto the input graph. The same alias exists for
+    # the vertex assigned with `canon_graph[canon_v] = graph[v]`.
+    Test.@testset "Canonical conversion does not mutate input evidence" begin
+        seq_a = BioSequences.LongDNA{4}("ATGCC")
+        seq_b = BioSequences.LongDNA{4}("CCAAT")
+        rc_a = BioSequences.reverse_complement(seq_a)
+        canon_a = BioSequences.canonical(seq_a)
+        canon_b = BioSequences.canonical(seq_b)
+
+        graph = make_dna_variable_graph(
+            typeof(Mycelia.Rhizomorph.BioSequenceVertexData(seq_a)),
+            Mycelia.Rhizomorph.BioSequenceEdgeData
+        )
+
+        vertex_a = Mycelia.Rhizomorph.BioSequenceVertexData(seq_a)
+        Mycelia.Rhizomorph.add_evidence!(
+            vertex_a,
+            "dataset",
+            "forward_vertex",
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward)
+        )
+        graph[seq_a] = vertex_a
+
+        vertex_rc_a = Mycelia.Rhizomorph.BioSequenceVertexData(rc_a)
+        Mycelia.Rhizomorph.add_evidence!(
+            vertex_rc_a,
+            "dataset",
+            "reverse_vertex",
+            Mycelia.Rhizomorph.EvidenceEntry(11, Mycelia.Rhizomorph.Forward)
+        )
+        graph[rc_a] = vertex_rc_a
+
+        vertex_b = Mycelia.Rhizomorph.BioSequenceVertexData(seq_b)
+        Mycelia.Rhizomorph.add_evidence!(
+            vertex_b,
+            "dataset",
+            "forward_target",
+            Mycelia.Rhizomorph.EvidenceEntry(20, Mycelia.Rhizomorph.Forward)
+        )
+        graph[seq_b] = vertex_b
+
+        forward_edge = Mycelia.Rhizomorph.BioSequenceEdgeData(3)
+        Mycelia.Rhizomorph.add_evidence!(
+            forward_edge,
+            "dataset",
+            "forward_edge",
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(1, 2, Mycelia.Rhizomorph.Forward)
+        )
+        graph[seq_a, seq_b] = forward_edge
+
+        mixed_edge = Mycelia.Rhizomorph.BioSequenceEdgeData(3)
+        Mycelia.Rhizomorph.add_evidence!(
+            mixed_edge,
+            "dataset",
+            "mixed_edge",
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(3, 4, Mycelia.Rhizomorph.Forward)
+        )
+        graph[rc_a, seq_b] = mixed_edge
+
+        function evidence_fingerprint(data)
+            rows = Set{Tuple{String, String, Any}}()
+            for (dataset_id, observations) in data.evidence
+                for (observation_id, entries) in observations
+                    for entry in entries
+                        push!(rows, (String(dataset_id), String(observation_id), entry))
+                    end
+                end
+            end
+            return rows
+        end
+
+        vertex_before = Dict(
+            label => evidence_fingerprint(graph[label])
+            for label in MetaGraphsNext.labels(graph)
+        )
+        edge_before = Dict(
+            (src, dst) => evidence_fingerprint(graph[src, dst])
+            for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        )
+
+        canon_graph = Mycelia.Rhizomorph.convert_variable_length_to_canonical(graph)
+
+        for label in MetaGraphsNext.labels(graph)
+            Test.@test evidence_fingerprint(graph[label]) == vertex_before[label]
+            Test.@test graph[label].evidence !== canon_graph[BioSequences.canonical(label)].evidence
+        end
+        canon_edge = canon_graph[canon_a, canon_b]
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            Test.@test evidence_fingerprint(graph[src, dst]) == edge_before[(src, dst)]
+            Test.@test graph[src, dst].evidence !== canon_edge.evidence
+        end
+        # The copy still receives the merged, strand-corrected evidence.
+        Test.@test Mycelia.Rhizomorph.count_total_observations(canon_edge) == 2
+        test_evidence_contains_strand(
+            canon_edge, "dataset", "forward_edge", Mycelia.Rhizomorph.Forward)
+        test_evidence_contains_strand(
+            canon_edge, "dataset", "mixed_edge", Mycelia.Rhizomorph.Reverse)
+        Test.@test length(graph[seq_a, seq_b].evidence["dataset"]) == 1
+        Test.@test only(graph[seq_a, seq_b].evidence["dataset"]["forward_edge"]).strand ==
+                   Mycelia.Rhizomorph.Forward
+    end
+
     Test.@testset "Quality-aware doublestrand conversion infers quality edge data" begin
         seq = BioSequences.LongDNA{4}("ATGC")
         rc_seq = BioSequences.reverse_complement(seq)
