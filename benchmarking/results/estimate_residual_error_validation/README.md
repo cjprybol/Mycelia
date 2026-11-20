@@ -100,8 +100,12 @@ Double minus single, quality absent, substitution:
 contrast: both draw identical fragments and identical error draws, and only the
 strand orientation differs. Note the bias does not vanish with coverage, which is
 what the halved-effective-coverage mechanism predicts — it is multiplicative on
-depth, not an additive small-sample artifact. The fix already exists in the same
-file and is simply not called here.
+depth, not an additive small-sample artifact. The canonical hash already existed
+in the same file and was not called on this path when these rows were measured.
+
+**Update (td-05hf):** `_kmer_spectrum_residual_error` now calls
+`_dynamic_k_canonical_window_hash`. The tables in this file were measured
+before that change and are kept as the record of the bias.
 
 ## Finding 3: the docstring's indel claim is not supported
 
