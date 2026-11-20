@@ -78,10 +78,12 @@
 # over_corrections attributes precision loss to failed corrections vs collateral
 # damage. Zero-denominator metrics are NaN ("undefined here", not a measured 0).
 #
-# GUARDS: a VERDICT requires BOTH the scale floor AND a minimum aggregate SCORED
-# fraction (MYCELIA_RCA_MIN_SCORED_FRACTION) so clean-looking metrics on a tiny
-# surviving subset (mass drops/exclusions) cannot be quoted as validation; a
-# crashed cell is marked ok=false in the CSV; an empty corrector output errors.
+# GUARDS: a VERDICT requires the scale floor, a minimum aggregate SCORED
+# fraction (MYCELIA_RCA_MIN_SCORED_FRACTION), AND null-arm health on the cells
+# that carry injected errors (`null_ok` and `null_scored_fraction` at that same
+# scored floor). A Control B crash, read-ID mis-join, or mass drop downgrades
+# the run to SMOKE-ONLY so it cannot be quoted as validation. A crashed cell is
+# marked ok=false / null_ok=false in the CSV; an empty corrector output errors.
 #
 # SCALE GUARD: reuses rhizomorph_scale_guard.jl (via the sweep include). Below
 # the floor the run is labelled SMOKE-ONLY and MUST NOT be quoted as validation.
@@ -118,6 +120,13 @@ end
 # than duplicating them. The sweep's run_sweep() is guarded by
 # `PROGRAM_FILE == @__FILE__`, so including it here only DEFINES functions.
 include(joinpath(@__DIR__, "rhizomorph_correction_validation_sweep.jl"))
+
+# Pure VERDICT decision (scale + real scored fraction + Control B null-arm
+# health). Included once: NullArmCell is a struct, and this file is included
+# repeatedly into Main by the stage-4 tests that pull in the PR-curve harness.
+if !isdefined(@__MODULE__, :NullArmCell)
+    include(joinpath(@__DIR__, "rhizomorph_correction_accuracy_verdict.jl"))
+end
 
 # === Substitution-only read simulation with retained truth ==================
 
@@ -346,6 +355,7 @@ function run_accuracy_benchmark()
         corrector_runtime_s = Float64[],
         # Control B — read-scramble null (same reads, per-read base permutation).
         null_seed = Int[], null_ok = Bool[], null_reads_scored = Int[],
+        null_scored_fraction = Float64[],
         null_injected_errors = Int[], null_true_fixes = Int[],
         null_recall = Float64[], null_precision = Float64[],
         null_over_correction_rate = Float64[], null_correction_rate = Float64[],
@@ -354,8 +364,8 @@ function run_accuracy_benchmark()
 
     min_effective_coverage = Inf
     # Aggregate scored-fraction across cells governs the VERDICT alongside the
-    # scale floor: clean-looking recall/precision on a tiny scored subset (mass
-    # drops/exclusions) must NOT be quotable as validation.
+    # scale floor and the null-arm gate: clean-looking recall/precision on a
+    # tiny scored subset (mass drops/exclusions) must NOT be quotable as validation.
     total_reads_all = 0
     total_scored_all = 0
     # Control-B aggregation (over cells with injected errors, where recall is
@@ -364,6 +374,8 @@ function run_accuracy_benchmark()
     real_injected_all = 0
     null_tp_all = 0
     null_injected_all = 0
+    # Control B health for the VERDICT gate, injected-error cells only.
+    null_cells = NullArmCell[]
 
     println("\n--- Sweeping (error_rate x read-regime) on the wired :scalable corrector ---")
     for err in errs
@@ -428,10 +440,17 @@ function run_accuracy_benchmark()
             # mismatch (renamed ids), byte-indistinguishable from a legitimate
             # collapse in the metrics — surface it rather than let a join bug
             # masquerade as "the null correctly recovered nothing".
-            if null_ok && mn.reads_scored == 0 && mn.corrected_unjoined > 0
+            if null_ok && null_arm_misjoined(mn.reads_scored, mn.corrected_unjoined)
                 @warn "Null arm: no corrected read joined to truth by id, yet the corrector emitted reads — " *
                       "likely a read-ID FORMAT mismatch (renamed ids), not a genuine null collapse" err readlen corrected_unjoined = mn.corrected_unjoined
             end
+            push!(null_cells,
+                NullArmCell(;
+                    injected_errors = injected_total,
+                    n_reads = length(records),
+                    null_ok = null_ok,
+                    null_reads_scored = mn.reads_scored,
+                    null_corrected_unjoined = mn.corrected_unjoined))
             # Pool recall numerator/denominator over injected-bearing cells only.
             if m.injected > 0
                 real_tp_all += m.tp
@@ -465,7 +484,9 @@ function run_accuracy_benchmark()
                     over_correction_rate = m.over_rate, correction_rate = m.correction_rate,
                     corrector_runtime_s = runtime,
                     null_seed = RCA_NULL_SEED, null_ok = null_ok,
-                    null_reads_scored = mn.reads_scored, null_injected_errors = mn.injected,
+                    null_reads_scored = mn.reads_scored,
+                    null_scored_fraction = mn.scored_fraction,
+                    null_injected_errors = mn.injected,
                     null_true_fixes = mn.tp, null_recall = mn.recall,
                     null_precision = mn.precision, null_over_correction_rate = mn.over_rate,
                     null_correction_rate = mn.correction_rate, null_runtime_s = null_runtime))
@@ -525,52 +546,49 @@ function run_accuracy_benchmark()
         println("  recall collapse (real - null) = $(round(real_pooled_recall - null_pooled_recall; digits=4))")
     end
 
-    # === Scale + scored-fraction guard ===
-    # Two independent gates must BOTH pass for a VERDICT:
+    # === Scale + scored-fraction + null-arm guard ===
+    # Three gates must ALL pass for a VERDICT (correction_accuracy_verdict):
     #   (1) scale floor  — enough sequenced bases (coverage x genome length)
     #   (2) scored floor — enough reads actually entered the positional metric,
     #       so recall/precision don't rest on a tiny surviving subset.
+    #   (3) null-arm health on cells that carry injected errors — Control B ran
+    #       and its scored fraction meets the same floor. A crash, ID mis-join,
+    #       or mass drop downgrades the run to SMOKE-ONLY.
     eff_cov_for_guard = isfinite(min_effective_coverage) ? min_effective_coverage : 0.0
     metric = scale_metric_bases(eff_cov_for_guard, glen)
     scale_ok = scale_verdict_allowed(eff_cov_for_guard, glen; floor = scale_floor)
     agg_scored_fraction = total_reads_all == 0 ? 0.0 : total_scored_all / total_reads_all
-    scored_ok = agg_scored_fraction >= min_scored_fraction
-    verdict_allowed = scale_ok && scored_ok
-    mode = verdict_allowed ? "VERDICT" : "SMOKE-ONLY"
+    decision = correction_accuracy_verdict(;
+        scale_ok = scale_ok,
+        agg_scored_fraction = agg_scored_fraction,
+        cells = null_cells,
+        min_scored_fraction = min_scored_fraction,
+        metric = metric,
+        scale_floor = scale_floor)
+    verdict_allowed = decision.verdict_allowed
+    mode = decision.mode
+    scored_ok = decision.scored_ok
 
     rows[!, :mode] = fill(mode, DataFrames.nrow(rows))
     rows[!, :scale_metric_bases] = fill(metric, DataFrames.nrow(rows))
     rows[!, :scale_floor_bases] = fill(scale_floor, DataFrames.nrow(rows))
     rows[!, :agg_scored_fraction] = fill(round(agg_scored_fraction; digits = 4), DataFrames.nrow(rows))
+    rows[!, :agg_null_scored_fraction] = fill(
+        round(decision.null_scored_fraction; digits = 4), DataFrames.nrow(rows))
     timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
     csv_path = joinpath(results_dir, "rhizomorph_correction_accuracy_$(timestamp).csv")
     CSV.write(csv_path, rows)
     println("\nCSV written: $csv_path")
     println("Aggregate scored fraction: $(round(agg_scored_fraction; digits=4)) (floor $(min_scored_fraction))")
+    println("Aggregate null scored fraction (injected-error cells): " *
+            "$(round(decision.null_scored_fraction; digits=4)) (floor $(min_scored_fraction))")
 
-    if verdict_allowed
-        println("\n=== VERDICT (scale $(round(metric; digits=0)) bases >= $(scale_floor); scored $(round(agg_scored_fraction; digits=3)) >= $(min_scored_fraction)) ===")
-        println("Interpretation per cell:")
-        println("  recall high + precision high + over_correction_rate ~0 => corrector fixes errors cleanly")
-        println("  precision < recall via mis_fixes => failed corrections; via over_corrections => collateral damage")
-        println("  correction_rate should track error_rate (edits ~ true errors); >> error_rate => over-editing")
-    else
-        reasons = String[]
-        scale_ok ||
-            push!(reasons, "scale metric $(round(metric; digits=0)) < floor $(scale_floor)")
-        scored_ok || push!(reasons,
-            "scored fraction $(round(agg_scored_fraction; digits=3)) < floor $(min_scored_fraction)")
-        println("\n=== SMOKE-ONLY ($(join(reasons, "; "))) ===")
-        println("This run MUST NOT be quoted as validation. " *
-                (scale_ok ? "" : "Raise coverage/genome size. ") *
-                (scored_ok ? "" :
-                 "Too few reads scored (mass drops/exclusions) — investigate before trusting metrics. "))
-        println("Run the full Lambda-phage config on Lovelace for a VERDICT.")
-    end
+    print_correction_accuracy_summary(stdout, decision)
 
     println("\n=== Accuracy benchmark complete: $(Dates.now()) ===")
     return (csv_path = csv_path, mode = mode, rows = rows,
-        real_pooled_recall = real_pooled_recall, null_pooled_recall = null_pooled_recall)
+        real_pooled_recall = real_pooled_recall, null_pooled_recall = null_pooled_recall,
+        null_scored_fraction = decision.null_scored_fraction)
 end
 
 # Only run when invoked as a script; `include`-ing this file (from the unit test)
