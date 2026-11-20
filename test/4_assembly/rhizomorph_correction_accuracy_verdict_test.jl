@@ -7,8 +7,10 @@
 #   (a) an unhealthy null arm (crash, mis-join, or mass drop) cannot emit VERDICT
 #   (b) a healthy null arm whose scale and scored checks pass still emits VERDICT
 #   (c) the existing local smoke scale (synthetic ~2 kb at 10x) stays SMOKE-ONLY
-#   The harness source is pinned too: run_accuracy_benchmark must call
-#   correction_accuracy_verdict and record null_scored_fraction. Restoring
+#   The printed summary is the harness's own print_correction_accuracy_summary,
+#   driven here with a synthetic null-arm table (no sweep). The harness source
+#   must pass that table (`cells = null_cells`) into correction_accuracy_verdict
+#   and print the resulting decision. Restoring
 #   `verdict_allowed = scale_ok && scored_ok` fails that contract.
 #
 # Run:
@@ -60,6 +62,17 @@ function _decide(scale_ok::Bool, agg_scored_fraction::Real, cells::Vector{NullAr
         scale_floor = scale_floor)
 end
 
+# Same two calls the harness makes: decide from the cell table, then print the
+# SMOKE/VERDICT block. `text` is what that print writes.
+function _printed(scale_ok::Bool, agg_scored_fraction::Real, cells::Vector{NullArmCell};
+        metric::Real, scale_floor::Real)
+    decision = _decide(scale_ok, agg_scored_fraction, cells;
+        metric = metric, scale_floor = scale_floor)
+    io = IOBuffer()
+    print_correction_accuracy_summary(io, decision)
+    return (decision = decision, text = String(take!(io)))
+end
+
 function _lambda()
     return (
         scale_ok = scale_verdict_allowed(LAMBDA_COVERAGE, LAMBDA_LENGTH),
@@ -85,16 +98,17 @@ Test.@testset "correction-accuracy VERDICT requires null-arm health" begin
         crashed = [_cell(;
             injected_errors = 40, n_reads = 100, null_ok = false,
             null_reads_scored = 100, null_corrected_unjoined = 0)]
-        crash = _decide(lambda.scale_ok, 1.0, crashed;
+        crash = _printed(lambda.scale_ok, 1.0, crashed;
             metric = lambda.metric, scale_floor = lambda.scale_floor)
-        Test.@test crash.scale_ok
-        Test.@test crash.scored_ok
-        Test.@test !crash.null_ok
-        Test.@test !crash.verdict_allowed
-        Test.@test crash.mode == "SMOKE-ONLY"
-        Test.@test !occursin("=== VERDICT", crash.line)
-        Test.@test occursin("=== SMOKE-ONLY", crash.line)
-        Test.@test occursin("null_scored_fraction=1.0", crash.line)
+        Test.@test crash.decision.scale_ok
+        Test.@test crash.decision.scored_ok
+        Test.@test !crash.decision.null_ok
+        Test.@test !crash.decision.verdict_allowed
+        Test.@test crash.decision.mode == "SMOKE-ONLY"
+        Test.@test !occursin("=== VERDICT", crash.text)
+        Test.@test occursin("=== SMOKE-ONLY", crash.text)
+        Test.@test occursin("null_scored_fraction=1.0", crash.text)
+        Test.@test occursin(crash.decision.line, crash.text)
 
         # Mis-join: null corrector ran, emitted reads, none joined to truth.
         # A sibling cell keeps the pooled scored fraction above the floor, so
@@ -105,45 +119,50 @@ Test.@testset "correction-accuracy VERDICT requires null-arm health" begin
                 injected_errors = 10, n_reads = 10, null_ok = true,
                 null_reads_scored = 0, null_corrected_unjoined = 10),
         ]
-        misjoin = _decide(lambda.scale_ok, 1.0, misjoined;
+        misjoin = _printed(lambda.scale_ok, 1.0, misjoined;
             metric = lambda.metric, scale_floor = lambda.scale_floor)
-        Test.@test misjoin.null_scored_fraction > 0.5
-        Test.@test !misjoin.null_ok
-        Test.@test !misjoin.verdict_allowed
-        Test.@test misjoin.mode == "SMOKE-ONLY"
-        Test.@test !occursin("=== VERDICT", misjoin.line)
-        Test.@test occursin("null_scored_fraction=", misjoin.line)
+        Test.@test misjoin.decision.null_scored_fraction > 0.5
+        Test.@test !misjoin.decision.null_ok
+        Test.@test !misjoin.decision.verdict_allowed
+        Test.@test misjoin.decision.mode == "SMOKE-ONLY"
+        Test.@test !occursin("=== VERDICT", misjoin.text)
+        Test.@test occursin("=== SMOKE-ONLY", misjoin.text)
+        Test.@test occursin("null_scored_fraction=", misjoin.text)
+        Test.@test occursin(misjoin.decision.line, misjoin.text)
 
         # Mass drop: corrector ran and ids joined, but almost every row was
         # excluded. null_ok stays true; the scored fraction is the gate.
         dropped = [_cell(;
             injected_errors = 40, n_reads = 100, null_ok = true,
             null_reads_scored = 10, null_corrected_unjoined = 0)]
-        drop = _decide(lambda.scale_ok, 1.0, dropped;
+        drop = _printed(lambda.scale_ok, 1.0, dropped;
             metric = lambda.metric, scale_floor = lambda.scale_floor)
-        Test.@test drop.null_ok
-        Test.@test !drop.null_scored_ok
-        Test.@test drop.null_scored_fraction == 0.1
-        Test.@test !drop.verdict_allowed
-        Test.@test drop.mode == "SMOKE-ONLY"
-        Test.@test !occursin("=== VERDICT", drop.line)
-        Test.@test occursin("=== SMOKE-ONLY", drop.line)
-        Test.@test occursin("null_scored_fraction=0.1", drop.line)
+        Test.@test drop.decision.null_ok
+        Test.@test !drop.decision.null_scored_ok
+        Test.@test drop.decision.null_scored_fraction == 0.1
+        Test.@test !drop.decision.verdict_allowed
+        Test.@test drop.decision.mode == "SMOKE-ONLY"
+        Test.@test !occursin("=== VERDICT", drop.text)
+        Test.@test occursin("=== SMOKE-ONLY", drop.text)
+        Test.@test occursin("null_scored_fraction=0.1", drop.text)
+        Test.@test occursin(drop.decision.line, drop.text)
     end
 
     Test.@testset "healthy null arm with passing scale and scored checks emits VERDICT" begin
         # Same scale and real-arm scored fraction as the unhealthy fixtures.
         # The previous gate was `scale_ok && scored_ok`; a healthy null arm
         # must leave that decision unchanged.
-        decision = _decide(lambda.scale_ok, 1.0, healthy;
+        printed = _printed(lambda.scale_ok, 1.0, healthy;
             metric = lambda.metric, scale_floor = lambda.scale_floor)
+        decision = printed.decision
         Test.@test decision.scale_ok && decision.scored_ok && decision.null_arm_ok
         Test.@test decision.verdict_allowed == (decision.scale_ok && decision.scored_ok)
         Test.@test decision.verdict_allowed
         Test.@test decision.mode == "VERDICT"
-        Test.@test occursin("=== VERDICT", decision.line)
-        Test.@test !occursin("SMOKE-ONLY", decision.line)
-        Test.@test occursin("null_scored_fraction=1.0", decision.line)
+        Test.@test occursin("=== VERDICT", printed.text)
+        Test.@test !occursin("SMOKE-ONLY", printed.text)
+        Test.@test occursin("null_scored_fraction=1.0", printed.text)
+        Test.@test occursin(decision.line, printed.text)
         Test.@test decision.null_scored_fraction == 1.0
 
         # Control A (no injected errors) is outside the null gate, even when
@@ -167,16 +186,18 @@ Test.@testset "correction-accuracy VERDICT requires null-arm health" begin
         Test.@test !smoke.scale_ok
         # Healthy null and a fully scored real arm: the label comes from the
         # scale floor, which is what a local MYCELIA_RCA_SMOKE run hits.
-        decision = _decide(smoke.scale_ok, 1.0, healthy;
+        printed = _printed(smoke.scale_ok, 1.0, healthy;
             metric = smoke.metric, scale_floor = smoke.scale_floor)
+        decision = printed.decision
         Test.@test decision.scored_ok
         Test.@test decision.null_arm_ok
         Test.@test !decision.verdict_allowed
         Test.@test decision.mode == "SMOKE-ONLY"
-        Test.@test occursin("=== SMOKE-ONLY", decision.line)
-        Test.@test !occursin("=== VERDICT", decision.line)
-        Test.@test occursin("null_scored_fraction=1.0", decision.line)
-        Test.@test occursin("scale metric", decision.line)
+        Test.@test occursin("=== SMOKE-ONLY", printed.text)
+        Test.@test !occursin("=== VERDICT", printed.text)
+        Test.@test occursin("null_scored_fraction=1.0", printed.text)
+        Test.@test occursin("scale metric", printed.text)
+        Test.@test occursin(decision.line, printed.text)
     end
 
     Test.@testset "boolean decision matches the fixture gate" begin
@@ -191,26 +212,29 @@ Test.@testset "correction-accuracy VERDICT requires null-arm health" begin
         Test.@test !null_scored_fraction_ok(0.5 - eps(0.5), 0.5)
     end
 
-    # The fixtures above include only the pure helper. This pins the harness
-    # call site, so reverting run_accuracy_benchmark to `scale_ok && scored_ok`
-    # fails in the default suite without loading Mycelia.
-    Test.@testset "harness source uses the verdict helper" begin
+    # The printed-summary tests call the same functions as the harness. This
+    # pins the call site: the null-arm table is an argument, and the summary
+    # printer (not an inlined scale && scored header) is what runs afterward.
+    Test.@testset "harness passes the null-arm table into the printed summary" begin
         src = read(joinpath(@__DIR__, "..", "..", "benchmarking",
             "rhizomorph_correction_accuracy_benchmark.jl"), String)
         call_at = findfirst("decision = correction_accuracy_verdict(", src)
         use_at = findfirst("verdict_allowed = decision.verdict_allowed", src)
+        print_at = findfirst("print_correction_accuracy_summary(stdout, decision)", src)
         Test.@test call_at !== nothing
         Test.@test use_at !== nothing
-        Test.@test first(call_at) < first(use_at)
+        Test.@test print_at !== nothing
+        Test.@test first(call_at) < first(use_at) < first(print_at)
+        call = src[first(call_at):first(use_at)]
+        Test.@test occursin("cells = null_cells", call)
+        Test.@test occursin("agg_scored_fraction = agg_scored_fraction", call)
+        Test.@test occursin("min_scored_fraction = min_scored_fraction", call)
         Test.@test !occursin("verdict_allowed = scale_ok && scored_ok", src)
         Test.@test occursin("null_scored_fraction = Float64[]", src)
         Test.@test occursin("null_scored_fraction = mn.scored_fraction", src)
         Test.@test occursin("rows[!, :agg_null_scored_fraction]", src)
         Test.@test occursin("round(decision.null_scored_fraction; digits = 4)", src)
         Test.@test occursin("null_scored_fraction = decision.null_scored_fraction", src)
-        summary_prints = count(l -> occursin("println(\"\\n\$(decision.line)\")", l),
-            eachline(IOBuffer(src)))
-        Test.@test summary_prints == 2
     end
 end
 

@@ -175,3 +175,30 @@ function correction_accuracy_verdict(; scale_ok::Bool, agg_scored_fraction::Real
         null_arm_ok = health.null_ok && null_scored_ok,
         n_injected = health.n_injected)
 end
+
+"""
+    print_correction_accuracy_summary(io, decision)
+
+Print the harness SMOKE-ONLY / VERDICT block for `decision` to `io`. The header
+is `decision.line`, which includes `null_scored_fraction`. This is the print
+the accuracy benchmark uses after `correction_accuracy_verdict`, so a synthetic
+cell table can drive the same text without running the sweep.
+"""
+function print_correction_accuracy_summary(io::IO, decision)
+    println(io, "\n$(decision.line)")
+    if decision.verdict_allowed
+        println(io, "Interpretation per cell:")
+        println(io, "  recall high + precision high + over_correction_rate ~0 => corrector fixes errors cleanly")
+        println(io, "  precision < recall via mis_fixes => failed corrections; via over_corrections => collateral damage")
+        println(io, "  correction_rate should track error_rate (edits ~ true errors); >> error_rate => over-editing")
+    else
+        println(io, "This run MUST NOT be quoted as validation. " *
+                    (decision.scale_ok ? "" : "Raise coverage/genome size. ") *
+                    (decision.scored_ok ? "" :
+                     "Too few reads scored (mass drops/exclusions) — investigate before trusting metrics. ") *
+                    (decision.null_arm_ok ? "" :
+                     "Control B null arm is unhealthy on injected-error cells (crash, mis-join, or mass drop). "))
+        println(io, "Run the full Lambda-phage config on Lovelace for a VERDICT.")
+    end
+    return nothing
+end

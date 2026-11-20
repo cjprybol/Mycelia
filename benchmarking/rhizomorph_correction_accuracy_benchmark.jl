@@ -583,22 +583,7 @@ function run_accuracy_benchmark()
     println("Aggregate null scored fraction (injected-error cells): " *
             "$(round(decision.null_scored_fraction; digits=4)) (floor $(min_scored_fraction))")
 
-    if verdict_allowed
-        println("\n$(decision.line)")
-        println("Interpretation per cell:")
-        println("  recall high + precision high + over_correction_rate ~0 => corrector fixes errors cleanly")
-        println("  precision < recall via mis_fixes => failed corrections; via over_corrections => collateral damage")
-        println("  correction_rate should track error_rate (edits ~ true errors); >> error_rate => over-editing")
-    else
-        println("\n$(decision.line)")
-        println("This run MUST NOT be quoted as validation. " *
-                (scale_ok ? "" : "Raise coverage/genome size. ") *
-                (scored_ok ? "" :
-                 "Too few reads scored (mass drops/exclusions) — investigate before trusting metrics. ") *
-                (decision.null_arm_ok ? "" :
-                 "Control B null arm is unhealthy on injected-error cells (crash, mis-join, or mass drop). "))
-        println("Run the full Lambda-phage config on Lovelace for a VERDICT.")
-    end
+    print_correction_accuracy_summary(stdout, decision)
 
     println("\n=== Accuracy benchmark complete: $(Dates.now()) ===")
     return (csv_path = csv_path, mode = mode, rows = rows,
