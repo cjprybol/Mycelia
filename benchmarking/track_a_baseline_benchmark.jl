@@ -714,7 +714,11 @@ end
 # omitted with at most a `@warn`, and the smaller table was what got published.
 # Downstream, including the power analysis, cannot tell that table from a finished
 # matrix. `write_aggregate` now refuses to publish while any such gap is still
-# unresolved, and leaves the previous TSV in place.
+# unresolved, and leaves the previous TSV in place. The refusal also writes
+# `track_a_aggregate_refusal.txt` beside that TSV. The job log is not what a
+# later reader of the results directory opens, and a complete-looking older table
+# with no stamp would be taken as current. A later successful aggregate deletes
+# the note.
 #
 # A readable `status=error` checkpoint is NOT a gap. It is the catch path's record
 # that the cell threw. Dropping it would hide the failure and shrink the table.
@@ -775,6 +779,12 @@ function row_cell_id(row)
         row.decoder_arm; k = row.k, traversal_weighting = row.traversal_weighting)
 end
 
+const AGGREGATE_REFUSAL_NAME = "track_a_aggregate_refusal.txt"
+
+function aggregate_refusal_path(root::AbstractString)
+    return joinpath(root, AGGREGATE_REFUSAL_NAME)
+end
+
 function aggregate_incomplete_message(root, gaps::Vector{CellStoreGap})
     lines = ["  - $(g.cell_id): $(g.kind) ($(g.reason))" for g in gaps]
     target = joinpath(root, "track_a_results.tsv")
@@ -784,6 +794,34 @@ function aggregate_incomplete_message(root, gaps::Vector{CellStoreGap})
            "\nThe previous table, if any, is unchanged. A missing cell_result.json " *
            "is an in-progress or crashed cell; an incomplete checkpoint did not " *
            "parse into the row schema. Delete that cell's checkpoint to recompute it."
+end
+
+"""
+    write_aggregate_refusal(root, gaps)
+
+Write `track_a_aggregate_refusal.txt` next to the kept `track_a_results.tsv`.
+
+The note is the directory-level stamp that this attempt did not replace the
+table. It is published atomically so a crash cannot leave a half-written note
+in its place. A later successful `write_aggregate` deletes it.
+"""
+function write_aggregate_refusal(root::AbstractString, gaps::Vector{CellStoreGap})
+    path = aggregate_refusal_path(root)
+    body = aggregate_incomplete_message(root, gaps) *
+           "\n\nThis file is the stamp that $(joinpath(root, "track_a_results.tsv")) " *
+           "was NOT replaced by the run that wrote this note. A complete-looking " *
+           "table beside this file is the previous publish, not the result of that " *
+           "run. A later successful aggregate deletes this file.\n"
+    _publish_atomically(path) do tmp
+        write(tmp, body)
+    end
+    return path
+end
+
+function clear_aggregate_refusal(root::AbstractString)
+    path = aggregate_refusal_path(root)
+    isfile(path) && rm(path; force = true)
+    return path
 end
 
 """
@@ -810,8 +848,20 @@ end
 function write_aggregate(root, rows)
     ordered, unresolved = assemble_aggregate(root, rows)
     if !isempty(unresolved)
-        throw(AggregateIncomplete(unresolved,
-            aggregate_incomplete_message(root, unresolved)))
+        msg = aggregate_incomplete_message(root, unresolved)
+        # Stamp the kept table before throwing. Phase 3 calls this uncaught, so
+        # the note is what remains in the results directory after a non-zero
+        # exit. A mid-loop refusal writes the same note; the next successful
+        # publish deletes it, so a transient sibling gap does not leave a
+        # permanent "stale" mark on a table that was later replaced.
+        try
+            write_aggregate_refusal(root, unresolved)
+        catch e
+            e isa InterruptException && rethrow()
+            msg *= "\nAlso failed to write $(aggregate_refusal_path(root)): " *
+                   sprint(showerror, e)
+        end
+        throw(AggregateIncomplete(unresolved, msg))
     end
     # No store yet (a fresh tree, before the first checkpoint directory exists):
     # the in-memory rows are the whole aggregate. `assemble_aggregate` already
@@ -820,6 +870,10 @@ function write_aggregate(root, rows)
     df = DataFrames.DataFrame(ordered)
     target = joinpath(root, "track_a_results.tsv")
     _publish_atomically(tmp -> CSV.write(tmp, df; delim = '\t'), target)
+    # After the new table is in place. Clearing first would let a crash during
+    # the publish remove the stamp while the previous TSV was still the file on
+    # disk — the state this note exists to mark.
+    clear_aggregate_refusal(root)
     return df
 end
 

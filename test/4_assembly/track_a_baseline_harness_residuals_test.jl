@@ -342,6 +342,15 @@ Test.@testset "track A harness residuals" begin
             # that a skip-and-publish path would have written without the holes.
             Test.@test read(sentinel, String) == "SENTINEL\n"
             Test.@test !any(n -> startswith(n, "jl_"), readdir(dir))
+            # The kept table is stamped in the results directory, not only in
+            # the exception the job log scrolls past.
+            refusal = aggregate_refusal_path(dir)
+            Test.@test isfile(refusal)
+            refusal_text = read(refusal, String)
+            Test.@test occursin("NOT replaced", refusal_text)
+            Test.@test occursin(missing_id, refusal_text)
+            Test.@test occursin(broken_id, refusal_text)
+            Test.@test basename(refusal) == AGGREGATE_REFUSAL_NAME
 
             # An in-memory row whose id is the missing directory covers that
             # gap. The unreadable checkpoint is still unresolved, so the table
@@ -358,9 +367,15 @@ Test.@testset "track A harness residuals" begin
             Test.@test occursin(broken_id, still.msg)
             Test.@test !occursin(missing_id, still.msg)
             Test.@test read(sentinel, String) == "SENTINEL\n"
+            # The note is rewritten for the gaps that are still unresolved.
+            rewritten = read(aggregate_refusal_path(dir), String)
+            Test.@test occursin(broken_id, rewritten)
+            Test.@test occursin("NOT replaced", rewritten)
+            Test.@test !occursin(missing_id, rewritten)
 
             rm(broken_dir; recursive = true)
             covered = write_aggregate(dir, [covering])
+            Test.@test !isfile(aggregate_refusal_path(dir))
             Test.@test DataFrames.nrow(covered) == 4
             Test.@test any(i -> i == missing_id,
                 (row_cell_id((;
@@ -387,6 +402,10 @@ Test.@testset "track A harness residuals" begin
             Test.@test occursin("incomplete", thrown.msg)
             Test.@test occursin("missing required key", thrown.msg)
             Test.@test read(joinpath(dir, "track_a_results.tsv"), String) == "SENTINEL\n"
+            schema_note = read(aggregate_refusal_path(dir), String)
+            Test.@test occursin("NOT replaced", schema_note)
+            Test.@test occursin("Lambda__ont__10x__seed42__kmer", schema_note)
+            Test.@test occursin("missing required key", schema_note)
         end
 
         # Interrupt during the scan is not an incomplete cell.
