@@ -201,11 +201,11 @@ Test.@testset "D5 grid runner" begin
             mkpath(work)
             fail_log = read_set_tool_log(work, "minimap2")
             msg = error_message(() -> run_with_log(
-                `bash -c 'echo producer-failed >&2; exit 7'`,
+                `sh -c 'echo boom >&2; exit 3'`,
                 joinpath(work, "failed.out"), fail_log))
             Test.@test msg !== nothing && occursin("failed process", msg) &&
-                       occursin("[7]", msg)
-            Test.@test read(fail_log, String) == "producer-failed\n"
+                       occursin("[3]", msg)
+            Test.@test read(fail_log, String) == "boom\n"
 
             mkpath(work)
             calls = []
