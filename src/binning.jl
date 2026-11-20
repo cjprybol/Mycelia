@@ -241,7 +241,7 @@ Run MetaBAT2 for metagenomic binning.
 - `depth_file::String`: Depth/coverage table from jgi_summarize_bam_contig_depths
 - `outdir::String`: Output directory (will contain bin FASTAs with prefix `bin`)
 - `min_contig::Int`: Minimum contig length (default: 1500)
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `seed::Int`: Random seed (default: 42)
 - `extra_args::Vector{String}`: Additional MetaBAT2 arguments
 
@@ -288,7 +288,7 @@ Run MetaCoAG, which integrates assembly graph structure and coverage for binning
 - `mapping_file::String`: Read mapping/coverage file
 - `outdir::String`: Output directory
 - `assembler::String`: Assembler name (default: "custom")
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `extra_args::Vector{String}`: Additional MetaCoAG arguments
 
 # Returns
@@ -338,7 +338,7 @@ Run COMEBin (constraint-based binning).
 - `bam_path::String`: Path to BAM file or directory containing BAMs
 - `outdir::String`: Output directory
 - `views::Int`: Number of contrastive learning views
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `temperature::Union{Nothing,Float64}`: Optional loss temperature (defaults to COMEBin heuristic)
 - `embedding_size::Int`: Embedding size for combine network
 - `coverage_embedding_size::Int`: Embedding size for coverage network
@@ -404,7 +404,7 @@ Run dRep for MAG dereplication.
 - `completeness_threshold::Union{Nothing, Float64}`: Minimum completeness to keep a genome
 - `contamination_threshold::Union{Nothing, Float64}`: Maximum contamination allowed
 - `ani_threshold::Float64`: ANI threshold for secondary clustering (default: 0.99)
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `extra_args::Vector{String}`: Additional dRep arguments
 
 # Returns
@@ -465,7 +465,10 @@ end
 Parse a generic contig → bin assignment table into a DataFrame.
 
 The table is expected to be tab-delimited and contain at least the columns
-named by `contig_col` and `bin_col`.
+named by `contig_col` and `bin_col`. If those names are absent, VAMB-style
+columns are accepted as a fallback: `contigname` for the contig and
+`clustername` for the bin. The returned DataFrame always has columns
+`contig` and `bin`.
 """
 function parse_bin_assignments(file::String; contig_col::AbstractString = "contig",
         bin_col::AbstractString = "bin")::DataFrames.DataFrame
@@ -473,13 +476,16 @@ function parse_bin_assignments(file::String; contig_col::AbstractString = "conti
     df = DataFrames.DataFrame(CSV.File(file; delim = '\t', ignorerepeated = true))
     names_map = Dict(string(col) => col for col in DataFrames.names(df))
 
-    haskey(names_map, contig_col) || error("Column $(contig_col) not found in $(file)")
-    haskey(names_map, bin_col) || error("Column $(bin_col) not found in $(file)")
-
-    contig_sym = names_map[contig_col]
-    bin_sym = names_map[bin_col]
+    contig_sym = _resolve_bin_assignment_column(names_map, contig_col, "contigname", file)
+    bin_sym = _resolve_bin_assignment_column(names_map, bin_col, "clustername", file)
 
     return DataFrames.select(df, contig_sym => :contig, bin_sym => :bin)
+end
+
+function _resolve_bin_assignment_column(names_map, requested, fallback, file)
+    haskey(names_map, requested) && return names_map[requested]
+    haskey(names_map, fallback) && return names_map[fallback]
+    error("Column $(requested) not found in $(file)")
 end
 
 """
@@ -527,7 +533,7 @@ Uses `vamb taxometer`.
 - `depth_file::String`: JGI depth table or VAMB abundance TSV
 - `taxonomy_file::String`: Taxonomy TSV
 - `outdir::String`: Output directory
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `extra_args::Vector{String}`: Additional command-line arguments
 """
 function run_taxometer(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
@@ -566,10 +572,17 @@ Uses `vamb bin taxvamb`.
 
 # Arguments
 - `contigs_fasta::String`: FASTA file with assembled contigs
-- `depth_file::String`: JGI depth table or VAMB abundance TSV
+- `depth_file::String`: Coverage table. Used as-is as a VAMB abundance TSV when the
+  first header column is `contigname` and no column is named `contigLen` or
+  `totalAvgDepth` (header comparisons are case-insensitive); otherwise treated as a JGI depth table from
+  `jgi_summarize_bam_contig_depths` and converted to `vamb_abundance.tsv` in the
+  same directory as `depth_file`. The conversion keeps the contig name column,
+  drops columns 2-3 by position, and drops any column whose name contains `var`
+  (case-insensitive). An existing `vamb_abundance.tsv` in that directory is reused
+  without checking which depth table produced it.
 - `taxonomy_file::String`: Taxonomy TSV
 - `outdir::String`: Output directory
-- `threads::Int`: Number of threads (default: all CPUs)
+- `threads::Int`: Number of threads (default: `get_default_threads()`)
 - `extra_args::Vector{String}`: Additional command-line arguments
 
 # Returns

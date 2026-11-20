@@ -264,6 +264,9 @@ function with_fake_vamb_bootstrap_runner(f::Function)
             withenv(
                 "MYCELIA_FAKE_CONDA_LOG" => log_file,
                 "MYCELIA_FAKE_CONDA_ENVS_DIR" => Mycelia._conda_envs_dir(),
+                # Unset an exported override so stubbed VAMB runs hit the
+                # stubbed CONDA_RUNNER, not a real conda.
+                "MYCELIA_CONDA_RUNNER" => nothing,
             ) do
                 with_stubbed_conda_runner(fake_vamb_bootstrap_conda_runner_script()) do
                     try
@@ -494,6 +497,17 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test df_custom.bin[2] == "BinB"
         Test.@test df_custom.contig[1] == "aaa"
 
+        # VAMB writes clustername / contigname; defaults must still parse it.
+        tmp_vamb = tempname()
+        open(tmp_vamb, "w") do io
+            write(io, "clustername\tcontigname\n")
+            write(io, "bin_1\tcontig1\n")
+            write(io, "bin_2\tcontig2\n")
+        end
+        Test.@test DataFrames.nrow(Mycelia.parse_bin_assignments(tmp_vamb)) == 2
+        Test.@test Mycelia.parse_bin_assignments(tmp_vamb).contig == ["contig1", "contig2"]
+        Test.@test Mycelia.parse_bin_assignments(tmp_vamb).bin == ["bin_1", "bin_2"]
+
         # dRep cluster table
         tmp_drep = tempname()
         open(tmp_drep, "w") do io
@@ -636,9 +650,11 @@ Test.@testset "Binning Tools Integration" begin
 
     Test.@testset "VAMB version-check failure handling" begin
         env_name = Mycelia._vamb_env_name()
-        with_stubbed_conda_envs([(env_name, Dict{String, String}())]) do
-            with_missing_conda_runner() do
-                Test.@test_throws Exception Mycelia._ensure_vamb_installed()
+        withenv("MYCELIA_CONDA_RUNNER" => nothing) do
+            with_stubbed_conda_envs([(env_name, Dict{String, String}())]) do
+                with_missing_conda_runner() do
+                    Test.@test_throws Exception Mycelia._ensure_vamb_installed()
+                end
             end
         end
     end
@@ -823,6 +839,7 @@ Test.@testset "Binning Tools Integration" begin
 
     Test.@testset "Stubbed wrapper execution" begin
         fake_specs = fake_binning_env_specs()
+        withenv("MYCELIA_CONDA_RUNNER" => nothing) do
         with_stubbed_conda_envs(fake_specs) do
             mktempdir() do dir
                 inputs = create_binning_stub_inputs(dir)
@@ -960,6 +977,7 @@ Test.@testset "Binning Tools Integration" begin
                 Test.@test occursin("bins_a__a.fa", copied_bins)
                 Test.@test occursin("bins_b__b.fa", copied_bins)
             end
+        end
         end
     end
 

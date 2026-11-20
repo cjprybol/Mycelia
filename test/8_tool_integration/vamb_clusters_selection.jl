@@ -75,6 +75,8 @@ mkdir "$outdir"
 printf '%s\n' "${args[*]}" > "$outdir/vamb_args.txt"
 model="vae"
 [[ "$mode" == "taxvamb" ]] && model="vaevae"
+# The metadata-file line is load-bearing. Without it, the old name-sorted
+# lookup also returns the split table, and the wiring test stops discriminating.
 printf 'name\tradius\n' > "$outdir/${model}_clusters_metadata.tsv"
 printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_unsplit.tsv"
 printf 'clustername\tcontigname\nbin_1\tcontig1\n' > "$outdir/${model}_clusters_split.tsv"
@@ -193,8 +195,13 @@ Test.@testset "VAMB clusters table selection" begin
                     threads = 2)
                 Test.@test vamb_result.clusters_tsv ==
                            joinpath(vamb_outdir, "vae_clusters_split.tsv")
-                Test.@test occursin("bin default",
-                    read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                vamb_args = read(joinpath(vamb_outdir, "vamb_args.txt"), String)
+                Test.@test occursin("bin default", vamb_args)
+                Test.@test occursin("-p 2", vamb_args)
+                Test.@test occursin("-m 2000", vamb_args)
+                Test.@test occursin("--fasta $(contigs)", vamb_args)
+                Test.@test Mycelia.parse_bin_assignments(vamb_result.clusters_tsv).contig == ["contig1"]
+                Test.@test Mycelia.parse_bin_assignments(vamb_result.clusters_tsv).bin == ["bin_1"]
 
                 taxvamb_outdir = joinpath(root, "out", "taxvamb")
                 taxvamb_result = Mycelia.run_taxvamb(
@@ -202,8 +209,13 @@ Test.@testset "VAMB clusters table selection" begin
                     taxonomy_file = taxonomy, outdir = taxvamb_outdir, threads = 2)
                 Test.@test taxvamb_result.clusters_tsv ==
                            joinpath(taxvamb_outdir, "vaevae_clusters_split.tsv")
-                Test.@test occursin("bin taxvamb",
-                    read(joinpath(taxvamb_outdir, "vamb_args.txt"), String))
+                taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                Test.@test occursin("bin taxvamb", taxvamb_args)
+                Test.@test occursin("-p 2", taxvamb_args)
+                Test.@test occursin("--fasta $(contigs)", taxvamb_args)
+                Test.@test occursin("--taxonomy $(taxonomy)", taxvamb_args)
+                Test.@test Mycelia.parse_bin_assignments(taxvamb_result.clusters_tsv).contig == ["contig1"]
+                Test.@test Mycelia.parse_bin_assignments(taxvamb_result.clusters_tsv).bin == ["bin_1"]
             end
         end
     end
