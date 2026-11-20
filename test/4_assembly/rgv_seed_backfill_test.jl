@@ -254,8 +254,12 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
             src = joinpath(dir, "nok.csv")
             write(src, "arm,n50\nnaive,60\niterative,62\n")
             out, _, _ = backfill_seed(src; seed = 42, provenance = "explicit (test)")
-            cols = DataFrames.names(CSV.read(out, DataFrames.DataFrame))
-            Test.@test cols == ["arm", "n50", "seed"]
+            df = CSV.read(out, DataFrames.DataFrame)
+            cols = DataFrames.names(df)
+            # `seed_provenance` sits beside the seed this tool supplied. A seed-only
+            # backfill still must not invent a metric-definition provenance column.
+            Test.@test cols == ["arm", "n50", "seed", "seed_provenance"]
+            Test.@test all(occursin.("explicit", df.seed_provenance))
         end
     end
 
@@ -391,8 +395,16 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
             _ = backfill_seed(src;
                 seed = 42, provenance = "explicit (test)",
                 output_path = joinpath(dir, "seed_only.csv"))
-            names2 = DataFrames.names(CSV.read(out2, DataFrames.DataFrame))
-            Test.@test !any(endswith.(names2, "_provenance"))
+            df2 = CSV.read(out2, DataFrames.DataFrame)
+            names2 = DataFrames.names(df2)
+            # No definition was supplied, so no definition-provenance column. The
+            # seed WAS supplied, so `seed_provenance` is present — that column is
+            # the disclosure, and its absence would make an assumed seed look
+            # observed once the analysis reads the table.
+            Test.@test !("metric_source_provenance" in names2)
+            Test.@test !("quast_min_contig_provenance" in names2)
+            Test.@test "seed_provenance" in names2
+            Test.@test all(occursin.("explicit", df2.seed_provenance))
         end
 
         # Rows that ALREADY carried the value are evidence, not assertions: only
@@ -461,5 +473,121 @@ Test.@testset "RGV seed backfill (td-59o7)" begin
         Test.@test "metric_source_provenance" in cols_written
         back = CSV.read(out_a, DataFrames.DataFrame)
         Test.@test all(back.metric_source_provenance .== DEFINITION_PROVENANCE_ASSERTED)
+    end
+
+    Test.@testset "the harness banner as printed today (plural, comma-space)" begin
+        # Pattern 3 used to be `Seed : <digits>` and returned nothing for the
+        # string the sweep actually prints, which the CLI then described as
+        # "this log predates seed logging". A multi-seed banner must hit the
+        # existing multi-seed error instead.
+        sweep = read(
+            joinpath(@__DIR__, "..", "..", "benchmarking",
+                "rhizomorph_correction_validation_sweep.jl"), String)
+        Test.@test occursin(
+            "println(\"Seeds          : \$(join(seeds, \", \"))\")", sweep)
+        mktempdir() do dir
+            one = joinpath(dir, "one.log")
+            write(one, "k              : 21\n" *
+                       "Seeds          : $(join([42], ", "))\n" *
+                       "Arms           : naive\n")
+            Test.@test recover_seed_from_log(one) == 42
+
+            many = joinpath(dir, "many.log")
+            write(many, "Seeds          : $(join([42, 123, 456], ", "))\n")
+            msg = _sbf_throws_with(() -> recover_seed_from_log(many),
+                ["MORE THAN ONE seed", "42, 123, 456", "pairable"])
+            Test.@test !occursin("predates", msg)
+
+            # The older singular banner still recovers. It is no longer what the
+            # sweep prints, and dropping it would reject logs that do carry a seed.
+            old = joinpath(dir, "old.log")
+            write(old, "Seed           : 123\n")
+            Test.@test recover_seed_from_log(old) == 123
+
+            # A banner of only commas or spaces matches `[\d,\s]+` but contains
+            # no seed. That is "no seed found", not an empty parse.
+            blank = joinpath(dir, "blank.log")
+            write(blank, "Seeds : ,\nSeeds          :   \n")
+            Test.@test recover_seed_from_log(blank) === nothing
+            _sbf_throws_with(
+                () -> resolve_backfill_seed(;
+                    explicit = nothing, run_log = blank, assume_default = false),
+                ["no seed found"])
+        end
+    end
+
+    Test.@testset "--seed does not silently supersede --run-log" begin
+        mktempdir() do dir
+            log = joinpath(dir, "run.log")
+            write(log, "Seeds          : 42\n")
+            seed, prov = resolve_backfill_seed(;
+                explicit = "42", run_log = log, assume_default = false)
+            Test.@test seed == 42
+            Test.@test occursin("agrees with run log", prov)
+
+            disagree = joinpath(dir, "other.log")
+            write(disagree, "SEED=123\n")
+            _sbf_throws_with(
+                () -> resolve_backfill_seed(;
+                    explicit = "42", run_log = disagree, assume_default = false),
+                ["disagrees", "123", "supersede"])
+
+            empty = joinpath(dir, "empty.log")
+            write(empty, "QUAST=true\n")
+            _sbf_throws_with(
+                () -> resolve_backfill_seed(;
+                    explicit = "42", run_log = empty, assume_default = false),
+                ["no seed was found", "Pass only one"])
+
+            # A multi-seed banner still refuses, even if --seed names one of them.
+            multi = joinpath(dir, "multi.log")
+            write(multi, "Seeds          : $(join([42, 123, 456], ", "))\n")
+            _sbf_throws_with(
+                () -> resolve_backfill_seed(;
+                    explicit = "42", run_log = multi, assume_default = false),
+                ["MORE THAN ONE seed"])
+        end
+    end
+
+    Test.@testset "assumed seeds are labelled in the CSV, not only the sidecar" begin
+        mktempdir() do dir
+            src = _sbf_legacy_csv(joinpath(dir, "sweep.csv"))
+            seed, prov = resolve_backfill_seed(;
+                explicit = nothing, run_log = nothing, assume_default = true)
+            Test.@test seed == RGV_DEFAULT_SEED
+            Test.@test occursin(SEED_PROVENANCE_ASSUMED_MARKER, prov)
+            out, sidecar, _ = backfill_seed(src; seed = seed, provenance = prov)
+            df = CSV.read(out, DataFrames.DataFrame)
+            Test.@test all(occursin.(SEED_PROVENANCE_ASSUMED_MARKER, df.seed_provenance))
+            meta = JSON.parsefile(sidecar)
+            Test.@test meta["seed_provenance_column"] == "seed_provenance"
+            Test.@test meta["seed_provenance_assumed_marker"] ==
+                       SEED_PROVENANCE_ASSUMED_MARKER
+
+            # Re-running over a column that already agrees must not launder the
+            # assumed label into "observed" or into a stronger explicit label.
+            again = insert_seed_column!(copy(df), seed; provenance = "explicit (--seed $seed)")
+            Test.@test all(occursin.(SEED_PROVENANCE_ASSUMED_MARKER, again.seed_provenance))
+
+            # A hole is labelled; a row that already had the seed stays observed.
+            partial = DataFrames.DataFrame(
+                arm = ["naive", "iterative"], k = [21, 21], seed = [42, missing])
+            filled = insert_seed_column!(partial, 42; provenance = prov)
+            Test.@test filled.seed_provenance[1] == SEED_PROVENANCE_OBSERVED
+            Test.@test occursin(SEED_PROVENANCE_ASSUMED_MARKER, filled.seed_provenance[2])
+        end
+    end
+
+    Test.@testset "unknown flags and flag-valued arguments are rejected" begin
+        Test.@test _cli_problem(["--csv", "a.csv", "--seed", "42"],
+            _BF_KNOWN_FLAGS, _BF_VALUE_FLAGS) === nothing
+        Test.@test occursin("unrecognized flag",
+            something(_cli_problem(["--csv", "a.csv", "--seeeed", "42"],
+                _BF_KNOWN_FLAGS, _BF_VALUE_FLAGS), ""))
+        Test.@test occursin("requires a value",
+            something(_cli_problem(["--csv", "a.csv", "--output", "--force"],
+                _BF_KNOWN_FLAGS, _BF_VALUE_FLAGS), ""))
+        _sbf_throws_with(() -> _bf_arg("--output", ["--output", "--force"]),
+            ["requires a value", "--force"])
     end
 end

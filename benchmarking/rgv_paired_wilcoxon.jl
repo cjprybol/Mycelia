@@ -51,6 +51,13 @@
 #    "guard enforced it" assurance over operator-asserted rows; `results.json`
 #    carries the same fact in `metric_definition_operator_asserted`.
 #
+#    The same disclosure applies to an ASSUMED seed. `--assume-default-seed`
+#    writes `seed_provenance` containing `documented-default` on every row it
+#    supplies. This script reads that column and, when any analyzed row carries
+#    it, says so in `report.md` and `results.json`. A harness CSV with no
+#    `seed_provenance` column is the observed case: the sweep wrote `seed`
+#    itself. Absence of the column is not an assumption.
+#
 # HOW PAIRS ARE FORMED
 # --------------------
 # One pair per (reference, error_rate, readlen, target_coverage, k, seed) cell:
@@ -487,17 +494,20 @@ the sign is now tested before the magnitude.
 `:none`-direction metrics get "reported (no directional claim)" rather than a
 verdict — the pre-registration defines no improvement threshold for them.
 
-An undefined effect size (`NaN`, e.g. every control value zero so no relative
-improvement is computable) is reported as indeterminate rather than being allowed
-to fall through the `> threshold` comparison, where `NaN > 0.1 === false` would
-have silently rendered it as "<= 10%".
+An undefined test (`n_pairs == 0`, or a non-finite adjusted p) and an undefined
+effect size are both reported with the leading token `INDETERMINATE`. A
+lowercase `indeterminate` was a separate outcome the legend's `**INDETERMINATE**`
+entry did not name. An undefined effect size (`NaN`, e.g. every control value
+zero so no relative improvement is computable) must not fall through the
+`> threshold` comparison, where `NaN > 0.1 === false` would have silently
+rendered it as "<= 10%".
 """
 function decide(result, adjusted_p)
     if result.direction == :none
         return "reported (no directional claim pre-registered for this metric)"
     end
     if result.n_pairs == 0 || isnan(adjusted_p)
-        return "indeterminate (test undefined — see n_pairs / dropped cells)"
+        return "INDETERMINATE (test undefined — see n_pairs / dropped cells)"
     end
     improved = result.median_relative_improvement
     pct = round(Int, RGV_IMPROVEMENT_THRESHOLD * 100)
@@ -548,6 +558,70 @@ The coupling to the writer is pinned by a behavioural round-trip test, not by a
 grep of the writer's source (a grep passes while the writer's call site drifts).
 """
 const RGV_OBSERVED_DEFINITION_LABEL = "observed"
+
+"""
+Substring identifying a seed that was ASSUMED by `rgv_seed_backfill.jl
+--assume-default-seed` rather than recorded by the harness or recovered from a
+run log.
+
+The backfill writes this inside the per-row `seed_provenance` string
+(`"documented-default (42); ..."`). Matched as a substring so the writer can
+keep the rest of the sentence. A table with no `seed_provenance` column is not
+assumed: that is the shape the live harness emits.
+"""
+const RGV_ASSUMED_SEED_MARKER = "documented-default"
+
+"""
+    assumed_seed_mask(df) -> BitVector
+
+True for rows whose `seed_provenance` says the seed was assumed. An absent
+column is all-false: the harness wrote `seed` and there is nothing to disclose
+beyond the seed values themselves.
+"""
+function assumed_seed_mask(df)
+    n = DataFrames.nrow(df)
+    col = "seed_provenance"
+    col in String.(DataFrames.names(df)) || return falses(n)
+    return BitVector([!ismissing(v) && occursin(RGV_ASSUMED_SEED_MARKER, string(v))
+                      for v in getproperty(df, Symbol(col))])
+end
+
+"""
+    _sorted_seeds(col) -> Vector
+
+The replicate axis, sorted.
+
+A `missing` seed is an error. Dropping it with `skipmissing` would remove a row
+from the replicate axis and make the same physical runs look like fewer
+replicates.
+
+Integer widths promote (`Int32` and `Int64` are the same seed). Any other mix,
+such as `String` and `Int64`, is refused with an explanation instead of
+`MethodError: isless(::String, ::Int64)`.
+"""
+function _sorted_seeds(col)
+    n_missing = count(ismissing, col)
+    if n_missing > 0
+        error("the `seed` column has $n_missing missing value(s) out of " *
+              "$(length(col)). A missing seed is not a replicate level and must " *
+              "not be dropped from the axis. Backfill it before analysis:\n" *
+              RGV_BACKFILL_HINT)
+    end
+    vals = collect(col)
+    types = unique(typeof.(vals))
+    if length(types) > 1 && all(t -> t <: Integer, types)
+        T = promote_type(types...)
+        return sort(unique(T.(vals)))
+    end
+    if length(types) > 1
+        error("the `seed` column mixes types ($(join(string.(types), ", "))). " *
+              "Shards disagree on the column type, so these values cannot be " *
+              "ordered into one replicate axis: `sort` would throw " *
+              "`MethodError: isless` (for example `isless(::String, ::Int64)`). " *
+              "Re-export every shard with a numeric `seed` before merging.")
+    end
+    return sort(unique(vals))
+end
 
 """
     definition_provenance_axes(df) -> (asserted, undeterminable, n_asserted_rows)
@@ -732,7 +806,11 @@ function run_paired_analysis(df;
     adjusted = benjamini_hochberg(Float64[r.test.pvalue for r in results])
     verdicts = [decide(results[i], adjusted[i]) for i in eachindex(results)]
 
-    seeds = sort(unique(work.seed))
+    seeds = _sorted_seeds(work.seed)
+    # Evaluated on the rows that were actually analyzed, so an assumed seed on a
+    # row the metric-source filter removed does not qualify the remainder.
+    assumed_seeds = assumed_seed_mask(work)
+    n_assumed_seeds = count(assumed_seeds)
     # The axes actually swept, so the report can state them next to every p-value
     # (the pre-registration's thresholds were calibrated for a different design).
     axes = Dict{Symbol, Vector{Any}}()
@@ -759,7 +837,9 @@ function run_paired_analysis(df;
         n_dropped_not_ok = n_dropped_not_ok,
         n_dropped_ok_missing = n_dropped_ok_missing,
         n_dropped_metric_source = n_dropped_source,
-        pair_keys = RGV_PAIR_KEYS)
+        pair_keys = RGV_PAIR_KEYS,
+        seed_provenance_assumed = n_assumed_seeds > 0,
+        n_rows_assumed_seed = n_assumed_seeds)
 end
 
 # === Reporting ==============================================================
@@ -796,6 +876,17 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
         println(io, "- Pairing key: " *
                     join(("`$k`" for k in analysis.pair_keys), " x "))
         println(io, "- Seeds present: $(join(string.(analysis.seeds), ", "))")
+        if analysis.seed_provenance_assumed
+            println(io,
+                "\n> ## ⚠️ SEED PROVENANCE ASSUMED, NOT OBSERVED\n>\n" *
+                "> $(analysis.n_rows_assumed_seed) of $(analysis.n_rows_analyzed) " *
+                "analyzed rows carry `seed_provenance` marked " *
+                "`$(RGV_ASSUMED_SEED_MARKER)`. That seed was not recorded by the " *
+                "harness and not recovered from a run log; it is the operator's " *
+                "acceptance of the documented default via `--assume-default-seed`. " *
+                "**Do not read the seed list above as observed replicate identity.** " *
+                "This is not an unqualified report.\n")
+        end
         # The axes ACTUALLY swept, next to the numbers. A p-value read without them
         # invites the reader to assume the pre-registered design produced it.
         for (label, col) in (("Error rates", :error_rate), ("Read lengths", :readlen),
@@ -981,9 +1072,12 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
             end
             println(io)
         end
-        # The legend must enumerate EVERY outcome `decide` can emit, or a reader
-        # meets a verdict string the report never defines. It listed three while
-        # the function emitted five.
+        # The legend must enumerate EVERY leading token `decide` can emit, or a
+        # reader meets a verdict string the report never defines. Both undefined
+        # branches share **INDETERMINATE** (the test-undefined branch used to
+        # return a lowercase "indeterminate", which this entry did not name).
+        # `:none` metrics return "reported (...)", which is not one of the five
+        # verdicts.
         pct = round(Int, RGV_IMPROVEMENT_THRESHOLD * 100)
         println(io, "## Decision rule applied\n")
         println(io,
@@ -1004,7 +1098,12 @@ function write_paired_report(path::AbstractString, analysis; csv_paths)
             "- **INDETERMINATE**: the test or the effect size is undefined (no " *
             "non-zero differences, or every control value is zero so relative " *
             "improvement cannot be computed) — read the median paired difference " *
-            "instead")
+            "instead. Both `decide` branches use this leading token.")
+        println(io,
+            "- **reported**: no directional claim was pre-registered for this " *
+            "metric (`:none` direction, including `quast_duplication_ratio` and " *
+            "any `--metrics` value with no entry in `RGV_METRIC_DIRECTION`). " *
+            "The difference is shown; it is not a verdict.")
     end
     return path
 end
@@ -1025,6 +1124,23 @@ _json_num(x::Real) = isfinite(x) ? x : nothing
 _json_num(x) = x
 
 """
+    _json_finite(x)
+
+A per-pair observation, which `build_pairs` only emits when it is finite.
+
+`_json_num` maps non-finite values to `null`. The figure reads `control`,
+`treatment`, and `difference` with `Float64[...]`, which throws `MethodError`
+on `null`. Emitting null there advertises a JSON shape the only consumer
+cannot parse, so a non-finite pair value is an error instead of a null.
+"""
+function _json_finite(x)
+    x isa Real && isfinite(x) ||
+        error("paired observation is not a finite number ($(repr(x))); " *
+              "refusing to emit null for a field the figure reads as Float64")
+    return x
+end
+
+"""
     paired_analysis_json(analysis; csv_paths) -> Dict
 
 Machine-readable form of the analysis, also consumed by
@@ -1038,6 +1154,10 @@ function paired_analysis_json(analysis; csv_paths)
         "control" => analysis.control,
         "pair_keys" => String[string(k) for k in analysis.pair_keys],
         "seeds" => collect(analysis.seeds),
+        # True when any analyzed row's seed was assumed (`--assume-default-seed`),
+        # not when the column is absent. Absence is the harness's observed seed.
+        "seed_provenance_assumed" => analysis.seed_provenance_assumed,
+        "n_rows_assumed_seed" => analysis.n_rows_assumed_seed,
         "n_input_rows" => analysis.n_input_rows,
         "n_rows_analyzed" => analysis.n_rows_analyzed,
         # Whether the ok=false check RAN, not only what it dropped. Without the
@@ -1098,9 +1218,9 @@ function paired_analysis_json(analysis; csv_paths)
                           # Per-pair observations, so rgv_paired_wilcoxon_figure.jl can
                           # draw the paired differences without re-reading the CSVs.
                           "pairs" => [Dict("key" => pr.key,
-                                          "control" => _json_num(pr.control_value),
-                                          "treatment" => _json_num(pr.treatment_value),
-                                          "difference" => _json_num(pr.difference))
+                                          "control" => _json_finite(pr.control_value),
+                                          "treatment" => _json_finite(pr.treatment_value),
+                                          "difference" => _json_finite(pr.difference))
                                       for pr in r.pairs]
                       )
                       for (i, r) in enumerate(analysis.results)]
@@ -1135,12 +1255,57 @@ function _pw_args(flag)
     return out
 end
 
-function _pw_arg(flag)
-    i = findfirst(==(flag), ARGS)
-    return (i !== nothing && i < length(ARGS)) ? ARGS[i + 1] : nothing
+const _PW_KNOWN_FLAGS = (
+    "--csv", "--treatment", "--control", "--metrics", "--output-dir",
+    "--metric-source", "--allow-mixed-src", "--keep-not-ok",
+)
+const _PW_VALUE_FLAGS = (
+    "--csv", "--treatment", "--control", "--metrics", "--output-dir",
+    "--metric-source",
+)
+
+"""
+    _cli_problem(args, known, value_flags) -> Union{String, Nothing}
+
+`nothing` when every `--flag` is known and every value-taking flag is followed
+by a value. An unknown flag used to be ignored, and a value slot used to accept
+the next flag, so `--output-dir --allow-mixed-src` created a directory named
+`--allow-mixed-src`.
+"""
+function _cli_problem(args, known, value_flags)
+    known_set = Set(String.(known))
+    value_set = Set(String.(value_flags))
+    for a in args
+        if startswith(a, "--") && !(a in known_set)
+            return "unrecognized flag `$a`"
+        end
+    end
+    for (i, a) in enumerate(args)
+        a in value_set || continue
+        if i == length(args) || startswith(args[i + 1], "--")
+            nxt = i == length(args) ? "end of arguments" : "`$(args[i + 1])`"
+            return "`$a` requires a value, not $nxt"
+        end
+    end
+    return nothing
+end
+
+function _pw_arg(flag, args = ARGS)
+    i = findfirst(==(flag), args)
+    i === nothing && return nothing
+    if i == length(args) || startswith(args[i + 1], "--")
+        error("`$flag` requires a value, not " *
+              (i == length(args) ? "end of arguments" : "`$(args[i + 1])`"))
+    end
+    return args[i + 1]
 end
 
 function main()
+    problem = _cli_problem(ARGS, _PW_KNOWN_FLAGS, _PW_VALUE_FLAGS)
+    if problem !== nothing
+        println(stderr, "ERROR: $problem")
+        return 2
+    end
     csv_paths = _pw_args("--csv")
     if isempty(csv_paths)
         println(stderr,
