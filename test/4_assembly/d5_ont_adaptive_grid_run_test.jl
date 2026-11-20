@@ -197,6 +197,17 @@ Test.@testset "D5 grid runner" begin
             rm(work; recursive = true)
             Test.@test isfile(blog)
 
+            # A nonzero producer still fails the call. Capturing stderr does not
+            # hide the exit status, and the log keeps what the producer wrote.
+            mkpath(work)
+            fail_log = read_set_tool_log(work, "minimap2")
+            msg = error_message(() -> run_with_log(
+                `sh -c 'echo boom >&2; exit 3'`,
+                joinpath(work, "failed.out"), fail_log))
+            Test.@test msg !== nothing && occursin("failed process", msg) &&
+                       occursin("[3]", msg)
+            Test.@test read(fail_log, String) == "boom\n"
+
             mkpath(work)
             calls = []
             fake = function (cmd, stdout_path, log_path; downstream = nothing)
