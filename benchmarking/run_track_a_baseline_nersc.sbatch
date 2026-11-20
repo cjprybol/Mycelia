@@ -49,6 +49,14 @@ echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK
 module load julia/1.10.10
 
 JULIA="$(command -v julia || true)"
+# Match the depot used during login-node pre-staging so cached conda envs +
+# precompiled deps are found (NERSC default for this project; on CFS, shared
+# between login and compute). Exported before the version guard so the probe
+# runs in the job's environment (td-67fj). A stale LD_LIBRARY_PATH can fail
+# --version on a julia that runs once the path is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
+# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
+export LD_LIBRARY_PATH=""
 if [[ -z "${JULIA}" ]] || ! "${JULIA}" --version >/dev/null 2>&1; then
   echo "ERROR: julia not runnable after 'module load julia/1.10.10'." >&2
   exit 1
@@ -56,12 +64,6 @@ fi
 echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-# Match the depot used during login-node pre-staging so cached conda envs +
-# precompiled deps are found (NERSC default for this project; on CFS, shared
-# between login and compute).
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/cfs/projectdirs/m4269/cjprybol/.julia_depot}"
-# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
-export LD_LIBRARY_PATH=""
 
 # Outputs on scratch (keep $HOME clean); must match the pre-stage --output-dir
 # so the downloaded refs are reused offline.

@@ -41,14 +41,17 @@ echo "Job: ${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}  Node: ${SLURM_NODELIST}
 # PATH lookup or `module load julia` is not used.
 JULIA="${HOME}/.juliaup/bin/julia"
 JULIA_ARGS=(+lts)
+# Depot and library path before the version guard so the probe runs in the
+# job's environment (td-67fj). A stale LD_LIBRARY_PATH can fail --version on a
+# julia that runs once the path is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
+export LD_LIBRARY_PATH=""
 if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
   echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable on this host." >&2
   exit 1
 fi
 
 export JULIA_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
-export LD_LIBRARY_PATH=""
 
 # Measure the checkout this was SUBMITTED from, never a hardcoded path: the
 # provenance below must describe the code that actually ran.
@@ -110,6 +113,9 @@ export JULIA_LOAD_PATH="@:@stdlib"
 # where RENAME_NOREPLACE returns EINVAL (smoke jobs 27116288, 27118360). So every
 # task gets a private directory on node-local disk, resolved to its physical path,
 # and a network/parallel filesystem is refused up front instead of failing later.
+# TD2RXH_TMP_MIN_FREE_KB (default 2097152, 2 GiB) is a free-space floor, not a
+# capacity estimate. TD2RXH_ALLOW_TMPFS=1 allows a tmpfs TMPDIR; without it
+# tmpfs is refused, because tmpfs counts against --mem.
 tmp_base="${TD2RXH_TMP_BASE:-${SLURM_TMPDIR:-/tmp}}"
 # mktemp -d creates a fresh 0700 directory and refuses an existing path, so a
 # requeued task never inherits stale contents and a pre-planted symlink at a
@@ -135,14 +141,36 @@ if ! tmp_fs="$(stat -f -c %T "${TMPDIR}")"; then
   exit 1
 fi
 # Allowlist, not denylist: an unrecognised type (BeeGFS prints "UNKNOWN (0x...)")
-# must not slip through to fail mid-run.
+# must not slip through to fail mid-run. tmpfs is local, but it counts against
+# --mem (sacct MaxRSS does not include it), so it needs an explicit opt-in.
 case "${tmp_fs}" in
-  ext2/ext3|xfs|tmpfs|btrfs|overlayfs) ;;
+  ext2/ext3|xfs|btrfs|overlayfs) ;;
+  tmpfs)
+    if [[ "${TD2RXH_ALLOW_TMPFS:-}" != "1" ]]; then
+      echo "ERROR: TMPDIR ${TMPDIR} is on tmpfs, which counts against --mem. Set TD2RXH_ALLOW_TMPFS=1 to allow it." >&2
+      exit 1
+    fi
+    echo "WARN: TMPDIR ${TMPDIR} is on tmpfs and counts against --mem (sacct MaxRSS excludes it). Continuing because TD2RXH_ALLOW_TMPFS=1." >&2
+    ;;
   *)
-    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem (ext/xfs/tmpfs/btrfs/overlayfs)." >&2
+    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem (ext/xfs/btrfs/overlayfs, or tmpfs with TD2RXH_ALLOW_TMPFS=1)." >&2
     exit 1 ;;
 esac
+# Free-space floor, not a capacity estimate: a full node-local disk fails the
+# corrector mid-run. Default is 2 GiB. Override with TD2RXH_TMP_MIN_FREE_KB.
+min_free_kb="${TD2RXH_TMP_MIN_FREE_KB:-2097152}"
+if [[ ! "${min_free_kb}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: TD2RXH_TMP_MIN_FREE_KB must be a non-negative integer (KiB), got '${min_free_kb}'." >&2
+  exit 1
+fi
+if ! avail_kb="$(df -P -k "${TMPDIR}" | awk 'NR==2 {print $4}')" ||
+   [[ ! "${avail_kb}" =~ ^[0-9]+$ ]] ||
+   (( avail_kb < min_free_kb )); then
+  echo "ERROR: TMPDIR ${TMPDIR} has ${avail_kb:-unknown} KiB free, below the ${min_free_kb} KiB floor (set TD2RXH_TMP_MIN_FREE_KB to override)." >&2
+  exit 1
+fi
 echo "TMPDIR=${TMPDIR} (${tmp_fs})"
+echo "TMPDIR free: ${avail_kb} KiB (floor ${min_free_kb} KiB)"
 
 cells="${TD2RXH_CELLS:-td2rxh}"
 case "${cells}" in

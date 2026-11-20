@@ -9,7 +9,8 @@ module Td2rxhSbatchGuardTest
 # failing status, failing or garbage sha256sum, missing Manifest, non-zero julia
 # exit, unknown cell set, --seeds/--label/--cells passthrough, MYCELIA_PROJECT
 # cleared, symlinked TMPDIR base,
-# TMPDIR kept on failure, and non-local or unrecognised filesystems refused.
+# TMPDIR kept on failure, non-local or unrecognised filesystems refused,
+# a free-space floor, and tmpfs refused unless TD2RXH_ALLOW_TMPFS=1.
 # Capture: stdout and stderr must both be complete (td-iobuf); a shared
 # IOBuffer plus take! can drop the EXIT-trap "kept TMPDIR" line.
 # Not covered: the "julia not runnable", "not in benchmarking/"
@@ -92,8 +93,10 @@ function run_sbatch(repo, home, bindir; extra_env = Dict{String, String}())
         "SLURM_ARRAY_JOB_ID" => "99", "SLURM_ARRAY_TASK_ID" => "1",
         "SLURM_NODELIST" => "n0", "SLURM_CPUS_PER_TASK" => "2",
         # A throwaway base, so failure cases that keep their TMPDIR on purpose do
-        # not leave directories in the host's /tmp.
-        "TD2RXH_TMP_BASE" => mktempdir())
+        # not leave directories in the host's /tmp. The floor is 1 KiB here so a
+        # small CI disk still passes; the floor-refusal case overrides it.
+        "TD2RXH_TMP_BASE" => mktempdir(),
+        "TD2RXH_TMP_MIN_FREE_KB" => "1")
     merge!(env, extra_env)
     # Separate stdout/stderr pipes, read to completion, then wait. A single
     # shared IOBuffer plus take! races the async copier and can drop the
@@ -326,6 +329,40 @@ Test.@testset "td2rxh sbatch fail-closed guards" begin
             log0 = run_sbatch(repo, home, bindir;
                 extra_env = Dict("STUB_ROWS" => "0", "TD2RXH_CELLS" => "all"))
             Test.@test rc0 == 1 && occursin("0 of 6", log0)
+        end
+        Test.@testset "tmpfs is refused unless TD2RXH_ALLOW_TMPFS=1" begin
+            repo, home, bindir = fixture()
+            base = mktempdir()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => base,
+                    "STUB_FS" => "tmpfs"))
+            Test.@test rc == 1 && occursin("is on tmpfs", log)
+            Test.@test occursin("TD2RXH_ALLOW_TMPFS=1", log)
+            Test.@test !occursin("Continuing because", log)
+            Test.@test isempty(readdir(base))
+            rc_ok,
+            log_ok = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => base,
+                    "STUB_FS" => "tmpfs", "TD2RXH_ALLOW_TMPFS" => "1"))
+            Test.@test rc_ok == 0
+            Test.@test occursin("WARN:", log_ok)
+            Test.@test occursin("Continuing because TD2RXH_ALLOW_TMPFS=1", log_ok)
+        end
+        Test.@testset "a TMPDIR below the free-space floor is refused" begin
+            repo, home, bindir = fixture()
+            base = mktempdir()
+            rc,
+            log = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => base,
+                    "TD2RXH_TMP_MIN_FREE_KB" => "999999999999"))
+            Test.@test rc == 1 && occursin("below the", log)
+            Test.@test isempty(readdir(base))
+            rc_bad,
+            log_bad = run_sbatch(repo, home, bindir;
+                extra_env = Dict("STUB_ROWS" => "12", "TD2RXH_TMP_BASE" => base,
+                    "TD2RXH_TMP_MIN_FREE_KB" => "nope"))
+            Test.@test rc_bad == 1 && occursin("non-negative integer", log_bad)
         end
         Test.@testset "mktemp-failure guard fires (td-wmvp item 11)" begin
             repo, home, bindir = fixture()
