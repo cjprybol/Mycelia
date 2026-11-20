@@ -182,9 +182,77 @@ function _stage0_harness_profiles(src::String, common_src::String)::Vector{Strin
     return profiles
 end
 
+function _stage0_harness_walk(f, ex)
+    f(ex)
+    if ex isa Expr
+        for arg in ex.args
+            _stage0_harness_walk(f, arg)
+        end
+    end
+    return nothing
+end
+
+"""True when `ex` is an `include(...)` call whose arguments name stage0_common.jl.
+
+A docstring or comment that only mentions the filename is not a call, so it
+does not count. `Meta.parseall` drops comments before this walk.
+"""
+function _stage0_harness_include_call(ex)::Bool
+    ex isa Expr || return false
+    ex.head === :call || return false
+    length(ex.args) >= 2 || return false
+    ex.args[1] === :include || return false
+    return _stage0_harness_expr_mentions_common(ex)
+end
+
+function _stage0_harness_expr_mentions_common(ex)::Bool
+    if ex isa AbstractString
+        return occursin("stage0_common.jl", ex)
+    elseif ex isa Expr
+        return any(_stage0_harness_expr_mentions_common, ex.args)
+    else
+        return false
+    end
+end
+
 function _stage0_harness_includes_common(src::String)::Bool
-    code = _stage0_harness_code(src; blank_literals = false)
-    return occursin(r"include\s*\([^)\n]*stage0_common\.jl", code)
+    ast = try
+        Meta.parseall(src)
+    catch
+        return false
+    end
+    found = Ref(false)
+    _stage0_harness_walk(ast) do ex
+        if _stage0_harness_include_call(ex)
+            found[] = true
+        end
+    end
+    return found[]
+end
+
+"""Default k from `const K = getenv("MYCELIA_S0_K", k)` in a Stage-0 script."""
+function _stage0_harness_configured_k(src::String)::Int
+    found = Int[]
+    ast = Meta.parseall(src)
+    _stage0_harness_walk(ast) do ex
+        ex isa Expr || return
+        ex.head === :const || return
+        length(ex.args) == 1 || return
+        inner = ex.args[1]
+        inner isa Expr && inner.head === :(=) || return
+        length(inner.args) == 2 || return
+        inner.args[1] === :K || return
+        rhs = inner.args[2]
+        rhs isa Expr && rhs.head === :call || return
+        length(rhs.args) >= 3 || return
+        rhs.args[1] === :getenv || return
+        rhs.args[2] == "MYCELIA_S0_K" || return
+        rhs.args[3] isa Integer || return
+        push!(found, Int(rhs.args[3]))
+    end
+    length(found) == 1 ||
+        error("expected one MYCELIA_S0_K default, found $(found)")
+    return found[1]
 end
 
 """Problems that mean this script has drifted from the shared harness."""
@@ -214,16 +282,30 @@ function _stage0_harness_issues(label::AbstractString, src::String,
     return issues
 end
 
-# Tiny config, included the same way the scripts include the harness. Error
-# rate 0 makes every read an exact slice of the reference, so the truth set is
-# checkable without running either benchmark.
-module Stage0CommonHarnessSmoke
-const REFLEN = 50
-const COVERAGE = 2
-const READLEN = 30
-const ERROR_RATE = 0.0
-const K = 21
-include(joinpath(@__DIR__, "..", "..", "benchmarking", "stage0_common.jl"))
+# One smoke module per k configured by the Stage-0 scripts. The module's `K`
+# is that script default, and `read_kmers` closes over it, so the k-mer
+# iterator is not a literal in the test.
+const _STAGE0_HARNESS_SMOKES = Dict{Int, Module}()
+for _stage0_k in unique(
+    _stage0_harness_configured_k(read(path, String))
+    for path in _STAGE0_HARNESS_SCRIPTS
+)
+    _stage0_mod = Symbol("Stage0CommonHarnessSmoke_k", _stage0_k)
+    @eval module $_stage0_mod
+        # Error rate 0 makes every read an exact slice of the reference.
+        # Read length stays just above this script k so the draw stays small
+        # even when a script's default reference is long.
+        const K = $_stage0_k
+        const READLEN = K + 9
+        const REFLEN = 2 * READLEN
+        const COVERAGE = 2
+        const ERROR_RATE = 0.0
+        include($(_STAGE0_HARNESS_COMMON))
+        function read_kmers(seq)
+            return Kmers.UnambiguousDNAMers{K}(seq)
+        end
+    end
+    _STAGE0_HARNESS_SMOKES[_stage0_k] = getfield(@__MODULE__, _stage0_mod)
 end
 
 Test.@testset "Stage-0 shared harness (td-f581)" begin
@@ -316,39 +398,78 @@ Test.@testset "Stage-0 shared harness (td-f581)" begin
                                  occursin("sample_quality", issue), issues)
     end
 
-    Test.@testset "shared helpers still simulate the Stage-0 model" begin
-        Test.@test Stage0CommonHarnessSmoke.STAGE0_MEMORY_PROFILE === :full
-        rng = Random.MersenneTwister(7)
-        for is_error in (false, true)
-            quality = Stage0CommonHarnessSmoke.sample_quality(rng, is_error)
-            Test.@test quality isa Char
-            Test.@test '#' <= quality <= 'I'   # Phred 2..40, encoded +33
+    Test.@testset "detector rejects a mention that is not an include call" begin
+        common = """
+        const STAGE0_MEMORY_PROFILE = :full
+        function sample_quality(rng, is_error::Bool)::Char
+            return 'I'
         end
-        ref_a, recs_a = Stage0CommonHarnessSmoke.simulate(Random.MersenneTwister(7))
-        ref_b, recs_b = Stage0CommonHarnessSmoke.simulate(Random.MersenneTwister(7))
-        Test.@test ref_a == ref_b
-        Test.@test length(ref_a) == Stage0CommonHarnessSmoke.REFLEN
-        n_reads = max(1, round(Int, Stage0CommonHarnessSmoke.COVERAGE *
-                                    Stage0CommonHarnessSmoke.REFLEN /
-                                    Stage0CommonHarnessSmoke.READLEN))
-        Test.@test length(recs_a) == n_reads
-        Test.@test length(recs_a) == length(recs_b)
-        truth = Stage0CommonHarnessSmoke.reference_kmer_set(ref_a)
-        Test.@test !isempty(truth)
-        k = Stage0CommonHarnessSmoke.K
-        for (rec_a, rec_b) in zip(recs_a, recs_b)
-            seq_a = FASTX.sequence(String, rec_a)
-            Test.@test seq_a == FASTX.sequence(String, rec_b)
-            Test.@test length(seq_a) == Stage0CommonHarnessSmoke.READLEN
-            Test.@test occursin(seq_a, ref_a)
-            read_seq = BioSequences.LongDNA{4}(seq_a)
-            Test.@test k == 21
-            for (kmer, _) in Kmers.UnambiguousDNAMers{21}(read_seq)
-                Test.@test BioSequences.canonical(kmer) in truth
+        function simulate(rng)
+            return "AC"
+        end
+        function reference_kmer_set(ref::AbstractString)
+            return Set([ref])
+        end
+        """
+        # The filename appears only inside a docstring. There is no include call.
+        doc_only = """
+        \"\"\"
+        Shared model: include(joinpath(@__DIR__, "stage0_common.jl"))
+        \"\"\"
+        memory_profile = :full
+        """
+        comment_only = """
+        # include(joinpath(@__DIR__, "stage0_common.jl"))
+        memory_profile = :full
+        """
+        Test.@test !_stage0_harness_includes_common(doc_only)
+        Test.@test !_stage0_harness_includes_common(comment_only)
+        for (label, src) in (("doc_only.jl", doc_only), ("comment_only.jl", comment_only))
+            issues = _stage0_harness_issues(label, src, common)
+            Test.@test issues == ["$label does not include stage0_common.jl"]
+        end
+    end
+
+    Test.@testset "shared helpers still simulate the Stage-0 model" begin
+        checked = Set{Int}()
+        for (_, src) in script_srcs
+            k = _stage0_harness_configured_k(src)
+            smoke = _STAGE0_HARNESS_SMOKES[k]
+            # The draw uses the k configured by this script, not a literal in the test.
+            Test.@test smoke.K == k
+            k in checked && continue
+            push!(checked, k)
+            Test.@test smoke.STAGE0_MEMORY_PROFILE === :full
+            rng = Random.MersenneTwister(7)
+            for is_error in (false, true)
+                quality = smoke.sample_quality(rng, is_error)
+                Test.@test quality isa Char
+                Test.@test '#' <= quality <= 'I'   # Phred 2..40, encoded +33
+            end
+            ref_a, recs_a = smoke.simulate(Random.MersenneTwister(7))
+            ref_b, recs_b = smoke.simulate(Random.MersenneTwister(7))
+            Test.@test ref_a == ref_b
+            Test.@test length(ref_a) == smoke.REFLEN
+            n_reads = max(1, round(Int, smoke.COVERAGE * smoke.REFLEN / smoke.READLEN))
+            Test.@test length(recs_a) == n_reads
+            Test.@test length(recs_a) == length(recs_b)
+            truth = smoke.reference_kmer_set(ref_a)
+            Test.@test !isempty(truth)
+            Test.@test smoke.READLEN >= smoke.K
+            for (rec_a, rec_b) in zip(recs_a, recs_b)
+                seq_a = FASTX.sequence(String, rec_a)
+                Test.@test seq_a == FASTX.sequence(String, rec_b)
+                Test.@test length(seq_a) == smoke.READLEN
+                Test.@test occursin(seq_a, ref_a)
+                read_seq = BioSequences.LongDNA{4}(seq_a)
+                for (kmer, _) in smoke.read_kmers(read_seq)
+                    Test.@test BioSequences.canonical(kmer) in truth
+                end
+            end
+            for kmer in truth
+                Test.@test kmer == BioSequences.canonical(kmer)
             end
         end
-        for kmer in truth
-            Test.@test kmer == BioSequences.canonical(kmer)
-        end
+        Test.@test !isempty(checked)
     end
 end
