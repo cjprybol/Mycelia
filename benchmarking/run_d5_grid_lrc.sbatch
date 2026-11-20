@@ -78,6 +78,11 @@
 #       D5_OUTDIR=/global/scratch/users/$USER/d5_grid_toy \
 #       sbatch --array=0-3 --time=24:00:00 \
 #       --dependency=afterany:<read_set_job_id> run_d5_grid_lrc.sbatch
+#   A SIGKILL (the time limit) leaves cells/<id>.lock or refs/<accession>.lock
+#   behind. The next task breaks it when `squeue -h -j <id>` shows the job is
+#   gone, the pid is dead on this host, or the lock is older than the 72 h
+#   walltime. If a resubmit still says the lock is held, remove that directory
+#   by hand and resubmit.
 #   Full Phase A, only after the user approves the launch (D5_FULL=1 and the
 #   array override together, as on Perlmutter). Read-set task time and memory
 #   are unmeasured above Lambda 100x; keep the 200G envelope until measured:

@@ -662,34 +662,70 @@ Test.@testset "D5 grid runner" begin
             Test.@test msg !== nothing && occursin("already held", msg) &&
                        occursin(D5OntAdaptiveGridDriver.cell_id(cell), msg)
             Test.@test isdir(lockdir)
-            # SIGKILL never runs finally. A dead pid on this host is reclaimed
-            # and the cell runs; our own pid is still live and is not stolen.
-            write(joinpath(lockdir, "holder"), "$(gethostname()) 2147483646 -")
+            # SIGKILL never runs finally. A dead pid on this host is broken
+            # and logged, and the cell runs. Our own pid, with a fresh timestamp,
+            # is still live and is not broken.
+            now = floor(Int, time())
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) 2147483646 - $(now)")
             Test.@test !local_pid_alive(2147483646)
             calls[] = 0
-            Test.@test run_or_resume(
-                _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A) == "ok"
+            dead_logs = Test.TestLogger()
+            Logging.with_logger(dead_logs) do
+                Test.@test run_or_resume(
+                    _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A) ==
+                           "ok"
+            end
             Test.@test calls[] == 1 && !isdir(lockdir)
+            Test.@test any(l -> occursin("breaking stale lock", l.message), dead_logs.logs)
             mkpath(lockdir)
-            write(joinpath(lockdir, "holder"), "$(gethostname()) $(getpid()) -")
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) $(getpid()) - $(now)")
             calls[] = 0
             msg = error_message(() -> run_or_resume(
                 _ -> (calls[] += 1; row_for(cell)), root, cell, CTX; phase = :A))
             Test.@test calls[] == 0 && isdir(lockdir)
+            Test.@test msg !== nothing && occursin("already held", msg) &&
+                       occursin("remove the lock directory by hand", msg)
+            # Older than the walltime is stale even when the pid is still ours
+            # (pid reuse) and squeue is not available.
+            write(joinpath(lockdir, "holder"),
+                "$(gethostname()) $(getpid()) - $(now - 100)")
+            aged = Ref(false)
+            age_logs = Test.TestLogger()
+            Logging.with_logger(age_logs) do
+                with_directory_lock(lockdir; timeout_s = 0, now, max_age_s = 10,
+                    squeue_available = false) do
+                    aged[] = true
+                end
+            end
+            Test.@test aged[] && !isdir(lockdir)
+            Test.@test any(l -> occursin("older than the 10 s walltime", l.message),
+                age_logs.logs)
+            # Another host is broken only when squeue is available and the job
+            # is gone. Without squeue, a young lock stays (age-only fallback).
+            mkpath(lockdir)
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
+            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0,
+                now, max_age_s = D5_LOCK_MAX_AGE_S, squeue_available = false,
+                job_running = _ -> false) do
+                error("broke a young lock without squeue")
+            end)
+            Test.@test isdir(lockdir)
             Test.@test msg !== nothing && occursin("already held", msg)
-            # Another host is reclaimed only when its SLURM job is finished.
             rm(lockdir; recursive = true)
             mkpath(lockdir)
-            write(joinpath(lockdir, "holder"), "otherhost 1 4242")
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
             ran = Ref(false)
-            with_directory_lock(lockdir; timeout_s = 0, job_running = _ -> false) do
+            with_directory_lock(lockdir; timeout_s = 0, now, squeue_available = true,
+                job_running = _ -> false) do
                 ran[] = true
             end
             Test.@test ran[] && !isdir(lockdir)
             mkpath(lockdir)
-            write(joinpath(lockdir, "holder"), "otherhost 1 4242")
-            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0,
-                job_running = _ -> true) do
+            write(joinpath(lockdir, "holder"), "otherhost 1 4242 $(now)")
+            msg = error_message(() -> with_directory_lock(lockdir; timeout_s = 0, now,
+                squeue_available = true, job_running = _ -> true) do
                 error("stole a live job")
             end)
             Test.@test isdir(lockdir)
@@ -739,6 +775,13 @@ Test.@testset "D5 grid runner" begin
             "run_d5_grid_nersc.sbatch"), String)
         Test.@test occursin("--stage-refs", nersc)
         Test.@test occursin("Phase A refuses", nersc)
+        for text in (lrc, nersc)
+            Test.@test occursin("squeue -h -j", text)
+            Test.@test occursin("remove that directory", text)
+        end
+        runner = read(joinpath(@__DIR__, "..", "..", "benchmarking",
+            "d5_ont_adaptive_grid_run.jl"), String)
+        Test.@test occursin("remove that directory by hand and resubmit", runner)
     end
 
     Test.@testset "temp root: resolved, pinned to TMPDIR, refused when rename fails" begin

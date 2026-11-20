@@ -86,6 +86,11 @@
 #       run_d5_grid_nersc.sbatch
 #   A cell task whose read set is not prepared exits 1 and writes no row;
 #   resubmit its index once the read-set task has finished.
+#   A SIGKILL (the time limit) leaves cells/<id>.lock or refs/<accession>.lock
+#   behind. The next task breaks it when `squeue -h -j <id>` shows the job is
+#   gone, the pid is dead on this host, or the lock is older than the 72 h
+#   walltime. If a resubmit still says the lock is held, remove that directory
+#   by hand and resubmit.
 #   Merge after both arrays finish (one task; index 0 is inside the toy):
 #     D5_PHASE=merge D5_OUTDIR=... sbatch --array=0 --time=01:00:00 \
 #       --dependency=afterany:<cell_job_id> run_d5_grid_nersc.sbatch

@@ -26,6 +26,13 @@
 # renameat2(RENAME_NOREPLACE), which Lustre does not, and the runner checks.
 # Run by hand on Perlmutter with --tmp-dir "$(mktemp --directory)".
 #
+# A SIGKILL (SLURM time limit, or kill -9) does not run the lock's finally, so
+# cells/<id>.lock or refs/<accession>.lock can be left behind. The next task
+# breaks that lock when `squeue -h -j <id>` shows the job is gone, when the
+# pid is dead on this host, or when the lock is older than the 72 h walltime
+# (the age-only rule when squeue is not available). If a resubmit still says
+# the lock is held, remove that directory by hand and resubmit.
+#
 # Output tree:
 #   <root>/run_manifest.json                  Mycelia SHA shared by every phase
 #   <root>/refs/                              reference FASTA per organism, staged
@@ -221,9 +228,14 @@ function reference_fasta(organism::Symbol, refs_dir::AbstractString)
     return (; info, path = joinpath(refs_dir, info.accession * ".fna"))
 end
 
-"""hostname, pid, and SLURM job id (`-` when this process is not a SLURM job)."""
-function lock_holder_line()
-    return "$(gethostname()) $(getpid()) $(get(ENV, "SLURM_JOB_ID", "-"))"
+# Longest `#SBATCH --time` on the D5 wrappers (Lawrencium, 72 h). A lock older
+# than this cannot belong to a job SLURM has not already killed. Perlmutter's
+# 48 h limit is shorter, so this ceiling does not break a live allocation.
+const D5_LOCK_MAX_AGE_S = 72 * 60 * 60
+
+"""hostname, pid, SLURM job id (`-` outside SLURM), and creation time (unix seconds)."""
+function lock_holder_line(; now::Real = time())
+    return "$(gethostname()) $(getpid()) $(get(ENV, "SLURM_JOB_ID", "-")) $(floor(Int, now))"
 end
 
 """True when `pid` exists on this machine. `EPERM` still means it exists."""
@@ -235,8 +247,9 @@ function local_pid_alive(pid::Integer)
 end
 
 """
-True when `squeue` still lists `jobid`. No `squeue`, or a non-numeric id, stays
-true: a lock is reclaimed only when the holder is proved gone.
+True when `squeue -h -j jobid` still lists the job. No `squeue`, a failed
+`squeue`, or a non-numeric id stays true: absence of the tool is not proof
+the job finished.
 """
 function slurm_job_running(jobid::AbstractString)
     occursin(r"^[0-9]+$", jobid) || return true
@@ -250,30 +263,53 @@ function slurm_job_running(jobid::AbstractString)
 end
 
 """
-True when the holder recorded in the lock may still be running. Missing or
-unreadable text stays live, so a lock that was just created is not stolen.
-Same host: the pid must exist. Another host: the recorded SLURM job must still
-be listed (`job_running`). A `-` job id cannot be proved finished.
+`(; host, pid, job, created)` from a holder line, or `nothing` when the line
+cannot be trusted. `created` is `nothing` when the line has no timestamp.
 """
-function lock_holder_alive(text::AbstractString; job_running::Function = slurm_job_running)
+function parse_lock_holder(text::AbstractString)
     parts = split(strip(text))
-    length(parts) >= 2 || return true
+    length(parts) < 2 && return nothing
     pid = tryparse(Int, parts[2])
-    pid === nothing && return true
-    if parts[1] == gethostname()
-        return local_pid_alive(pid)
-    end
-    length(parts) >= 3 || return true
-    parts[3] == "-" && return true
-    return job_running(parts[3])
+    pid === nothing && return nothing
+    job = length(parts) >= 3 ? parts[3] : "-"
+    created = length(parts) >= 4 ? tryparse(Int, parts[4]) : nothing
+    return (; host = String(parts[1]), pid, job = String(job), created)
 end
 
 """
-Remove `lockdir` when its holder file proves the holder is gone (SIGKILL does
-not run the holder's `finally`). Returns false when the holder may be live or
-the lock has no holder file yet.
+Why `text` is a stale lock, or `nothing` when it may still be live. A lock is
+stale when it is older than `max_age_s` (the walltime), when `squeue` is
+available and the recorded job is not listed, or, on this host, when the pid
+is dead. Without `squeue`, a job that merely looks finished is not enough:
+the age rule is the fallback. Unreadable text is not stale.
 """
-function reclaim_stale_lock(lockdir::AbstractString; job_running::Function = slurm_job_running)
+function lock_stale_reason(text::AbstractString; job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
+    holder = parse_lock_holder(text)
+    holder === nothing && return nothing
+    if holder.created !== nothing && now - holder.created > max_age_s
+        return "older than the $(max_age_s) s walltime"
+    end
+    if holder.host == gethostname() && !local_pid_alive(holder.pid)
+        return "pid $(holder.pid) is not running on $(holder.host)"
+    end
+    if squeue_available && holder.job != "-" && occursin(r"^[0-9]+$", holder.job) &&
+       !job_running(holder.job)
+        return "SLURM job $(holder.job) is not listed by squeue -h -j $(holder.job)"
+    end
+    return nothing
+end
+
+"""
+Remove `lockdir` when its holder is stale, and log that. Returns false when
+the holder may be live or the lock has no holder file yet (a task that has
+just created the directory). Manual recovery, if a resubmit still refuses:
+delete the lock directory and resubmit.
+"""
+function reclaim_stale_lock(lockdir::AbstractString; job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
     isdir(lockdir) || return false
     holder_path = joinpath(lockdir, "holder")
     isfile(holder_path) || return false
@@ -282,23 +318,28 @@ function reclaim_stale_lock(lockdir::AbstractString; job_running::Function = slu
     catch
         return false
     end
-    lock_holder_alive(text; job_running) && return false
+    reason = lock_stale_reason(text; job_running, now, max_age_s, squeue_available)
+    reason === nothing && return false
+    @warn "breaking stale lock $(lockdir) ($(reason)); holder $(strip(text)). " *
+          "SIGKILL does not run finally. If a resubmit still reports this lock " *
+          "held, remove the directory by hand and resubmit."
     rm(lockdir; recursive = true, force = true)
     return true
 end
 
 """
-Hold `lockdir` (an atomic `mkdir`) for `f`, then remove it. A second holder
-fails instead of waiting out a live task: the message names the lock and, when
-the holder wrote one, who created it. A holder that is proved gone — dead pid
-on this host, or a SLURM job id `job_running` says has finished — is reclaimed,
-so a resubmit after SIGKILL (which never runs `finally`) does not stick. A
-holder that cannot be proved gone is left for the operator to remove.
-`timeout_s == 0` fails on the first collision with a live holder. The directory
-is removed only when this call created it.
+Hold `lockdir` (an atomic `mkdir`) for `f`, then remove it. A live holder is
+refused: the message names the lock and who created it, and says to remove the
+directory by hand if that holder is actually gone. A stale holder (dead pid on
+this host, job gone from `squeue`, or older than the walltime) is broken and
+logged, so a resubmit after SIGKILL does not stick. `timeout_s == 0` fails on
+the first collision with a live holder. The directory is removed only when
+this call created it.
 """
 function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
-        purpose::AbstractString = "work", job_running::Function = slurm_job_running)
+        purpose::AbstractString = "work", job_running::Function = slurm_job_running,
+        now::Real = time(), max_age_s::Real = D5_LOCK_MAX_AGE_S,
+        squeue_available::Bool = Sys.which("squeue") !== nothing)
     mkpath(dirname(lockdir))
     t0 = time()
     steals = 0
@@ -311,7 +352,8 @@ function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
             collided = e.code == Base.UV_EEXIST || occursin("EEXIST", sprint(showerror, e))
             collided || rethrow()
             isdir(lockdir) || continue
-            if steals < 1 && reclaim_stale_lock(lockdir; job_running)
+            if steals < 1 && reclaim_stale_lock(lockdir; job_running, now, max_age_s,
+                squeue_available)
                 steals += 1
                 continue
             end
@@ -321,13 +363,13 @@ function with_directory_lock(f, lockdir::AbstractString; timeout_s::Real = 120,
                          " Holder: $(strip(read(holder_path, String)))." : ""
                 error("$(purpose) lock $(lockdir) is already held.$(holder) " *
                       "Do not run two tasks on the same work. If that holder is " *
-                      "gone, remove the lock directory and retry.")
+                      "gone, remove the lock directory by hand and resubmit.")
             end
             sleep(0.05)
         end
     end
     try
-        write(joinpath(lockdir, "holder"), lock_holder_line())
+        write(joinpath(lockdir, "holder"), lock_holder_line(; now))
         return f()
     finally
         rm(lockdir; recursive = true, force = true)
