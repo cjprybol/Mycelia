@@ -146,6 +146,21 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
     return outfile
 end
 
+# Permission bits a new file gets from `open(path, "w")` under the current
+# umask. `mktemp`/`mkstemp` creates mode 0600, and `mv` keeps that mode.
+function _plain_open_write_mode()
+    probe = tempname()
+    local mode
+    try
+        io = open(probe, "w")
+        close(io)
+        mode = filemode(probe) & 0o777
+    finally
+        isfile(probe) && rm(probe; force = true)
+    end
+    return mode
+end
+
 """
     write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString; segment_naming::Symbol=:numeric)
 
@@ -169,7 +184,10 @@ written for every combination where the last `k-1` bases of the oriented `u`
 equal the first `k-1` bases of the oriented `v`, so every emitted link is
 literally spelled by the segment sequences. GFA-equivalent links are written
 once: `L u + v -` is the same link as `L v + u -`, and `L u + v +` is the same
-link as `L v - u -`. Self-loops (`u == v`) are handled the same way, e.g. a
+link as `L v - u -`. When both members of a GFA-equivalent pair are valid, the
+written representative prefers more `+` orientations (so `+ +` is written
+rather than the equivalent `- -`); remaining ties are broken by lower segment
+index. Self-loops (`u == v`) are handled the same way, e.g. a
 k-mer whose `(k-1)`-suffix equals the `(k-1)`-prefix of its own reverse
 complement yields `L u + u -`.
 
@@ -195,8 +213,10 @@ orientation combination that no read traversed. This happens only when more
 than one combination is valid for the same edge: a palindromic k-mer at even
 k (whose `+` and `-` spell the same sequence, so the links are equivalent
 walks) or a short tandem repeat such as `ACACA -- CACAC` (where both `u -> v`
-and `v -> u` are valid). Neither case arises for non-repetitive sequence at
-typical assembly k.
+and `v -> u` are valid). Palindromic k-mers cannot occur at odd k, which is
+the typical assembly choice, so the palindrome case is excluded by odd k.
+The tandem-repeat case is a property of repetitive sequence and does not
+arise on non-repetitive sequence.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Undirected graph with nucleotide k-mer labels
@@ -209,7 +229,7 @@ typical assembly k.
 
 # Throws
 - `ArgumentError` if the graph is directed, `segment_naming` is invalid, or
-  labels are not nucleotide k-mers.
+  labels are not 2-bit nucleotide k-mers (`Kmers.DNAKmer` or `Kmers.RNAKmer`).
 - `ErrorException` if an edge has no valid `(k-1)` overlap in any orientation,
   which indicates the graph is not a k-mer adjacency graph.
 
@@ -233,7 +253,11 @@ function write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractS
         end
     end
 
-    open(outfile, "w") do io
+    parent = dirname(outfile)
+    isempty(parent) && (parent = ".")
+    tmpfile, tmpio = mktemp(parent)
+    try
+        io = tmpio
         println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Rhizomorph")
 
         # Segment lines: same content and ID assignment as write_gfa_next.
@@ -258,7 +282,8 @@ function write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractS
         # Link lines: one per valid, GFA-distinct orientation combination.
         written = Set{Tuple{Int, Bool, Int, Bool}}()
         for edge_labels in MetaGraphsNext.edge_labels(graph)
-            length(edge_labels) == 2 || continue
+            # MetaGraphsNext.edge_labels always yields 2-tuples; fail loudly if that changes.
+            @assert length(edge_labels) == 2
             u, v = edge_labels
             k = length(u)
             overlap = k - 1
@@ -283,6 +308,13 @@ function write_gfa_canonical(graph::MetaGraphsNext.MetaGraph, outfile::AbstractS
             n_valid > 0 ||
                 error("Edge $(u) -- $(v) has no valid $(overlap)-base overlap in any orientation")
         end
+        close(tmpio)
+        chmod(tmpfile, _plain_open_write_mode())
+        mv(tmpfile, outfile; force=true)
+    catch
+        isopen(tmpio) && close(tmpio)
+        isfile(tmpfile) && rm(tmpfile; force=true)
+        rethrow()
     end
 
     return outfile
