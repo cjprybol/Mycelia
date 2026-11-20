@@ -26,10 +26,10 @@ Amendment 5 was recorded on 2026-10-30 after the runs were launched and before a
 
 - **G0a**: illumina rows identical BASE vs FIX in all 6 cells.
 - **G0b**: nanopore rows identical BASE vs FIX in the three 2000 bp cells.
-- **G0c**: the fixed-toy oracle passes at both commits, with equal illumina sha between them.
-  - The pre-registration reads "19/19". The implementation gates on the 18 `gate` rows and reports the one `advisory` row (a host-load-dependent wall-clock check) without gating it.
-  - Within the gate rows, the one comparing against the historical prewiring sha is reported rather than gated, as amendment 4 specifies.
-  - In this run all 19 rows passed at both commits, so neither reading changes the result.
+- **G0c**: the fixed-toy oracle passes at both commits, with the illumina sha equal between them.
+  - Amendment 4 says the oracle "passes 19/19" and that equality with the historical prewiring sha is reported descriptively: a mismatch there points to dependency drift and does not void the comparison. The one `advisory` row is the host-load-dependent wall-clock check.
+  - Amendment 5 says every `severity=gate` row passes, and that the illumina sha in `illumina_byte_identical_to_prewiring_oracle` is equal between the commits. That check is itself a `gate` row, so amendment 5's "every gate row" wording would gate the historical comparison. That conflicts with amendment 4.
+  - The implementation follows amendment 4: the advisory row and the historical-sha gate row are reported, not gated, and cross-commit equality of the illumina sha is still required. In this run all 19 rows passed at both commits, so neither reading changes the result.
 - "Identical" means exact CSV field equality on every column except `label`, `wall_seconds`, `wall_seconds_per_read`.
 - Any G0 failure voids the comparison.
 - **G2** (outcome): at 1000 bp / err 0.01, per seed `d = nanopore − illumina` best-contig reference coverage in each run, `x = |d_BASE| − |d_FIX|`; exact one-sided sign-flip Wilcoxon signed-rank on the 16 `x`, alpha 0.05, H1: x > 0.
@@ -38,7 +38,7 @@ Amendment 5 was recorded on 2026-10-30 after the runs were launched and before a
 The analysis code (`benchmarking/td4mbg_base_fix_analysis.jl`, with tests) was first committed at `94c0cbb9` (2026-10-30 10:28 PDT), before any array task had ended: FIX seed 11's failed attempt ended first, at 10:36 PDT; the first task to complete did so at 10:53 PDT and the last at 11:58 PDT (`sacct.txt`).
 The oracle job had already finished (09:52 PDT), and its checks (G0c inputs) had been read when the code was committed.
 After code review the script was revised, again with the decision rule unchanged. The revision adds input validation, oracle provenance and shape checks, and the read-integrity checks of the earlier td2rxh analysis, and fixes report formatting and the figure.
-Re-running the revised script on these inputs reproduces the original verdict and every G0 and G2 number; the outputs in `analysis/` come from the revised script.
+Re-running the script on these inputs reproduces the original verdict and every G0 and G2 number. The files in `analysis/` are the outputs of the script as run for this evidence. A later edit of the script's wall-time caveat no longer asserts node placement, which this analysis does not record; that edit does not rewrite `analysis/report.md`, and the verdict line there is unchanged.
 
 ## Results
 
@@ -79,9 +79,10 @@ Illumina is identical in 16/16 seeds in every cell; nanopore is identical in 7-1
   - hardware-dependent numerics: the lr6 partition mixes CPU feature sets (the seed 11 failure on n0018 shows this), and no BASE/FIX pair of a seed ran on the same node;
   - a path in the PR that this code reading missed.
   The context comparison is consistent with either of the first two, but it also spans a code and dependency change.
-- A BASE-vs-BASE replicate of seeds 2 and 10 at `ca9eb736` (same Manifest, `--exclude=n0018.lr6`, job 27438474) was run to start separating them. It ran on n0230 (seed 2) and n0211 (seed 10); the original BASE tasks for those seeds ran on n0216 and n0375. The reading was fixed before it ran:
-  - If BASE does not reproduce itself, exact-identity G0b is unachievable as designed, and the protocol needs a determinism- and node-controlled redesign before the PR can be judged.
-  - If it does, the result is consistent with a PR effect on long reads, but a node-controlled comparison is still needed, because the replicate does not hold the CPU type fixed against the FIX tasks.
+- A BASE-vs-BASE replicate of seeds 2 and 10 at `ca9eb736` (same Manifest, `--exclude=n0018.lr6`, job 27438474) was run to start separating them. It ran on n0230 (seed 2) and n0211 (seed 10); the original BASE tasks for those seeds ran on n0216 and n0375. The reading was fixed before it ran, as amendment 6 records it (diagnostic; it enters no gate). Compare the replicate with the BASE shards under the G0 field rule:
+  - If the replicate's nanopore rows differ from BASE in the 2000 bp cells: the nanopore arm is nondeterministic, exact-identity G0b is unachievable as designed, the VOID stands, and the measurement needs a redesigned protocol (for example a determinism-controlled run or a replicate-based noise floor) before any merge decision rests on it.
+  - If those nanopore rows are identical: PR #487 changes long-read results through a path the code reading missed, amendment 1's premise is falsified, and the PR needs investigation before merge.
+  - Illumina rows must also replicate; if they do not, the whole grid is suspect.
 
 ## Replicate result: BASE does not reproduce itself
 
