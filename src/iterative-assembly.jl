@@ -5912,7 +5912,8 @@ Find optimal sequence path through graph using maximum likelihood principles.
 Returns improved sequence and likelihood improvement score.
 """
 function find_optimal_sequence_path(sequence::AbstractString, quality, graph, k::Int;
-        graph_mode::Symbol = :canonical)::Tuple{String, Float64}
+        graph_mode::Symbol = :canonical,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Tuple{String, Float64}
     quality_string = if quality isa AbstractString
         String(quality)
     elseif quality isa AbstractVector{<:Integer}
@@ -5923,7 +5924,9 @@ function find_optimal_sequence_path(sequence::AbstractString, quality, graph, k:
 
     record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
     improved_record,
-    improvement = find_optimal_sequence_path(record, graph, k; graph_mode = graph_mode)
+    improvement = find_optimal_sequence_path(record, graph, k;
+        graph_mode = graph_mode,
+        calibrated_gap_threshold = calibrated_gap_threshold)
     return FASTX.sequence(String, improved_record), improvement
 end
 
@@ -7430,7 +7433,9 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
 end
 
 function try_viterbi_path_improvement(
-        sequence::AbstractString, quality, graph, k::Int; graph_mode::Symbol = :canonical)
+        sequence::AbstractString, quality, graph, k::Int;
+        graph_mode::Symbol = :canonical,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)
     quality_string = if quality isa AbstractString
         String(quality)
     elseif quality isa AbstractVector{<:Integer}
@@ -7440,7 +7445,9 @@ function try_viterbi_path_improvement(
     end
 
     record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
-    result = try_viterbi_path_improvement(record, graph, k; graph_mode = graph_mode)
+    result = try_viterbi_path_improvement(record, graph, k;
+        graph_mode = graph_mode,
+        calibrated_gap_threshold = calibrated_gap_threshold)
     if result === nothing
         return nothing
     end
