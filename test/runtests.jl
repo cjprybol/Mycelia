@@ -379,6 +379,9 @@ else
     include(joinpath(@__DIR__, "8_tool_integration", "minimap_split_temp_cleanup.jl"))
     # Which VAMB table run_vamb/run_taxvamb return; fake-runner coverage, no conda.
     include(joinpath(@__DIR__, "8_tool_integration", "vamb_clusters_selection.jl"))
+    # Static sbatch lint (td-hhkd). Bash plus render_sbatch; does not submit jobs
+    # and is not a separate CI workflow.
+    include(joinpath(@__DIR__, "8_tool_integration", "sbatch_pattern_lint.jl"))
     @info "Skipping remaining tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end
 # for file in (
