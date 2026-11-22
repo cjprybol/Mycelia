@@ -732,15 +732,41 @@ Test.@testset "D5 grid runner" begin
             Test.@test msg !== nothing && occursin("already held", msg) &&
                        occursin("4242", msg)
             Test.@test slurm_job_running("not-a-job")
-            # SLURM exits 1 with "Invalid job id specified" for a finished job.
-            # That is "not listed". A controller error stays "still running".
-            gone = (1, "", "slurm_load_jobs error: Invalid job id specified\n")
-            Test.@test !slurm_job_running("4242"; inquire = _ -> gone)
-            Test.@test !slurm_job_running("4242"; inquire = _ -> (0, "", ""))
-            Test.@test slurm_job_running("4242"; inquire = _ -> (0, "4242 R\n", ""))
-            Test.@test slurm_job_running("4242";
-                inquire = _ -> (1, "", "Unable to contact slurm controller\n"))
-            Test.@test slurm_job_running("4242"; inquire = _ -> error("squeue failed to spawn"))
+            # squeue decides first. Invalid job id and empty output are gone.
+            # A listed line is running, and sacct is not asked.
+            asked = Ref(0)
+            account = function (id)
+                asked[] += 1
+                return (0, "COMPLETED\n", "")
+            end
+            invalid = (1, "", "slurm_load_jobs error: Invalid job id specified\n")
+            Test.@test !slurm_job_running("4242"; inquire = _ -> invalid, account)
+            Test.@test !slurm_job_running("4242"; inquire = _ -> (0, "", ""), account)
+            Test.@test slurm_job_running("4242"; inquire = _ -> (0, "4242 R\n", ""),
+                account)
+            Test.@test asked[] == 0
+            # Another squeue error does not by itself release the lock. sacct
+            # does, when it reports a terminal state.
+            down = (1, "", "Unable to contact slurm controller\n")
+            Test.@test slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> nothing)
+            Test.@test slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (1, "", "sacct: error: Problem talking to the database\n"))
+            Test.@test slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (0, "RUNNING\n", ""))
+            Test.@test slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (0, "", ""))
+            Test.@test !slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (0, "COMPLETED\n", ""))
+            Test.@test !slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (0, "CANCELLED by 0\n", ""))
+            Test.@test !slurm_job_running("4242"; inquire = _ -> down,
+                account = _ -> (0, "TIMEOUT\n", ""))
+            Test.@test slurm_job_running("4242"; inquire = _ -> error("squeue failed to spawn"),
+                account = _ -> nothing)
+            Test.@test !slurm_job_running("4242";
+                inquire = _ -> error("squeue failed to spawn"),
+                account = _ -> (0, "FAILED\n", ""))
         end
 
         cell_cli = D5OntAdaptiveGridDriver.parse_cli(

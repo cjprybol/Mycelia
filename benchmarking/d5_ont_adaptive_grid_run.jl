@@ -28,7 +28,9 @@
 #
 # A SIGKILL (SLURM time limit, or kill -9) does not run the lock's finally, so
 # cells/<id>.lock or refs/<accession>.lock can be left behind. The next task
-# breaks that lock when `squeue -h -j <id>` shows the job is gone, when the
+# breaks that lock when `squeue -h -j <id>` shows the job is gone (no stdout,
+# or exit 1 with "Invalid job id specified"), when an inconclusive squeue is
+# followed by `sacct -n -X -j <id> -o State` reporting a terminal state, when the
 # pid is dead on this host, or when the lock is older than the 72 h walltime
 # (the age-only rule when squeue is not available). If a resubmit still says
 # the lock is held, remove that directory by hand and resubmit.
@@ -260,26 +262,93 @@ function squeue_inquire(jobid::AbstractString)
 end
 
 """
-True when the job is still queued or running. `squeue -h -j` exits 0 with a
-line when it is, and exits 1 with `Invalid job id specified` when SLURM no
-longer knows the id (the job finished). Any other failure — no `squeue`, a
-controller error, a non-numeric id — stays true, so a broken `squeue` does not
-break a live lock.
+`(exitcode, stdout, stderr)` from `sacct -n -X -j jobid -o State`, or
+`nothing` when `sacct` is not on `PATH`.
 """
-function slurm_job_running(jobid::AbstractString; inquire::Function = squeue_inquire)
-    occursin(r"^[0-9]+$", jobid) || return true
-    result = try
-        inquire(jobid)
-    catch
-        return true
+function sacct_inquire(jobid::AbstractString)
+    sacct = Sys.which("sacct")
+    sacct === nothing && return nothing
+    out = IOBuffer()
+    err = IOBuffer()
+    proc = run(pipeline(ignorestatus(`$sacct -n -X -j $jobid -o State`);
+        stdout = out, stderr = err))
+    return (proc.exitcode, String(take!(out)), String(take!(err)))
+end
+
+# Accounting states that mean the job will not run again. A trailing '+' is
+# sacct truncating the field; "CANCELLED by <uid>" is still CANCELLED.
+const SLURM_TERMINAL_JOB_STATES = (
+    "BOOT_FAIL", "CANCELLED", "COMPLETED", "DEADLINE", "FAILED", "NODE_FAIL",
+    "OUT_OF_MEMORY", "PREEMPTED", "REVOKED", "SPECIAL_EXIT", "TIMEOUT",
+)
+
+"""True when every `sacct -o State` line is a terminal job state."""
+function sacct_reports_terminal(stdout_s::AbstractString)
+    lines = [strip(line) for line in split(stdout_s, '\n') if !isempty(strip(line))]
+    isempty(lines) && return false
+    return all(lines) do line
+        token = replace(first(split(line)), r"\+$" => "")
+        return token in SLURM_TERMINAL_JOB_STATES
     end
-    result === nothing && return true
+end
+
+"""
+`:gone`, `:running`, or `:inconclusive` from one `squeue -h -j` result.
+Exit 0 with no stdout, and exit 1 with `Invalid job id specified`, are gone.
+Exit 0 with a line is running. Anything else, including a missing `squeue`,
+does not decide.
+"""
+function squeue_job_verdict(result)
+    result === nothing && return :inconclusive
     code, stdout_s, stderr_s = result
-    code == 0 && return !isempty(strip(stdout_s))
-    if code == 1 && occursin("Invalid job id specified", stderr_s)
-        return false
+    if code == 0
+        return isempty(strip(stdout_s)) ? :gone : :running
     end
-    return true
+    if code == 1 && occursin("Invalid job id specified", stderr_s)
+        return :gone
+    end
+    return :inconclusive
+end
+
+"""
+`:gone`, `:running`, or `:inconclusive` from one `sacct -o State` result.
+A terminal state is gone. Empty output, a non-zero exit, or no `sacct` does
+not decide.
+"""
+function sacct_job_verdict(result)
+    result === nothing && return :inconclusive
+    code, stdout_s, _stderr_s = result
+    code == 0 || return :inconclusive
+    sacct_reports_terminal(stdout_s) && return :gone
+    isempty(strip(stdout_s)) && return :inconclusive
+    return :running
+end
+
+"""
+True when the job is still queued or running. `squeue -h -j` decides first:
+empty output or exit 1 with `Invalid job id specified` means the job is gone,
+and a listed line means it is running. Any other `squeue` result is
+inconclusive and falls through to `sacct -n -X -j <id> -o State` when `sacct`
+is available; a terminal state is gone. A missing tool, a controller error, a
+non-numeric id, or an exception stays true, so a broken query does not break
+a live lock.
+"""
+function slurm_job_running(jobid::AbstractString; inquire::Function = squeue_inquire,
+        account::Function = sacct_inquire)
+    occursin(r"^[0-9]+$", jobid) || return true
+    squeue_verdict = try
+        squeue_job_verdict(inquire(jobid))
+    catch
+        :inconclusive
+    end
+    squeue_verdict === :gone && return false
+    squeue_verdict === :running && return true
+    sacct_verdict = try
+        sacct_job_verdict(account(jobid))
+    catch
+        :inconclusive
+    end
+    return sacct_verdict !== :gone
 end
 
 """
@@ -316,7 +385,7 @@ function lock_stale_reason(text::AbstractString; job_running::Function = slurm_j
     end
     if squeue_available && holder.job != "-" && occursin(r"^[0-9]+$", holder.job) &&
        !job_running(holder.job)
-        return "SLURM job $(holder.job) is not listed by squeue -h -j $(holder.job)"
+        return "SLURM job $(holder.job) is no longer running"
     end
     return nothing
 end

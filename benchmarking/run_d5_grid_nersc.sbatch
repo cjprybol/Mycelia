@@ -88,7 +88,9 @@
 #   resubmit its index once the read-set task has finished.
 #   A SIGKILL (the time limit) leaves cells/<id>.lock or refs/<accession>.lock
 #   behind. The next task breaks it when `squeue -h -j <id>` shows the job is
-#   gone, the pid is dead on this host, or the lock is older than the 72 h
+#   gone (empty output, or exit 1 "Invalid job id specified"), when `sacct
+#   -n -X -j <id> -o State` reports a terminal state after an inconclusive
+#   squeue, when the pid is dead on this host, or when the lock is older than the 72 h
 #   walltime. If a resubmit still says the lock is held, remove that directory
 #   by hand and resubmit.
 #   Merge after both arrays finish (one task; index 0 is inside the toy):
