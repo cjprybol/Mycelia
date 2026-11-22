@@ -25,12 +25,12 @@
 # `/lawrencium/`, or it carries a `# Site profile: lawrencium` line (the line
 # Mycelia's renderer emits).
 #
-# Comment text is exempt for the code checks (1, 2): corrected scripts
-# legitimately mention these strings in explanatory comments (e.g.
-# `# "julia -u" errors at startup`). The #SBATCH check (3) matches only the
-# directive value, before any inline comment. The Lawrencium check (4) is
-# deliberately comment-inclusive — a Lawrencium script should not name NERSC
-# hardware even in prose.
+# Full-line `#` comments are exempt. Corrected scripts legitimately mention
+# these strings in explanatory comments (for example `# "julia -u" errors at
+# startup`, or `# as on Perlmutter` as contrast documentation). `#SBATCH`
+# directives are not comments: check 3 matches the directive value, and check 4
+# still flags NERSC hardware or the CFS depot path on a directive. A Perlmutter
+# or `/global/cfs` path in code is still a hit.
 #
 # This script only reads files. It does not call sbatch or any scheduler.
 # It is intentionally not a GitHub Actions job: `.github/workflows/ci.yml` is
@@ -75,6 +75,12 @@ preflight() {
 # drop `grep -Hn` hits whose content is a full-line comment (so a string
 # mentioned in a `#` comment is not flagged as code).
 strip_comment_hits() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true; }
+
+# Same as strip_comment_hits, but keep `#SBATCH` directives. POSIX ERE has no
+# lookahead, so this matches a full-line `#` that is not the `#SBATCH` token.
+strip_prose_comment_hits() {
+    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#($|[^S]|S($|[^B])|SB($|[^A])|SBA($|[^T])|SBAT($|[^C])|SBATC($|[^H])|SBATCH($|[^[:space:]]))' || true
+}
 
 is_lawrencium_script() {
     local f="$1"
@@ -145,7 +151,7 @@ lint_paths() {
         "$(grep -HnE -- "$RX_SBATCH_VAR" "${wrappers[@]}" 2>/dev/null)"
     if [[ ${#lrc[@]} -gt 0 ]]; then
         _report "NERSC-ism in a Lawrencium script — 'milan'/'Perlmutter'/CFS depot are NERSC-only" \
-            "$(grep -HnE -- "$RX_LRC_NERSC" "${lrc[@]}" 2>/dev/null)"
+            "$(grep -HnE -- "$RX_LRC_NERSC" "${lrc[@]}" 2>/dev/null | strip_prose_comment_hits)"
     fi
 
     if [[ $fail -eq 0 ]]; then
@@ -201,20 +207,21 @@ selftest() {
     printf '# note: "julia -u" errors at startup\n# $HOME is NOT expanded in #SBATCH\n' >>"$tmp/cmt/run_nb01.sbatch"
     _expect "comment mentions are exempt" cmt 0 "clean"
     mkdir -p "$tmp/lrc"
-    printf '#!/bin/bash\n#SBATCH --output=slurmlogs/%%x.out\n# runs on a milan node\n%s\n' "$good_jl" \
+    printf '#!/bin/bash\n#SBATCH --output=slurmlogs/%%x.out\n# as on Perlmutter\n%s\n' "$good_jl" \
         > "$tmp/lrc/run_nb01_lrc.sbatch"
-    _expect "_lrc milan caught"      lrc     1 "NERSC-ism"
+    _expect "comment Perlmutter is exempt" lrc 0 "clean"
 
     # Mycelia discovery: templates live under lawrencium/, and render_sbatch
     # stamps `# Site profile: lawrencium` even when the filename is not *_lrc.
+    # `#SBATCH` is still a directive, so a milan constraint is a real hit.
     mkdir -p "$tmp/lawpath/lawrencium"
-    printf '#!/bin/bash\n#SBATCH --output=slurmlogs/%%x.out\n# milan node\n%s\n' "$good_jl" \
+    printf '#!/bin/bash\n#SBATCH --output=slurmlogs/%%x.out\n#SBATCH --constraint=milan\n%s\n' "$good_jl" \
         > "$tmp/lawpath/lawrencium/cpu.sbatch"
-    _expect "lawrencium path milan caught" lawpath 1 "NERSC-ism"
+    _expect "#SBATCH milan caught" lawpath 1 "NERSC-ism"
     mkdir -p "$tmp/profile"
-    printf '#!/bin/bash\n# Site profile: lawrencium\n#SBATCH --output=slurmlogs/%%x.out\n# Perlmutter copy-paste\n%s\n' "$good_jl" \
+    printf '#!/bin/bash\n# Site profile: lawrencium\n#SBATCH --output=slurmlogs/%%x.out\nexport JULIA_DEPOT_PATH=/global/cfs/cdirs/m4269/Perlmutter/.julia_depot\n%s\n' "$good_jl" \
         > "$tmp/profile/rendered.sbatch"
-    _expect "site profile lawrencium caught" profile 1 "NERSC-ism"
+    _expect "Perlmutter path in code caught" profile 1 "NERSC-ism"
     mkdir -p "$tmp/profileok"
     printf '#!/bin/bash\n# Site profile: lawrencium\n#SBATCH --output=slurmlogs/%%x.out\n%s\n' "$good_jl" \
         > "$tmp/profileok/rendered.sbatch"
