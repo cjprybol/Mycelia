@@ -3669,6 +3669,45 @@ function _probe_indel_window_metric(
     end
 end
 
+"""
+    _probe_indel_windows(graph, candidates, read_sequences, k, config, graph_mode,
+        work_limit, graph_summary, selected) -> Vector
+
+Probe every candidate window `i` with `selected[i]` and return the
+`_probe_indel_window_metric` results in candidate order (`nothing` where not
+selected). Probes run on `Threads.@threads`: each reads only the graph, the
+precomputed `graph_summary` (successor index) and its own read, and writes only
+its own slot, so the result does not depend on the thread count. Callers record
+causes, telemetry and window sources from the vector sequentially, in candidate
+order, exactly as the serial loop did.
+"""
+function _probe_indel_windows(
+        graph::MetaGraphsNext.MetaGraph,
+        candidates::AbstractVector,
+        read_sequences::AbstractDict,
+        k::Int,
+        config::Any,
+        graph_mode::Symbol,
+        work_limit::Int,
+        graph_summary::NamedTuple,
+        selected::AbstractVector{Bool},
+)::Vector{Union{Nothing, Tuple{Dict{Symbol, Any}, Bool}}}
+    length(selected) == length(candidates) ||
+        throw(ArgumentError("selected has $(length(selected)) entries for " *
+                            "$(length(candidates)) candidate windows"))
+    results = Vector{Union{Nothing, Tuple{Dict{Symbol, Any}, Bool}}}(
+        nothing, length(candidates))
+    indices = findall(selected)
+    Threads.@threads for position in eachindex(indices)
+        candidate_index = indices[position]
+        read_index, window = candidates[candidate_index]
+        results[candidate_index] = _probe_indel_window_metric(
+            graph, read_sequences[read_index], window, k, config, graph_mode,
+            work_limit, graph_summary)
+    end
+    return results
+end
+
 function _evaluate_indel_frontier_schedule(
         reads::Vector{<:FASTX.FASTQ.Record},
         raw_graph::MetaGraphsNext.MetaGraph,
@@ -3729,15 +3768,24 @@ function _indel_additional_graph_bytes(
            typemax(Int) : graph_bytes * additional_variants
 end
 
+"""
+    _indel_graph_variants_fit_memory(raw_graph, variants, memory_limit; graph_bytes)
+
+Whether `variants` copies of `raw_graph` fit under `memory_limit`, given the live
+heap. `graph_bytes`, when given, is `_indel_graph_memory_bytes(raw_graph)` already
+measured for this unmodified graph: `Base.summarysize` walks the whole graph, so
+a caller that checks one graph several times measures it once.
+"""
 function _indel_graph_variants_fit_memory(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
-        memory_limit::Union{Nothing, Int},
+        memory_limit::Union{Nothing, Int};
+        graph_bytes::Union{Nothing, Int} = nothing,
 )::Bool
     variants > 0 || throw(ArgumentError("variants must be positive, got $variants"))
     memory_limit === nothing && return true
     memory_limit <= 0 && return false
-    graph_bytes = _indel_graph_memory_bytes(raw_graph)
+    graph_bytes = something(graph_bytes, _indel_graph_memory_bytes(raw_graph))
     current_live_bytes = Int(Base.gc_live_bytes())
     current_live_bytes > memory_limit && return false
     additional_bytes = _indel_additional_graph_bytes(graph_bytes, variants)
@@ -3748,9 +3796,10 @@ function _indel_graph_memory_telemetry(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
         memory_limit::Union{Nothing, Int},
-        status::String,
+        status::String;
+        graph_bytes::Union{Nothing, Int} = nothing,
 )::Dict{String, Any}
-    graph_bytes = _indel_graph_memory_bytes(raw_graph)
+    graph_bytes = something(graph_bytes, _indel_graph_memory_bytes(raw_graph))
     current_live_bytes = Int(Base.gc_live_bytes())
     additional_bytes = _indel_additional_graph_bytes(graph_bytes, variants)
     projected_peak = current_live_bytes > typemax(Int) - additional_bytes ?
@@ -3835,22 +3884,27 @@ function _evaluate_indel_frontier_schedule_impl(
     end
 
     config = _indel_probe_config(params, graph_mode)
+    # `Base.summarysize` walks the whole graph. `raw_graph` is not mutated in this
+    # function (cleaning works on a `deepcopy`), so its size is measured at most
+    # once and reused by every memory check and telemetry record below.
+    raw_graph_bytes = Ref{Union{Nothing, Int}}(nothing)
+    function raw_bytes()::Union{Nothing, Int}
+        memory_limit === nothing && return nothing
+        if raw_graph_bytes[] === nothing
+            raw_graph_bytes[] = _indel_graph_memory_bytes(raw_graph)
+        end
+        return raw_graph_bytes[]
+    end
     raw_summary = Mycelia._indel_frontier_graph_summary(raw_graph)
     raw_metrics = Dict{Symbol, Any}[]
     raw_evaluated = 0
     raw_admitted = fill(false, requested)
     raw_anchored = fill(false, requested)
+    raw_results = _probe_indel_windows(
+        raw_graph, candidates, read_sequences, k, config, graph_mode, work_limit,
+        raw_summary, fill(true, requested))
     for (candidate_index, (read_index, window)) in enumerate(candidates)
-        metric, admitted = _probe_indel_window_metric(
-            raw_graph,
-            read_sequences[read_index],
-            window,
-            k,
-            config,
-            graph_mode,
-            work_limit,
-            raw_summary,
-        )
+        metric, admitted = raw_results[candidate_index]
         metric[:read_index] = read_index
         metric[:window_start] = first(window)
         metric[:window_stop] = last(window)
@@ -3867,12 +3921,14 @@ function _evaluate_indel_frontier_schedule_impl(
     end
 
     if all(raw_admitted)
-        if !_indel_graph_variants_fit_memory(raw_graph, 2, memory_limit)
+        if !_indel_graph_variants_fit_memory(
+                raw_graph, 2, memory_limit; graph_bytes = raw_bytes())
             for (read_index, window) in candidates
                 window_sources[read_index][window] = :substitution
             end
             cleanup = _indel_graph_memory_telemetry(
-                raw_graph, 2, memory_limit, "skipped_weighted_memory_limit")
+                raw_graph, 2, memory_limit, "skipped_weighted_memory_limit";
+                graph_bytes = raw_bytes())
             return (
                 graph = raw_graph,
                 raw_weighted_graph = nothing,
@@ -3964,7 +4020,8 @@ function _evaluate_indel_frontier_schedule_impl(
     cleaned_admitted = fill(false, requested)
     cleaned_weighted_graph = nothing
     cleaning_status = :not_attempted
-    if _indel_graph_variants_fit_memory(raw_graph, 4, memory_limit)
+    if _indel_graph_variants_fit_memory(
+            raw_graph, 4, memory_limit; graph_bytes = raw_bytes())
         try
             cleaned_graph = deepcopy(raw_graph)
             cleanup = clean_graph!(cleaned_graph, k)
@@ -3976,18 +4033,12 @@ function _evaluate_indel_frontier_schedule_impl(
                 cleaned_graph, prior_soft_weights) do
                 cleaned_summary =
                     Mycelia._indel_frontier_graph_summary(cleaned_graph)
+                cleaned_results = _probe_indel_windows(
+                    cleaned_graph, candidates, read_sequences, k, config,
+                    graph_mode, work_limit, cleaned_summary, .!raw_admitted)
                 for (candidate_index, (read_index, window)) in enumerate(candidates)
                     raw_admitted[candidate_index] && continue
-                    metric, admitted = _probe_indel_window_metric(
-                        cleaned_graph,
-                        read_sequences[read_index],
-                        window,
-                        k,
-                        config,
-                        graph_mode,
-                        work_limit,
-                        cleaned_summary,
-                    )
+                    metric, admitted = cleaned_results[candidate_index]
                     metric[:read_index] = read_index
                     metric[:window_start] = first(window)
                     metric[:window_stop] = last(window)
@@ -4046,7 +4097,8 @@ function _evaluate_indel_frontier_schedule_impl(
         end
     else
         cleanup = _indel_graph_memory_telemetry(
-            raw_graph, 4, memory_limit, "skipped_memory_limit")
+            raw_graph, 4, memory_limit, "skipped_memory_limit";
+            graph_bytes = raw_bytes())
         cleaning_status = :memory_limit
     end
 
@@ -4108,12 +4160,14 @@ function _evaluate_indel_frontier_schedule_impl(
         needs_raw_graph = :raw in used_sources || :substitution in used_sources
         needs_cleaned_graph = :cleaned in used_sources
         if needs_raw_graph &&
-           !_indel_graph_variants_fit_memory(raw_graph, 2, memory_limit)
+           !_indel_graph_variants_fit_memory(
+               raw_graph, 2, memory_limit; graph_bytes = raw_bytes())
             for (read_index, window) in candidates
                 window_sources[read_index][window] = :substitution
             end
             cleanup = _indel_graph_memory_telemetry(
-                raw_graph, 2, memory_limit, "skipped_weighted_memory_limit")
+                raw_graph, 2, memory_limit, "skipped_weighted_memory_limit";
+                graph_bytes = raw_bytes())
             return (
                 graph = raw_graph,
                 raw_weighted_graph = nothing,

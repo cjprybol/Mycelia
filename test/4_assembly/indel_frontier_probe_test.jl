@@ -2286,3 +2286,84 @@ Test.@testset "Weighted memory limit after a partial raw frontier" begin
                Mycelia._indel_frontier_work_summary(Int[])
     indel_assert_cause_matches_admission(decision, work_limit)
 end
+
+
+Test.@testset "Parallel window probes return the serial probe results (td-twmi)" begin
+    # _probe_indel_windows runs probes on Threads.@threads. Each result must equal
+    # the serial _probe_indel_window_metric for that window, in candidate order,
+    # whatever the thread count (run under JULIA_NUM_THREADS > 1 to exercise it).
+    k = 7
+    linear_sequence = first(indel_classifier_de_bruijn_sequence(k), 3_000)
+    linear_record = indel_classifier_fastq("parallel_linear", linear_sequence)
+    branch_sequence = first(indel_classifier_de_bruijn_sequence(3), 600)
+    branch_record = indel_classifier_fastq("parallel_branch", branch_sequence)
+    for (record, kk) in ((linear_record, k), (branch_record, 3))
+        records = FASTX.FASTQ.Record[record]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(records, kk; mode = :singlestrand)
+        hard = Set(MetaGraphsNext.labels(graph))
+        candidates, read_sequences = Mycelia._indel_candidate_windows(
+            records, kk, hard, Bool[false], :singlestrand)
+        Test.@test length(candidates) >= 1
+        config = Mycelia._indel_probe_config(indel_classifier_params(), :singlestrand)
+        summary = Mycelia._indel_frontier_graph_summary(graph)
+        work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT
+        serial = [Mycelia._probe_indel_window_metric(
+                      graph, read_sequences[read_index], window, kk, config,
+                      :singlestrand, work_limit, summary)
+                  for (read_index, window) in candidates]
+        all_selected = Mycelia._probe_indel_windows(
+            graph, candidates, read_sequences, kk, config, :singlestrand,
+            work_limit, summary, fill(true, length(candidates)))
+        Test.@test all_selected == serial
+        alternate = [isodd(i) for i in eachindex(candidates)]
+        some_selected = Mycelia._probe_indel_windows(
+            graph, candidates, read_sequences, kk, config, :singlestrand,
+            work_limit, summary, alternate)
+        for i in eachindex(candidates)
+            Test.@test some_selected[i] == (alternate[i] ? serial[i] : nothing)
+        end
+    end
+    # The linear read spans several windows, so the parallel path is exercised.
+    linear_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[linear_record], k; mode = :singlestrand)
+    linear_candidates, _ = Mycelia._indel_candidate_windows(
+        FASTX.FASTQ.Record[linear_record], k, Set(MetaGraphsNext.labels(linear_graph)),
+        Bool[false], :singlestrand)
+    Test.@test length(linear_candidates) > 1
+    indel_frontier_test_throws_message(
+        ArgumentError,
+        "selected has 1 entries for $(length(linear_candidates)) candidate windows",
+    ) do
+        Mycelia._probe_indel_windows(
+            linear_graph, linear_candidates, Dict{Int, BioSequences.LongDNA{4}}(), k,
+            Mycelia._indel_probe_config(indel_classifier_params(), :singlestrand),
+            :singlestrand, 1, Mycelia._indel_frontier_graph_summary(linear_graph),
+            Bool[true])
+    end
+end
+
+Test.@testset "A precomputed graph size gives the same memory decision (td-twmi)" begin
+    k = 7
+    sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
+    read = indel_classifier_fastq("graph_bytes_reuse", sequence)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[read], k; mode = :singlestrand)
+    graph_bytes = Mycelia._indel_graph_memory_bytes(graph)
+    live = Int(Base.gc_live_bytes())
+    for memory_limit in (nothing, 1, live + graph_bytes - 1, live + 4 * graph_bytes,
+                         typemax(Int))
+        for variants in (2, 4)
+            Test.@test Mycelia._indel_graph_variants_fit_memory(
+                graph, variants, memory_limit; graph_bytes = graph_bytes) ==
+                       Mycelia._indel_graph_variants_fit_memory(
+                graph, variants, memory_limit)
+        end
+    end
+    telemetry = Mycelia._indel_graph_memory_telemetry(
+        graph, 2, 1, "skipped_weighted_memory_limit"; graph_bytes = graph_bytes)
+    Test.@test telemetry["measured_graph_bytes"] == graph_bytes
+    Test.@test telemetry["projected_graph_variants"] == 2
+    # A caller-supplied size is used as given (no re-measurement).
+    Test.@test Mycelia._indel_graph_memory_telemetry(
+        graph, 2, 1, "x"; graph_bytes = 12_345)["measured_graph_bytes"] == 12_345
+end
