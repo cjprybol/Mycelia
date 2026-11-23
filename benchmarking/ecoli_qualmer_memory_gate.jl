@@ -42,6 +42,8 @@
 #   MYCELIA_MEMORY_CEILING_GB default "32"  — hard gate ceiling
 #   MYCELIA_RUN_QUAST        default "true" — QUAST accuracy scoring
 #   MYCELIA_QUAST_MIN_CONTIG default "500"  — QUAST --min-contig
+#   MYCELIA_GATE_HEARTBEAT_S default "300"  — seconds between flushed memory lines (0 = off)
+#   MYCELIA_GATE_VERBOSE     default "false" — AssemblyConfig verbose (assembler stage logging)
 #
 # Usage (on Lawrencium lr6, see PR for the exact SLURM launch):
 #   julia --project=. benchmarking/ecoli_qualmer_memory_gate.jl
@@ -72,14 +74,59 @@ const ASPIRATION_GB::Float64 = 16.0
 
 const RUN_QUAST::Bool = get(ENV, "MYCELIA_RUN_QUAST", "true") in ["1", "true", "yes"]
 const QUAST_MIN_CONTIG::Int = parse(Int, get(ENV, "MYCELIA_QUAST_MIN_CONTIG", "500"))
+const HEARTBEAT_S::Int = parse(Int, get(ENV, "MYCELIA_GATE_HEARTBEAT_S", "300"))
+const ASSEMBLY_VERBOSE::Bool = get(ENV, "MYCELIA_GATE_VERBOSE", "false") in [
+    "1", "true", "yes"]
 
-println("=== E. coli Qualmer-Path Memory Gate (td-n8ax) ===")
-println("Start time (UTC): $(Dates.now(Dates.UTC))")
-println("Organism: $ORGANISM ($ACCESSION)")
-println("Cell: coverage=$(COVERAGE)x seed=$(SEED), base k=$K")
-println("COMPOSED config: corrector=:iterative, qualmer_memory_profile=:$(QUALMER_PROFILE), " *
-        "qualmer_prefilter_min_count=$(PREFILTER_MIN), graph_mode=DoubleStrand")
-println("GATE: completes AND peak RSS <= $(MEMORY_CEILING_GB) GB (aspiration <= $(ASPIRATION_GB) GB); was 74-200 GB+")
+# === Progress that survives a Slurm kill ===
+# Julia block-buffers stdout when it is redirected to a file, so a job killed for
+# time or memory loses everything it printed since the last buffer flush: on
+# Lawrencium (jobs 28071705-07) the .out files stopped at the launcher's RUN line
+# and the phase reached was unknowable. Every progress line is therefore flushed,
+# and a background task prints peak and live memory every HEARTBEAT_S seconds
+# (0 disables it). The task waits with Libc.systemsleep, an OS sleep, NOT sleep():
+# sleep() is a libuv timer, and while the main thread is inside the single
+# blocking assemble_genome call the event loop is not serviced, so a sleep()-based
+# heartbeat never fires (checked: zero lines in 6 s against a busy main thread,
+# versus one line per second with systemsleep, both surviving SIGKILL). Because
+# systemsleep blocks its thread, the heartbeat only starts with
+# Threads.nthreads() > 1; the gate sbatch sets JULIA_NUM_THREADS from
+# --cpus-per-task=16.
+
+function gate_println(args...)::Nothing
+    println(args...)
+    flush(stdout)
+    return nothing
+end
+
+function memory_line(tag::AbstractString)::String
+    maxrss_gb = round(Sys.maxrss() / 1024^3; digits = 3)
+    live_gb = round(Base.gc_live_bytes() / 1024^3; digits = 3)
+    return "[$(tag) $(Dates.now(Dates.UTC))] maxrss=$(maxrss_gb) GB gc_live=$(live_gb) GB"
+end
+
+const HEARTBEAT_TASK = if HEARTBEAT_S > 0 && Threads.nthreads() > 1
+    Threads.@spawn begin
+        while true
+            Libc.systemsleep(HEARTBEAT_S)
+            gate_println(memory_line("heartbeat"))
+            flush(stderr)
+        end
+    end
+else
+    HEARTBEAT_S > 0 &&
+        @warn "Memory heartbeat disabled: needs Threads.nthreads() > 1 " *
+              "(got $(Threads.nthreads())); phase lines are still flushed."
+    nothing
+end
+
+gate_println("=== E. coli Qualmer-Path Memory Gate (td-n8ax) ===")
+gate_println("Start time (UTC): $(Dates.now(Dates.UTC))")
+gate_println("Organism: $ORGANISM ($ACCESSION)")
+gate_println("Cell: coverage=$(COVERAGE)x seed=$(SEED), base k=$K")
+gate_println("COMPOSED config: corrector=:iterative, qualmer_memory_profile=:$(QUALMER_PROFILE), " *
+             "qualmer_prefilter_min_count=$(PREFILTER_MIN), graph_mode=DoubleStrand")
+gate_println("GATE: completes AND peak RSS <= $(MEMORY_CEILING_GB) GB (aspiration <= $(ASPIRATION_GB) GB); was 74-200 GB+")
 
 # Under the sbatch wrapper (which sets QUALMER_GATE_HEAD) this directory survives
 # process exit so the wrapper can save the contigs FASTA and QUAST report; the
@@ -88,7 +135,7 @@ benchmark_dir = mktempdir(prefix = "ecoli_qualmer_memory_gate_";
     cleanup = !haskey(ENV, "QUALMER_GATE_HEAD"))
 results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
-println("Working directory: $benchmark_dir")
+gate_println("Working directory: $benchmark_dir")
 
 # === QUAST report.tsv parsing (reused verbatim from the crashtest) ===
 
@@ -126,7 +173,7 @@ end
 
 # === Phase 1: download E. coli reference ===
 
-println("\n--- Phase 1: download E. coli reference ---")
+gate_println("\n--- Phase 1: download E. coli reference ---")
 ref_dir = joinpath(benchmark_dir, "reference")
 mkpath(ref_dir)
 reference_path = Mycelia.download_genome_by_accession(
@@ -134,11 +181,11 @@ reference_path = Mycelia.download_genome_by_accession(
 if !isfile(reference_path) || filesize(reference_path) == 0
     error("Failed to download E. coli reference ($ACCESSION) to $ref_dir")
 end
-println("Reference: $reference_path ($(filesize(reference_path)) bytes)")
+gate_println("Reference: $reference_path ($(filesize(reference_path)) bytes)")
 
 # === Phase 2: simulate reads ===
 
-println("\n--- Phase 2: simulate reads (coverage=$(COVERAGE)x seed=$(SEED)) ---")
+gate_println("\n--- Phase 2: simulate reads (coverage=$(COVERAGE)x seed=$(SEED)) ---")
 reads_dir = joinpath(benchmark_dir, "reads")
 mkpath(reads_dir)
 outbase = joinpath(reads_dir, "$(ORGANISM)_cov$(COVERAGE)x_seed$(SEED)")
@@ -149,11 +196,11 @@ records = load_reads(sim)
 if isempty(records)
     error("No reads simulated for coverage=$(COVERAGE)x seed=$(SEED)")
 end
-println("Loaded $(length(records)) reads")
+gate_println("Loaded $(length(records)) reads")
 
 # === Phase 3: assemble ONCE with the COMPOSED corrector config (crash-guarded) ===
 
-println("\n--- Phase 3: assemble (corrector=:iterative + prefilter + aggregate, crash-guarded) ---")
+gate_println("\n--- Phase 3: assemble (corrector=:iterative + prefilter + aggregate, crash-guarded) ---")
 
 # The corrector path: use_quality_scores=true (FASTQ default) routes through the
 # qualmer graph; qualmer_memory_profile + qualmer_prefilter_min_count are the two
@@ -165,7 +212,7 @@ config = Mycelia.Rhizomorph.AssemblyConfig(;
     corrector = :iterative,
     qualmer_memory_profile = QUALMER_PROFILE,
     qualmer_prefilter_min_count = PREFILTER_MIN,
-    verbose = false)
+    verbose = ASSEMBLY_VERBOSE)
 
 completed::Bool = false
 # failure_kind distinguishes a genuine OOM (the memory result this gate exists to
@@ -178,6 +225,7 @@ n_contigs::Union{Missing, Int} = missing
 contigs_path::String = joinpath(benchmark_dir, "$(ORGANISM)_cov$(COVERAGE)x_seed$(SEED)_contigs.fasta")
 
 GC.gc(true)
+gate_println(memory_line("before-assemble"))
 t0 = time()
 try
     result = Mycelia.Rhizomorph.assemble_genome(records, config)
@@ -190,7 +238,7 @@ try
             println(io, contig)
         end
     end
-    println("  Assembly COMPLETED: $(n_contigs) contigs in $(elapsed_s)s")
+    gate_println("  Assembly COMPLETED: $(n_contigs) contigs in $(elapsed_s)s")
 catch e
     global elapsed_s = round(time() - t0; digits = 3)
     global completed = false
@@ -202,7 +250,7 @@ end
 # Whole-process peak RSS (monotonic; captured after the assemble attempt).
 peak_rss_kb::Int = Int(Sys.maxrss() ÷ 1024)
 peak_rss_gb::Float64 = round(peak_rss_kb / (1024 * 1024); digits = 3)
-println("  Peak Sys.maxrss(): $(peak_rss_gb) GB ($(peak_rss_kb) KB)")
+gate_println("  Peak Sys.maxrss(): $(peak_rss_gb) GB ($(peak_rss_kb) KB)")
 
 # === Phase 4: QUAST aligned-truth scoring (only if it completed) ===
 
@@ -213,7 +261,7 @@ genome_fraction::Union{Missing, Float64} = missing
 
 if completed && RUN_QUAST && !ismissing(n_contigs) && n_contigs > 0 &&
    filesize(contigs_path) > 0
-    println("\n--- Phase 4: QUAST aligned-truth scoring ---")
+    gate_println("\n--- Phase 4: QUAST aligned-truth scoring ---")
     quast_dir = joinpath(benchmark_dir, "quast")
     try
         Mycelia.run_quast(contigs_path; outdir = quast_dir,
@@ -223,13 +271,13 @@ if completed && RUN_QUAST && !ismissing(n_contigs) && n_contigs > 0 &&
         global num_misassemblies = parse_quast_metric(report_tsv, "# misassemblies")
         global dup_ratio = parse_quast_metric(report_tsv, "Duplication ratio")
         global genome_fraction = parse_quast_metric(report_tsv, "Genome fraction (%)")
-        println("  NGA50=$(nga50), misasm=$(num_misassemblies), dup_ratio=$(dup_ratio), GF=$(genome_fraction)%")
+        gate_println("  NGA50=$(nga50), misasm=$(num_misassemblies), dup_ratio=$(dup_ratio), GF=$(genome_fraction)%")
     catch e
         @warn "QUAST failed — leaving accuracy metrics missing" exception = (
             e, catch_backtrace())
     end
 elseif !completed
-    println("\n--- Phase 4: skipped (assembly did not complete) ---")
+    gate_println("\n--- Phase 4: skipped (assembly did not complete) ---")
 end
 
 # === Phase 5: write results CSV ===
@@ -260,12 +308,12 @@ results = DataFrames.DataFrame(
     manifest_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SHA", "")],
     manifest_src_sha256 = String[get(ENV, "QUALMER_GATE_MANIFEST_SRC_SHA", "")])
 CSV.write(csv_path, results)
-println("\nResults written to: $csv_path")
-println(results)
+gate_println("\nResults written to: $csv_path")
+gate_println(results)
 
 # === Phase 6: PASS/FAIL memory GATE verdict ===
 
-println("\n--- GATE Verdict ---")
+gate_println("\n--- GATE Verdict ---")
 under_ceiling = peak_rss_gb <= MEMORY_CEILING_GB
 under_aspiration = peak_rss_gb <= ASPIRATION_GB
 gate_pass = completed && under_ceiling
@@ -275,22 +323,22 @@ if gate_pass
     aspiration_str = under_aspiration ?
                      "and CLEARED the $(ASPIRATION_GB) GB SPAdes-class aspiration" :
                      "(above the $(ASPIRATION_GB) GB aspiration, but under the ceiling)"
-    println("PASS: E. coli $(COVERAGE)x COMPLETED in $(elapsed_s)s at $(peak_rss_gb) GB peak " *
-            "<= $(MEMORY_CEILING_GB) GB ceiling $(aspiration_str). GF=$(gf_str)% " *
-            "($(ismissing(n_contigs) ? "NA" : n_contigs) contigs). Was 74-200 GB+.")
+    gate_println("PASS: E. coli $(COVERAGE)x COMPLETED in $(elapsed_s)s at $(peak_rss_gb) GB peak " *
+                 "<= $(MEMORY_CEILING_GB) GB ceiling $(aspiration_str). GF=$(gf_str)% " *
+                 "($(ismissing(n_contigs) ? "NA" : n_contigs) contigs). Was 74-200 GB+.")
 elseif completed && !under_ceiling
-    println("FAIL: E. coli $(COVERAGE)x COMPLETED but peak $(peak_rss_gb) GB EXCEEDS the " *
-            "$(MEMORY_CEILING_GB) GB ceiling — memory not yet bounded to target.")
+    gate_println("FAIL: E. coli $(COVERAGE)x COMPLETED but peak $(peak_rss_gb) GB EXCEEDS the " *
+                 "$(MEMORY_CEILING_GB) GB ceiling — memory not yet bounded to target.")
 elseif failure_kind == :error
-    println("ERROR: E. coli $(COVERAGE)x assembly threw a NON-OOM exception after $(elapsed_s)s " *
-            "at $(peak_rss_gb) GB — this is a CODE failure, NOT a memory-gate result. " *
-            "See the backtrace above. (Do not read this as 'memory unbounded'.)")
+    gate_println("ERROR: E. coli $(COVERAGE)x assembly threw a NON-OOM exception after $(elapsed_s)s " *
+                 "at $(peak_rss_gb) GB — this is a CODE failure, NOT a memory-gate result. " *
+                 "See the backtrace above. (Do not read this as 'memory unbounded'.)")
 else
-    println("FAIL: E. coli $(COVERAGE)x did NOT complete — OUT OF MEMORY after $(elapsed_s)s at " *
-            "$(peak_rss_gb) GB peak. Memory not bounded to target.")
+    gate_println("FAIL: E. coli $(COVERAGE)x did NOT complete — OUT OF MEMORY after $(elapsed_s)s at " *
+                 "$(peak_rss_gb) GB peak. Memory not bounded to target.")
 end
 
-println("\n=== E. coli Qualmer-Path Memory Gate complete (UTC): $(Dates.now(Dates.UTC)) ===")
+gate_println("\n=== E. coli Qualmer-Path Memory Gate complete (UTC): $(Dates.now(Dates.UTC)) ===")
 # Exit codes: 0 = gate PASS; 1 = memory FAIL (OOM or over-ceiling, a real gate result);
 # 2 = CODE error (non-OOM exception — NOT a memory result, needs a code fix).
 exit(gate_pass ? 0 : (failure_kind == :error ? 2 : 1))
