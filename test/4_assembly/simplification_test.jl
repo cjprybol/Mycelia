@@ -1725,6 +1725,8 @@ Test.@testset "Neighbor lookups match a full edge scan" begin
         graph["v1", "v1"] = Mycelia.Rhizomorph.StringEdgeData(1)
         return graph, labels
     end
+    # A label not in the graph has no neighbors (the scan found none). Check a
+    # label that was deleted ("v3") and one that was never inserted ("absent").
     function check_absent(graph)
         for missing_label in ("v3", "absent")
             out_neighbors = Mycelia.Rhizomorph.get_out_neighbors(graph, missing_label)
@@ -1753,20 +1755,43 @@ Test.@testset "Neighbor lookups match a full edge scan" begin
         check_absent(graph)
     end
 
-    # Pinned order: codes are C=1, A=2, B=3, so A's out-neighbors come back in
-    # code order (C, B), not label order (B, C) or edge-insertion order (B, C).
-    pinned = MetaGraphsNext.MetaGraph(
-        Graphs.DiGraph();
-        label_type = String,
-        vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
-        edge_data_type = Mycelia.Rhizomorph.StringEdgeData
-    )
-    for v in ("C", "A", "B")
-        pinned[v] = Mycelia.Rhizomorph.StringVertexData(v)
+    # Pinned order, hand-computed. Labels are inserted as C, A, B, so the codes
+    # are C=1, A=2, B=3. Edges into and out of A are added B before C, so label
+    # order and edge-insertion order are both (B, C), while code order is (C, B).
+    function pinned_graph(base_graph)
+        graph = MetaGraphsNext.MetaGraph(
+            base_graph;
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+        )
+        for v in ("C", "A", "B")
+            graph[v] = Mycelia.Rhizomorph.StringVertexData(v)
+        end
+        return graph
     end
-    pinned["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    pinned["A", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    pinned["B", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    Test.@test Mycelia.Rhizomorph.get_out_neighbors(pinned, "A") == Any["C", "B"]
-    Test.@test Mycelia.Rhizomorph.get_in_neighbors(pinned, "C") == Any["A", "B"]
+    edge = Mycelia.Rhizomorph.StringEdgeData(1)
+
+    directed = pinned_graph(Graphs.DiGraph())
+    directed["A", "B"] = edge
+    directed["A", "C"] = edge
+    directed["B", "A"] = edge
+    directed["C", "A"] = edge
+    Test.@test Mycelia.Rhizomorph.get_out_neighbors(directed, "A") == Any["C", "B"]
+    Test.@test Mycelia.Rhizomorph.get_in_neighbors(directed, "A") == Any["C", "B"]
+
+    # Undirected: each edge is reported once, from its lower-code endpoint, so
+    # out(v) holds neighbors with code >= v and in(v) those with code <= v; the
+    # self-loop A-A appears once on each side.
+    undirected = pinned_graph(Graphs.Graph())
+    undirected["A", "B"] = edge
+    undirected["A", "C"] = edge
+    undirected["A", "A"] = edge
+    undirected["B", "C"] = edge
+    Test.@test Mycelia.Rhizomorph.get_out_neighbors(undirected, "A") == Any["A", "B"]
+    Test.@test Mycelia.Rhizomorph.get_in_neighbors(undirected, "A") == Any["C", "A"]
+    Test.@test Mycelia.Rhizomorph.get_out_neighbors(undirected, "C") == Any["A", "B"]
+    Test.@test isempty(Mycelia.Rhizomorph.get_in_neighbors(undirected, "C"))
+    Test.@test isempty(Mycelia.Rhizomorph.get_out_neighbors(undirected, "B"))
+    Test.@test Mycelia.Rhizomorph.get_in_neighbors(undirected, "B") == Any["C", "A"]
 end

@@ -70,9 +70,11 @@ graph's edge labels.
 Bubble detection used to call `get_out_neighbors` per vertex while that
 function scanned every edge (`O(E)` per call); building the index once up front
 made the detection pass `O(V+E)` instead of `O(V*E)`. For any given source vertex
-the neighbor list equals `get_out_neighbors(graph, vertex)`, in the same order,
-because both list the edges whose source is that vertex in `edge_labels` order,
-so bubble results are identical to the pre-index scan.
+the neighbor list equals `get_out_neighbors(graph, vertex)`, in the same order:
+the index records each source's edges in `edge_labels` order, and
+`get_out_neighbors` reproduces that order from the sorted adjacency list (on
+undirected graphs both keep only neighbors whose code is >= the vertex's), so
+bubble results are identical to the pre-index scan.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Graph to index
@@ -163,7 +165,13 @@ end
 """
     get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
 
-Return outgoing neighbor labels for `vertex`.
+Return outgoing neighbor labels for `vertex`, in vertex-code order. A label not
+in the graph has no neighbors.
+
+On undirected graphs (for example canonical k-mer graphs) each edge is reported
+once, from its lower-code endpoint: the "outgoing" neighbors are those whose
+vertex code is >= this vertex's code, a self-loop included. Vertex codes depend
+on insertion and deletion order, so this is not an orientation.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Graph to query
@@ -210,7 +218,12 @@ end
 """
     get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
 
-Return incoming neighbor labels for `vertex`.
+Return incoming neighbor labels for `vertex`, in vertex-code order. A label not
+in the graph has no neighbors.
+
+On undirected graphs each edge is reported once, from its lower-code endpoint:
+the "incoming" neighbors are those whose vertex code is <= this vertex's code, a
+self-loop included. See `get_out_neighbors`.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Graph to query
