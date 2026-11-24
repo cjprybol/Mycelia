@@ -2286,3 +2286,47 @@ Test.@testset "Weighted memory limit after a partial raw frontier" begin
                Mycelia._indel_frontier_work_summary(Int[])
     indel_assert_cause_matches_admission(decision, work_limit)
 end
+
+Test.@testset "Live heap alone proves an indel memory fit" begin
+    # Pure rule: variants * live <= limit, without overflow.
+    Test.@test Mycelia._indel_live_heap_proves_fit(2, 10, 20)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, 10, 19)
+    Test.@test Mycelia._indel_live_heap_proves_fit(4, 5, 20)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(4, 6, 20)
+    Test.@test Mycelia._indel_live_heap_proves_fit(1, 20, 20)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, typemax(Int), typemax(Int))
+    Test.@test Mycelia._indel_live_heap_proves_fit(4, fld(typemax(Int), 4), typemax(Int))
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, 10, 0)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(0, 10, 20)
+
+    k = 7
+    sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
+    read = indel_classifier_fastq("live_heap_fit", sequence)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[read], k; mode = :singlestrand)
+    graph_bytes = Mycelia._indel_graph_memory_bytes(graph)
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+
+    # The assumption the shortcut rests on, on a real corrector graph.
+    Test.@test graph_bytes <= live_bytes
+
+    # Where the shortcut applies, the measured rule agrees with it.
+    for variants in (2, 4)
+        roomy_limit = variants * live_bytes + 64_000_000
+        Test.@test Mycelia._indel_live_heap_proves_fit(
+            variants, live_bytes, roomy_limit)
+        Test.@test Mycelia._indel_graph_variants_fit_memory(
+            graph, variants, roomy_limit)
+        Test.@test Mycelia._indel_additional_graph_bytes(graph_bytes, variants) <=
+                   roomy_limit - live_bytes
+    end
+
+    # Below the shortcut the exact measurement still decides, including a
+    # refusal by one byte.
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+    tight_limit = live_bytes + graph_bytes - 1
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, live_bytes, tight_limit)
+    Test.@test !Mycelia._indel_graph_variants_fit_memory(graph, 2, tight_limit)
+end

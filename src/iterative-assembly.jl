@@ -3729,6 +3729,28 @@ function _indel_additional_graph_bytes(
            typemax(Int) : graph_bytes * additional_variants
 end
 
+"""
+    _indel_live_heap_proves_fit(variants, live_bytes, memory_limit) -> Bool
+
+True when `variants * live_bytes <= memory_limit`, computed without overflow.
+
+If the graph's measured size is at most the live heap (`graph_bytes <=
+live_bytes`), this implies `(variants - 1) * graph_bytes <= memory_limit -
+live_bytes`, which is the fit rule in `_indel_graph_variants_fit_memory`. The
+graph is part of the live heap, and `Base.gc_live_bytes` also counts garbage
+allocated since the last collection, so it overstates what is live. That bound
+is an assumption rather than a proof: `Base.summarysize` can count objects that
+are not on the GC heap (for example constants in the system image).
+"""
+function _indel_live_heap_proves_fit(
+        variants::Int,
+        live_bytes::Int,
+        memory_limit::Int,
+)::Bool
+    (variants > 0 && live_bytes >= 0 && memory_limit > 0) || return false
+    return live_bytes <= fld(memory_limit, variants)
+end
+
 function _indel_graph_variants_fit_memory(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
@@ -3737,6 +3759,13 @@ function _indel_graph_variants_fit_memory(
     variants > 0 || throw(ArgumentError("variants must be positive, got $variants"))
     memory_limit === nothing && return true
     memory_limit <= 0 && return false
+    # `Base.summarysize` walks the whole graph and its evidence payloads, and
+    # this check runs several times per frontier schedule; in one profiled
+    # corrector run the walk took about a fifth of the time. When the live heap is small
+    # enough that even `variants` copies of all of it fit, the graph (part of
+    # that heap) fits too; skip the walk. Otherwise measure exactly as before.
+    _indel_live_heap_proves_fit(
+        variants, Int(Base.gc_live_bytes()), memory_limit) && return true
     graph_bytes = _indel_graph_memory_bytes(raw_graph)
     current_live_bytes = Int(Base.gc_live_bytes())
     current_live_bytes > memory_limit && return false
