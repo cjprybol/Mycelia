@@ -1976,28 +1976,44 @@ function _indel_frontier_successor_limit(
     return work_limit - current_work
 end
 
+"""
+    _indel_frontier_successors!(successors, successor_index, cell, maximum_successors) -> Bool
+
+Empty `successors`, fill it with the strand-compatible successors of `cell` in
+index order (at most `maximum_successors` of them), and return whether more
+existed. The probe reuses one buffer for every cell it expands, so it must
+finish reading the successors before the next call.
+"""
+function _indel_frontier_successors!(
+        successors::Vector{Tuple{V, Rhizomorph.StrandOrientation}},
+        successor_index::_IndelFrontierSuccessorIndex{V},
+        cell::_IndelFrontierCell{V},
+        maximum_successors::Int,
+)::Bool where {V}
+    maximum_successors < 0 && throw(ArgumentError(
+        "maximum_successors must be non-negative, got $maximum_successors"))
+    empty!(successors)
+    indexed_edges = get(successor_index.outgoing, cell.vertex, nothing)
+    indexed_edges === nothing && return false
+    for indexed_edge in indexed_edges
+        for (source_strand, target_strand) in indexed_edge.strand_pairs
+            source_strand == cell.strand || continue
+            length(successors) >= maximum_successors && return true
+            push!(successors, (indexed_edge.target, target_strand))
+        end
+    end
+    return false
+end
+
 function _indel_frontier_successors(
         successor_index::_IndelFrontierSuccessorIndex{V},
         cell::_IndelFrontierCell{V},
         maximum_successors::Int,
 )::_IndelFrontierSuccessorBatch{V} where {V}
-    maximum_successors < 0 && throw(ArgumentError(
-        "maximum_successors must be non-negative, got $maximum_successors"))
     successors = Tuple{V, Rhizomorph.StrandOrientation}[]
-    indexed_edges = get(
-        successor_index.outgoing, cell.vertex,
-        _IndelFrontierIndexedEdge{V}[])
-    sizehint!(successors, min(length(indexed_edges), maximum_successors))
-    for indexed_edge in indexed_edges
-        for (source_strand, target_strand) in indexed_edge.strand_pairs
-            source_strand == cell.strand || continue
-            if length(successors) >= maximum_successors
-                return _IndelFrontierSuccessorBatch(successors, true)
-            end
-            push!(successors, (indexed_edge.target, target_strand))
-        end
-    end
-    return _IndelFrontierSuccessorBatch(successors, false)
+    overflowed = _indel_frontier_successors!(
+        successors, successor_index, cell, maximum_successors)
+    return _IndelFrontierSuccessorBatch(successors, overflowed)
 end
 
 function _indel_frontier_successors(
@@ -2020,11 +2036,12 @@ function _indel_frontier_start_strands(
     strand_mode == :singlestrand && return [configured]
 
     outgoing = Set{Rhizomorph.StrandOrientation}()
-    for indexed_edge in get(
-            successor_index.outgoing, vertex,
-            _IndelFrontierIndexedEdge{V}[])
-        for (source_strand, _) in indexed_edge.strand_pairs
-            push!(outgoing, source_strand)
+    indexed_edges = get(successor_index.outgoing, vertex, nothing)
+    if indexed_edges !== nothing
+        for indexed_edge in indexed_edges
+            for (source_strand, _) in indexed_edge.strand_pairs
+                push!(outgoing, source_strand)
+            end
         end
     end
 
@@ -2130,6 +2147,9 @@ function _probe_indel_frontier(
     end
 
     Cell = _IndelFrontierCell{label_type}
+    # One successor buffer for every cell this probe expands; each expansion
+    # reads it completely before the next call refills it.
+    successor_buffer = Tuple{label_type, Rhizomorph.StrandOrientation}[]
     # Raw corrector graphs carry orientation in evidence rather than mandatory
     # `src_strand`/`dst_strand` fields. Resolve every evidence-backed outgoing
     # orientation without consulting its weight or likelihood.
@@ -2223,12 +2243,12 @@ function _probe_indel_frontier(
             for cell in deletion_hop
                 successor_limit = _indel_frontier_successor_limit(
                     work_limit, frontier_area, edge_expansions)
-                successor_batch = _indel_frontier_successors(
-                    successor_index, cell, successor_limit)
-                successors = successor_batch.successors
+                overflowed = _indel_frontier_successors!(
+                    successor_buffer, successor_index, cell, successor_limit)
+                successors = successor_buffer
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
-                if successor_batch.overflowed
+                if overflowed
                     edge_expansions = _saturating_indel_frontier_add(
                         edge_expansions, 1)
                     return _indel_frontier_metrics(
@@ -2292,12 +2312,12 @@ function _probe_indel_frontier(
             for cell in frontier
                 successor_limit = _indel_frontier_successor_limit(
                     work_limit, frontier_area, edge_expansions)
-                successor_batch = _indel_frontier_successors(
-                    successor_index, cell, successor_limit)
-                successors = successor_batch.successors
+                overflowed = _indel_frontier_successors!(
+                    successor_buffer, successor_index, cell, successor_limit)
+                successors = successor_buffer
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
-                if successor_batch.overflowed
+                if overflowed
                     edge_expansions = _saturating_indel_frontier_add(
                         edge_expansions, 1)
                     return _indel_frontier_metrics(
@@ -2350,12 +2370,12 @@ function _probe_indel_frontier(
                 for cell in deletion_hop
                     successor_limit = _indel_frontier_successor_limit(
                         work_limit, frontier_area, edge_expansions)
-                    successor_batch = _indel_frontier_successors(
-                        successor_index, cell, successor_limit)
-                    successors = successor_batch.successors
+                    overflowed = _indel_frontier_successors!(
+                        successor_buffer, successor_index, cell, successor_limit)
+                    successors = successor_buffer
                     edge_expansions = _saturating_indel_frontier_add(
                         edge_expansions, length(successors))
-                    if successor_batch.overflowed
+                    if overflowed
                         edge_expansions = _saturating_indel_frontier_add(
                             edge_expansions, 1)
                         return _indel_frontier_metrics(

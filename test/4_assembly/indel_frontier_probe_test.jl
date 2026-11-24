@@ -2286,3 +2286,46 @@ Test.@testset "Weighted memory limit after a partial raw frontier" begin
                Mycelia._indel_frontier_work_summary(Int[])
     indel_assert_cause_matches_admission(decision, work_limit)
 end
+
+Test.@testset "Buffered frontier successors match the allocating form" begin
+    degree = 50
+    graph = indel_frontier_high_degree_graph(degree)
+    successor_index = Mycelia._indel_frontier_successor_index(graph)
+    cell = Mycelia._IndelFrontierCell(
+        "root", Mycelia.Rhizomorph.Forward, :M, 0, 0)
+    reference = Mycelia._indel_frontier_successors(
+        successor_index, cell, typemax(Int))
+    Test.@test length(reference.successors) == degree
+
+    # A buffer still holding an earlier expansion is emptied and refilled with
+    # the same successors, in the same order, as a fresh allocation.
+    buffer = copy(reference.successors)
+    push!(buffer, first(reference.successors))
+    for limit in (0, 1, 3, degree - 1, degree, degree + 1, typemax(Int))
+        expected = Mycelia._indel_frontier_successors(
+            successor_index, cell, limit)
+        overflowed = Mycelia._indel_frontier_successors!(
+            buffer, successor_index, cell, limit)
+        Test.@test overflowed == expected.overflowed
+        Test.@test buffer == expected.successors
+        Test.@test overflowed == (limit < degree)
+    end
+
+    # A vertex with no outgoing edges yields an empty buffer and no overflow.
+    leaf = Mycelia._IndelFrontierCell(
+        reference.successors[1][1], Mycelia.Rhizomorph.Forward, :M, 0, 0)
+    buffer = copy(reference.successors)
+    Test.@test !Mycelia._indel_frontier_successors!(
+        buffer, successor_index, leaf, typemax(Int))
+    Test.@test isempty(buffer)
+    Test.@test isempty(Mycelia._indel_frontier_successors(
+        successor_index, leaf, typemax(Int)).successors)
+
+    message = try
+        Mycelia._indel_frontier_successors!(buffer, successor_index, cell, -1)
+        ""
+    catch err
+        sprint(showerror, err)
+    end
+    Test.@test occursin("maximum_successors must be non-negative", message)
+end
