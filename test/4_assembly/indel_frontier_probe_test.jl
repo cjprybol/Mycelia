@@ -2298,6 +2298,8 @@ Test.@testset "Live heap alone proves an indel memory fit" begin
     Test.@test Mycelia._indel_live_heap_proves_fit(4, fld(typemax(Int), 4), typemax(Int))
     Test.@test !Mycelia._indel_live_heap_proves_fit(2, 10, 0)
     Test.@test !Mycelia._indel_live_heap_proves_fit(0, 10, 20)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(1, 0, 0)
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, -1, 20)
 
     k = 7
     sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
@@ -2308,25 +2310,37 @@ Test.@testset "Live heap alone proves an indel memory fit" begin
     Base.GC.gc()
     live_bytes = Int(Base.gc_live_bytes())
 
-    # The assumption the shortcut rests on, on a real corrector graph.
+    # Sanity check of the assumption on a small qualmer graph; it does not
+    # stress the assumption on large graphs.
     Test.@test graph_bytes <= live_bytes
 
-    # Where the shortcut applies, the measured rule agrees with it.
+    # Under a roomy limit the shortcut decides and the graph is never measured:
+    # a measurement that throws must not be reached.
+    measure_must_not_run = _ -> error("graph measured despite the live-heap shortcut")
     for variants in (2, 4)
         roomy_limit = variants * live_bytes + 64_000_000
         Test.@test Mycelia._indel_live_heap_proves_fit(
             variants, live_bytes, roomy_limit)
         Test.@test Mycelia._indel_graph_variants_fit_memory(
-            graph, variants, roomy_limit)
+            graph, variants, roomy_limit; measure_graph_bytes = measure_must_not_run)
+        # The measured rule would also admit here.
         Test.@test Mycelia._indel_additional_graph_bytes(graph_bytes, variants) <=
                    roomy_limit - live_bytes
     end
 
-    # Below the shortcut the exact measurement still decides, including a
-    # refusal by one byte.
+    # Below the shortcut the graph is measured exactly once, and the measured
+    # rule refuses a limit one byte under the requirement at the test's own
+    # live-heap reading.
     Base.GC.gc()
     live_bytes = Int(Base.gc_live_bytes())
     tight_limit = live_bytes + graph_bytes - 1
+    measurements = Ref(0)
+    counting_measure = function (g)
+        measurements[] += 1
+        return Mycelia._indel_graph_memory_bytes(g)
+    end
     Test.@test !Mycelia._indel_live_heap_proves_fit(2, live_bytes, tight_limit)
-    Test.@test !Mycelia._indel_graph_variants_fit_memory(graph, 2, tight_limit)
+    Test.@test !Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, tight_limit; measure_graph_bytes = counting_measure)
+    Test.@test measurements[] == 1
 end

@@ -3732,15 +3732,22 @@ end
 """
     _indel_live_heap_proves_fit(variants, live_bytes, memory_limit) -> Bool
 
-True when `variants * live_bytes <= memory_limit`, computed without overflow.
+True only when `variants` and `memory_limit` are positive, `live_bytes` is
+non-negative, and `variants * live_bytes <= memory_limit` (computed without
+overflow); false otherwise.
 
 If the graph's measured size is at most the live heap (`graph_bytes <=
 live_bytes`), this implies `(variants - 1) * graph_bytes <= memory_limit -
-live_bytes`, which is the fit rule in `_indel_graph_variants_fit_memory`. The
-graph is part of the live heap, and `Base.gc_live_bytes` also counts garbage
-allocated since the last collection, so it overstates what is live. That bound
-is an assumption rather than a proof: `Base.summarysize` can count objects that
-are not on the GC heap (for example constants in the system image).
+live_bytes`, the fit rule in `_indel_graph_variants_fit_memory` evaluated at the
+same live-heap reading. The graph is part of the live heap, and
+`Base.gc_live_bytes` also counts garbage allocated since the last collection, so
+it overstates what is live. The premise `graph_bytes <= live_bytes` is an
+assumption rather than a proof: `Base.summarysize` can count objects that are
+not on the GC heap (for example constants in the system image).
+
+The exact rule reads the live heap again after its own measurement, which
+allocates, so near the threshold the two rules can differ by that allocation:
+the shortcut may admit where the exact rule would refuse.
 """
 function _indel_live_heap_proves_fit(
         variants::Int,
@@ -3754,19 +3761,20 @@ end
 function _indel_graph_variants_fit_memory(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
-        memory_limit::Union{Nothing, Int},
+        memory_limit::Union{Nothing, Int};
+        measure_graph_bytes::Function = _indel_graph_memory_bytes,
 )::Bool
     variants > 0 || throw(ArgumentError("variants must be positive, got $variants"))
     memory_limit === nothing && return true
     memory_limit <= 0 && return false
-    # `Base.summarysize` walks the whole graph and its evidence payloads, and
-    # this check runs several times per frontier schedule; in one profiled
-    # corrector run the walk took about a fifth of the time. When the live heap is small
-    # enough that even `variants` copies of all of it fit, the graph (part of
-    # that heap) fits too; skip the walk. Otherwise measure exactly as before.
+    # Measuring the graph walks it and its evidence payloads with
+    # `Base.summarysize`, which is slow on large graphs. When even `variants`
+    # copies of the whole live heap fit, the graph fits too, assuming its
+    # measured size does not exceed the live heap (see
+    # `_indel_live_heap_proves_fit`); skip the walk. Otherwise measure the graph.
     _indel_live_heap_proves_fit(
         variants, Int(Base.gc_live_bytes()), memory_limit) && return true
-    graph_bytes = _indel_graph_memory_bytes(raw_graph)
+    graph_bytes = measure_graph_bytes(raw_graph)
     current_live_bytes = Int(Base.gc_live_bytes())
     current_live_bytes > memory_limit && return false
     additional_bytes = _indel_additional_graph_bytes(graph_bytes, variants)
