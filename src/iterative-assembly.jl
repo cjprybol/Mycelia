@@ -4392,6 +4392,44 @@ numbers are reproducible). Do not quote single-seed contig lengths as an effect
 size: largest-contig is a discontinuous order statistic and one correction can
 join or split a contig.
 """
+
+# td-4mbg route debug (MYCELIA_DEBUG_DEMOTED_ROUTE=1). Debug-only and
+# output-neutral: it reads counters around each decode and never changes a
+# decode argument. Single-thread only (per-read attribution uses counter deltas).
+mutable struct _DemotedRouteDebug
+    targets::Int
+    improved::Int
+    failopen::Int
+    window_div::Int
+end
+
+function _demoted_route_debug_state()
+    get(ENV, "MYCELIA_DEBUG_DEMOTED_ROUTE", "") == "1" || return nothing
+    if Threads.nthreads() != 1
+        println("[route-debug] disabled: needs 1 thread, have $(Threads.nthreads())")
+        return nothing
+    end
+    return _DemotedRouteDebug(0, 0, 0, 0)
+end
+
+# The reads td-4mbg's `_frontier_decode_route` decodes whole: a forced
+# frontier-budgeted pass, every scheduled window demoted, and a short read.
+function _is_short_demoted_target(read, k, use_windowed, force_indel_windowing,
+        indel_params, read_window_sources)
+    return use_windowed && force_indel_windowing &&
+           read_window_sources !== nothing &&
+           !_read_runs_indel_decode(indel_params, read_window_sources) &&
+           !_windowed_decode_read_is_long(read, k)
+end
+
+function _route_debug_record!(dbg, was_improved, sld0, wd0, diag)
+    dbg.targets += 1
+    was_improved && (dbg.improved += 1)
+    diag.substitution_length_divergences[] > sld0 && (dbg.failopen += 1)
+    diag.window_divergences[] > wd0 && (dbg.window_div += 1)
+    return nothing
+end
+
 function _read_runs_indel_decode(
         indel_params::Union{Nothing, IndelDecodeParams},
         indel_window_sources::Union{
@@ -5492,6 +5530,7 @@ function _improve_read_set_likelihood_impl(
     # output-neutral, so it is a stable per-run setting rather than a
     # per-batch env re-read.
     gc_between_batches_enabled = _gc_between_batches_enabled(gc_between_batches)
+    route_dbg = _demoted_route_debug_state()
     for batch_start in 1:batch_size:total_reads
         batch_end = min(batch_start + batch_size - 1, total_reads)
         batch_reads = work_reads[batch_start:batch_end]
@@ -5536,6 +5575,11 @@ function _improve_read_set_likelihood_impl(
                         if soft_weights !== nothing
                             batch_local[i] = local_sink
                         end
+                        dbg_target = route_dbg !== nothing && _is_short_demoted_target(
+                            read, k, use_windowed, force_indel_windowing,
+                            effective_indel_params, read_window_sources)
+                        dbg_sld0 = diag.substitution_length_divergences[]
+                        dbg_wd0 = diag.window_divergences[]
                         improved_read,
                         was_improved = (use_windowed &&
                                         (force_indel_windowing ||
@@ -5568,6 +5612,8 @@ function _improve_read_set_likelihood_impl(
                             calibrated_gap_threshold = calibrated_gap_threshold,
                         )
                         batch_results[i] = (improved_read, was_improved)
+                        dbg_target && _route_debug_record!(
+                            route_dbg, was_improved, dbg_sld0, dbg_wd0, diag)
                     end
                 end
             end
@@ -5664,6 +5710,11 @@ function _improve_read_set_likelihood_impl(
                 read_index = batch_start + i - 1
                 read_window_sources = get(
                     scheduled_window_sources, read_index, nothing)
+                dbg_target = route_dbg !== nothing && _is_short_demoted_target(
+                    read, k, use_windowed, force_indel_windowing,
+                    effective_indel_params, read_window_sources)
+                dbg_sld0 = diag.substitution_length_divergences[]
+                dbg_wd0 = diag.window_divergences[]
                 improved_read,
                 was_improved = (use_windowed &&
                                 (force_indel_windowing ||
@@ -5687,6 +5738,8 @@ function _improve_read_set_likelihood_impl(
                     substitution_error_rate = substitution_error_rate,
                     calibrated_gap_threshold = calibrated_gap_threshold)
                 updated_reads[batch_start + i - 1] = improved_read
+                dbg_target && _route_debug_record!(
+                    route_dbg, was_improved, dbg_sld0, dbg_wd0, diag)
 
                 if was_improved
                     batch_improvements += 1
@@ -5728,6 +5781,13 @@ function _improve_read_set_likelihood_impl(
         end
     end
 
+    if route_dbg !== nothing
+        println("[route-debug] arm=base k=$k reads=$total_reads forced=$(force_indel_windowing) " *
+                "short_demoted=$(route_dbg.targets) improved=$(route_dbg.improved) " *
+                "failopen_len_divergence=$(route_dbg.failopen) " *
+                "window_divergence=$(route_dbg.window_div)")
+        flush(stdout)
+    end
     skip_fraction = total_reads > 0 ? skipped_reads / total_reads : 0.0
     if verbose
         total_improvement_rate = improvements_made / total_reads * 100
