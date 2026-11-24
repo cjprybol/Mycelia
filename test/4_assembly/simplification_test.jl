@@ -1670,3 +1670,71 @@ Test.@testset "Graph Simplification Helper Coverage" begin
         end
     end
 end
+
+import Random
+import StableRNGs
+
+Test.@testset "Neighbor lookups match a full edge scan (td-twmi)" begin
+    # get_out_neighbors / get_in_neighbors read the adjacency lists. They must
+    # return exactly what scanning every edge returned (same labels, same order,
+    # same Vector{Any} type), including after vertex removals reassign codes.
+    function scan_out(graph, vertex)
+        neighbors = []
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            src == vertex && push!(neighbors, dst)
+        end
+        return neighbors
+    end
+    function scan_in(graph, vertex)
+        neighbors = []
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            dst == vertex && push!(neighbors, src)
+        end
+        return neighbors
+    end
+    function check_all(graph, labels)
+        for v in labels
+            out_neighbors = Mycelia.Rhizomorph.get_out_neighbors(graph, v)
+            in_neighbors = Mycelia.Rhizomorph.get_in_neighbors(graph, v)
+            Test.@test out_neighbors isa Vector{Any}
+            Test.@test in_neighbors isa Vector{Any}
+            Test.@test out_neighbors == scan_out(graph, v)
+            Test.@test in_neighbors == scan_in(graph, v)
+            Test.@test Mycelia.Rhizomorph.is_isolated_vertex(graph, v) ==
+                       (isempty(scan_out(graph, v)) && isempty(scan_in(graph, v)))
+        end
+    end
+
+    rng = StableRNGs.StableRNG(42)
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = String,
+        vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+        edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+    )
+    # Insert labels in shuffled order so vertex codes do not follow label order.
+    labels = ["v" * string(i) for i in 1:40]
+    for v in labels[Random.randperm(rng, length(labels))]
+        graph[v] = Mycelia.Rhizomorph.StringVertexData(v)
+    end
+    for _ in 1:160
+        a = labels[rand(rng, 1:length(labels))]
+        b = labels[rand(rng, 1:length(labels))]
+        graph[a, b] = Mycelia.Rhizomorph.StringEdgeData(1)   # self-loops allowed
+    end
+    graph["v1", "v1"] = Mycelia.Rhizomorph.StringEdgeData(1)
+    check_all(graph, labels)
+
+    # Removing a vertex moves the last code into the removed slot; lookups must
+    # still agree with the scan afterwards.
+    for v in ("v3", "v17", labels[end])
+        delete!(graph, v)
+    end
+    remaining = collect(MetaGraphsNext.labels(graph))
+    Test.@test length(remaining) == length(labels) - 3
+    check_all(graph, remaining)
+
+    # A label not in the graph has no neighbors (the scan found none).
+    Test.@test Mycelia.Rhizomorph.get_out_neighbors(graph, "v3") == Any[]
+    Test.@test Mycelia.Rhizomorph.get_in_neighbors(graph, "absent") == Any[]
+end

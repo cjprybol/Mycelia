@@ -178,12 +178,16 @@ neighbors = Mycelia.Rhizomorph.get_out_neighbors(graph, vertex)
 ```
 """
 function get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
+    # Read the vertex's adjacency list (O(degree)) rather than scanning every
+    # edge (O(E)): `remove_path_from_graph!` calls this once per path vertex, so
+    # the scan made bubble cleanup O(path * E). The order is unchanged: Graphs.jl
+    # keeps adjacency lists sorted by vertex code, and `edge_labels` visits the
+    # edges of one source in that same sorted order. An absent vertex has no
+    # neighbors, as the scan returned.
     neighbors = []
-    for edge_label in MetaGraphsNext.edge_labels(graph)
-        src, dst = edge_label
-        if src == vertex
-            push!(neighbors, dst)
-        end
+    haskey(graph, vertex) || return neighbors
+    for dst in MetaGraphsNext.outneighbor_labels(graph, vertex)
+        push!(neighbors, dst)
     end
     return neighbors
 end
@@ -206,12 +210,13 @@ neighbors = Mycelia.Rhizomorph.get_in_neighbors(graph, vertex)
 ```
 """
 function get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
+    # O(degree) adjacency read; see `get_out_neighbors`. `edge_labels` visits
+    # sources in ascending code order, which is the order of the sorted
+    # in-adjacency list, so the result order is unchanged.
     neighbors = []
-    for edge_label in MetaGraphsNext.edge_labels(graph)
-        src, dst = edge_label
-        if dst == vertex
-            push!(neighbors, src)
-        end
+    haskey(graph, vertex) || return neighbors
+    for src in MetaGraphsNext.inneighbor_labels(graph, vertex)
+        push!(neighbors, src)
     end
     return neighbors
 end
