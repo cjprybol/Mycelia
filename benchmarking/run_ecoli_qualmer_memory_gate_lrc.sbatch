@@ -303,19 +303,42 @@ julia_pid=$!
 # Julia 1.10 a thread parked in Libc.systemsleep is not GC-safe, so an in-process
 # sampler stalls every collection (a local test hung outright), and a sleep()-based
 # one never fires while the main thread is busy. /proc/<pid>/status gives current
-# (VmRSS) and peak (VmHWM) resident memory for the juliaup launcher and its child,
-# the real julia process; each line is written as soon as it is sampled.
+# (VmRSS) and peak (VmHWM) resident memory. Every descendant of the launcher is
+# sampled, not just its child: juliaup's launcher starts the real julia, and julia
+# starts QUAST/ART via run(), so those are grandchildren. Each line carries PPid so
+# the tree can be rebuilt (the launcher and the real julia are both named "julia").
+# A tool that starts and exits within one interval is still missed, and a process's
+# VmHWM is lost when it exits: sacct MaxRSS (printed below) stays the authoritative
+# job peak; this trail says WHEN and in WHICH process memory grew. The first sample
+# is taken at start, so a job killed during warm-up still leaves one line; each line
+# is written as soon as it is sampled.
+descendants() {
+  local c
+  for c in $(pgrep -P "$1"); do
+    echo "${c}"
+    descendants "${c}"
+  done
+}
 sample_s="${MYCELIA_GATE_SAMPLE_S:-300}"
 sampler_pid=""
 if [[ "${sample_s}" =~ ^[0-9]+$ ]] && (( sample_s > 0 )); then
   (
+    # On TERM, also kill the pending sleep so nothing keeps the job's stdout open.
+    sleep_pid=""
+    trap 'kill "${sleep_pid}" 2>/dev/null; exit 0' TERM
     while kill -0 "${julia_pid}" 2>/dev/null; do
-      sleep "${sample_s}"
-      for p in "${julia_pid}" $(pgrep -P "${julia_pid}"); do
-        [[ -r "/proc/${p}/status" ]] || continue
-        mem=$(awk '/^(VmRSS|VmHWM):/ {sub(":", "", $1); printf "%s=%s%s ", $1, $2, $3}' "/proc/${p}/status")
-        echo "[mem $(date -u +%Y-%m-%dT%H:%M:%SZ)] pid=${p} ${mem}"
+      for p in "${julia_pid}" $(descendants "${julia_pid}"); do
+        # A process can exit between listing and reading (or be a zombie with no
+        # memory fields); skip it rather than print a line without values.
+        mem=$(awk '/^(PPid|VmRSS|VmHWM):/ {sub(":", "", $1); printf "%s=%s%s ", $1, $2, $3}' "/proc/${p}/status" 2>/dev/null)
+        name=$(cat "/proc/${p}/comm" 2>/dev/null)
+        [[ "${mem}" == *VmRSS=* ]] || continue
+        echo "[mem $(date -u +%Y-%m-%dT%H:%M:%SZ)] pid=${p} ${name:-?} ${mem}"
       done
+      sleep "${sample_s}" &
+      sleep_pid=$!
+      wait "${sleep_pid}"
+      sleep_pid=""
     done
   ) &
   sampler_pid=$!
@@ -325,7 +348,10 @@ else
 fi
 wait "${julia_pid}"
 status=$?
-[[ -n "${sampler_pid}" ]] && kill "${sampler_pid}" 2>/dev/null
+# The sampler's TERM trap also kills its pending sleep.
+if [[ -n "${sampler_pid}" ]]; then
+  kill "${sampler_pid}" 2>/dev/null
+fi
 # Exit 2 is a driver CODE error: keep its scratch. 0 and 1 are gate results.
 [[ "${status}" -eq 2 ]] && keep_tmp=1
 
