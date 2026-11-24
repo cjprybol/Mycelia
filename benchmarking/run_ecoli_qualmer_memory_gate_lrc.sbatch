@@ -296,8 +296,36 @@ if ! "${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" \
 fi
 
 echo ">>> RUN ecoli_qualmer_memory_gate.jl $(date)"
-"${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" ecoli_qualmer_memory_gate.jl
+"${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no --project="${env_dir}" ecoli_qualmer_memory_gate.jl &
+julia_pid=$!
+# Memory trail that survives a Slurm kill. Sampled HERE, from bash, every
+# MYCELIA_GATE_SAMPLE_S seconds (default 300, 0 = off), not from a Julia task: in
+# Julia 1.10 a thread parked in Libc.systemsleep is not GC-safe, so an in-process
+# sampler stalls every collection (a local test hung outright), and a sleep()-based
+# one never fires while the main thread is busy. /proc/<pid>/status gives current
+# (VmRSS) and peak (VmHWM) resident memory for the juliaup launcher and its child,
+# the real julia process; each line is written as soon as it is sampled.
+sample_s="${MYCELIA_GATE_SAMPLE_S:-300}"
+sampler_pid=""
+if [[ "${sample_s}" =~ ^[0-9]+$ ]] && (( sample_s > 0 )); then
+  (
+    while kill -0 "${julia_pid}" 2>/dev/null; do
+      sleep "${sample_s}"
+      for p in "${julia_pid}" $(pgrep -P "${julia_pid}"); do
+        [[ -r "/proc/${p}/status" ]] || continue
+        mem=$(awk '/^(VmRSS|VmHWM):/ {sub(":", "", $1); printf "%s=%s%s ", $1, $2, $3}' "/proc/${p}/status")
+        echo "[mem $(date -u +%Y-%m-%dT%H:%M:%SZ)] pid=${p} ${mem}"
+      done
+    done
+  ) &
+  sampler_pid=$!
+  disown "${sampler_pid}"  # no "Terminated" job notice when it is killed below
+else
+  echo "Memory sampler off (MYCELIA_GATE_SAMPLE_S='${sample_s}')"
+fi
+wait "${julia_pid}"
 status=$?
+[[ -n "${sampler_pid}" ]] && kill "${sampler_pid}" 2>/dev/null
 # Exit 2 is a driver CODE error: keep its scratch. 0 and 1 are gate results.
 [[ "${status}" -eq 2 ]] && keep_tmp=1
 
