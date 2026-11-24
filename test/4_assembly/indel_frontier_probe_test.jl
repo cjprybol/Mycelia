@@ -2315,10 +2315,16 @@ Test.@testset "Live heap alone proves an indel memory fit" begin
     Test.@test graph_bytes <= live_bytes
 
     # Under a roomy limit the shortcut decides and the graph is never measured:
-    # a measurement that throws must not be reached.
+    # a measurement that throws must not be reached. Compile the call first and
+    # leave 1 GiB of slack, so allocation between the reading and the call
+    # cannot push the live heap past the shortcut.
     measure_must_not_run = _ -> error("graph measured despite the live-heap shortcut")
+    Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, typemax(Int); measure_graph_bytes = measure_must_not_run)
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
     for variants in (2, 4)
-        roomy_limit = variants * live_bytes + 64_000_000
+        roomy_limit = variants * live_bytes + (1 << 30)
         Test.@test Mycelia._indel_live_heap_proves_fit(
             variants, live_bytes, roomy_limit)
         Test.@test Mycelia._indel_graph_variants_fit_memory(
@@ -2342,5 +2348,21 @@ Test.@testset "Live heap alone proves an indel memory fit" begin
     Test.@test !Mycelia._indel_live_heap_proves_fit(2, live_bytes, tight_limit)
     Test.@test !Mycelia._indel_graph_variants_fit_memory(
         graph, 2, tight_limit; measure_graph_bytes = counting_measure)
+    Test.@test measurements[] == 1
+
+    # With the shortcut off, the measured rule admits when the measured graph
+    # fits beside the live heap: a one-byte graph under a limit just below
+    # twice the live heap.
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+    admit_limit = 2 * live_bytes - 1
+    measurements[] = 0
+    one_byte_measure = function (g)
+        measurements[] += 1
+        return 1
+    end
+    Test.@test !Mycelia._indel_live_heap_proves_fit(2, live_bytes, admit_limit)
+    Test.@test Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, admit_limit; measure_graph_bytes = one_byte_measure)
     Test.@test measurements[] == 1
 end

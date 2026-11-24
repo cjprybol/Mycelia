@@ -3762,7 +3762,7 @@ function _indel_graph_variants_fit_memory(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
         memory_limit::Union{Nothing, Int};
-        measure_graph_bytes::Function = _indel_graph_memory_bytes,
+        measure_graph_bytes = _indel_graph_memory_bytes,
 )::Bool
     variants > 0 || throw(ArgumentError("variants must be positive, got $variants"))
     memory_limit === nothing && return true
