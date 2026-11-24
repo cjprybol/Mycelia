@@ -2351,16 +2351,20 @@ Test.@testset "Live heap alone proves an indel memory fit" begin
     Test.@test measurements[] == 1
 
     # With the shortcut off, the measured rule admits when the measured graph
-    # fits beside the live heap: a one-byte graph under a limit just below
-    # twice the live heap.
-    Base.GC.gc()
-    live_bytes = Int(Base.gc_live_bytes())
-    admit_limit = 2 * live_bytes - 1
-    measurements[] = 0
+    # fits beside the live heap: a one-byte graph under a limit of 1.5x the live
+    # heap. The margin on both sides absorbs a collection or allocation between
+    # the reading and the call; the warm-up call compiles the stub's method
+    # before the reading.
     one_byte_measure = function (g)
         measurements[] += 1
         return 1
     end
+    Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, tight_limit; measure_graph_bytes = one_byte_measure)
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+    admit_limit = live_bytes + fld(live_bytes, 2)
+    measurements[] = 0
     Test.@test !Mycelia._indel_live_heap_proves_fit(2, live_bytes, admit_limit)
     Test.@test Mycelia._indel_graph_variants_fit_memory(
         graph, 2, admit_limit; measure_graph_bytes = one_byte_measure)
