@@ -303,19 +303,32 @@ julia_pid=$!
 # Julia 1.10 a thread parked in Libc.systemsleep is not GC-safe, so an in-process
 # sampler stalls every collection (a local test hung outright), and a sleep()-based
 # one never fires while the main thread is busy. /proc/<pid>/status gives current
-# (VmRSS) and peak (VmHWM) resident memory for the juliaup launcher and its child,
-# the real julia process; each line is written as soon as it is sampled.
+# (VmRSS) and peak (VmHWM) resident memory. Every descendant of the launcher is
+# sampled, not just its child: juliaup's launcher starts the real julia, and julia
+# starts QUAST/ART via run(), so those are grandchildren and their memory would
+# otherwise be invisible. The first sample is taken at start, so a job killed
+# during warm-up still leaves one line; each line is written as soon as it is sampled.
+descendants() {
+  local c
+  for c in $(pgrep -P "$1"); do
+    echo "${c}"
+    descendants "${c}"
+  done
+}
 sample_s="${MYCELIA_GATE_SAMPLE_S:-300}"
 sampler_pid=""
 if [[ "${sample_s}" =~ ^[0-9]+$ ]] && (( sample_s > 0 )); then
   (
     while kill -0 "${julia_pid}" 2>/dev/null; do
-      sleep "${sample_s}"
-      for p in "${julia_pid}" $(pgrep -P "${julia_pid}"); do
-        [[ -r "/proc/${p}/status" ]] || continue
-        mem=$(awk '/^(VmRSS|VmHWM):/ {sub(":", "", $1); printf "%s=%s%s ", $1, $2, $3}' "/proc/${p}/status")
-        echo "[mem $(date -u +%Y-%m-%dT%H:%M:%SZ)] pid=${p} ${mem}"
+      for p in "${julia_pid}" $(descendants "${julia_pid}"); do
+        # A process can exit between listing and reading; skip it rather than
+        # print an empty line.
+        mem=$(awk '/^(VmRSS|VmHWM):/ {sub(":", "", $1); printf "%s=%s%s ", $1, $2, $3}' "/proc/${p}/status" 2>/dev/null)
+        name=$(cat "/proc/${p}/comm" 2>/dev/null)
+        [[ -n "${mem}" ]] || continue
+        echo "[mem $(date -u +%Y-%m-%dT%H:%M:%SZ)] pid=${p} ${name:-?} ${mem}"
       done
+      sleep "${sample_s}"
     done
   ) &
   sampler_pid=$!
@@ -325,7 +338,12 @@ else
 fi
 wait "${julia_pid}"
 status=$?
-[[ -n "${sampler_pid}" ]] && kill "${sampler_pid}" 2>/dev/null
+# Kill the sampler's pending sleep as well as the sampler, so nothing it started
+# keeps the job's stdout open after the driver has exited.
+if [[ -n "${sampler_pid}" ]]; then
+  pkill -P "${sampler_pid}" 2>/dev/null
+  kill "${sampler_pid}" 2>/dev/null
+fi
 # Exit 2 is a driver CODE error: keep its scratch. 0 and 1 are gate results.
 [[ "${status}" -eq 2 ]] && keep_tmp=1
 
