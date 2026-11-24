@@ -67,12 +67,12 @@ end
 Build a vertex -> outgoing-neighbor-labels index in a single `O(E)` pass over the
 graph's edge labels.
 
-This replaces the per-vertex `get_out_neighbors` scan (each of which is itself
-`O(E)`) inside bubble detection. Building the index once up front turns the
-detection pass from `O(V*E)` into `O(V+E)`. For any given source vertex the
-neighbor order matches what `get_out_neighbors` would return — both consume
-`MetaGraphsNext.edge_labels(graph)` in the same order — so downstream bubble
-results are identical to the pre-index scan.
+Bubble detection used to call `get_out_neighbors` per vertex while that
+function scanned every edge (`O(E)` per call); building the index once up front
+made the detection pass `O(V+E)` instead of `O(V*E)`. For any given source vertex
+the neighbor list equals `get_out_neighbors(graph, vertex)`, in the same order,
+because both list the edges whose source is that vertex in `edge_labels` order,
+so bubble results are identical to the pre-index scan.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Graph to index
@@ -95,7 +95,7 @@ end
 
 Look up the outgoing neighbors of `vertex` in a prebuilt out-adjacency index in
 `O(1)`. Returns an empty vector for vertices with no outgoing edges. Mirrors the
-result of `get_out_neighbors(graph, vertex)` without rescanning the edge set.
+result of `get_out_neighbors(graph, vertex)`.
 """
 function _indexed_out_neighbors(out_index::AbstractDict{T, Vector{T}}, vertex) where {T}
     return haskey(out_index, vertex) ? out_index[vertex] : T[]
@@ -136,8 +136,8 @@ function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
 
     # Build the out-adjacency index ONCE in O(E), then reuse it for every
     # entry-point out-degree check and every forward path trace. This is the
-    # fix for the former O(V*E) scaling: each vertex previously triggered a
-    # full O(E) get_out_neighbors edge scan.
+    # fix for the former O(V*E) scaling: each vertex used to trigger a call to
+    # get_out_neighbors, which then scanned every edge (O(E) per call).
     out_index = _build_out_adjacency_index(graph, T)
 
     for entry_vertex in vertices
@@ -179,15 +179,30 @@ neighbors = Mycelia.Rhizomorph.get_out_neighbors(graph, vertex)
 """
 function get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
     # Read the vertex's adjacency list (O(degree)) rather than scanning every
-    # edge (O(E)): `remove_path_from_graph!` calls this once per path vertex, so
-    # the scan made bubble cleanup O(path * E). The order is unchanged: Graphs.jl
-    # keeps adjacency lists sorted by vertex code, and `edge_labels` visits the
-    # edges of one source in that same sorted order. An absent vertex has no
+    # edge (O(E)). Callers that loop over vertices (`is_isolated_vertex` from
+    # `remove_path_from_graph!` and `remove_isolated_vertices!`) made the scan
+    # O(path * E) or O(V * E).
+    #
+    # The result is exactly what the former scan of `edge_labels` returned:
+    # - Directed graphs: the edges with this source, in adjacency-list order.
+    # - Undirected graphs: `edges` lists each edge once, as (u, w) with
+    #   code(u) <= code(w), so the scan returned only neighbors whose code is
+    #   >= this vertex's code (a self-loop included once). Keep that split.
+    # Graphs.jl SimpleGraph/SimpleDiGraph keep adjacency lists sorted by code,
+    # which is the order `edges` visits them in. An absent vertex has no
     # neighbors, as the scan returned.
     neighbors = []
     haskey(graph, vertex) || return neighbors
-    for dst in MetaGraphsNext.outneighbor_labels(graph, vertex)
-        push!(neighbors, dst)
+    if Graphs.is_directed(graph)
+        for dst in MetaGraphsNext.outneighbor_labels(graph, vertex)
+            push!(neighbors, dst)
+        end
+    else
+        code = MetaGraphsNext.code_for(graph, vertex)
+        for neighbor_code in Graphs.neighbors(graph, code)
+            neighbor_code >= code || continue
+            push!(neighbors, MetaGraphsNext.label_for(graph, neighbor_code))
+        end
     end
     return neighbors
 end
@@ -210,13 +225,23 @@ neighbors = Mycelia.Rhizomorph.get_in_neighbors(graph, vertex)
 ```
 """
 function get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
-    # O(degree) adjacency read; see `get_out_neighbors`. `edge_labels` visits
-    # sources in ascending code order, which is the order of the sorted
-    # in-adjacency list, so the result order is unchanged.
+    # O(degree) adjacency read with the same result as the former scan of
+    # `edge_labels`; see `get_out_neighbors`. That scan visits sources in
+    # ascending code order, which is the order of the sorted in-adjacency list.
+    # On undirected graphs it returned only neighbors whose code is <= this
+    # vertex's code (a self-loop included once); keep that split.
     neighbors = []
     haskey(graph, vertex) || return neighbors
-    for src in MetaGraphsNext.inneighbor_labels(graph, vertex)
-        push!(neighbors, src)
+    if Graphs.is_directed(graph)
+        for src in MetaGraphsNext.inneighbor_labels(graph, vertex)
+            push!(neighbors, src)
+        end
+    else
+        code = MetaGraphsNext.code_for(graph, vertex)
+        for neighbor_code in Graphs.neighbors(graph, code)
+            neighbor_code <= code || continue
+            push!(neighbors, MetaGraphsNext.label_for(graph, neighbor_code))
+        end
     end
     return neighbors
 end
