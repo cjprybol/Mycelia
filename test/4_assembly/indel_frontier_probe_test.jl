@@ -2295,37 +2295,117 @@ Test.@testset "Buffered frontier successors match the allocating form" begin
         "root", Mycelia.Rhizomorph.Forward, :M, 0, 0)
     reference = Mycelia._indel_frontier_successors(
         successor_index, cell, typemax(Int))
-    Test.@test length(reference.successors) == degree
+    # Order pinned independently of the code under test: the fixture adds
+    # target_1 ... target_degree in that order, and the index keeps it.
+    Test.@test reference.successors ==
+               [("target_$index", Mycelia.Rhizomorph.Forward) for index in 1:degree]
 
     # A buffer still holding an earlier expansion is emptied and refilled with
     # the same successors, in the same order, as a fresh allocation.
     buffer = copy(reference.successors)
     push!(buffer, first(reference.successors))
     for limit in (0, 1, 3, degree - 1, degree, degree + 1, typemax(Int))
-        expected = Mycelia._indel_frontier_successors(
-            successor_index, cell, limit)
         overflowed = Mycelia._indel_frontier_successors!(
             buffer, successor_index, cell, limit)
-        Test.@test overflowed == expected.overflowed
-        Test.@test buffer == expected.successors
         Test.@test overflowed == (limit < degree)
+        Test.@test buffer == reference.successors[1:min(limit, degree)]
     end
 
-    # A vertex with no outgoing edges yields an empty buffer and no overflow.
+    # A directed graph indexes every vertex, so a target has an empty entry.
     leaf = Mycelia._IndelFrontierCell(
-        reference.successors[1][1], Mycelia.Rhizomorph.Forward, :M, 0, 0)
+        "target_1", Mycelia.Rhizomorph.Forward, :M, 0, 0)
+    Test.@test haskey(successor_index.outgoing, "target_1")
     buffer = copy(reference.successors)
     Test.@test !Mycelia._indel_frontier_successors!(
         buffer, successor_index, leaf, typemax(Int))
     Test.@test isempty(buffer)
-    Test.@test isempty(Mycelia._indel_frontier_successors(
-        successor_index, leaf, typemax(Int)).successors)
 
-    message = try
-        Mycelia._indel_frontier_successors!(buffer, successor_index, cell, -1)
-        ""
-    catch err
-        sprint(showerror, err)
+    # No strand-compatible pair: the filter skips every edge, at any limit.
+    reverse_cell = Mycelia._IndelFrontierCell(
+        "root", Mycelia.Rhizomorph.Reverse, :M, 0, 0)
+    for limit in (0, 1, typemax(Int))
+        buffer = copy(reference.successors)
+        Test.@test !Mycelia._indel_frontier_successors!(
+            buffer, successor_index, reverse_cell, limit)
+        Test.@test isempty(buffer)
     end
-    Test.@test occursin("maximum_successors must be non-negative", message)
+
+    buffer = copy(reference.successors)
+    indel_frontier_test_throws_message(
+        () -> Mycelia._indel_frontier_successors!(
+            buffer, successor_index, cell, -1),
+        ArgumentError,
+        "maximum_successors must be non-negative",
+    )
+    Test.@test buffer == reference.successors
+end
+
+Test.@testset "Buffered frontier successors on a mixed-strand vertex" begin
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0,
+    )
+    for label in ("root", "forward_target", "reverse_target")
+        graph[label] = nothing
+    end
+    graph["root", "forward_target"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        1.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+    graph["root", "reverse_target"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        1.0, Mycelia.Rhizomorph.Reverse, Mycelia.Rhizomorph.Reverse)
+    successor_index = Mycelia._indel_frontier_successor_index(graph)
+    cell = Mycelia._IndelFrontierCell(
+        "root", Mycelia.Rhizomorph.Forward, :M, 0, 0)
+    # One compatible successor at a limit of one: the incompatible edge after it
+    # is skipped by the strand filter and does not count as overflow.
+    buffer = Tuple{String, Mycelia.Rhizomorph.StrandOrientation}[]
+    Test.@test !Mycelia._indel_frontier_successors!(
+        buffer, successor_index, cell, 1)
+    Test.@test buffer == [("forward_target", Mycelia.Rhizomorph.Forward)]
+    Test.@test Mycelia._indel_frontier_successors!(
+        buffer, successor_index, cell, 0)
+    Test.@test isempty(buffer)
+end
+
+Test.@testset "Buffered frontier successors on an unindexed vertex" begin
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.Graph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0,
+    )
+    graph["left"] = nothing
+    graph["right"] = nothing
+    graph["left", "right"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        1.0,
+        Mycelia.Rhizomorph.Forward,
+        Mycelia.Rhizomorph.Reverse,
+    )
+    stored_source, stored_target = only(MetaGraphsNext.edge_labels(graph))
+    successor_index = Mycelia._indel_frontier_successor_index(graph)
+    # An undirected graph indexes only stored sources, so the target is a miss.
+    Test.@test !haskey(successor_index.outgoing, stored_target)
+
+    stale = [(stored_source, Mycelia.Rhizomorph.Forward)]
+    for strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+        cell = Mycelia._IndelFrontierCell(stored_target, strand, :M, 0, 0)
+        buffer = copy(stale)
+        Test.@test !Mycelia._indel_frontier_successors!(
+            buffer, successor_index, cell, typemax(Int))
+        Test.@test isempty(buffer)
+    end
+
+    # Start strands on a miss fall back to the configured strand.
+    Test.@test Mycelia._indel_frontier_start_strands(
+        successor_index, stored_target, :canonical,
+        Mycelia.Rhizomorph.Forward) == [Mycelia.Rhizomorph.Forward]
+    Test.@test Mycelia._indel_frontier_start_strands(
+        successor_index, stored_target, :doublestrand,
+        Mycelia.Rhizomorph.Forward) ==
+               [Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse]
 end
