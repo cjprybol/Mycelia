@@ -41,9 +41,9 @@ Three hypotheses were under test:
 
 Every assembly and QUAST number below was measured on **one host with one
 toolchain**. The read-identity tables were later regenerated on a different
-host; see the paragraph after the table. Earlier cells computed on a macOS
-laptop (Badread 0.4.1, QUAST forced to 1 thread by a known Python-3.8+ bug) were
-discarded rather than merged.
+host; see **Regenerated on a different host** below. Earlier cells computed
+on a macOS laptop (Badread 0.4.1, QUAST forced to 1 thread by a known
+Python-3.8+ bug) were discarded rather than merged.
 
 | component | version                                                        |
 | --------- | -------------------------------------------------------------- |
