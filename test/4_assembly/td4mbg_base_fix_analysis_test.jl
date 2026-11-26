@@ -20,8 +20,14 @@ module Td4mbgBaseFixAnalysisTest
 #   - Errors, not verdicts: malformed heads, BASE == FIX, same directory or
 #     oracle file (including a symlinked one), truncated, mis-shaped or
 #     duplicated-and-dropped oracle files, wrong oracle provenance, a shard cut
-#     short mid-write, an empty-assembly pair, bad read counts on either run, and
-#     mismatched shard columns.
+#     short mid-write, an empty-assembly pair, bad read counts on either run,
+#     an arm outside illumina/nanopore, and mismatched shard columns.
+#   - Seed keys: a float spelling ("4.0") of an integer seed is the same row,
+#     not a missing row. Identical spellings on both sides do not void; a
+#     spelling difference is a `seed` field mismatch.
+#   - The reusable report does not assert that BASE and FIX ran on different
+#     nodes. compare_replicate.py refuses a short argument list, a bad seed
+#     argument, and labels that are missing, malformed, or not shared.
 # The one-sided test is checked against hand enumeration.
 
 import Test
@@ -542,9 +548,141 @@ Test.@testset "td4mbg outputs are complete, readable and deterministic" begin
     Test.@test count(l -> startswith(l, "| G0a |"), split(report, "\n")) == 96
     Test.@test occursin("descriptively only", report)
     Test.@test occursin("NOT CAPTURED", report)
+    Test.@test occursin("VOID (G0 failed)", report)
+    Test.@test occursin("does not read node placement", report)
+    Test.@test !occursin("ran on different nodes", report)
     Test.@test occursin("| true |", report)               # Bools print as Bools
     Test.@test !occursin(r"\| G0a \| [^|]+ \| \d+\.0 \|", report)  # seeds as Ints
     Test.@test all(r1.drift.n_seeds_identical .== 16)     # context = BASE itself
+end
+
+"""Replace the seed field in one shard with a float spelling, e.g. `4` -> `4.0`."""
+function spell_seed_as_float(root, side, seed)
+    path = joinpath(root, side, "seed$(seed).csv")
+    text = read(path, String)
+    rewritten = replace(text, Regex(",$(seed),(illumina|nanopore),") =>
+                             SubstitutionString(",$(seed).0,\\1,"))
+    rewritten == text && error("fixture: seed $(seed) was not rewritten in $(side)")
+    write(path, rewritten)
+    return nothing
+end
+
+function retarget_arm(df, cell, seed, from, to)
+    out = DataFrames.DataFrame(df)
+    hit = (out.cell .== cell) .& (out.seed .== seed) .& (out.arm .== from)
+    count(hit) == 1 || error("fixture: expected one $(from) row at $(cell) seed $(seed)")
+    out.arm[hit] .= to
+    return out
+end
+
+Test.@testset "td4mbg seed key matches integer spellings, not only string(seed)" begin
+    Test.@test Analysis._seed_key("4") == 4
+    Test.@test Analysis._seed_key("4.0") == 4
+    Test.@test Analysis._seed_key("04") == 4
+    Test.@test Analysis._seed_key(" 4 ") == 4
+    Test.@test Analysis._seed_key("4.5") === nothing
+    Test.@test Analysis._seed_key("seed4") === nothing
+    # Both sides use the float spelling: the row is found, and the text matches,
+    # so G0 does not invent an absent row.
+    both = run_case(postprocess = root -> begin
+        spell_seed_as_float(root, "base", 4)
+        spell_seed_as_float(root, "fix", 4)
+    end)
+    Test.@test both.verdict == "SUPPORTED"
+    Test.@test DataFrames.nrow(both.g0a) == 0 && DataFrames.nrow(both.g0b) == 0
+    # One side only: the seed text differs, and the row is not reported absent.
+    one = run_case(postprocess = root -> spell_seed_as_float(root, "fix", 4))
+    Test.@test one.verdict == VOID_G0
+    Test.@test DataFrames.nrow(one.g0a) == 6
+    Test.@test all(==("seed"), one.g0a.column)
+    Test.@test !any(==("<row>"), one.g0a.column)
+end
+
+Test.@testset "td4mbg an unknown arm is an error, not a missing row" begin
+    toward = fix_delta(s -> -0.005 * s)
+    bad_fix = retarget_arm(
+        synthetic_run(head = FIX_HEAD, delta = toward),
+        "6000/1000/20x/e0.01", 3, "nanopore", "pacbio")
+    Test.@test_throws r"arms outside illumina, nanopore: pacbio" run_case(fix = bad_fix)
+    bad_base = retarget_arm(
+        synthetic_run(head = BASE_HEAD),
+        "6000/2000/20x/e0.05", 8, "illumina", "Illumina")
+    Test.@test_throws r"arms outside illumina, nanopore: Illumina" run_case(base = bad_base)
+end
+
+const COMPARE_REPLICATE = joinpath(
+    @__DIR__, "..", "..", "benchmarking", "results", "td2rxh-evidence",
+    "td4mbg-27435671-27435672", "replicate-27438474", "compare_replicate.py")
+
+function compare_replicate_cmd(args::Vector{String})
+    python = Sys.which("python3")
+    python === nothing && error("python3 not found")
+    out = IOBuffer()
+    err = IOBuffer()
+    cmd = `$python $COMPARE_REPLICATE $args`
+    proc = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err))
+    return (code = proc.exitcode, out = String(take!(out)), err = String(take!(err)))
+end
+
+function write_min_shard(dir, seed; label, seed_field = string(seed), n_reads = 1)
+    mkpath(dir)
+    lines = ["label,cell,seed,arm,n_reads,wall_seconds\n"]
+    for arm in ("illumina", "nanopore")
+        push!(lines,
+            "$(label),6000/1000/20x/e0.01,$(seed_field),$(arm),$(n_reads),1.0\n")
+    end
+    write(joinpath(dir, "seed$(seed).csv"), join(lines))
+    return dir
+end
+
+Test.@testset "td4mbg compare_replicate.py argument and label guards" begin
+    evidence = joinpath(@__DIR__, "..", "..", "benchmarking", "results",
+        "td2rxh-evidence", "td4mbg-27435671-27435672")
+    committed = compare_replicate_cmd([
+        joinpath(evidence, "shards", "base"),
+        joinpath(evidence, "replicate-27438474", "shards"),
+        "2", "10"])
+    Test.@test committed.code == 0
+    Test.@test committed.out ==
+               read(joinpath(evidence, "replicate-27438474", "comparison.txt"), String)
+
+    usage = compare_replicate_cmd(String[])
+    Test.@test usage.code != 0
+    Test.@test isempty(usage.out)
+    Test.@test occursin("usage:", usage.err)
+
+    root = mktempdir()
+    base = joinpath(root, "base")
+    rep = joinpath(root, "rep")
+    label = "td2rxh@$(BASE_HEAD)+manifest$(MANIFEST)"
+    other = "td2rxh@$(FIX_HEAD)+manifest$(MANIFEST)"
+    write_min_shard(base, 2; label)
+    write_min_shard(rep, 2; label, n_reads = 2)
+    ok = compare_replicate_cmd([base, rep, "2"])
+    Test.@test ok.code == 0
+    Test.@test occursin("DIFF 6000/1000/20x/e0.01 seed=2 illumina | n_reads: 1 -> 2", ok.out)
+    Test.@test occursin("labels: ['$(label)']", ok.out)
+    Test.@test occursin("rows compared=2 differing=2", ok.out)
+
+    Test.@test occursin("not a canonical integer",
+        compare_replicate_cmd([base, rep, "02"]).err)
+    Test.@test occursin("not a directory",
+        compare_replicate_cmd([joinpath(root, "missing"), rep, "2"]).err)
+
+    write_min_shard(rep, 2; label = other)
+    mismatched = compare_replicate_cmd([base, rep, "2"])
+    Test.@test mismatched.code != 0
+    Test.@test isempty(mismatched.out)
+    Test.@test occursin("labels differ", mismatched.err)
+
+    write_min_shard(base, 2; label = "not-a-label")
+    write_min_shard(rep, 2; label = "not-a-label")
+    Test.@test occursin("is not td2rxh@", compare_replicate_cmd([base, rep, "2"]).err)
+
+    write_min_shard(base, 2; label, seed_field = "10")
+    write_min_shard(rep, 2; label)
+    Test.@test occursin("does not match requested seed",
+        compare_replicate_cmd([base, rep, "2"]).err)
 end
 
 end
