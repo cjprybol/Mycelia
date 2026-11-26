@@ -1,8 +1,8 @@
 # Mycelia Documentation
 
-**An experimental Julia package for bioinformatics and computational biology**
+**A Julia package for bioinformatics and computational biology**
 
-Mycelia is a research-oriented package exploring best-practice methodologies for pan-multi-omics analysis and graph-based assembly with quality-aware sequence processing. Currently in early development, it provides both experimental algorithms and integrations with established bioinformatics tools.
+Mycelia is a research-oriented package exploring best-practice methodologies for pan-multi-omics analysis and graph-based assembly with quality-aware sequence processing. Currently under active development, it provides both experimental algorithms and integrations with established bioinformatics tools.
 
 ## Quick Start
 
