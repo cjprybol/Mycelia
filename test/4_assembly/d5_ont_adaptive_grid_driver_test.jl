@@ -408,11 +408,14 @@ Test.@testset "D5 grid driver" begin
                 error_model = "nanopore2023", qscore_model = "nanopore2023",
                 n_reads = 10, read_bases = 1000, error_rate_estimate_diagnostic = 0.05,
                 mycelia_git_sha = "abc", git_dirty = false, host = "test",
-                slurm_job_id = missing)
+                slurm_job_id = missing, julia_depot_path = "/d5/depot",
+                julia_load_path = "@:@stdlib")
             row = D5OntAdaptiveGridDriver.cell_row(cell, context; phase = :A,
                 status = D5OntAdaptiveGridDriver.STATUS_OK, metrics = m,
                 nga50_status = "censored_partial_alignment")
             Test.@test ismissing(row.NGA50)
+            Test.@test row.julia_depot_path == "/d5/depot"
+            Test.@test row.julia_load_path == "@:@stdlib"
             ckpt = joinpath(dir, "cell_result.json")
             D5OntAdaptiveGridDriver.save_json_atomically(ckpt,
                 D5OntAdaptiveGridDriver.row_to_json(row))

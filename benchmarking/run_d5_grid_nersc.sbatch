@@ -56,11 +56,11 @@
 #   julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
 #   julia --project=. -e 'import Mycelia; foreach(Mycelia.add_bioconda_env,
 #       ["badread", "art", "minimap2", "quast"])'
-#   # references: --list does not download; Phase A downloads into <root>/refs on
-#   # first use, so run one toy read-set task interactively with
-#   # --skip-iterative (without it the read set's :iterative cells run on the
-#   # login node, up to 8.9 h each), adding --tmp-dir "$(mktemp --directory)"
-#   # (the default <root>/tmp is on Lustre and is refused), or pre-copy refs/.
+#   # references: compute nodes have no outbound internet, and Phase A refuses
+#   # to download. Stage once on a login node (per-accession lock, then rename):
+#   #   julia --project=. benchmarking/d5_ont_adaptive_grid_run.jl --stage-refs \
+#   #       --toy --output-dir "$SCRATCH/d5_grid_toy"
+#   # or copy an existing refs/ into the output root. Array tasks only read it.
 #
 # USAGE (submit from benchmarking/):
 #   The default array is indices 0-2; only D5_ARGS="--toy" makes them the toy
@@ -86,6 +86,13 @@
 #       run_d5_grid_nersc.sbatch
 #   A cell task whose read set is not prepared exits 1 and writes no row;
 #   resubmit its index once the read-set task has finished.
+#   A SIGKILL (the time limit) leaves cells/<id>.lock or refs/<accession>.lock
+#   behind. The next task breaks it when `squeue -h -j <id>` shows the job is
+#   gone (empty output, or exit 1 "Invalid job id specified"), when `sacct
+#   -n -X -j <id> -o State` reports a terminal state after an inconclusive
+#   squeue, when the pid is dead on this host, or when the lock is older than the 72 h
+#   walltime. If a resubmit still says the lock is held, remove that directory
+#   by hand and resubmit.
 #   Merge after both arrays finish (one task; index 0 is inside the toy):
 #     D5_PHASE=merge D5_OUTDIR=... sbatch --array=0 --time=01:00:00 \
 #       --dependency=afterany:<cell_job_id> run_d5_grid_nersc.sbatch
