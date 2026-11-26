@@ -1192,6 +1192,13 @@ end
 # are ranked by score descending; score ties are broken by `hash(state)` for a
 # deterministic (run-reproducible) beam. Called once per depth by
 # `_viterbi_correct_observation` when the frontier exceeds the beam.
+#
+# Stays separate from `Rhizomorph._prune_viterbi_beam` in
+# `src/rhizomorph/algorithms/path-finding.jl` (td-63vh). This helper is generic
+# over state, width-only, and ranks ties by `hash(state)`. The path-finding
+# helper is typed to `(vertex, StrandOrientation)`, also applies
+# `beam_log_threshold`, stores `(predecessor, transition_prob)` backpointers,
+# and ranks ties by vertex string then strand.
 function _prune_correction_beam(
         scores::Dict{S, Float64},
         predecessors::Dict{S, S},
