@@ -76,4 +76,27 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     flat_labels = [true, false, true, false, true, false, true, false, true, false]
     bm = fit_binned_map(flat, flat_labels)
     Test.@test all(isapprox(0.5), predict_binned(bm, flat))
+
+    # --- L2 regularization: slope is well-defined on separable data (td-ufsu) -
+    # Without L2, gradient descent on a linearly separable problem lets |b|
+    # grow with the iteration cap (measured: 1.16 at 200 iters, 2.11 at 2000).
+    # Regularization must keep the 200-iter and 2000-iter slopes close.
+    sep_scores = vcat(fill(0.0, 50), fill(5.0, 50))
+    sep_labels = vcat(fill(false, 50), fill(true, 50))
+    b_short = fit_logistic_map(sep_scores, sep_labels; iters = 200).b
+    b_long = fit_logistic_map(sep_scores, sep_labels; iters = 2000).b
+    Test.@test isfinite(b_short) && isfinite(b_long)
+    Test.@test isapprox(b_short, b_long; rtol = 0.1)
+
+    # 90/10 labels. Regularizing the intercept would pull the fitted mean
+    # toward 0.5. With the penalty on the slope only, it stays near the
+    # label mean.
+    n_majority = 180
+    n_minority = 20
+    imb_scores = vcat(fill(0.0, n_majority), fill(1.0, n_minority))
+    imb_labels = vcat(fill(false, n_majority), fill(true, n_minority))
+    imb_model = fit_logistic_map(imb_scores, imb_labels; iters = 4000)
+    imb_mean = sum(predict_logistic(imb_model, imb_scores)) / length(imb_scores)
+    label_mean = n_minority / (n_majority + n_minority)
+    Test.@test isapprox(imb_mean, label_mean; atol = 0.02)
 end

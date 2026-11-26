@@ -68,3 +68,101 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
         end
     end
 end
+
+
+# td-ufsu item 1: the same OFF vs -Inf guarantee on the windowed path, which
+# applies the gate per sub-read. Residual risk is a sub-read coordinate-frame
+# bug; this smoke needs a >1024-observation read with hard windows that decode.
+Test.@testset "windowed path: OFF byte-identity + gate engaged" begin
+    k = 13
+    rng = Random.MersenneTwister(42)
+    reflen = 2000
+    readlen = 1200
+    n_clean = 20
+    n_err = 3
+    err_locus = 1000
+    bases = ['A', 'C', 'G', 'T']
+    ref = join(rand(rng, bases, reflen))
+    reads = FASTX.FASTQ.Record[]
+    for i in 1:n_clean
+        s = rand(rng, 1:(reflen - readlen + 1))
+        push!(reads, rec("c$i", ref[s:(s + readlen - 1)]))
+    end
+    err_reads = FASTX.FASTQ.Record[]
+    for i in 1:n_err
+        s = err_locus - div(readlen, 2)
+        off = div(readlen, 2) + 1
+        seq = collect(ref[s:(s + readlen - 1)])
+        seq[off] = first(filter(!=(seq[off]), bases))
+        er = rec("e$i", String(seq))
+        push!(err_reads, er)
+        push!(reads, er)
+    end
+
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k;
+        dataset_id = "win-gate", mode = :canonical, memory_profile = :full)
+    hard = Mycelia._hard_vertex_set(graph, k)
+    Test.@test !isempty(hard)
+
+    r = err_reads[1]
+    n_obs = length(FASTX.sequence(r)) - k + 1
+    Test.@test n_obs > 1024
+    wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
+    Test.@test !isempty(wins)
+
+    function run_at(thresh)
+        diag = Mycelia.CorrectorDiagnostics()
+        record, _improved, decoded, _divergent = Mycelia.improve_read_likelihood_windowed_detail(
+            r, graph, k, hard;
+            graph_mode = :canonical, calibrated_gap_threshold = thresh,
+            diagnostics = diag)
+        return (record = record, decoded = decoded, diag = diag)
+    end
+
+    off = run_at(nothing)
+    permissive = run_at(-Inf)
+    strict = run_at(100.0)
+
+    # Hard windows actually decoded (otherwise this is a passthrough, not a gate smoke).
+    Test.@test off.decoded > 0
+    Test.@test permissive.decoded > 0
+    Test.@test permissive.decoded == off.decoded
+
+    # BYTE-IDENTITY: gate OFF === gate engaged-but-permissive.
+    Test.@test FASTX.sequence(String, off.record) == FASTX.sequence(String, permissive.record)
+
+    # Gate engaged and did not fall open: the contract (path + gaps) held.
+    Test.@test permissive.diag.gate_skipped[] == 0
+
+    # Gating can only move a corrected base back toward the observed read.
+    obs = FASTX.sequence(String, r)
+    Test.@test mismatches(FASTX.sequence(String, strict.record), obs) <=
+               mismatches(FASTX.sequence(String, off.record), obs)
+end
+
+# td-ufsu item 3: AbstractString overloads must forward calibrated_gap_threshold
+# so the string API is not a silent completeness hole off the production path.
+Test.@testset "AbstractString overloads forward calibrated_gap_threshold" begin
+    k = 7
+    clean_seq = "ATGCGTACGTACGTTAGCCGATACAGGTCA"
+    reads = [rec("clean$i", clean_seq) for i in 1:10]
+    err_seq = collect(clean_seq)
+    err_seq[15] = err_seq[15] == 'A' ? 'C' : 'A'
+    err_seq = String(err_seq)
+    push!(reads, rec("err1", err_seq))
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, k;
+        dataset_id = "str-gate", mode = :canonical, memory_profile = :full)
+    qual = String(fill('I', length(err_seq)))
+
+    off_seq, _ = Mycelia.find_optimal_sequence_path(err_seq, qual, graph, k;
+        graph_mode = :canonical, calibrated_gap_threshold = nothing)
+    perm_seq, _ = Mycelia.find_optimal_sequence_path(err_seq, qual, graph, k;
+        graph_mode = :canonical, calibrated_gap_threshold = -Inf)
+    Test.@test off_seq == perm_seq
+
+    off_v = Mycelia.try_viterbi_path_improvement(err_seq, qual, graph, k;
+        graph_mode = :canonical, calibrated_gap_threshold = nothing)
+    perm_v = Mycelia.try_viterbi_path_improvement(err_seq, qual, graph, k;
+        graph_mode = :canonical, calibrated_gap_threshold = -Inf)
+    Test.@test off_v == perm_v
+end
