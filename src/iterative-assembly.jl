@@ -4460,7 +4460,7 @@ end
 # reproducing the serial left-fold bit-for-bit. `sink === nothing` keeps the
 # serial merge path unchanged.
 function _capture_or_merge_soft_weights!(
-        soft_weights,
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
         sink::Union{
             Nothing, Vector{Mycelia.Rhizomorph.SoftEdgeWeightAccumulator}},
         staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -5891,7 +5891,14 @@ Improve likelihood of a single read using maximum likelihood path finding.
 Returns improved read and boolean indicating if improvement was made.
 
 `soft_weights` (td-e70t): when supplied, the read's decoded ML path accumulates
-edge responsibilities into it (responsibility 1.0 for the single argmax path).
+edge responsibilities into it (responsibility 1.0 for the single argmax path;
+split across competing paths when several are enumerated).
+
+`soft_weights_sink`: when supplied, each staged accumulator is appended in
+decode order instead of merged into `soft_weights`. The parallel soft-EM fold
+replays that list in read×window order. Leave it `nothing` on the serial path.
+When both are set, the sink receives the staged weights and `soft_weights` is
+not updated.
 """
 function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
@@ -5964,6 +5971,16 @@ function find_optimal_sequence_path(sequence::AbstractString, quality, graph, k:
     return FASTX.sequence(String, improved_record), improvement
 end
 
+"""
+Find the maximum-likelihood path for one FASTQ record.
+Returns the improved record and the likelihood improvement, or the original
+record and `0.0` when the ML path is not an improvement.
+
+`soft_weights` and `soft_weights_sink` match `improve_read_likelihood`: a
+supplied sink captures each staged accumulator in decode order, and when the
+sink is `nothing` those responsibilities merge into `soft_weights`. When both
+are set, the sink receives the staged weights and `soft_weights` is not updated.
+"""
 function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
