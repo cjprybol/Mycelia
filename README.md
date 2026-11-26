@@ -1,6 +1,6 @@
 # Mycelia
 
-! Warning: In Development !
+**Status:** active development
 
 **A Julia package for bioinformatics and computational biology**
 
