@@ -360,12 +360,10 @@ function Mycelia.kernel_batched_correct_observations(
     end
 
     alphabet = Mycelia._resolve_viterbi_alphabet(graph, observations, config.alphabet)
+    # Same resolution as `batched_correct_observations`: `:auto`, explicit
+    # `:doublestrand`, and explicit `:canonical` are decoded in the resolved
+    # mode. Reverse-strand equivalence is covered with the CPU PoC.
     strand_mode = Mycelia._resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
-    if strand_mode != :singlestrand
-        throw(ArgumentError(
-            "kernel PoC supports single-strand decoding only (resolved " *
-            "strand_mode=$strand_mode); multi-strand batching is deferred."))
-    end
 
     transition_edge_weight = Mycelia._viterbi_transition_edge_weight(graph, config.edge_weight)
     transition_scoring = Mycelia._viterbi_transition_scoring(graph, transition_edge_weight)
