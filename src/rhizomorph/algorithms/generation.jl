@@ -335,23 +335,44 @@ function compute_sequence_likelihood(
     return log_likelihood
 end
 
+# Unnormalized mass used as both the numerator and the outgoing denominator of
+# sequence-likelihood transitions. Zero stays zero: `_edge_transition_weight`
+# floors at `_KSP_MIN_WEIGHT`, which would turn a zero-weight edge into a
+# positive probability.
+function _likelihood_edge_weight(edge_data)
+    return edge_data isa StrandWeightedEdgeData ? edge_data.weight : 1.0
+end
+
+# Sum of `_likelihood_edge_weight` over edges whose stored source is `src`.
+# The walk is `outneighbors` of `src`, so `compute_sequence_likelihood` is
+# O(L * out-degree). A full `edge_labels` scan made that score O(L*E).
+function _outgoing_likelihood_weight(graph::MetaGraphsNext.MetaGraph, src)
+    total = 0.0
+    src_code = MetaGraphsNext.code_for(graph, src)
+    directed = Graphs.is_directed(graph.graph)
+    for dst_code in Graphs.outneighbors(graph.graph, src_code)
+        # Undirected `edges` emits each edge once, with the smaller vertex code
+        # as the source (a self-loop has equal codes and is kept). Symmetric
+        # adjacency would also count the reverse orientation and change the
+        # denominator. Skipping the larger-code endpoint keeps the stored-source
+        # sum that the old `edge_labels` scan produced.
+        if !directed && dst_code < src_code
+            continue
+        end
+        dst = MetaGraphsNext.label_for(graph, dst_code)
+        total += _likelihood_edge_weight(graph[src, dst])
+    end
+    return total
+end
+
 function _compute_edge_transition_probability(
         graph::MetaGraphsNext.MetaGraph, src, dst)
     if !haskey(graph, src, dst)
         return 0.0
     end
 
-    edge_data = graph[src, dst]
-    edge_weight = edge_data isa StrandWeightedEdgeData ? edge_data.weight : 1.0
-
-    total_outgoing_weight = 0.0
-    for (edge_src, edge_dst) in MetaGraphsNext.edge_labels(graph)
-        if edge_src == src
-            out_data = graph[edge_src, edge_dst]
-            w = out_data isa StrandWeightedEdgeData ? out_data.weight : 1.0
-            total_outgoing_weight += w
-        end
-    end
+    edge_weight = _likelihood_edge_weight(graph[src, dst])
+    total_outgoing_weight = _outgoing_likelihood_weight(graph, src)
 
     if total_outgoing_weight == 0.0
         return 0.0
