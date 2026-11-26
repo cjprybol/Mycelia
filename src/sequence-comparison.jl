@@ -687,44 +687,10 @@ function _merge_and_map_file_token(path::AbstractString)
     return string(abs_path, "\t", file_stat.size, "\t", file_stat.mtime)
 end
 
-"""
-    merge_and_map_single_end_samples(; 
-        fasta_reference::AbstractString, 
-        fastq_list::Vector{<:AbstractString}, 
-        minimap_index::AbstractString, 
-        mapping_type::AbstractString,
-        outbase::AbstractString = "results",
-        outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
-    ) -> DataFrames.DataFrame
-
-Merge and map single-end sequencing samples, then output results in one or more formats.
-
-# Arguments
-- `fasta_reference`: Path to the reference FASTA file.
-- `fastq_list`: Vector of paths to input FASTQ files to be merged.
-- `minimap_index`: Path to the minimap2 index file (.mmi).
-- `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
-- `outbase`: Base name (optionally including path) for output files. The default
-  is a SHA-1 fingerprint of the input FASTQ list (order-insensitive, absolute
-  paths plus each file's size and mtime), the reference, the minimap index, and
-  the mapping type. Different input sets do not collide, and an in-place change
-  to a FASTQ, the reference, or the index invalidates the cache key. Pass
-  `outbase` explicitly to keep a chosen path.
-- `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
-
-# Description
-This function merges provided FASTQ files and assigns unique UUIDs to reads, maps the merged FASTQ against the provided reference using minimap2, reads mapping and UUID tables, joins them into a single DataFrame, writes this table to all requested output formats with filenames constructed from the `outbase` and the appropriate extension, and returns the resulting joined DataFrame.
-
-# Output Files
-- `.tsv.gz`: Tab-separated, gzip-compressed table of results.
-- `".jld2"`: JLD2 file containing results.
-
-# Returns
-- The joined results as a `DataFrames.DataFrame`.
-"""
+"""Default outbase: a SHA-1 fingerprint of the FASTQ list, reference, minimap index, and mapping type."""
 function merge_and_map_default_outbase(fastq_list;
-        fasta_reference::AbstractString = "",
-        minimap_index::AbstractString = "",
+        fasta_reference::AbstractString,
+        minimap_index::AbstractString,
         mapping_type::AbstractString = "")
     fastq_paths = sort(abspath.(string.(fastq_list)))
     fastq_payload = join((_merge_and_map_file_token(path) for path in fastq_paths), "\n")
@@ -743,9 +709,10 @@ function merge_and_map_default_outbase(fastq_list;
     return "joint-minimap-mapping-results." * fingerprint
 end
 
+"""Use an explicit `outbase`, or the default fingerprint when `outbase` is `nothing`."""
 function resolve_merge_and_map_outbase(outbase, fastq_list;
-        fasta_reference::AbstractString = "",
-        minimap_index::AbstractString = "",
+        fasta_reference::AbstractString,
+        minimap_index::AbstractString,
         mapping_type::AbstractString = "")
     outbase === nothing || return outbase
     return merge_and_map_default_outbase(fastq_list;
@@ -754,6 +721,42 @@ function resolve_merge_and_map_outbase(outbase, fastq_list;
         mapping_type = mapping_type)
 end
 
+"""
+    merge_and_map_single_end_samples(;
+        fasta_reference::AbstractString,
+        fastq_list::Vector{<:AbstractString},
+        minimap_index::AbstractString,
+        mapping_type::AbstractString,
+        outbase::Union{Nothing, AbstractString} = nothing,
+        outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
+    ) -> DataFrames.DataFrame
+
+Merge and map single-end sequencing samples, then output results in one or more formats.
+
+# Arguments
+- `fasta_reference`: Path to the reference FASTA file.
+- `fastq_list`: Vector of paths to input FASTQ files to be merged.
+- `minimap_index`: Path to the minimap2 index file (.mmi).
+- `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
+- `outbase`: Base name (optionally including path) for output files. The default
+  is a SHA-1 fingerprint of the input FASTQ list (order-insensitive, absolute
+  paths plus each file's size and mtime), the reference, the minimap index, and
+  the mapping type. Different input sets do not collide, and an in-place change
+  to a FASTQ, the reference, or the index invalidates the cache key. Touching an
+  input file (mtime change) busts the cache. Pass `outbase` explicitly to keep a
+  chosen path.
+- `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
+
+# Description
+This function merges provided FASTQ files and assigns unique UUIDs to reads, maps the merged FASTQ against the provided reference using minimap2, reads mapping and UUID tables, joins them into a single DataFrame, writes this table to all requested output formats with filenames constructed from the `outbase` and the appropriate extension, and returns the resulting joined DataFrame.
+
+# Output Files
+- `.tsv.gz`: Tab-separated, gzip-compressed table of results.
+- `".jld2"`: JLD2 file containing results.
+
+# Returns
+- The joined results as a `DataFrames.DataFrame`.
+"""
 function merge_and_map_single_end_samples(;
         fasta_reference::AbstractString,
         fastq_list::Vector{<:AbstractString},
