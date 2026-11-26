@@ -192,4 +192,82 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
             strategy = :scalable, layout = :olc, sequencing_tech = :illumina,
             olc_options = (; k_list = "21")) isa R.AssemblyConfig
     end
+
+    Test.@testset "adapter exhaustiveness via wrapper stubs (td-yguy)" begin
+        # Every tool in `_olc_taxonomy()` must have a live `_run_olc_tool` branch.
+        # The wrappers keyword is the stub seam so conda/subprocess never run.
+        tax = R._olc_taxonomy()
+        wired = (tax.short_read_tools..., tax.long_read_tools...)
+        called = Symbol[]
+        touch_fa(out, name) = begin
+            path = joinpath(out, "$(name).fa")
+            write(path, ">c\nACGT\n")
+            path
+        end
+        stubs = (
+            megahit = (fastq, out, options) -> begin
+                push!(called, :megahit)
+                (; contigs = touch_fa(out, "megahit"))
+            end,
+            metaspades = (fastq, out, options) -> begin
+                push!(called, :metaspades)
+                (; contigs = touch_fa(out, "metaspades"))
+            end,
+            flye = (fastq, out, options, read_type) -> begin
+                push!(called, :flye)
+                Test.@test read_type isa AbstractString
+                (; assembly = touch_fa(out, "flye"))
+            end,
+            metaflye = (fastq, out, options, read_type) -> begin
+                push!(called, :metaflye)
+                Test.@test read_type isa AbstractString
+                (; assembly = touch_fa(out, "metaflye"))
+            end,
+            canu = (fastq, out, options, read_type) -> begin
+                push!(called, :canu)
+                Test.@test read_type isa AbstractString
+                (; assembly = touch_fa(out, "canu"))
+            end,
+            hifiasm = (fastq, out, options) -> begin
+                push!(called, :hifiasm)
+                prefix = joinpath(out, "hifiasm")
+                write(prefix * ".p_ctg.fa", ">c\nACGT\n")
+                (; hifiasm_outprefix = prefix)
+            end,
+        )
+        Test.@test issetequal(keys(stubs), wired)
+
+        function cfg_for(tool)
+            if tool in tax.short_read_tools
+                return R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, layout = :olc, olc_tool = tool,
+                    sequencing_tech = :illumina)
+            elseif tool == :hifiasm
+                return R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, layout = :olc, olc_tool = tool,
+                    sequencing_tech = :pacbio_hifi)
+            elseif tool == :canu
+                return R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, layout = :olc, olc_tool = tool,
+                    sequencing_tech = :pacbio_clr,
+                    olc_options = (; genome_size = "5m"))
+            else
+                return R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, layout = :olc, olc_tool = tool,
+                    sequencing_tech = :pacbio_clr)
+            end
+        end
+
+        mktempdir() do tmp
+            fq = joinpath(tmp, "reads.fastq")
+            write(fq, "@r\nACGT\n+\nIIII\n")
+            for tool in wired
+                out = mkpath(joinpath(tmp, String(tool)))
+                empty!(called)
+                path = R._run_olc_tool(tool, fq, out, cfg_for(tool); wrappers = stubs)
+                Test.@test called == [tool]
+                Test.@test isfile(path)
+            end
+        end
+    end
 end
