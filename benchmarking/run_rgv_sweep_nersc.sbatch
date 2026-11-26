@@ -42,6 +42,11 @@ JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]]; then
   JULIA=/global/common/software/nersc9/julia/1.10.10/bin/julia
 fi
+# Depot and library path before the version guard so the probe runs in the
+# job's environment (td-67fj). A stale LD_LIBRARY_PATH can fail --version on a
+# julia that runs once the path is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${HOME}/.julia}"
+export LD_LIBRARY_PATH=""
 if ! "${JULIA}" --version >/dev/null 2>&1; then
   echo "ERROR: julia not runnable at '${JULIA}' — module load failed or path stale." >&2
   exit 1
@@ -49,8 +54,6 @@ fi
 echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${HOME}/.julia}"
-export LD_LIBRARY_PATH=""
 
 # === Sweep configuration (real Lambda-phage validation scale) =============
 export MYCELIA_RGV_SMOKE="${MYCELIA_RGV_SMOKE:-false}"

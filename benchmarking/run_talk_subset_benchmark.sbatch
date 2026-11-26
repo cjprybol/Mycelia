@@ -31,6 +31,14 @@ JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]]; then
   JULIA=/global/common/software/nersc9/julia/1.10.10/bin/julia
 fi
+# Pin the depot so the batch job reuses what hpc-setup.sh precompiled on the login
+# node (SLURM does not reliably inherit interactive-shell exports). `:-` keeps any
+# value already exported by the environment/.bashrc. Exported before the version
+# guard so the probe runs in the job's environment (td-67fj). A stale
+# LD_LIBRARY_PATH can fail --version on a julia that runs once the path is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${HOME}/.julia}"
+# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
+export LD_LIBRARY_PATH=""
 # Validate it actually runs — a broken `module load` (NERSC's juliaup modulefile
 # can error) or a relocated fallback path must fail the job LOUDLY here, not
 # silently produce a green job with no results downstream.
@@ -41,12 +49,6 @@ fi
 echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-# Pin the depot so the batch job reuses what hpc-setup.sh precompiled on the login
-# node (SLURM does not reliably inherit interactive-shell exports). `:-` keeps any
-# value already exported by the environment/.bashrc.
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${HOME}/.julia}"
-# HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
-export LD_LIBRARY_PATH=""
 
 cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 

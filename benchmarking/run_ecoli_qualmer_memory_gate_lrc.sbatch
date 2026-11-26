@@ -35,6 +35,12 @@
 #                                     (relative paths are taken from the submit dir)
 #   QUALMER_GATE_TMP_BASE=<dir>       node-local parent for TMPDIR (default
 #                                     ${SLURM_TMPDIR:-/tmp})
+#   QUALMER_GATE_TMP_MIN_FREE_KB=<KiB>
+#                                     free-space floor for that TMPDIR (default
+#                                     2097152, which is 2 GiB). The job exits
+#                                     before Pkg or the driver when less is free.
+#   QUALMER_GATE_ALLOW_TMPFS=1        allow a tmpfs TMPDIR. tmpfs is refused
+#                                     otherwise, because it counts against --mem.
 # Driver knobs (MYCELIA_ECOLI_COVERAGE, MYCELIA_MEMORY_CEILING_GB, ...) pass through.
 #
 # PRIVATE ENVIRONMENT. The job never writes the checkout's Manifest.toml: other
@@ -50,6 +56,9 @@
 # The sha256 of the Manifest actually used and the checkout HEAD are printed and
 # written into the driver's results CSV (git_head, manifest_sha256,
 # manifest_src_sha256); the env Project/Manifest are saved to results/<jobid>/.
+# Resolve mode leaves manifest_src_sha256 empty (no source Manifest to hash).
+# The env manifest_sha256 is then the only dependency identity; two resolves of
+# the same Project.toml can differ, so compare those runs by manifest_sha256.
 #
 # A dirty tracked tree is reported in the log but does NOT stop the run: this is a
 # memory gate on whatever is checked out, not a provenance-locked evidence run.
@@ -72,15 +81,16 @@ echo "Job ${SLURM_JOB_ID}  Node ${SLURM_NODELIST}  Start $(date)"
 # resolved by juliaup itself, pinned regardless of the default (td-j8bh review).
 JULIA="${HOME}/.juliaup/bin/julia"
 JULIA_ARGS=(+lts)
+# Group depot (precompiled deps + Bioconda envs install here). Exported before
+# the version guard so the probe runs in the job's environment (td-67fj): a
+# stale LD_LIBRARY_PATH can fail --version on a julia that runs once it is cleared.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
+export LD_LIBRARY_PATH=""
 if [[ ! -x "${JULIA}" ]] || ! "${JULIA}" "${JULIA_ARGS[@]}" --version >/dev/null 2>&1; then
   echo "ERROR: '${JULIA} ${JULIA_ARGS[*]}' not runnable (juliaup lts channel missing/broken on this host)" >&2
   exit 1
 fi
 echo "JULIA: ${JULIA} ${JULIA_ARGS[*]}  ($("${JULIA}" "${JULIA_ARGS[@]}" --version 2>&1 | head -1))"
-
-# Group depot (precompiled deps + Bioconda envs install here).
-export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-/global/home/groups-sw/pc_mfnanofabio/cjprybol/.julia_depot}"
-export LD_LIBRARY_PATH=""
 # Environment hygiene, as in run_td2rxh_evidence_lrc.sbatch: sbatch exports the
 # submit shell, so a stray MYCELIA_PROJECT / JULIA_PROJECT could select another
 # environment, and Julia's default load path would stack the global environment.
@@ -163,7 +173,8 @@ cd "${run_dir}/benchmarking" || exit 1
 # 27116288, 27118360), and its artifact-identity check rejects a symlinked temp
 # root. Same construction as run_td2rxh_evidence_lrc.sbatch: a fresh private
 # directory on node-local disk, resolved to its physical path, with a local
-# filesystem required up front.
+# filesystem and a free-space floor required up front. tmpfs needs
+# QUALMER_GATE_ALLOW_TMPFS=1, because tmpfs counts against --mem.
 tmp_base="${QUALMER_GATE_TMP_BASE:-${SLURM_TMPDIR:-/tmp}}"
 # mktemp -d creates a fresh 0700 directory and refuses an existing path, so a
 # requeued job never inherits stale contents.
@@ -211,13 +222,35 @@ if ! tmp_fs="$(stat -f -c %T "${TMPDIR}")"; then
   exit 1
 fi
 # Allowlist, not denylist: an unrecognised type must not slip through to fail mid-run.
+# tmpfs is local, but it counts against --mem (sacct MaxRSS does not include it),
+# so it needs an explicit opt-in.
 case "${tmp_fs}" in
-  ext2/ext3|xfs|tmpfs|btrfs|overlayfs) ;;
+  ext2/ext3|xfs|btrfs|overlayfs) ;;
+  tmpfs)
+    if [[ "${QUALMER_GATE_ALLOW_TMPFS:-}" != "1" ]]; then
+      echo "ERROR: TMPDIR ${TMPDIR} is on tmpfs, which counts against --mem. Set QUALMER_GATE_ALLOW_TMPFS=1 to allow it." >&2
+      exit 1
+    fi
+    echo "WARN: TMPDIR ${TMPDIR} is on tmpfs and counts against --mem (sacct MaxRSS excludes it). Continuing because QUALMER_GATE_ALLOW_TMPFS=1." >&2
+    ;;
   *)
-    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem (ext/xfs/tmpfs/btrfs/overlayfs)." >&2
+    echo "ERROR: TMPDIR ${TMPDIR} is on ${tmp_fs}; Mycelia needs a local filesystem (ext/xfs/btrfs/overlayfs, or tmpfs with QUALMER_GATE_ALLOW_TMPFS=1)." >&2
     exit 1 ;;
 esac
-echo "TMPDIR=${TMPDIR} (${tmp_fs}, $(df -h "${TMPDIR}" | awk 'NR==2 {print $4 " free"}'))"
+# Free-space floor, not a capacity estimate: a full node-local disk fails the
+# corrector mid-run. Default is 2 GiB. Override with QUALMER_GATE_TMP_MIN_FREE_KB.
+min_free_kb="${QUALMER_GATE_TMP_MIN_FREE_KB:-2097152}"
+if [[ ! "${min_free_kb}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: QUALMER_GATE_TMP_MIN_FREE_KB must be a non-negative integer (KiB), got '${min_free_kb}'." >&2
+  exit 1
+fi
+if ! avail_kb="$(df -P -k "${TMPDIR}" | awk 'NR==2 {print $4}')" ||
+   [[ ! "${avail_kb}" =~ ^[0-9]+$ ]] ||
+   (( avail_kb < min_free_kb )); then
+  echo "ERROR: TMPDIR ${TMPDIR} has ${avail_kb:-unknown} KiB free, below the ${min_free_kb} KiB floor (set QUALMER_GATE_TMP_MIN_FREE_KB to override)." >&2
+  exit 1
+fi
+echo "TMPDIR=${TMPDIR} (${tmp_fs}, ${avail_kb} KiB free, floor ${min_free_kb} KiB)"
 # Confirm Julia itself resolves tempdir() to the node-local directory, not a
 # value baked in elsewhere (startup file, inherited JULIA_* settings).
 if ! julia_tmp="$("${JULIA}" "${JULIA_ARGS[@]}" --startup-file=no -e 'print(tempdir())')" ||
@@ -259,6 +292,11 @@ JL
 # (comparable with a checkout's Manifest.toml; empty in resolve mode), while
 # manifest_sha256 is the env Manifest that actually ran, which includes the
 # Mycelia develop-path entry and so never matches a checkout's file.
+# Resolve mode leaves manifest_src_sha256 empty: there is no source Manifest to
+# hash. manifest_sha256 is then the only dependency identity, and two resolve-mode
+# runs of the same Project.toml can hash differently when the resolver selects
+# different versions. Compare those runs by manifest_sha256, not by the empty
+# source hash.
 manifest_src_sha=""
 if [[ -n "${manifest_src}" ]]; then
   if ! manifest_src_sha="$(sha256sum "${manifest_src}" | cut -d' ' -f1)" ||
