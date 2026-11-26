@@ -358,7 +358,7 @@ end
 # default results directory would silently replace a coverage-30 table with a
 # coverage-50 one. Stamp the run's provenance onto every emitted table, and
 # refuse a write whose provenance differs from the on-disk table unless
-# --overwrite is passed.
+# the CLI flag --overwrite or the library kwarg overwrite=true is given.
 
 const IDENTITY_PROVENANCE_FIELDS = (
     :run_coverage, :run_seed, :badread_version, :read_source, :reads_file)
@@ -420,8 +420,9 @@ end
 
 Stamp `provenance` onto `df` and write it as a TSV. If `path` already exists
 and its recorded provenance differs — or is missing — throw `ArgumentError`
-unless `overwrite` is true. The on-disk file is left unchanged on refusal.
-A same-provenance refresh is allowed.
+unless `overwrite` is true. The error names both the CLI flag `--overwrite`
+and the library kwarg `overwrite=true`. The on-disk file is left unchanged
+on refusal. A same-provenance refresh is allowed.
 """
 function assert_identity_table_provenance(path, provenance; overwrite::Bool = false)
     isfile(path) || return nothing
@@ -435,7 +436,7 @@ function assert_identity_table_provenance(path, provenance; overwrite::Bool = fa
     throw(ArgumentError(
         "refusing to overwrite $(path): on-disk provenance " *
         "$(existing_text) differs from this run $(provenance). " *
-        "Pass --overwrite to replace it."))
+        "Pass --overwrite or call with overwrite=true to replace it."))
 end
 
 # All three tables are one measurement. Check every path before writing any,
