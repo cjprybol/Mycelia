@@ -76,6 +76,10 @@ function paired_figure_caption(payload)
         [string(k, "=", join(md[k], "/")) for k in sort(collect(keys(md)))], "  ")
     seeds = join(string.(payload["seeds"]), ", ")
     caveats = String[]
+    # The override caveat lives in this caption, which `draw_paired_figure` stamps
+    # on the figure itself. That is the disclosure that travels with the SVG/PNG.
+    # A second red band repeating "GUARD OVERRIDDEN — NOT validation-grade" would
+    # say the same thing again (td-thq2 item 2); the caption is the record.
     if get(payload, "metric_definition_override_bound", false) === true
         push!(caveats,
             "GUARD OVERRIDDEN — rows span more than one definition — NOT validation-grade")
@@ -90,6 +94,39 @@ function paired_figure_caption(payload)
     head = "RGV correction-validation sweep — paired Wilcoxon (EXPLORATORY)\n" *
            "seeds $seeds · definition: $definition"
     return isempty(caveats) ? head : head * "\n⚠ " * join(caveats, "\n⚠ ")
+end
+
+"""
+    paired_line_color(direction, control, treatment)
+
+Colour of one paired slope.
+
+`"none"` metrics get no improvement claim — `decide` refuses one — so the line
+is neutral grey. Treating a higher treatment value as "improving" would assert
+exactly the directional claim the verdict withholds, including on
+`quast_duplication_ratio`.
+"""
+function paired_line_color(direction, control, treatment)
+    if string(direction) == "none"
+        return (:grey40, 0.85)
+    end
+    improving = string(direction) == "lower" ? treatment < control : treatment > control
+    return improving ? (:steelblue, 0.75) : (:firebrick, 0.75)
+end
+
+"""
+    _pair_float(x) -> Float64
+
+A per-pair number. `null` is an error: the analysis emits finite pair values,
+and a null here used to become `MethodError` inside `Float64[...]`.
+"""
+function _pair_float(x)
+    x isa Real ||
+        error("paired figure expected a finite number, got $(repr(x)); " *
+              "null is not a pair value")
+    y = Float64(x)
+    isfinite(y) || error("paired figure expected a finite number, got $y")
+    return y
 end
 
 """
@@ -111,9 +148,9 @@ function draw_paired_figure(payload; output_dir::AbstractString,
     for (row, m) in enumerate(metrics)
         name = m["metric"]
         pairs = get(m, "pairs", Any[])
-        ctrl = Float64[p["control"] for p in pairs]
-        trt = Float64[p["treatment"] for p in pairs]
-        diffs = Float64[p["difference"] for p in pairs]
+        ctrl = Float64[_pair_float(p["control"]) for p in pairs]
+        trt = Float64[_pair_float(p["treatment"]) for p in pairs]
+        diffs = Float64[_pair_float(p["difference"]) for p in pairs]
 
         # Only the verdict LABEL goes on the axis; the full pre-registration wording
         # ("SUPPORTED (FDR-adjusted p < 0.05 and ...)") is long enough to overrun
@@ -135,10 +172,9 @@ function draw_paired_figure(payload; output_dir::AbstractString,
         else
             for i in eachindex(ctrl)
                 # Colour by direction of change so the paired structure is readable
-                # at a glance without implying a group-level claim.
-                improving = m["direction"] == "lower" ? trt[i] < ctrl[i] : trt[i] > ctrl[i]
+                # at a glance. `"none"` stays grey: that is not an improvement claim.
                 CairoMakie.lines!(ax1, [1, 2], [ctrl[i], trt[i]];
-                    color = improving ? (:steelblue, 0.75) : (:firebrick, 0.75),
+                    color = paired_line_color(m["direction"], ctrl[i], trt[i]),
                     linewidth = 1.5)
             end
             CairoMakie.scatter!(ax1, fill(1, length(ctrl)), ctrl;
@@ -178,12 +214,51 @@ function draw_paired_figure(payload; output_dir::AbstractString,
     return svg_path, png_path
 end
 
-function _fig_arg(flag)
-    i = findfirst(==(flag), ARGS)
-    return (i !== nothing && i < length(ARGS)) ? ARGS[i + 1] : nothing
+const _FIG_KNOWN_FLAGS = ("--json", "--output-dir", "--basename")
+const _FIG_VALUE_FLAGS = ("--json", "--output-dir", "--basename")
+
+"""
+    _cli_problem(args, known, value_flags) -> Union{String, Nothing}
+
+`nothing` when every `--flag` is known and every value-taking flag is followed
+by a value. Otherwise a message. Unknown flags used to be ignored, and a value
+slot used to accept the next flag (`--output-dir --basename` named a directory
+`--basename`).
+"""
+function _cli_problem(args, known, value_flags)
+    known_set = Set(String.(known))
+    value_set = Set(String.(value_flags))
+    for a in args
+        if startswith(a, "--") && !(a in known_set)
+            return "unrecognized flag `$a`"
+        end
+    end
+    for (i, a) in enumerate(args)
+        a in value_set || continue
+        if i == length(args) || startswith(args[i + 1], "--")
+            nxt = i == length(args) ? "end of arguments" : "`$(args[i + 1])`"
+            return "`$a` requires a value, not $nxt"
+        end
+    end
+    return nothing
+end
+
+function _fig_arg(flag, args = ARGS)
+    i = findfirst(==(flag), args)
+    i === nothing && return nothing
+    if i == length(args) || startswith(args[i + 1], "--")
+        error("`$flag` requires a value, not " *
+              (i == length(args) ? "end of arguments" : "`$(args[i + 1])`"))
+    end
+    return args[i + 1]
 end
 
 function main()
+    problem = _cli_problem(ARGS, _FIG_KNOWN_FLAGS, _FIG_VALUE_FLAGS)
+    if problem !== nothing
+        println(stderr, "ERROR: $problem")
+        return 2
+    end
     json_path = _fig_arg("--json")
     if json_path === nothing
         println(stderr,
