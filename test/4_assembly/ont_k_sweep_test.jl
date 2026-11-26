@@ -21,6 +21,7 @@
 # which another test already includes there.
 module OntKSweepTest
 
+import Logging
 import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "ont_k_sweep.jl"))
@@ -547,7 +548,8 @@ Test.@testset "ONT k-sweep helpers" begin
                 # there, and also skip if the file is still readable after
                 # the mode change.
                 if Sys.iswindows() || ccall(:getuid, Cint, ()) == 0
-                    Test.@test_skip true
+                    @info "skipping permission-denied case: chmod 000 is not unreadable when running as root or on Windows"
+                    Test.@test_skip "chmod 000 is not unreadable for uid 0 or on Windows"
                 else
                     mktempdir() do dir
                         target = joinpath(dir, results_name)
@@ -563,7 +565,8 @@ Test.@testset "ONT k-sweep helpers" begin
                         end
                         if still_readable
                             chmod(target, 0o644)
-                            Test.@test_skip true
+                            @info "skipping permission-denied case: file stayed readable after chmod 000"
+                            Test.@test_skip "file stayed readable after chmod 000"
                         else
                             err = try
                                 guarded_error(() -> write_table_guarded(
@@ -1416,6 +1419,13 @@ Test.@testset "ONT k-sweep helpers" begin
         mixed = DataFrames.DataFrame(
             cell_id = ["a", "a"], min_identity = [80, 80.5])
         Test.@test length(table_row_keys(mixed, (:cell_id, :min_identity))) == 2
+
+        # 30.0 is an integer-valued float inside the Int range, so it must
+        # match the Int form. 2^63 is integer-valued and exactly
+        # representable, but it does not fit in Int64: the bound check must
+        # return string(2.0^63) rather than throw InexactError from Int().
+        Test.@test _canonical_key_text(30.0) == "30"
+        Test.@test _canonical_key_text(2.0^63) == string(2.0^63)
     end
 
     Test.@testset "--allow-shrink CLI parsing is pinned (td-6mzb)" begin
@@ -1447,7 +1457,6 @@ Test.@testset "ONT k-sweep helpers" begin
         # checkpoint therefore warned twice, and the tree was parsed twice.
         # Use a first write (no on-disk table, so the guard does not refuse)
         # with one good checkpoint and one truncated one.
-        import Logging
         mktempdir() do dir
             cells = joinpath(dir, "cells")
             good = cell_row("Lambda", "NC_001416", "ont", 21, 30, 42;
