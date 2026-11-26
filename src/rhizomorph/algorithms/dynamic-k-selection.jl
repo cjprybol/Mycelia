@@ -396,6 +396,9 @@ end
 # solid FRACTION of k-mer occurrences approximates (1-e)^k_ref, so
 # e ≈ 1 - solid_fraction^(1/k_ref). Because an indel disrupts many downstream
 # k-mers, this (correctly) reports a higher effective error for indel-heavy reads.
+# Windows are counted with the canonical hash (td-05hf): a k-mer and its reverse
+# complement are one locus. The strand-sensitive hash splits them and inflates
+# this estimate on double-stranded reads.
 function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float64
     sequences = _collect_dynamic_k_sequences(reads)
     isempty(sequences) && return 0.0
@@ -405,7 +408,7 @@ function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float
     for characters in character_sequences
         if length(characters) >= k_ref
             for start_index in 1:(length(characters) - k_ref + 1)
-                kmer_hash = _dynamic_k_window_hash(characters, start_index, k_ref)
+                kmer_hash = _dynamic_k_canonical_window_hash(characters, start_index, k_ref)
                 counts[kmer_hash] = get(counts, kmer_hash, 0) + 1
                 total_occurrences += 1
             end
@@ -427,7 +430,8 @@ end
 # ONLY. May be reported; MUST NEVER select k or gate a decision. It has no
 # production call site and must not acquire one.
 #
-# Measured behaviour (benchmarking/results/estimate_residual_error_validation/):
+# Measured behaviour (benchmarking/results/estimate_residual_error_validation/,
+# recorded before td-05hf switched this path to the canonical window hash):
 # the estimator is PRECISE but BIASED, and the bias grows with coverage --
 # replicate CV is mostly below 0.02 for e >= 0.01 at C >= 10, while the bias
 # reverses sign near C = 10-30. At e = 0.10 it returns 0.1424 at C = 5 (42%
@@ -449,8 +453,9 @@ this estimate; this remains as an interpretable, reference-free error readout (a
 direct callers/tests). Combines two signals and returns the more conservative
 (higher-error) one, clamped to `[0, 0.5)`:
 
-- **k-mer spectrum** (always available): solid-fraction of k-mer occurrences at
-  `k_ref` inverted through the survival model `(1-e)^k_ref`.
+- **k-mer spectrum** (always available): solid-fraction of canonical k-mer
+  occurrences at `k_ref` (a window and its reverse complement share one count),
+  inverted through the survival model `(1-e)^k_ref`.
 - **per-base Q-values** (FASTQ input only): `mean(10^(-Q/10))`.
 
 `reads` may be FASTQ/FASTA records, strings, or `BioSequence`s.
