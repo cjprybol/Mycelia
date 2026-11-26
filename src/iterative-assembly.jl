@@ -2068,6 +2068,9 @@ function mycelia_iterative_assemble(input_fastq::String;
                           "enabled ($(Threads.nthreads()) threads)" : "disabled"
         println("Parallel processing: $parallel_status")
         println("Batch size: $batch_size")
+        # Effective flag (keyword or the case-sensitive env allow-list) so an
+        # env-driven run is reproducible from this banner (td-3vge item 3).
+        println(_between_batch_gc_banner_line(gc_between_batches))
         checkpoint_status = enable_checkpointing ?
                             "enabled (every $checkpoint_interval iterations)" :
                             "disabled"
@@ -5166,16 +5169,46 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     end
 end
 
-# opt5 (td-jbjd): resolve whether the corrector's forced between-batch
-# GC.gc() fires, from the gc_between_batches keyword (primary) and the
-# MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback). Pure and
-# side-effect free so the wiring is truth-table testable without running
-# the corrector — the GC itself is output-invisible, so byte-identity
-# alone cannot lock that the keyword actually gates it.
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Resolve whether the corrector's forced between-batch `GC.gc()` fires.
+
+The `gc_between_batches` keyword is primary. When it is `false`,
+`MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES` is a fallback for memory-constrained
+hosts. That variable is a case-sensitive allow-list: only the exact tokens
+`"1"`, `"true"`, and `"yes"` enable the GC. `"TRUE"`, `"True"`, `"YES"`,
+`"On"`, `"on"`, and every other value leave it off. An unset variable is off.
+
+Pure and side-effect free so the wiring is truth-table testable without
+running the corrector. The GC itself is output-invisible, so byte-identity
+alone cannot lock that the keyword actually gates it.
+"""
 function _gc_between_batches_enabled(gc_between_batches::Bool)::Bool
     return gc_between_batches ||
            get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in
            ("1", "true", "yes")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Verbose-banner line for the resolved between-batch GC setting.
+
+Reports the effective flag from [`_gc_between_batches_enabled`](@ref), the
+keyword, and the raw environment token. The case-sensitive allow-list is
+repeated here so a log from an env-driven run shows why the flag resolved
+the way it did.
+"""
+function _between_batch_gc_banner_line(gc_between_batches::Bool)::String
+    enabled = _gc_between_batches_enabled(gc_between_batches)
+    state = enabled ? "enabled" : "disabled"
+    raw = get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", nothing)
+    env_shown = raw === nothing ? "unset" : "\"$(raw)\""
+    return "Between-batch GC: $(state) " *
+           "(keyword=$(gc_between_batches), " *
+           "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES=$(env_shown); " *
+           "env fallback is a case-sensitive allow-list: \"1\", \"true\", \"yes\")"
 end
 
 function _improve_read_set_likelihood_impl(
@@ -5756,10 +5789,12 @@ function _improve_read_set_likelihood_impl(
         # once memory is already bounded. Default OFF (the speedup); re-enable via
         # the gc_between_batches keyword (primary) or the
         # MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES env var (fallback, for memory-
-        # constrained hosts). GC is output-neutral, so corrected reads are
-        # byte-identical either way. (The other GC.gc(true) calls in this file —
-        # OOM handlers and proactive memory-release paths — are unaffected; they
-        # stay for fail-closed safety.)
+        # constrained hosts). The env fallback is a case-sensitive allow-list:
+        # only "1", "true", and "yes" enable it (see
+        # `_gc_between_batches_enabled`). GC is output-neutral, so corrected
+        # reads are byte-identical either way. The other GC.gc(true) calls in
+        # this file (OOM handlers and proactive memory-release paths) are
+        # unaffected; they stay for fail-closed safety.
         if batch_end < total_reads && gc_between_batches_enabled
             GC.gc()
         end
