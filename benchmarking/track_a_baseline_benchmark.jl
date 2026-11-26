@@ -495,32 +495,9 @@ end
 # Re-reading the store makes the aggregate monotone and idempotent by construction:
 # shards, sweeps and resumes all converge on the union rather than the last writer's
 # slice, and a no-op re-run repairs a previously truncated table.
-# Atomic publish with a PER-PROCESS temp name.
-#
-# A FIXED temp path (`target * ".tmp"`) is safe for a single writer and unsafe here:
-# write_aggregate runs once per cell, and sharding is the documented workflow — the
-# harness header advertises that "an HPC array job can split the matrix and share one
-# results tree", and run_track_a_baseline_lrc.sbatch shows a shard invocation with no
-# --output-dir, so every shard defaults to the same directory. Two shards then open
-# the SAME temp inode and both rename it, and the rename publishes interleaved content
-# as a complete table. That is worse than the truncation bug the store-rebuild fixed:
-# a short table is detectable, a corrupt one is not.
-#
-# tempname(dir) is unique per call, so concurrent shards can no longer collide, and the
-# rename stays atomic because the temp is on the same filesystem as the target.
-function _publish_atomically(write!, target::AbstractString)
-    dir = dirname(target)
-    mkpath(dir)
-    tmp = tempname(dir)
-    try
-        write!(tmp)
-        mv(tmp, target; force = true)
-    catch
-        isfile(tmp) && rm(tmp; force = true)
-        rethrow()
-    end
-    return target
-end
+# Unique-temp rename lives in atomic_publish.jl so the merge script calls the same
+# function. This file cannot be included from there (it imports Mycelia and reads ARGS).
+include(joinpath(@__DIR__, "atomic_publish.jl"))
 
 function write_aggregate(root, rows)
     cells_dir = joinpath(root, "cells")
