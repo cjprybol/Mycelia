@@ -16,12 +16,12 @@
 #   MYCELIA_S0_ERRORRATE substitution error rate     (default 0.01)
 #   MYCELIA_S0_K         k-mer length                (default 21)
 #   MYCELIA_S0_SEED      RNG seed                    (default 42)
+#
+# The read simulator, genomic-kmer truth set, and qualmer memory_profile are
+# shared with stage0_threshold_calibration.jl via stage0_common.jl.
 # ==============================================================================
 
 import Mycelia
-import FASTX
-import BioSequences
-import Kmers
 import MetaGraphsNext
 import Random
 import Statistics
@@ -39,47 +39,9 @@ const K          = getenv("MYCELIA_S0_K", 21)
 const SEED       = getenv("MYCELIA_S0_SEED", 42)
 const DATASET    = "s0"
 
-const BASES = ['A', 'C', 'G', 'T']
-
-"""Phred quality model: correct bases ~Q35, error bases ~Q22 (lower but
-overlapping), so quality carries PARTIAL signal — not a perfect oracle. This is
-what lets the matrix show where fusing quality with coverage actually helps."""
-function sample_quality(rng, is_error::Bool)::Char
-    q = is_error ? round(Int, 22 + 8 * randn(rng)) : round(Int, 35 + 3 * randn(rng))
-    q = clamp(q, 2, 40)
-    return Char(q + 33)  # Phred+33
-end
-
-function simulate(rng)
-    ref = join(rand(rng, BASES, REFLEN))
-    n_reads = max(1, round(Int, COVERAGE * REFLEN / READLEN))
-    recs = FASTX.FASTQ.Record[]
-    for i in 1:n_reads
-        start = rand(rng, 1:(REFLEN - READLEN + 1))
-        seq = collect(ref[start:(start + READLEN - 1)])
-        quals = Vector{Char}(undef, READLEN)
-        for j in 1:READLEN
-            is_err = rand(rng) < ERROR_RATE
-            if is_err
-                alt = rand(rng, filter(!=(seq[j]), BASES))
-                seq[j] = alt
-            end
-            quals[j] = sample_quality(rng, is_err)
-        end
-        push!(recs, FASTX.FASTQ.Record("r$i", join(seq), join(quals)))
-    end
-    return ref, recs
-end
-
-"""Truth set: canonical k-mers of the ERROR-FREE reference = genomic k-mers."""
-function reference_kmer_set(ref::AbstractString)
-    truth = Set{Kmers.DNAKmer{K}}()
-    seq = BioSequences.LongDNA{4}(ref)
-    for (kmer, _) in Kmers.UnambiguousDNAMers{K}(seq)
-        push!(truth, BioSequences.canonical(kmer))
-    end
-    return truth
-end
+# Shared simulator, genomic-kmer truth set, and qualmer memory_profile.
+# REFLEN / COVERAGE / READLEN / ERROR_RATE / K above are this script's config.
+include(joinpath(@__DIR__, "stage0_common.jl"))
 
 """Mann–Whitney AUC = P(score(genomic) > score(error)); 0.5 = chance, 1.0 = perfect."""
 function auc(scores_pos::Vector{Float64}, scores_neg::Vector{Float64})::Float64
@@ -118,11 +80,12 @@ function main()
     println("ref=$REFLEN cov=$COVERAGE readlen=$READLEN err=$ERROR_RATE k=$K seed=$SEED")
     ref, recs = simulate(rng)
     truth = reference_kmer_set(ref)
-    # :full retains per-observation quality so get_vertex_mean_quality yields the
-    # depth-independent per-base mean the fused arms need (review C1); the
-    # lightweight profile only stores accumulated joint quality.
+    # STAGE0_MEMORY_PROFILE is :full: it retains per-observation quality so
+    # get_vertex_mean_quality yields the depth-independent per-base mean the
+    # fused arms need (review C1); the lightweight profile only stores
+    # accumulated joint quality.
     graph = R.build_qualmer_graph(recs, K; dataset_id = DATASET, mode = :canonical,
-                                  memory_profile = :full)
+                                  memory_profile = STAGE0_MEMORY_PROFILE)
     labels = collect(MetaGraphsNext.labels(graph))
     n_genomic = count(l -> l in truth, labels)
     println("graph k-mers: $(length(labels))  (genomic=$n_genomic  error=$(length(labels) - n_genomic))\n")
