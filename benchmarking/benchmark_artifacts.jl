@@ -5,7 +5,14 @@ import JSON
 import OrderedCollections
 import TOML
 
-const BENCHMARK_ARTIFACT_SCHEMA_VERSION = 1
+# Public benchmark artifact schema.
+# v1: provenance columns through benchmark_git_commit.
+# v2: adds benchmark_git_dirty immediately after benchmark_git_commit.
+#     Cell values are "true", "false", or "" when git dirtiness is unknown.
+#     Every later column in the table moves one position to the right.
+#     Readers select columns by name. Tables already committed under
+#     benchmarking/results/ were written at v1 and are left on that layout.
+const BENCHMARK_ARTIFACT_SCHEMA_VERSION = 2
 const BENCHMARK_ARTIFACT_SUBDIRS = ("tables", "plots", "logs", "provenance")
 
 """
@@ -87,9 +94,10 @@ Write a CSV table under `layout.tables` and a sidecar provenance JSON file
 under `layout.provenance`.
 
 Stable `benchmark_*` provenance columns are prepended to the table before
-writing. `row_context_columns` maps provenance column names to source columns
-already present in the table, for example
-`"benchmark_dataset_id" => "dataset_id"`.
+writing. Schema version 2 adds `benchmark_git_dirty` (`"true"`, `"false"`, or
+`""`) immediately after `benchmark_git_commit`. `row_context_columns` maps
+provenance column names to source columns already present in the table, for
+example `"benchmark_dataset_id" => "dataset_id"`.
 """
 function write_benchmark_table(
         table,
@@ -207,14 +215,24 @@ function _insert_table_provenance_columns!(
         provenance::AbstractDict,
         row_context_columns)
     rows = DataFrames.nrow(table)
-    git = get(provenance, "git", Dict{String, Any}())
+    raw_git = get(provenance, "git", nothing)
+    git = raw_git isa AbstractDict ? raw_git : Dict{String, Any}()
+    is_dirty = get(git, "is_dirty", nothing)
+    git_dirty = if is_dirty === true
+        "true"
+    elseif is_dirty === false
+        "false"
+    else
+        ""
+    end
     dataset_ids = get(provenance, "dataset_ids", String[])
     column_values = Pair{String, Any}[
         "benchmark_schema_version" => get(provenance, "schema_version", BENCHMARK_ARTIFACT_SCHEMA_VERSION),
         "benchmark_run_id" => get(provenance, "run_id", ""),
         "benchmark_scale" => get(provenance, "scale", ""),
         "benchmark_dataset_ids" => join(string.(dataset_ids), ","),
-        "benchmark_git_commit" => _string_or_empty(get(git, "commit", nothing))
+        "benchmark_git_commit" => _string_or_empty(get(git, "commit", nothing)),
+        "benchmark_git_dirty" => git_dirty
     ]
 
     for (provenance_column, source_column) in sort(collect(row_context_columns); by = first)
