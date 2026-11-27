@@ -1,6 +1,6 @@
 # Getting Started with Mycelia
 
-Welcome to Mycelia, an experimental Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and explore its current capabilities.
+Welcome to Mycelia, a Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and explore its current capabilities.
 
 ## What is Mycelia?
 

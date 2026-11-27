@@ -1,13 +1,11 @@
 # Mycelia
 
-! Warning: In Development !
+**Status:** active development
 
 **A Julia package for bioinformatics and computational biology**
 
 [![Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR)](https://codecov.io/github/cjprybol/Mycelia)
 [![HPC Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR&flag=hpc-extended)](https://codecov.io/github/cjprybol/Mycelia?flag=hpc-extended)
-[![HPC Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-tests.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
-[![HPC Benchmarks](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-benchmarks.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
 [![Documentation](https://github.com/cjprybol/Mycelia/actions/workflows/documentation.yml/badge.svg)](https://cjprybol.github.io/Mycelia/dev/)
 
 ![Banner Logo](banner-logo.jpg)
@@ -34,7 +32,7 @@ import Mycelia
 - **Parallel Processing**: Multi-threaded analysis with progress tracking and HPC support (SLURM, rclone)
 - **Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic distributions, and more
 
-### Ongoing Areas of Reseach and Development
+### Ongoing Areas of Research and Development
 
 - **BioJulia-based Sequence Graph Assembly Framework**: From fixed-length (n-gram, k-mer, qualmer) to variable-length (string, FASTA, FASTQ) graphs
 - **Quality-Aware Assembly**: A framework to preserve per-base quality scores throughout assembly process
@@ -56,7 +54,7 @@ import Mycelia
 - **[Tutorials](https://cjprybol.github.io/Mycelia/dev/tutorials/)** - Step-by-step workflows
 - **[Workflow & Tool Map](docs/src/workflow-map.md)** - Quick links from inputs to tools, outputs, and tutorials
 - **[HPC Job Templates](docs/src/hpc-job-templates.md)** - Portable `JobSpec` rendering for NERSC, Lawrencium, SCG, Docker, and Cloud Build
-- **[HPC Benchmarks & Status](https://cjprybol.github.io/Mycelia/dev/benchmarks/)** - Published HPC CI summaries, benchmark notes, and badge-backed status
+- **[HPC Benchmarks & Status](https://cjprybol.github.io/Mycelia/dev/benchmarks/)** - HPC CI notes, coverage, and benchmark documentation
 - **[Migration Guide](MIGRATION.md)** - Old SLURM wrapper usage to new `JobSpec` workflows
 - **[References](https://cjprybol.github.io/Mycelia/dev/references/)** - Citation guidance for Mycelia and external tools
 
@@ -104,7 +102,7 @@ the [References](https://cjprybol.github.io/Mycelia/dev/references/) page for gu
 
 ## Development Status
 
-**Status**: Research platform with substantial implemented functionality alongside experimental algorithms
+Research platform with substantial implemented functionality alongside experimental algorithms.
 
 ### Working Components
 

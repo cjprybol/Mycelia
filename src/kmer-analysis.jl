@@ -917,7 +917,7 @@ end
 
 """
     generate_and_save_kmer_counts(; 
-        bioalphabet, 
+        alphabet, 
         fastas, 
         k, 
         output_dir=pwd(),
@@ -927,15 +927,18 @@ end
 Generates and saves k-mer counts for a list of FASTA files for a single k.
 
 # Keyword Arguments
-- `bioalphabet`: Alphabet type (e.g., :DNA).
+- `alphabet`: Alphabet type (`:DNA`, `:RNA`, or `:AA`).
 - `fastas`: List of FASTA file paths.
 - `k`: Value of k (e.g., 9).
-- `output_dir`: (optional) Directory to write output files (default: current directory).
+- `output_dir`: (optional) Directory for all outputs (default: current directory).
 - `filename`: (optional) Full file name for output (default: 
-    `"{Mycelia.normalized_current_date()}.{lowercase(string(bioalphabet))}{k}mers.jld2"`).
+    `"{Mycelia.normalized_current_date()}.{lowercase(string(alphabet))}{k}mers.jld2"`).
 
 # Output
-Saves a .jld2 file with the specified file name in `output_dir` if it does not already exist.
+Returns the path to the `.jld2` results file in `output_dir`. If that file already
+exists, nothing is recomputed or written. Otherwise the counts are saved there, and
+on the sparse paths (`:DNA`/`:RNA` with `k > 9`, `:AA` with `k > 3`) a rarefaction
+table (`.tsv`) and its plot (`.png`, `.pdf`, `.svg`) are also written to `output_dir`.
 """
 function generate_and_save_kmer_counts(;
         alphabet,
@@ -964,7 +967,8 @@ function generate_and_save_kmer_counts(;
                 kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
                     fasta_list = fastas,
                     k = k,
-                    alphabet = alphabet
+                    alphabet = alphabet,
+                    out_dir = output_dir
                 )
             end
         elseif (alphabet == :AA)
@@ -978,7 +982,8 @@ function generate_and_save_kmer_counts(;
                 kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
                     fasta_list = fastas,
                     k = k,
-                    alphabet = alphabet
+                    alphabet = alphabet,
+                    out_dir = output_dir
                 )
             end
         else
@@ -1023,8 +1028,8 @@ the result is loaded and returned. If `force` is true or the file does not exist
 - `alphabet::Symbol`: The alphabet type (:AA, :DNA, :RNA).
 - `temp_dir_parent::AbstractString`: Parent directory for creating the temporary working directory. Defaults to `Base.tempdir()`.
 - `count_element_type::Union{Type{<:Unsigned}, Nothing}`: Optional. Specifies the unsigned integer type for the counts. If `nothing` (default), the smallest `UInt` type capable of holding the maximum observed count is used.
-- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. If a relative path, will be written to `out_dir`.
-- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. If a relative path, will be written to `out_dir`.
+- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. A relative path is resolved against the output directory described above.
+- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. A relative path is resolved against the output directory described above.
 - `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
 - `skip_rarefaction_plot::Bool`: If true, completely skip rarefaction plot generation (including loading plotting libraries). Defaults to `false`.
 - `result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
@@ -1036,7 +1041,7 @@ the result is loaded and returned. If `force` is true or the file does not exist
 - `NamedTuple{(:kmers, :counts, :rarefaction_data_path)}`:
     - `kmers`: A sorted `Vector` of unique kmer objects.
     - `counts`: A `SparseArrays.SparseMatrixCSC{V, Int}` storing kmer counts.
-    - `rarefaction_data_path`: Path to the saved TSV file with rarefaction data.
+    - `rarefaction_data_path`: Path where the rarefaction TSV is written; the file exists only when rarefaction data was collected.
 
 # Raises
 - `ErrorException`: If input `fasta_list` is empty, alphabet is invalid, or required Kmer/counting functions are not found.

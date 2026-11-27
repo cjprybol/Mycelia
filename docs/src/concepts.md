@@ -184,8 +184,8 @@ plot_quality_distribution(quality_scores)
 count_kmers("reads.fastq", k=21)
 
 # Dense vs sparse counting
-fasta_list_to_dense_kmer_counts(files, k=21)
-fasta_list_to_sparse_kmer_counts(files, k=21)
+fasta_list_to_dense_kmer_counts(fasta_list=files, k=21, alphabet=:DNA)
+fasta_list_to_sparse_kmer_counts(fasta_list=files, k=21, alphabet=:DNA)
 
 # K-mer spectrum analysis
 kmer_frequency_spectrum(kmer_counts)
