@@ -1065,9 +1065,10 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
         Test.@testset "Sparse generation writes rarefaction outputs to output_dir" begin
             # Regression guard: generate_and_save_kmer_counts must hand its
             # output_dir to the sparse counter. When it does not, the rarefaction
-            # table and its three plots land in the working directory instead.
-            # DNA/RNA (k > 9) and AA (k > 3) cover both sparse call sites. The
-            # expected file names are pinned here, not read back from Mycelia.
+            # table (.tsv) and its plot (.png, .pdf, .svg) land in the working
+            # directory instead. DNA/RNA (k > 9) and AA (k > 3) cover both sparse
+            # call sites. The expected file-name suffixes are pinned here, not
+            # read back from Mycelia; the timestamp prefix is not checked.
             passthrough_cases = (
                 (label = "dna", alphabet = :DNA, k = 10, sequence = "ATGCATGCATGC",
                     stem = ".dna10mer_rarefaction"),
