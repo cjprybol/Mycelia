@@ -122,9 +122,3 @@ trees/
 
 # Agent tool symlinks / worktrees / backups (td-vu6g4, 2026-06-22)
 .claude/skills/
-
-# K-mer rarefaction outputs written to the repo root when
-# fasta_list_to_sparse_kmer_counts runs from there without an out_dir
-/*_rarefaction.*
-# Same outputs written to test/ when it is the working directory
-/test/*_rarefaction.*

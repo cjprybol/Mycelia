@@ -1062,6 +1062,60 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             end
         end
 
+        Test.@testset "Sparse generation writes rarefaction outputs to output_dir" begin
+            # Regression guard: generate_and_save_kmer_counts must hand its
+            # output_dir to the sparse counter. When it does not, the rarefaction
+            # table and its three plots land in the working directory instead.
+            # DNA/RNA (k > 9) and AA (k > 3) cover both sparse call sites. The
+            # expected file names are pinned here, not read back from Mycelia.
+            passthrough_cases = (
+                (label = "dna", alphabet = :DNA, k = 10, sequence = "ATGCATGCATGC",
+                    stem = ".dna10mer_rarefaction"),
+                (label = "rna", alphabet = :RNA, k = 10, sequence = "AUGCAUGCAUGC",
+                    stem = ".rna10mer_rarefaction"),
+                (label = "aa", alphabet = :AA, k = 4, sequence = "ACDEFGHIK",
+                    stem = ".aa4mer_rarefaction")
+            )
+            for case in passthrough_cases
+                passthrough_fasta = joinpath(temp_dir, "passthrough_$(case.label).fasta")
+                Mycelia.write_fasta(
+                    outfile = passthrough_fasta,
+                    records = [FASTX.FASTA.Record(
+                        "passthrough_$(case.label)", case.sequence)],
+                    gzip = false,
+                    show_progress = false
+                )
+                requested_output_dir = joinpath(
+                    temp_dir, "passthrough_output_$(case.label)")
+                mkpath(requested_output_dir)
+
+                mktempdir() do working_dir
+                    passthrough_result = cd(working_dir) do
+                        Mycelia.generate_and_save_kmer_counts(
+                            alphabet = case.alphabet,
+                            fastas = [passthrough_fasta],
+                            k = case.k,
+                            output_dir = requested_output_dir
+                        )
+                    end
+                    Test.@test isfile(passthrough_result)
+                    Test.@test dirname(passthrough_result) == requested_output_dir
+
+                    leaked_into_working_dir = filter(
+                        name -> occursin("rarefaction", name), readdir(working_dir))
+                    Test.@test leaked_into_working_dir == String[]
+                end
+
+                written_to_output_dir = readdir(requested_output_dir)
+                for extension in (".tsv", ".png", ".pdf", ".svg")
+                    Test.@test count(
+                        name -> endswith(name, case.stem * extension),
+                        written_to_output_dir
+                    ) == 1
+                end
+            end
+        end
+
         Test.@testset "Count element type and serial fallback branches" begin
             dense_ok_fasta = joinpath(temp_dir, "dense_ok.fasta")
             dense_bad_fasta = joinpath(temp_dir, "dense_bad.fasta")

@@ -964,7 +964,8 @@ function generate_and_save_kmer_counts(;
                 kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
                     fasta_list = fastas,
                     k = k,
-                    alphabet = alphabet
+                    alphabet = alphabet,
+                    out_dir = output_dir
                 )
             end
         elseif (alphabet == :AA)
@@ -978,7 +979,8 @@ function generate_and_save_kmer_counts(;
                 kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
                     fasta_list = fastas,
                     k = k,
-                    alphabet = alphabet
+                    alphabet = alphabet,
+                    out_dir = output_dir
                 )
             end
         else
